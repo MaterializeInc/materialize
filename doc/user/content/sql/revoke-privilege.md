@@ -10,10 +10,7 @@ menu:
 be used to indicate that the privileges should be revoked from all roles
 (including roles that might not exist yet).
 
-{{< warning >}}
-Currently, privileges have limited functionality in Materialize. This is part of the
-work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 
@@ -23,17 +20,23 @@ work to enable **Role-based access control** (RBAC) in a future release {{% gh 1
 
 {{< diagram "privilege.svg" >}}
 
-Field         | Use
---------------|--------------------------------------------------
-_object_name_ | The object that privileges are being revoked from.
-_role_name_   | The role name that is losing privileges. Use the `PUBLIC` pseudo-role to revoke privileges from all roles.
-**SELECT**    | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
-**INSERT**    | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
-**UPDATE**    | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
-**DELETE**    | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
-**CREATE**    | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
-**USAGE**     | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
-**ALL**       | All applicable privileges for the provided object type.
+Field                                               | Use
+----------------------------------------------------|--------------------------------------------------
+_object_name_                                       | The object that privileges are being revoked from.
+**ALL** _object_type_ **IN SCHEMA** schema_name     | The privilege will be revoked from all objects of _object_type_ in _schema_name_.
+**ALL** _object_type_ **IN DATABASE** database_name | The privilege will be revoked from all objects of _object_type_ in _database_name_.
+**ALL** _object_type_                               | The privilege will be revoked from all objects of _object_type_, excluding system objects.
+_role_name_                                         | The role name that is losing privileges. Use the `PUBLIC` pseudo-role to revoke privileges from all roles.
+**SELECT**                                          | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
+**INSERT**                                          | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
+**UPDATE**                                          | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
+**DELETE**                                          | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
+**CREATE**                                          | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
+**USAGE**                                           | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
+**CREATEROLE**                                      | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. This privilege is very powerful. It allows roles to grant and revoke membership in other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role with this privilege can obtain the privileges of any other role in the system. The abbreviation for this privilege is 'R' (Role).
+**CREATEDB**                                        | Allows creating databases. The abbreviation for this privilege is 'B' (dataBase).
+**CREATECLUSTER**                                   | Allows creating clusters. The abbreviation for this privilege is 'N' (compute Node).
+**ALL PRIVILEGES**                                  | All applicable privileges for the provided object type.
 
 ## Details
 
@@ -46,6 +49,7 @@ type for sources, views, and materialized views, or omit the object type.
 
 | Object type           | All privileges |
 |-----------------------|----------------|
+| `SYSTEM`              | RBN            |
 | `DATABASE`            | UC             |
 | `SCHEMA`              | UC             |
 | `TABLE`               | arwd           |
@@ -81,6 +85,20 @@ REVOKE USAGE, CREATE ON DATABASE materialize FROM joe;
 REVOKE ALL ON CLUSTER dev FROM joe;
 ```
 
+```sql
+REVOKE CREATEDB ON SYSTEM FROM joe;
+```
+
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- superuser status if the privilege is a system privilege.
 
 ## Related pages
 
@@ -92,3 +110,4 @@ REVOKE ALL ON CLUSTER dev FROM joe;
 - [REVOKE ROLE](../revoke-role)
 - [ALTER OWNER](../alter-owner)
 - [GRANT PRIVILEGE](../revoke-privilege)
+- [ALTER DEFAULT PRIVILEGES](../alter-default-privileges)

@@ -12,6 +12,7 @@ import subprocess
 from typing import Optional
 
 from materialize import ui
+from materialize.cloudtest.util.print_pods import print_pods
 from materialize.ui import UIError
 
 
@@ -57,4 +58,5 @@ def wait(
             error = e
 
     ui.progress(finish=True)
+    print_pods()
     raise UIError(f"kubectl wait never returned 'condition met': {error}")

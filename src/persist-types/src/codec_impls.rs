@@ -25,10 +25,13 @@ use bytes::BufMut;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{
-    ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
+    ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder,
+    Schema,
 };
-use crate::part::{ColumnsMut, ColumnsRef};
-use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn};
+use crate::dyn_struct::{
+    ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
+};
+use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
 use crate::{Codec, Codec64, Opaque};
 
 /// An implementation of [Schema] for [()].
@@ -47,8 +50,8 @@ impl Schema<()> for UnitSchema {
     type Encoder<'a> = Self;
     type Decoder<'a> = Self;
 
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        Vec::new()
+    fn columns(&self) -> DynStructCfg {
+        DynStructCfg::from(Vec::new())
     }
 
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
@@ -57,7 +60,7 @@ impl Schema<()> for UnitSchema {
     }
 
     fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        let () = cols.finish()?;
+        let (_len, ()) = cols.finish()?;
         Ok(UnitSchema)
     }
 }
@@ -85,7 +88,7 @@ impl Codec for () {
 }
 
 /// An implementation of [PartEncoder] for a single column.
-pub struct SimpleEncoder<'a, X, T: Data>(SimpleEncoderFn<'a, X, T>);
+pub struct SimpleEncoder<'a, X, T: Data>(&'a mut usize, SimpleEncoderFn<'a, X, T>);
 
 enum SimpleEncoderFn<'a, X, T: Data> {
     Cast {
@@ -100,7 +103,8 @@ enum SimpleEncoderFn<'a, X, T: Data> {
 
 impl<'a, X, T: Data> PartEncoder<'a, X> for SimpleEncoder<'a, X, T> {
     fn encode(&mut self, val: &X) {
-        match &mut self.0 {
+        *self.0 += 1;
+        match &mut self.1 {
             SimpleEncoderFn::Cast { col, encode } => ColumnPush::<T>::push(*col, encode(val)),
             SimpleEncoderFn::Push { col, encode } => encode(col, val),
         }
@@ -128,8 +132,8 @@ pub struct SimpleSchema<X, T: Data>(PhantomData<(X, T)>);
 // the lifetimes get tricky.
 impl<X, T: Data> SimpleSchema<X, T> {
     /// A helper for [Schema::columns] impls of a single column.
-    pub fn columns() -> Vec<(String, DataType, StatsFn)> {
-        vec![("".to_owned(), T::TYPE, StatsFn::Default)]
+    pub fn columns(cfg: &T::Cfg) -> DynStructCfg {
+        DynStructCfg::from(vec![("".to_owned(), cfg.as_type(), StatsFn::Default)])
     }
 
     /// A helper for [Schema::decoder] impls of a single column.
@@ -148,8 +152,8 @@ impl<X, T: Data> SimpleSchema<X, T> {
         encode: for<'b> fn(&'b X) -> T::Ref<'b>,
     ) -> Result<SimpleEncoder<'a, X, T>, String> {
         let col = cols.col::<T>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleEncoder(SimpleEncoderFn::Cast { col, encode }))
+        let (len, ()) = cols.finish()?;
+        Ok(SimpleEncoder(len, SimpleEncoderFn::Cast { col, encode }))
     }
 
     /// A helper for [Schema::encoder] impls of a single column.
@@ -158,8 +162,8 @@ impl<X, T: Data> SimpleSchema<X, T> {
         encode: fn(&mut T::Mut, &X),
     ) -> Result<SimpleEncoder<'a, X, T>, String> {
         let col = cols.col::<T>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleEncoder(SimpleEncoderFn::Push { col, encode }))
+        let (len, ()) = cols.finish()?;
+        Ok(SimpleEncoder(len, SimpleEncoderFn::Push { col, encode }))
     }
 }
 
@@ -172,8 +176,8 @@ impl Schema<String> for StringSchema {
 
     type Decoder<'a> = SimpleDecoder<'a, String, String>;
 
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        SimpleSchema::<String, String>::columns()
+    fn columns(&self) -> DynStructCfg {
+        SimpleSchema::<String, String>::columns(&())
     }
 
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
@@ -213,8 +217,8 @@ impl Schema<Vec<u8>> for VecU8Schema {
 
     type Decoder<'a> = SimpleDecoder<'a, Vec<u8>, Vec<u8>>;
 
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        SimpleSchema::<Vec<u8>, Vec<u8>>::columns()
+    fn columns(&self) -> DynStructCfg {
+        SimpleSchema::<Vec<u8>, Vec<u8>>::columns(&())
     }
 
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
@@ -288,49 +292,73 @@ impl Opaque for i64 {
 }
 
 impl Data for bool {
-    const TYPE: DataType = DataType {
-        optional: false,
-        format: ColumnFormat::Bool,
-    };
+    type Cfg = ();
     type Ref<'a> = bool;
     type Col = Bitmap;
     type Mut = MutableBitmap;
     type Stats = PrimitiveStats<bool>;
 }
 
+impl ColumnCfg<bool> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::Bool,
+        }
+    }
+}
+
 impl Data for Option<bool> {
-    const TYPE: DataType = DataType {
-        optional: true,
-        format: ColumnFormat::Bool,
-    };
+    type Cfg = ();
     type Ref<'a> = Option<bool>;
     type Col = BooleanArray;
     type Mut = MutableBooleanArray;
     type Stats = OptionStats<PrimitiveStats<bool>>;
 }
 
+impl ColumnCfg<Option<bool>> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: true,
+            format: ColumnFormat::Bool,
+        }
+    }
+}
+
 macro_rules! data_primitive {
     ($data:ident, $format:expr) => {
         impl Data for $data {
-            const TYPE: DataType = DataType {
-                optional: false,
-                format: $format,
-            };
+            type Cfg = ();
             type Ref<'a> = $data;
             type Col = Buffer<$data>;
             type Mut = Vec<$data>;
             type Stats = PrimitiveStats<$data>;
         }
 
+        impl ColumnCfg<$data> for () {
+            fn as_type(&self) -> DataType {
+                DataType {
+                    optional: false,
+                    format: $format,
+                }
+            }
+        }
+
         impl Data for Option<$data> {
-            const TYPE: DataType = DataType {
-                optional: true,
-                format: $format,
-            };
+            type Cfg = ();
             type Ref<'a> = Option<$data>;
             type Col = PrimitiveArray<$data>;
             type Mut = MutablePrimitiveArray<$data>;
             type Stats = OptionStats<PrimitiveStats<$data>>;
+        }
+
+        impl ColumnCfg<Option<$data>> for () {
+            fn as_type(&self) -> DataType {
+                DataType {
+                    optional: true,
+                    format: $format,
+                }
+            }
         }
     };
 }
@@ -347,10 +375,7 @@ data_primitive!(f32, ColumnFormat::F32);
 data_primitive!(f64, ColumnFormat::F64);
 
 impl Data for Vec<u8> {
-    const TYPE: DataType = DataType {
-        optional: false,
-        format: ColumnFormat::Bytes,
-    };
+    type Cfg = ();
     type Ref<'a> = &'a [u8];
     // TODO: Something that more obviously isn't optional.
     type Col = BinaryArray<i32>;
@@ -358,22 +383,34 @@ impl Data for Vec<u8> {
     type Stats = BytesStats;
 }
 
+impl ColumnCfg<Vec<u8>> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::Bytes,
+        }
+    }
+}
+
 impl Data for Option<Vec<u8>> {
-    const TYPE: DataType = DataType {
-        optional: true,
-        format: ColumnFormat::Bytes,
-    };
+    type Cfg = ();
     type Ref<'a> = Option<&'a [u8]>;
     type Col = BinaryArray<i32>;
     type Mut = MutableBinaryArray<i32>;
     type Stats = OptionStats<BytesStats>;
 }
 
+impl ColumnCfg<Option<Vec<u8>>> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: true,
+            format: ColumnFormat::Bytes,
+        }
+    }
+}
+
 impl Data for String {
-    const TYPE: DataType = DataType {
-        optional: false,
-        format: ColumnFormat::String,
-    };
+    type Cfg = ();
     type Ref<'a> = &'a str;
     // TODO: Something that more obviously isn't optional.
     type Col = Utf8Array<i32>;
@@ -381,18 +418,70 @@ impl Data for String {
     type Stats = PrimitiveStats<String>;
 }
 
+impl ColumnCfg<String> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::String,
+        }
+    }
+}
+
 impl Data for Option<String> {
-    const TYPE: DataType = DataType {
-        optional: true,
-        format: ColumnFormat::String,
-    };
+    type Cfg = ();
     type Ref<'a> = Option<&'a str>;
     type Col = Utf8Array<i32>;
     type Mut = MutableUtf8Array<i32>;
     type Stats = OptionStats<PrimitiveStats<String>>;
 }
 
-impl ColumnRef for Bitmap {
+impl ColumnCfg<Option<String>> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: true,
+            format: ColumnFormat::String,
+        }
+    }
+}
+
+impl Data for DynStruct {
+    type Cfg = DynStructCfg;
+    type Ref<'a> = DynStructRef<'a>;
+    type Col = DynStructCol;
+    type Mut = DynStructMut;
+    type Stats = StructStats;
+}
+
+impl ColumnCfg<DynStruct> for DynStructCfg {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::Struct(self.clone()),
+        }
+    }
+}
+
+impl Data for Option<DynStruct> {
+    type Cfg = DynStructCfg;
+    type Ref<'a> = Option<DynStructRef<'a>>;
+    type Col = DynStructCol;
+    type Mut = DynStructMut;
+    type Stats = OptionStats<StructStats>;
+}
+
+impl ColumnCfg<Option<DynStruct>> for DynStructCfg {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: true,
+            format: ColumnFormat::Struct(self.clone()),
+        }
+    }
+}
+
+impl ColumnRef<()> for Bitmap {
+    fn cfg(&self) -> &() {
+        &()
+    }
     fn len(&self) -> usize {
         self.len()
     }
@@ -400,7 +489,7 @@ impl ColumnRef for Bitmap {
         let array = BooleanArray::new(ArrowLogicalType::Boolean, self.clone(), None);
         (Encoding::Plain, Box::new(array))
     }
-    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<BooleanArray>()
@@ -424,14 +513,17 @@ impl ColumnPush<bool> for MutableBitmap {
     }
 }
 
-impl ColumnRef for BooleanArray {
+impl ColumnRef<()> for BooleanArray {
+    fn cfg(&self) -> &() {
+        &()
+    }
     fn len(&self) -> usize {
         self.len()
     }
     fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
         (Encoding::Plain, Box::new(self.clone()))
     }
-    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<BooleanArray>()
@@ -458,7 +550,10 @@ impl ColumnPush<Option<bool>> for MutableBooleanArray {
 
 macro_rules! arrowable_primitive {
     ($data:ident, $encoding:expr) => {
-        impl ColumnRef for Buffer<$data> {
+        impl ColumnRef<()> for Buffer<$data> {
+            fn cfg(&self) -> &() {
+                &()
+            }
             fn len(&self) -> usize {
                 self.len()
             }
@@ -466,7 +561,7 @@ macro_rules! arrowable_primitive {
                 let array = PrimitiveArray::new($data::PRIMITIVE.into(), self.clone(), None);
                 ($encoding, Box::new(array.clone()))
             }
-            fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+            fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
                 let array = array
                     .as_any()
                     .downcast_ref::<PrimitiveArray<$data>>()
@@ -499,14 +594,17 @@ macro_rules! arrowable_primitive {
             }
         }
 
-        impl ColumnRef for PrimitiveArray<$data> {
+        impl ColumnRef<()> for PrimitiveArray<$data> {
+            fn cfg(&self) -> &() {
+                &()
+            }
             fn len(&self) -> usize {
                 self.len()
             }
             fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
                 ($encoding, Box::new(self.clone()))
             }
-            fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+            fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
                 let array = array
                     .as_any()
                     .downcast_ref::<PrimitiveArray<$data>>()
@@ -550,14 +648,17 @@ arrowable_primitive!(i64, Encoding::Plain);
 arrowable_primitive!(f32, Encoding::Plain);
 arrowable_primitive!(f64, Encoding::Plain);
 
-impl ColumnRef for BinaryArray<i32> {
+impl ColumnRef<()> for BinaryArray<i32> {
+    fn cfg(&self) -> &() {
+        &()
+    }
     fn len(&self) -> usize {
         self.len()
     }
     fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
         (Encoding::Plain, Box::new(self.clone()))
     }
-    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<BinaryArray<i32>>()
@@ -596,14 +697,17 @@ impl ColumnPush<Option<Vec<u8>>> for MutableBinaryArray<i32> {
     }
 }
 
-impl ColumnRef for Utf8Array<i32> {
+impl ColumnRef<()> for Utf8Array<i32> {
+    fn cfg(&self) -> &() {
+        &()
+    }
     fn len(&self) -> usize {
         self.len()
     }
     fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
         (Encoding::Plain, Box::new(self.clone()))
     }
-    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<Utf8Array<i32>>()
@@ -668,7 +772,7 @@ impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
     type Encoder<'a> = Self;
     type Decoder<'a> = Self;
 
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
+    fn columns(&self) -> DynStructCfg {
         panic!("TODO")
     }
 

@@ -7,38 +7,37 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
-use std::iter;
-use std::mem;
+use std::sync::{Arc, Mutex};
+use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_adapter::session::{
+    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
+};
+use mz_adapter::{
+    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
+};
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_ore::cast::CastFrom;
+use mz_ore::netio::AsyncReady;
+use mz_ore::str::StrExt;
+use mz_pgcopy::CopyFormatParams;
+use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
+use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
-
-use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
-};
-use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::{Authentication as FronteggAuthentication, Claims};
-use mz_ore::cast::CastFrom;
-use mz_ore::netio::AsyncReady;
-use mz_ore::str::StrExt;
-use mz_pgcopy::CopyFormatParams;
-use mz_repr::GlobalId;
-use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
-use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
-use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
-use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::VarInput;
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -71,7 +70,7 @@ pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
-    pub adapter_client: mz_adapter::ConnClient,
+    pub adapter_client: mz_adapter::Client,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.
@@ -83,6 +82,8 @@ pub struct RunParams<'a, A> {
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
+    /// Global connection limit and count
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 /// Runs a pgwire connection to completion.
@@ -104,6 +105,7 @@ pub async fn run<'a, A>(
         mut params,
         frontegg,
         internal,
+        active_connection_count,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -158,13 +160,7 @@ where
         }
     }
 
-    // Construct session.
-    let mut session = adapter_client.new_session(User {
-        name: user.clone(),
-        external_metadata: None,
-    });
-
-    let is_expired = if let Some(frontegg) = frontegg {
+    let (mut session, is_expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -179,25 +175,41 @@ where
                     .await
             }
         };
-        let admin_role = frontegg.admin_role();
-        let external_metadata_rx = session.retain_external_metadata_transmitter();
         match frontegg
             .exchange_password_for_token(&password)
             .await
-            .and_then(|token| {
-                frontegg.continuously_validate_access_token(token, user.clone(), move |claims| {
-                    let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
-                    // Ignore error if client has hung up.
-                    let _ = external_metadata_rx.send(external_metadata);
-                })
+            .and_then(|response| {
+                let response = frontegg.validate_api_token_response(response, Some(&user))?;
+
+                // Create a session based on the validated claims.
+                //
+                // In particular, it's important that the username come from the
+                // claims, as Frontegg may return an email address with
+                // different casing than the user supplied via the pgwire
+                // username field. We want to use the Frontegg casing as
+                // canonical.
+                let mut session = adapter_client.new_session(
+                    conn.conn_id().clone(),
+                    User {
+                        name: response.claims.email.clone(),
+                        external_metadata: Some(ExternalUserMetadata::from(&response.claims)),
+                    },
+                );
+
+                // Arrange to continuously refresh and revalidate the access
+                // token, updating the session as necessary.
+                let external_metadata_tx = session.retain_external_metadata_transmitter();
+                let is_expired =
+                    frontegg.continuously_revalidate_api_token_response(response, move |claims| {
+                        // Ignore error if client has hung up.
+                        let _ = external_metadata_tx.send(ExternalUserMetadata::from(claims));
+                    });
+
+                Ok((session, is_expired))
             }) {
-            Ok(is_expired) => {
-                // Make sure to apply the initial claims.
-                session.apply_external_metadata_updates();
-                is_expired.left_future()
-            }
+            Ok((session, is_expired)) => (session, is_expired.left_future()),
             Err(e) => {
-                warn!("PGwire connection failed authentication: {}", e);
+                warn!("pgwire connection failed authentication: {}", e);
                 return conn
                     .send(ErrorResponse::fatal(
                         SqlState::INVALID_PASSWORD,
@@ -207,8 +219,16 @@ where
             }
         }
     } else {
+        let session = adapter_client.new_session(
+            conn.conn_id().clone(),
+            User {
+                name: user.clone(),
+                external_metadata: None,
+            },
+        );
         // No frontegg check, so is_expired never resolves.
-        pending().right_future()
+        let is_expired = pending().right_future();
+        (session, is_expired)
     };
 
     for (name, value) in params {
@@ -231,7 +251,10 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+            if let Err(err) = session
+                .vars_mut()
+                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            {
                 session.add_notice(AdapterNotice::BadStartupSetting {
                     name: key,
                     reason: err.to_string(),
@@ -243,12 +266,21 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
+    let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
+        Ok(drop_connection) => drop_connection,
+        Err(e) => {
+            return conn
+                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
+                .await
+        }
+    };
+
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
     buf.push(BackendMessage::BackendKeyData {
-        conn_id: session.conn_id(),
+        conn_id: session.conn_id().unhandled(),
         secret_key: session.secret_key(),
     });
     // Immediately respond with connection success without waiting on the
@@ -296,14 +328,6 @@ where
                 .await?;
             conn.flush().await
         }
-    }
-}
-
-fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> ExternalUserMetadata {
-    ExternalUserMetadata {
-        user_id: claims.best_user_id(),
-        group_id: claims.tenant_id,
-        admin: claims.admin(admin_role),
     }
 }
 
@@ -589,7 +613,11 @@ where
             }
         }
 
-        let result = match self.adapter_client.execute(EMPTY_PORTAL.to_string()).await {
+        let result = match self
+            .adapter_client
+            .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
+            .await
+        {
             Ok(response) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
@@ -623,12 +651,24 @@ where
         assert!(res.is_ok());
     }
 
+    fn parse_sql(&self, sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
+        match self.adapter_client.parse(sql) {
+            Ok(result) => result.map_err(|e| {
+                // Convert our 0-based byte position to pgwire's 1-based character
+                // position.
+                let pos = sql[..e.error.pos].chars().count() + 1;
+                ErrorResponse::error(SqlState::SYNTAX_ERROR, e.error.message).with_position(pos)
+            }),
+            Err(msg) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, msg)),
+        }
+    }
+
     // See "Multiple Statements in a Simple Query" which documents how implicit
     // transactions are handled.
     // From https://www.postgresql.org/docs/current/protocol-flow.html
     async fn query(&mut self, sql: String) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 self.error(err).await?;
@@ -711,7 +751,7 @@ where
             }
         }
 
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 return self.error(err).await;
@@ -731,7 +771,7 @@ where
         }
         match self
             .adapter_client
-            .describe(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, param_types)
             .await
         {
             Ok(()) => {
@@ -813,7 +853,7 @@ where
                     .await
             }
         };
-        if aborted_txn && !is_txn_exit_stmt(stmt.sql()) {
+        if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
@@ -877,7 +917,7 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
-        let stmt = stmt.sql().cloned();
+        let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
@@ -939,7 +979,11 @@ where
                     // Postgres).
                     self.start_transaction(Some(1));
 
-                    match self.adapter_client.execute(portal_name.clone()).await {
+                    match self
+                        .adapter_client
+                        .execute(portal_name.clone(), self.conn.wait_closed())
+                        .await
+                    {
                         Ok(response) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
@@ -1374,13 +1418,36 @@ where
                 id,
                 columns,
                 params,
+                ctx_extra,
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.copy_from(id, columns, params, row_desc).await
+                self.copy_from(id, columns, params, row_desc, ctx_extra)
+                    .await
+            }
+            ExecuteResponse::TransactionCommitted { params }
+            | ExecuteResponse::TransactionRolledBack { params } => {
+                let notify_set: mz_ore::collections::HashSet<String> = self
+                    .adapter_client
+                    .session()
+                    .vars()
+                    .notify_set()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Only report on parameters that are in the notify set.
+                for (name, value) in params
+                    .into_iter()
+                    .filter(|(name, _v)| notify_set.contains(*name))
+                {
+                    let msg = BackendMessage::ParameterStatus(name, value);
+                    self.send(msg).await?;
+                }
+                command_complete!()
             }
 
-            ExecuteResponse::AlteredIndexLogicalCompaction
+            ExecuteResponse::AlteredDefaultPrivileges
+            | ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
@@ -1400,22 +1467,24 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
+            | ExecuteResponse::CreatedWebhookSource
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
+            | ExecuteResponse::DroppedOwned
             | ExecuteResponse::GrantedPrivilege
             | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::ReassignOwned
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::TransactionCommitted
-            | ExecuteResponse::TransactionRolledBack
-            | ExecuteResponse::Updated(..) => {
+            | ExecuteResponse::Updated(..)
+            | ExecuteResponse::ValidatedConnection => {
                 command_complete!()
             }
         };
@@ -1724,6 +1793,7 @@ where
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
+        ctx_extra: ExecuteContextExtra,
     ) -> Result<State, io::Error> {
         let typ = row_desc.typ();
         let column_formats = vec![mz_pgrepr::Format::Text; typ.column_types.len()];
@@ -1787,7 +1857,11 @@ where
 
             let count = rows.len();
 
-            if let Err(e) = self.adapter_client.insert_rows(id, columns, rows).await {
+            if let Err(e) = self
+                .adapter_client
+                .insert_rows(id, columns, rows, ctx_extra)
+                .await
+            {
                 return self
                     .error(ErrorResponse::from_adapter_error(Severity::Error, e))
                     .await;
@@ -1889,18 +1963,6 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> Ba
     }
 }
 
-fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
-    match mz_sql::parse::parse_with_limit(sql) {
-        Ok(result) => result.map_err(|e| {
-            // Convert our 0-based byte position to pgwire's 1-based character
-            // position.
-            let pos = sql[..e.pos].chars().count() + 1;
-            ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
-        }),
-        Err(e) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, e)),
-    }
-}
-
 type GetResponse = fn(
     max_rows: ExecuteCount,
     total_sent_rows: usize,
@@ -1970,7 +2032,7 @@ enum FetchResult {
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_options() {
         struct TestCase {
             input: &'static str,
@@ -2024,7 +2086,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_option() {
         struct TestCase {
             input: &'static str,
@@ -2071,7 +2133,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_split_options() {
         struct TestCase {
             input: &'static str,

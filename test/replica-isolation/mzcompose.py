@@ -212,6 +212,13 @@ def restart_environmentd(c: Composition) -> None:
 
 
 def drop_create_replica(c: Composition) -> None:
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     c.testdrive(
         dedent(
             """
@@ -227,6 +234,11 @@ def drop_create_replica(c: Composition) -> None:
 
 
 def create_invalid_replica(c: Composition) -> None:
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
     c.testdrive(
         dedent(
             """
@@ -393,16 +405,21 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     c.up("testdrive", persistent=True)
 
-    logging_env = ["CLUSTERD_LOG_FILTER=mz_compute::server=debug,info"]
     nodes = [
-        Clusterd(name="clusterd_1_1", environment_extra=logging_env),
-        Clusterd(name="clusterd_1_2", environment_extra=logging_env),
-        Clusterd(name="clusterd_2_1", environment_extra=logging_env),
-        Clusterd(name="clusterd_2_2", environment_extra=logging_env),
+        Clusterd(name="clusterd_1_1"),
+        Clusterd(name="clusterd_1_2"),
+        Clusterd(name="clusterd_2_1"),
+        Clusterd(name="clusterd_2_2"),
     ]
 
     with c.override(*nodes):
         c.up("materialized", *[n.name for n in nodes])
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         c.sql(
             """

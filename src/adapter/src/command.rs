@@ -19,18 +19,19 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_sql::plan::PlanKind;
-use tokio::sync::oneshot;
-use tokio::sync::watch;
-
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{GlobalId, Row, ScalarType};
-use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
-use mz_sql::plan::ExecuteTimeout;
+use mz_repr::{ColumnType, GlobalId, Row, ScalarType};
+use mz_sql::ast::{FetchDirection, Raw, Statement};
+use mz_sql::catalog::ObjectType;
+use mz_sql::plan::{ExecuteTimeout, PlanKind};
+use mz_sql::session::vars::Var;
+use mz_storage_client::controller::MonotonicAppender;
+use tokio::sync::{oneshot, watch};
 
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
@@ -51,7 +52,7 @@ pub enum Command {
         tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
-    Describe {
+    Prepare {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
@@ -79,13 +80,17 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: ConnectionId,
+        conn_id: ConnectionIdType,
         secret_key: u32,
+    },
+
+    PrivilegedCancelRequest {
+        conn_id: ConnectionId,
     },
 
     DumpCatalog {
         session: Session,
-        tx: oneshot::Sender<Response<String>>,
+        tx: oneshot::Sender<Response<CatalogDump>>,
     },
 
     CopyRows {
@@ -94,11 +99,20 @@ pub enum Command {
         rows: Vec<Row>,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        ctx_extra: ExecuteContextExtra,
+    },
+
+    AppendWebhook {
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<Option<AppendWebhookResponse>, AdapterError>>,
     },
 
     GetSystemVars {
         session: Session,
-        tx: oneshot::Sender<Response<BTreeMap<String, String>>>,
+        tx: oneshot::Sender<Response<GetVariablesResponse>>,
     },
 
     SetSystemVars {
@@ -118,7 +132,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -127,7 +141,9 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } => None,
+            Command::CancelRequest { .. }
+            | Command::AppendWebhook { .. }
+            | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 
@@ -135,7 +151,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -144,34 +160,9 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } => None,
-        }
-    }
-
-    pub fn send_error(self, e: AdapterError) {
-        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
-            let _ = tx.send(Response::<T> {
-                result: Err(e),
-                session,
-            });
-        }
-        match self {
-            Command::Startup { tx, session, .. } => send(tx, session, e),
-            Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Describe { tx, session, .. } => send(tx, session, e),
-            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
-            Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } => {}
-            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
-            Command::CopyRows { tx, session, .. } => send(tx, session, e),
-            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::Terminate { tx, session, .. } => {
-                if let Some(tx) = tx {
-                    send(tx, session, e)
-                }
-            }
+            Command::CancelRequest { .. }
+            | Command::AppendWebhook { .. }
+            | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 }
@@ -184,7 +175,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
-/// The response to [`ConnClient::startup`](crate::ConnClient::startup).
+/// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
     /// Notifications associated with session startup.
@@ -236,11 +227,79 @@ impl fmt::Display for StartupMessage {
     }
 }
 
+/// The response to [`SessionClient::dump_catalog`](crate::SessionClient::dump_catalog).
+#[derive(Debug, Clone)]
+pub struct CatalogDump(String);
+
+impl CatalogDump {
+    pub fn new(raw: String) -> Self {
+        CatalogDump(raw)
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl Transmittable for CatalogDump {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
+/// The response to [`SessionClient::get_system_vars`](crate::SessionClient::get_system_vars).
+#[derive(Debug, Clone)]
+pub struct GetVariablesResponse(BTreeMap<String, String>);
+
+impl GetVariablesResponse {
+    pub fn new<'a>(vars: impl Iterator<Item = &'a dyn Var>) -> Self {
+        GetVariablesResponse(
+            vars.map(|var| (var.name().to_string(), var.value()))
+                .collect(),
+        )
+    }
+}
+
+impl Transmittable for GetVariablesResponse {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
+impl IntoIterator for GetVariablesResponse {
+    type Item = (String, String);
+    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+pub struct AppendWebhookResponse {
+    pub tx: MonotonicAppender,
+    pub body_ty: ColumnType,
+    pub header_ty: Option<ColumnType>,
+}
+
+impl fmt::Debug for AppendWebhookResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppendWebhookResponse")
+            .field("tx", &"(...)")
+            .field("body_ty", &self.body_ty)
+            .field("header_ty", &self.header_ty)
+            .finish()
+    }
+}
+
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(EnumKind, Derivative)]
 #[derivative(Debug)]
 #[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
+    /// The default privileges were altered.
+    AlteredDefaultPrivileges,
     /// The requested object was altered.
     AlteredObject(ObjectType),
     /// The index was altered.
@@ -261,6 +320,7 @@ pub enum ExecuteResponse {
         id: GlobalId,
         columns: Vec<usize>,
         params: CopyFormatParams<'static>,
+        ctx_extra: ExecuteContextExtra,
     },
     /// The requested connection was created.
     CreatedConnection,
@@ -280,6 +340,8 @@ pub enum ExecuteResponse {
     CreatedSecret,
     /// The requested sink was created.
     CreatedSink,
+    /// The requested HTTP source was created.
+    CreatedWebhookSource,
     /// The requested source was created.
     CreatedSource,
     /// The requested sources were created.
@@ -306,6 +368,8 @@ pub enum ExecuteResponse {
     DiscardedAll,
     /// The requested object was dropped.
     DroppedObject(ObjectType),
+    /// The requested objects were dropped.
+    DroppedOwned,
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.
@@ -327,6 +391,8 @@ pub enum ExecuteResponse {
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested objects were reassigned.
+    ReassignOwned,
     /// The requested privilege was revoked.
     RevokedPrivilege,
     /// The requested role was revoked.
@@ -350,17 +416,26 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Subscribing { rx: RowBatchStream },
     /// The active transaction committed.
-    TransactionCommitted,
+    TransactionCommitted {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The active transaction rolled back.
-    TransactionRolledBack,
+    TransactionRolledBack {
+        /// Session parameters that changed because the transaction ended.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+    /// A connection was validated.
+    ValidatedConnection,
 }
 
 impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
         use ExecuteResponse::*;
         match self {
+            AlteredDefaultPrivileges => Some("ALTER DEFAULT PRIVILEGES".into()),
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
             AlteredRole => Some("ALTER ROLE".into()),
@@ -378,6 +453,7 @@ impl ExecuteResponse {
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
+            CreatedWebhookSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSources => Some("CREATE SOURCES".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
@@ -391,6 +467,7 @@ impl ExecuteResponse {
             DiscardedTemp => Some("DISCARD TEMP".into()),
             DiscardedAll => Some("DISCARD ALL".into()),
             DroppedObject(o) => Some(format!("DROP {o}")),
+            DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,
             Fetch { .. } => None,
             GrantedPrivilege => Some("GRANT".into()),
@@ -407,6 +484,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
@@ -414,9 +492,10 @@ impl ExecuteResponse {
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
             Subscribing { .. } => None,
-            TransactionCommitted => Some("COMMIT".into()),
-            TransactionRolledBack => Some("ROLLBACK".into()),
+            TransactionCommitted { .. } => Some("COMMIT".into()),
+            TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
+            ValidatedConnection => Some("VALIDATE CONNECTION".into()),
         }
     }
 
@@ -428,10 +507,19 @@ impl ExecuteResponse {
 
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
-            AlterOwner | AlterItemRename | AlterNoop | AlterSecret | AlterSink | AlterSource
+            AlterClusterRename
+            | AlterCluster
+            | AlterClusterReplicaRename
+            | AlterOwner
+            | AlterItemRename
+            | AlterNoop
+            | AlterSecret
+            | AlterSink
+            | AlterSource
             | RotateKeys => {
                 vec![AlteredObject]
             }
+            AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
@@ -448,6 +536,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
+            CreateWebhookSource => vec![CreatedWebhookSource],
             CreateSource | CreateSources => vec![CreatedSource, CreatedSources],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
@@ -461,23 +550,29 @@ impl ExecuteResponse {
             DiscardTemp => vec![DiscardedTemp],
             DiscardAll => vec![DiscardedAll],
             DropObjects => vec![DroppedObject],
+            DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Peek | ShowAllVariables | ShowCreate | ShowVariable => {
+            Explain | Select | ShowAllVariables | ShowCreate | ShowVariable | InspectShard => {
                 vec![CopyTo, SendingRows]
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
-            GrantPrivilege => vec![GrantedPrivilege],
+            GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
             CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
-            RevokePrivilege => vec![RevokedPrivilege],
+            PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
+            RevokePrivileges => vec![RevokedPrivilege],
             RevokeRole => vec![RevokedRole],
-            PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
+            PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
+                vec![ExecuteResponseKind::SetVariable]
+            }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
+            SideEffectingFunc => vec![SendingRows],
+            ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
 }

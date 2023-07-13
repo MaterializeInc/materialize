@@ -14,12 +14,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::operators::shard_source::shard_source;
+pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
-use mz_persist_types::stats::{ColumnStats, DynStats};
-use mz_repr::stats::PersistSourceDataStats;
+use mz_persist_types::dyn_struct::DynStruct;
+use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
+
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{
+    ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
+    RelationType, Row, RowArena, ScalarType, Timestamp,
+};
+use mz_timely_util::buffer::ConsolidateBuffer;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
@@ -28,21 +39,11 @@ use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
-
-use mz_expr::{MfpPlan, MfpPushdown};
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::fetch::FetchedPart;
-use mz_repr::{
-    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp,
-};
 use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
-use crate::types::sources::{RelationDescHack, SourceData};
-
-pub use mz_persist_client::operators::shard_source::FlowControl;
-use mz_timely_util::buffer::ConsolidateBuffer;
+use crate::types::sources::SourceData;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -129,8 +130,18 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
-    let mfp_pushdown = map_filter_project.as_ref().map(|x| MfpPushdown::new(*x));
-    let desc = RelationDescHack::new(&metadata.relation_desc);
+    let desc = metadata.relation_desc.clone();
+    let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+    let time_range = if let Some(lower) = as_of.as_ref().and_then(|a| a.as_option().copied()) {
+        // If we have a lower bound, we can provide a bound on mz_now to our filter pushdown.
+        // The range is inclusive, so it's safe to use the maximum timestamp as the upper bound when
+        // `until ` is the empty antichain.
+        // TODO: continually narrow this as the frontier progresses.
+        let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
+        ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
+    } else {
+        ResultSpec::anything()
+    };
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
@@ -143,13 +154,40 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
         move |stats| {
-            mfp_pushdown.as_ref().map_or(true, |x| {
-                x.should_fetch(&PersistSourceDataStatsImpl { desc: &desc, stats })
-            })
+            if let Some(plan) = &filter_plan {
+                let stats = PersistSourceDataStats { desc: &desc, stats };
+                filter_may_match(desc.typ(), time_range.clone(), stats, plan)
+            } else {
+                true
+            }
         },
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)
+}
+
+fn filter_may_match(
+    relation_type: &RelationType,
+    time_range: ResultSpec,
+    stats: PersistSourceDataStats,
+    plan: &MfpPlan,
+) -> bool {
+    let arena = RowArena::new();
+    let mut ranges = ColumnSpecs::new(relation_type, &arena);
+    // TODO: even better if we can use the lower bound of the part itself!
+    ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range.clone());
+
+    if stats.err_count().into_iter().any(|count| count > 0) {
+        // If the error collection is nonempty, we always keep the part.
+        return true;
+    }
+
+    for (id, _) in relation_type.column_types.iter().enumerate() {
+        let result_spec = stats.col_stats(id, &arena);
+        ranges.push_column(id, result_spec);
+    }
+    let result = ranges.mfp_plan_filter(plan).range;
+    result.may_contain(Datum::True) || result.may_fail()
 }
 
 pub fn decode_and_mfp<G, YFn>(
@@ -257,7 +295,7 @@ impl PendingWork {
         P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
         YFn: Fn(Instant, usize) -> bool,
     {
-        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit().cloned();
+        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit();
         while let Some(((key, val), time, diff)) = self.fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
@@ -275,11 +313,8 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
-                            if let Some(key) = is_filter_pushdown_audit {
-                                // Ideally we'd be able to include the part stats here, but that
-                                // would require us to exchange them around. It's unclear if that's
-                                // worth it for work that's already known to be unnecessary.
-                                panic!("persist filter pushdown correctness violation! {} {} val={:?} mfp={:?}", name, key, result, map_filter_project);
+                            if let Some(stats) = is_filter_pushdown_audit {
+                                panic!("persist filter pushdown correctness violation! {} val={:?} mfp={:?} stats={:?}", name, result, map_filter_project, stats);
                             }
                             match result {
                                 Ok((row, time, diff)) => {
@@ -321,8 +356,8 @@ impl PendingWork {
 }
 
 #[derive(Debug)]
-pub(crate) struct PersistSourceDataStatsImpl<'a> {
-    pub(crate) desc: &'a RelationDescHack,
+pub(crate) struct PersistSourceDataStats<'a> {
+    pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
 
@@ -340,7 +375,104 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
     }
 }
 
-impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
+impl PersistSourceDataStats<'_> {
+    fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
+        match stats {
+            JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
+            JsonStats::Bools(bools) => {
+                ResultSpec::value_between(bools.lower.into(), bools.upper.into())
+            }
+            JsonStats::Strings(strings) => ResultSpec::value_between(
+                strings.lower.as_str().into(),
+                strings.upper.as_str().into(),
+            ),
+            JsonStats::Numerics(numerics) => ResultSpec::value_between(
+                arena.make_datum(|r| Jsonb::decode(&numerics.lower, r)),
+                arena.make_datum(|r| Jsonb::decode(&numerics.upper, r)),
+            ),
+            JsonStats::Maps(maps) => {
+                ResultSpec::map_spec(
+                    maps.into_iter()
+                        .map(|(k, v)| {
+                            let mut v_spec = Self::json_spec(v.len, &v.stats, arena);
+                            if v.len != len {
+                                // This field is not always present, so assume
+                                // that accessing it might be null.
+                                v_spec = v_spec.union(ResultSpec::null());
+                            }
+                            (k.as_str().into(), v_spec)
+                        })
+                        .collect(),
+                )
+            }
+            JsonStats::None => ResultSpec::nothing(),
+            JsonStats::Lists | JsonStats::Mixed => ResultSpec::anything(),
+        }
+    }
+
+    fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
+        let value_range = self.col_values(id, arena).unwrap_or(ResultSpec::anything());
+        let json_range = self.col_json(id, arena);
+
+        // If this is not a JSON column or we don't have JSON stats, json_range is
+        // [ResultSpec::anything] and this is a noop.
+        value_range.intersect(json_range)
+    }
+
+    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> ResultSpec<'a> {
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
+        match typ {
+            ColumnType {
+                scalar_type: ScalarType::Jsonb,
+                nullable: false,
+            } => {
+                let stats = self
+                    .stats
+                    .key
+                    .col::<Vec<u8>>(name.as_str())
+                    .expect("stats type should match column");
+                if let Some(byte_stats) = stats {
+                    let value_range = match byte_stats {
+                        BytesStats::Json(json_stats) => {
+                            Self::json_spec(self.stats.key.len, json_stats, arena)
+                        }
+                        BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    };
+                    value_range
+                } else {
+                    ResultSpec::anything()
+                }
+            }
+            ColumnType {
+                scalar_type: ScalarType::Jsonb,
+                nullable: true,
+            } => {
+                let stats = self
+                    .stats
+                    .key
+                    .col::<Option<Vec<u8>>>(name.as_str())
+                    .expect("stats type should match column");
+                if let Some(option_stats) = stats {
+                    let null_range = match option_stats.none {
+                        0 => ResultSpec::nothing(),
+                        _ => ResultSpec::null(),
+                    };
+                    let value_range = match &option_stats.some {
+                        BytesStats::Json(json_stats) => {
+                            Self::json_spec(self.stats.key.len, json_stats, arena)
+                        }
+                        BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    };
+                    null_range.union(value_range)
+                } else {
+                    ResultSpec::anything()
+                }
+            }
+            _ => ResultSpec::anything(),
+        }
+    }
+
     fn len(&self) -> Option<usize> {
         Some(self.stats.key.len)
     }
@@ -354,73 +486,122 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
         let num_oks = self
             .stats
             .key
-            .col::<Option<Vec<u8>>>(RelationDescHack::SOURCE_DATA_ERROR)
-            .expect("stats type should match column")
+            .col::<Option<Vec<u8>>>("err")
+            .expect("err column should be a Vec<u8>")
             .map(|x| x.none);
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_min<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
-        struct ColMin<'a>(&'a dyn DynStats, &'a RowArena);
-        impl<'a> DatumToPersistFn<Option<Datum<'a>>> for ColMin<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<Datum<'a>> {
-                let ColMin(stats, arena) = self;
-                downcast_stats::<T::Data>(stats)?
-                    .lower()
-                    .map(|val| arena.make_datum(|packer| T::decode(val, packer)))
-            }
-        }
-
-        if self.len() <= self.col_null_count(idx) {
-            return None;
-        }
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str())?;
-        typ.to_persist(ColMin(stats.as_ref(), arena))
-    }
-
-    fn col_max<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
-        struct ColMax<'a>(&'a dyn DynStats, &'a RowArena);
-        impl<'a> DatumToPersistFn<Option<Datum<'a>>> for ColMax<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<Datum<'a>> {
-                let ColMax(stats, arena) = self;
-                downcast_stats::<T::Data>(stats)?
-                    .upper()
-                    .map(|val| arena.make_datum(|packer| T::decode(val, packer)))
-            }
-        }
-
-        if self.len() <= self.col_null_count(idx) {
-            return None;
-        }
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str())?;
-        typ.to_persist(ColMax(stats.as_ref(), arena))
-    }
-
-    fn col_null_count(&self, idx: usize) -> Option<usize> {
-        struct ColNullCount<'a>(&'a dyn DynStats);
-        impl<'a> DatumToPersistFn<Option<usize>> for ColNullCount<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<usize> {
-                let ColNullCount(stats) = self;
+    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
+        struct ColValues<'a>(&'a dyn DynStats, &'a RowArena, Option<usize>);
+        impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
+            fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
+                let ColValues(stats, arena, total_count) = self;
                 let stats = downcast_stats::<T::Data>(stats)?;
-                Some(stats.none_count())
+                let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
+                let min = stats.lower().map(make_datum);
+                let max = stats.upper().map(make_datum);
+                let null_count = stats.none_count();
+                let values = match (total_count, min, max) {
+                    (Some(total_count), _, _) if total_count == null_count => ResultSpec::nothing(),
+                    (_, Some(min), Some(max)) => ResultSpec::value_between(min, max),
+                    _ => ResultSpec::value_all(),
+                };
+                let nulls = if null_count > 0 {
+                    ResultSpec::null()
+                } else {
+                    ResultSpec::nothing()
+                };
+                Some(values.union(nulls))
             }
         }
 
-        let name = self.desc.0.get_name(idx);
-        let typ = &self.desc.0.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str());
-        typ.to_persist(ColNullCount(stats?.as_ref()))
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
+        let ok_stats = self
+            .stats
+            .key
+            .col::<Option<DynStruct>>("ok")
+            .expect("ok column should be a struct")?;
+        let stats = ok_stats.some.cols.get(name.as_str())?;
+        typ.to_persist(ColValues(stats.as_ref(), arena, self.len()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_persist_client::stats::PartStats;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::columnar::{PartEncoder, Schema};
+    use mz_persist_types::part::PartBuilder;
+    use mz_repr::{
+        is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
+        RowArena, ScalarType,
+    };
+    use proptest::prelude::*;
+
+    use crate::source::persist_source::PersistSourceDataStats;
+    use crate::types::sources::SourceData;
+
+    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
+        struct ValidateStats<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
+        impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
+            fn call<T: DatumToPersist>(self) -> () {
+                let ValidateStats(stats, arena, datum) = self;
+                if let Some(spec) = stats.col_values(0, arena) {
+                    assert!(spec.may_contain(datum));
+                }
+            }
+        }
+
+        fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
+            let schema = RelationDesc::empty().with_column("col", column_type.clone());
+            let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
+
+            let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
+            {
+                let mut part_mut = part.get_mut();
+                <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
+            }
+            let part = part.finish()?;
+            let stats = part.key_stats()?;
+
+            let stats = PersistSourceDataStats {
+                stats: &PartStats { key: stats },
+                desc: &schema,
+            };
+            let arena = RowArena::default();
+            column_type.to_persist(ValidateStats(stats, &arena, datum));
+            Ok(())
+        }
+
+        // Non-nullable version of the column.
+        let column_type = scalar_type.clone().nullable(false);
+        for datum in scalar_type.interesting_datums() {
+            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+        }
+
+        // Nullable version of the column.
+        let column_type = scalar_type.clone().nullable(true);
+        for datum in scalar_type.interesting_datums() {
+            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+        }
+        assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
     }
 
-    fn row_min(&self, _row: &mut Row) -> Option<usize> {
-        None
-    }
-
-    fn row_max(&self, _row: &mut Row) -> Option<usize> {
-        None
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_scalar_types_stats_roundtrip() {
+        proptest!(|(scalar_type in any::<ScalarType>())| {
+            // The proptest! macro interferes with rustfmt.
+            scalar_type_stats_roundtrip(scalar_type)
+        });
     }
 }

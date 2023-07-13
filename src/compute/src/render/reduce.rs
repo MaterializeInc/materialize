@@ -15,18 +15,12 @@ use std::collections::BTreeMap;
 
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::difference::Multiply;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::Collection;
-use serde::{Deserialize, Serialize};
-use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::warn;
-
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
@@ -37,6 +31,11 @@ use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::reduce::ReduceExt;
+use serde::{Deserialize, Serialize};
+use timely::dataflow::Scope;
+use timely::progress::timestamp::Refines;
+use timely::progress::Timestamp;
+use tracing::warn;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
 use crate::render::errors::MaybeValidatingRow;
@@ -165,11 +164,6 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        // Note also the special case in `ReducePlan::keys()`.
-        if plan == ReducePlan::DistinctNegated {
-            let (output, errs) = self.build_distinct_retractions(collection);
-            return CollectionBundle::from_collections(output, err_input.concat(&errs));
-        }
         let mut errors = Default::default();
         let arrangement = self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity);
         CollectionBundle::from_columns(
@@ -200,9 +194,6 @@ where
                 let (arranged_output, errs) = self.build_distinct(collection);
                 errors.push(errs);
                 arranged_output
-            }
-            ReducePlan::DistinctNegated => {
-                panic!("should have been handled in render_reduce_plan()")
             }
             ReducePlan::Accumulable(expr) => {
                 let (arranged_output, errs) = self.build_accumulable(collection, expr);
@@ -450,71 +441,19 @@ where
                     // output.
                     output.push((Row::default(), 1));
                 },
-                move |_key, input: &[(_, Diff)], output| {
-                    for (row, count) in input.iter() {
+                move |key, input: &[(_, Diff)], output| {
+                    for (_, count) in input.iter() {
                         if count.is_positive() {
                             continue;
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
-                        error_logger.log(message, &format!("row={row:?}, count={count}"));
+                        error_logger.log(message, &format!("row={key:?}, count={count}"));
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }
                 },
             );
         (output, errors.as_collection(|_k, v| v.clone()))
-    }
-
-    /// Build the dataflow to compute the set of distinct keys.
-    ///
-    /// This implementation maintains the rows that don't appear in the output.
-    fn build_distinct_retractions<S>(
-        &self,
-        collection: Collection<S, (Row, Row), Diff>,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
-        let error_logger = self.error_logger();
-
-        let (negated_result, errs) = collection
-            .arrange_named::<RowSpine<Row, _, _, _>>("Arranged DistinctBy Retractions input")
-            .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduce DistinctBy Retractions", {
-                move |key, input, output| {
-                    for (row, count) in input.iter() {
-                        if count.is_positive() {
-                            continue;
-                        }
-                        let message = "Non-positive multiplicity in DistinctBy Retractions";
-                        error_logger.log(message, &format!("row={row:?}, count={count}"));
-                        output.push((Err(message.to_string()), 1));
-                        return;
-                    }
-
-                    output.push((Ok(key.clone()), -1));
-                    output.extend(
-                        input
-                            .iter()
-                            .map(|(values, count)| (Ok((*values).clone()), *count)),
-                    );
-                }
-            })
-            .as_collection(|k, v| (k.clone(), v.clone()))
-            .map_fallible("Demux Errors", |(key, result)| match result {
-                Ok(row) => Ok((key, row)),
-                Err(message) => Err(EvalError::Internal(message).into()),
-            });
-        use timely::dataflow::operators::Map;
-        (
-            negated_result
-                .negate()
-                .concat(&collection)
-                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated DistinctBy Retractions")
-                .inner
-                .map(|((k, _), time, count)| (k, time, count))
-                .as_collection(),
-            errs,
-        )
     }
 
     /// Build the dataflow to compute and arrange multiple non-accumulable,
@@ -1775,11 +1714,10 @@ pub mod monoids {
     // negative infinity, which we do not represent).
 
     use differential_dataflow::difference::{Multiply, Semigroup};
-    use serde::{Deserialize, Serialize};
-
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;
     use mz_repr::{Datum, Diff, Row};
+    use serde::{Deserialize, Serialize};
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -1900,6 +1838,7 @@ pub mod monoids {
             | AggregateFunc::ListConcat { .. }
             | AggregateFunc::StringAgg { .. }
             | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
             | AggregateFunc::DenseRank { .. }
             | AggregateFunc::LagLead { .. }
             | AggregateFunc::FirstValue { .. }

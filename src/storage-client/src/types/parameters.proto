@@ -9,17 +9,24 @@
 
 syntax = "proto3";
 
+import "tracing/src/params.proto";
 import "proto/src/proto.proto";
 import "persist-client/src/cfg.proto";
+import "rocksdb-types/src/config.proto";
 
 package mz_storage_client.types.parameters;
 
 message ProtoStorageParameters {
+    reserved 2;
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
-    bool enable_multi_worker_storage_persist_sink = 2;
     ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
     uint64 keep_n_source_status_history_entries = 4;
+    mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
+    bool finalize_shards = 6;
+    uint64 keep_n_sink_status_history_entries = 7;
+    mz_tracing.params.ProtoTracingParameters tracing = 8;
 }
+
 
 message ProtoPgReplicationTimeouts {
     optional mz_proto.ProtoDuration connect_timeout = 1;

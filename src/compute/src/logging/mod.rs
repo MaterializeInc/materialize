@@ -21,12 +21,11 @@ use std::time::Duration;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
-
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::Timestamp;
 use mz_timely_util::activator::RcActivator;
 
-pub use initialize::initialize;
+pub use crate::logging::initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
 struct BatchLogger<T, E, P>

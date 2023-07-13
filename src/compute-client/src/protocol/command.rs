@@ -11,13 +11,6 @@
 
 use std::collections::BTreeSet;
 
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
-use uuid::Uuid;
-
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -26,6 +19,13 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::client::ProtoAllowCompaction;
 use mz_storage_client::controller::CollectionMetadata;
+use mz_tracing::params::TracingParameters;
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use timely::progress::frontier::Antichain;
+use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
 use crate::types::dataflows::DataflowDescription;
@@ -360,8 +360,12 @@ pub struct ComputeParameters {
     pub max_result_size: Option<u32>,
     /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: Option<usize>,
+    /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
+    pub enable_mz_join_core: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
+    /// Tracing configuration.
+    pub tracing: TracingParameters,
 }
 
 impl ComputeParameters {
@@ -370,7 +374,9 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            enable_mz_join_core,
             persist,
+            tracing,
         } = other;
 
         if max_result_size.is_some() {
@@ -379,7 +385,12 @@ impl ComputeParameters {
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
         }
+        if enable_mz_join_core.is_some() {
+            self.enable_mz_join_core = enable_mz_join_core;
+        }
+
         self.persist.update(persist);
+        self.tracing.update(tracing);
     }
 
     /// Return whether all parameters are unset.
@@ -393,7 +404,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
             dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
+            enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             persist: Some(self.persist.into_proto()),
+            tracing: Some(self.tracing.into_proto()),
         }
     }
 
@@ -401,9 +414,13 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
             dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
+            enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,
+            tracing: proto
+                .tracing
+                .into_rust_if_some("ProtoComputeParameters::tracing")?,
         })
     }
 }
@@ -495,24 +512,23 @@ fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());

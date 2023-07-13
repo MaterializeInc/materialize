@@ -78,18 +78,13 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
-use std::cmp;
-use std::env;
 use std::ffi::CStr;
-use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::{cmp, env, iter, process, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -97,18 +92,11 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use once_cell::sync::Lazy;
-use opentelemetry::trace::TraceContextExt;
-use prometheus::IntGauge;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-use url::Url;
-use uuid::Uuid;
-
 use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsConfig, BUILD_INFO};
+use mz_environmentd::{Listeners, ListenersConfig, TlsConfig, BUILD_INFO};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
@@ -122,17 +110,28 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
-use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task::RuntimeExt;
+use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use opentelemetry::trace::TraceContextExt;
+use prometheus::IntGauge;
+use tracing::{error, info, warn, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
+use uuid::Uuid;
 
 mod sys;
 
@@ -153,15 +152,15 @@ static LONG_VERSION: Lazy<String> = Lazy::new(|| {
 )]
 pub struct Args {
     // === Special modes. ===
-    /// Enable unsafe features.
-    ///
-    /// Unsafe features fall into two categories:
-    ///
-    ///   * In-development features that are not yet ready for production use.
-    ///   * Features useful for development and testing that would pose a
-    ///     legitimate security risk if used in Materialize Cloud.
+    /// Enable unsafe features. Unsafe features are those that should never run
+    /// in production but are appropriate for testing/local development.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
+
+    /// Enables all feature flags, meant only as a tool for local development;
+    /// this should never be enabled in CI.
+    #[clap(long, env = "ALL_FEATURES")]
+    all_features: bool,
 
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
@@ -213,6 +212,18 @@ pub struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+    /// The address on which to listen for Persist PubSub connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR",
+        default_value = "127.0.0.1:6879"
+    )]
+    internal_persist_pubsub_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -319,8 +330,16 @@ pub struct Args {
     /// The init container for services created by the Kubernetes orchestrator.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_INIT_CONTAINER_IMAGE")]
     orchestrator_kubernetes_init_container_image: Option<String>,
-    /// Prefix commands issued by the process orchestrator with the supplied
-    /// value.
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the Kubernetes orchestrator will refuse to create
+    /// services that request disk.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_EPHEMERAL_VOLUME_CLASS")]
+    orchestrator_kubernetes_ephemeral_volume_class: Option<String>,
+    /// The optional fs group for service's pods' `securityContext`.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_FS_GROUP")]
+    orchestrator_kubernetes_service_fs_group: Option<i64>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -403,6 +422,15 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
+    /// The Persist PubSub URL.
+    ///
+    /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_URL",
+        default_value = "http://localhost:6879"
+    )]
+    persist_pubsub_url: String,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -529,6 +557,9 @@ pub struct Args {
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
 
+    #[clap(long, env = "DEPLOY_GENERATION")]
+    deploy_generation: Option<u64>,
+
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
@@ -546,7 +577,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("environmentd: {}", err.display_with_causes());
+        eprintln!("environmentd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }
@@ -585,16 +616,33 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
+
     let (tracing_handle, _tracing_guard) =
         runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         }))?;
 
+    if args.tracing.log_filter.is_some() {
+        halt!(
+            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
+             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
+        )
+    }
+    if args.tracing.opentelemetry_filter.is_some() {
+        halt!(
+            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
+            is needed before the process has access to the system variable, use \
+            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+        )
+    }
+
     let span = tracing::info_span!("environmentd::run").entered();
 
     let metrics_registry = MetricsRegistry::new();
-    let metrics = Metrics::register_into(&metrics_registry);
+    let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
 
@@ -687,6 +735,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
                         coverage: args.orchestrator_kubernetes_coverage,
+                        ephemeral_volume_storage_class: args
+                            .orchestrator_kubernetes_ephemeral_volume_class
+                            .clone(),
+                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -699,6 +751,15 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             )
         }
         OrchestratorKind::Process => {
+            if args
+                .orchestrator_kubernetes_ephemeral_volume_class
+                .is_some()
+            {
+                bail!(
+                    "--orchestrator-kubernetes-ephemeral-volume-class is \
+                      not usable with the process orchestrator"
+                );
+            }
             let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
@@ -724,7 +785,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
-                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
+                        scratch_directory: args
+                            .orchestrator_process_scratch_directory
+                            .expect("process orchestrator requires scratch directory"),
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -734,13 +797,42 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
-        &metrics_registry,
+
+    let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+
+    let _server = runtime.spawn_named(
+        || "persist::rpc::server",
+        async move {
+            info!(
+                "listening for Persist PubSub connections on {}",
+                args.internal_persist_pubsub_listen_addr
+            );
+            // Intentionally do not bubble up errors here, we don't want to take
+            // down environmentd if there are any issues with the pubsub server.
+            let res = persist_pubsub_server
+                .serve(args.internal_persist_pubsub_listen_addr)
+                .await;
+            error!("Persist Pubsub server exited {:?}", res);
+        }
+        .instrument(tracing::info_span!("persist::rpc::server")),
     );
+
+    let persist_clients = {
+        // PersistClientCache may spawn tasks, so run within a tokio runtime context
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                persist_pubsub_client.sender,
+                metrics,
+            ));
+            PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+        })
+    };
+
     let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
-
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -755,7 +847,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory: args.orchestrator_process_scratch_directory,
+        persist_pubsub_url: args.persist_pubsub_url,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -776,53 +868,62 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
 
-    let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
-        sql_listen_addr: args.sql_listen_addr,
-        http_listen_addr: args.http_listen_addr,
-        internal_sql_listen_addr: args.internal_sql_listen_addr,
-        internal_http_listen_addr: args.internal_http_listen_addr,
-        tls,
-        frontegg,
-        cors_allowed_origin,
-        adapter_stash_url: args.adapter_stash_url,
-        controller,
-        secrets_controller,
-        cloud_resource_controller,
-        unsafe_mode: args.unsafe_mode,
-        metrics_registry,
-        now,
-        environment_id: args.environment_id,
-        cluster_replica_sizes,
-        default_storage_cluster_size: args.default_storage_host_size,
-        bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-        bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        system_parameter_defaults: args
-            .system_parameter_default
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
-        availability_zones: args.availability_zone,
-        connection_context: ConnectionContext::from_cli_args(
-            &args.tracing.log_filter.inner,
-            args.aws_external_id_prefix,
-            secrets_reader,
-        ),
-        tracing_handle,
-        storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
-        storage_usage_retention_period: args.storage_usage_retention_period,
-        segment_api_key: args.segment_api_key,
-        egress_ips: args.announce_egress_ip,
-        aws_account_id: args.aws_account_id,
-        aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
-        launchdarkly_sdk_key: args.launchdarkly_sdk_key,
-        launchdarkly_key_map: args
-            .launchdarkly_key_map
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
-        config_sync_loop_interval: args.config_sync_loop_interval,
-        bootstrap_role: args.bootstrap_role,
-    }))?;
+    let server = runtime.block_on(async {
+        let listeners = Listeners::bind(ListenersConfig {
+            sql_listen_addr: args.sql_listen_addr,
+            http_listen_addr: args.http_listen_addr,
+            internal_sql_listen_addr: args.internal_sql_listen_addr,
+            internal_http_listen_addr: args.internal_http_listen_addr,
+        })
+        .await?;
+        listeners
+            .serve(mz_environmentd::Config {
+                tls,
+                frontegg,
+                cors_allowed_origin,
+                adapter_stash_url: args.adapter_stash_url,
+                controller,
+                secrets_controller,
+                cloud_resource_controller,
+                unsafe_mode: args.unsafe_mode,
+                all_features: args.all_features,
+                metrics_registry,
+                now,
+                environment_id: args.environment_id,
+                cluster_replica_sizes,
+                default_storage_cluster_size: args.default_storage_host_size,
+                bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+                bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
+                system_parameter_defaults: args
+                    .system_parameter_default
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                availability_zones: args.availability_zone,
+                connection_context: ConnectionContext::from_cli_args(
+                    &args.tracing.startup_log_filter,
+                    args.aws_external_id_prefix,
+                    secrets_reader,
+                ),
+                tracing_handle,
+                storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+                storage_usage_retention_period: args.storage_usage_retention_period,
+                segment_api_key: args.segment_api_key,
+                egress_ips: args.announce_egress_ip,
+                aws_account_id: args.aws_account_id,
+                aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
+                launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_key_map: args
+                    .launchdarkly_key_map
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                config_sync_loop_interval: args.config_sync_loop_interval,
+                bootstrap_role: args.bootstrap_role,
+                deploy_generation: args.deploy_generation,
+            })
+            .await
+    })?;
 
     metrics.start_time_environmentd.set(
         envd_start
@@ -849,6 +950,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
     );
+    println!(
+        " Internal Persist PubSub address: {}",
+        args.internal_persist_pubsub_listen_addr
+    );
 
     println!(" Root trace ID: {id}");
 
@@ -874,11 +979,15 @@ struct Metrics {
 }
 
 impl Metrics {
-    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+    pub fn register_into(registry: &MetricsRegistry, build_info: BuildInfo) -> Metrics {
         Metrics {
             start_time_environmentd: registry.register(metric!(
                 name: "mz_start_time_environmentd",
                 help: "Time in milliseconds from environmentd start until the adapter is ready.",
+                const_labels: {
+                    "version" => build_info.version,
+                    "build_type" => if cfg!(release) { "release" } else { "debug" }
+                },
             )),
         }
     }

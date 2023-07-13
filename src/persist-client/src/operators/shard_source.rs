@@ -15,7 +15,6 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,7 +23,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use futures_util::future::Either;
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
@@ -186,7 +184,7 @@ where
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     let cfg = clients.cfg().clone();
-    let metrics = clients.metrics.shards.shard(&shard_id);
+    let metrics = Arc::clone(&clients.metrics);
     let worker_index = scope.index();
     let num_workers = scope.peers();
 
@@ -452,9 +450,11 @@ where
                             let bytes_emitted = {
                                 let mut bytes_emitted = 0;
                                 for mut part_desc in std::mem::take(&mut batch_parts) {
-                                    // TODO(mfp): Push the filter down into the Subscribe?
+                                    // TODO: Push the filter down into the Subscribe?
                                     if cfg.dynamic.stats_filter_enabled() {
-                                        let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| should_fetch_part(stats));
+                                        let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
+                                            should_fetch_part(&stats.decode())
+                                        });
                                         let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                                         if should_fetch {
                                             metrics.pushdown.parts_fetched_count.inc();
@@ -462,12 +462,14 @@ where
                                         } else {
                                             metrics.pushdown.parts_filtered_count.inc();
                                             metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                                            let should_audit = SOFT_ASSERTIONS.load(Ordering::Relaxed) || {
+                                            let should_audit = {
                                                 let mut h = DefaultHasher::new();
                                                 part_desc.key.hash(&mut h);
                                                 usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
                                             };
                                             if should_audit {
+                                                metrics.pushdown.parts_audited_count.inc();
+                                                metrics.pushdown.parts_audited_bytes.inc_by(bytes);
                                                 part_desc.request_filter_pushdown_audit();
                                             } else {
                                                 debug!("skipping part because of stats filter {:?}", part_desc.stats);
@@ -681,7 +683,7 @@ mod tests {
     ///
     /// NOTE: This test is weird: if everything is good it will pass. If we
     /// break the assumption that we test this will time out and we will notice.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_shard_source_implicit_initial_as_of() {
         let (persist_clients, location) = new_test_client_cache_and_location();
 
@@ -738,7 +740,7 @@ mod tests {
     ///
     /// NOTE: This test is weird: if everything is good it will pass. If we
     /// break the assumption that we test this will time out and we will notice.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_shard_source_explicit_initial_as_of() {
         let (persist_clients, location) = new_test_client_cache_and_location();
 

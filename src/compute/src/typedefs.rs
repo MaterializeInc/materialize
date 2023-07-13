@@ -15,7 +15,6 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{
     ColKeySpine, ColValSpine, OrdKeySpine, OrdValSpine,
 };
-
 use mz_repr::{Diff, Row, Timestamp};
 use mz_storage_client::types::errors::DataflowError;
 

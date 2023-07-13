@@ -9,9 +9,9 @@
 
 import argparse
 import random
-import time
 from threading import Thread
 
+from materialize import spawn
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized
 
@@ -27,6 +27,10 @@ SERVICES = [
         },
     ),
 ]
+
+
+def print_logs(container_id: str) -> None:
+    spawn.runv(["docker", "logs", "-f", container_id])
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -53,13 +57,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     seed = args.seed or random.randint(0, 2**31)
 
-    def kill_sqlancer_with_delay() -> None:
-        time.sleep(args.runtime)
-        c.kill("sqlancer", signal="SIGINT")
-
-    killer = Thread(target=kill_sqlancer_with_delay)
-    killer.start()
-
+    print("~~~ Run in progress")
     result = c.run(
         "sqlancer",
         "--random-seed",
@@ -70,6 +68,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "6875",
         "--username",
         "materialize",
+        "--timeout-seconds",
+        f"{args.runtime}",
         "--num-tries",
         f"{args.num_tries}",
         "--num-threads",
@@ -81,18 +81,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "materialize",
         "--oracle",
         args.oracle,
-        capture=True,
-        capture_stderr=True,
         check=False,
+        detach=True,
+        capture=True,
     )
+    container_id = result.stdout.strip()
 
-    if result.returncode not in (0, 130):
-        raise Exception(
-            f"[SQLancer] Unexpected return code in SQLancer: {result.returncode}\n{result.stdout}\n{result.stderr}"
-        )
+    # Print logs in a background thread so that we get immediate output in CI,
+    # and also when running SQLancer locally
+    thread = Thread(target=print_logs, args=(container_id,))
+    thread.start()
+    # At the same time capture the logs to analyze for finding new issues
+    stdout = spawn.capture(["docker", "logs", "-f", container_id])
 
     in_assertion = False
-    for line in result.stderr.splitlines():
+    for line in stdout.splitlines():
         if line.startswith("--java.lang.AssertionError: "):
             in_assertion = True
             print(f"--- [SQLancer] {line.removeprefix('--java.lang.AssertionError: ')}")

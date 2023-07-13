@@ -24,6 +24,14 @@ _value_ | The value for the secret. The _value_ expression may not reference any
 CREATE SECRET upstash_kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+
 ## Related pages
 
 - [`CREATE CONNECTION`](../create-connection)

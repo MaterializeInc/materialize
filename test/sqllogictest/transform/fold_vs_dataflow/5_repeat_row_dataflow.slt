@@ -22,6 +22,11 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 statement ok
 INSERT INTO t_base VALUES (1, 9223372036854775807);
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row = true
+----
+COMPLETE 0
+
 statement ok
 CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
   SELECT data FROM t_base, repeat_row(diff);

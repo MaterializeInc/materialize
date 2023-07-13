@@ -17,11 +17,6 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tokio::sync::oneshot;
-use uuid::Uuid;
-
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
@@ -30,19 +25,20 @@ use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::StrExt;
-use mz_ore::str::{separated, Indent};
+use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::client::ConnectionId;
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::util::{send_immediate_rows, ResultExt};
 use crate::AdapterError;
-
-use super::id_bundle::CollectionIdBundle;
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -141,10 +137,9 @@ where
 #[derive(Debug)]
 pub struct PlannedPeek {
     pub plan: PeekPlan,
-    pub timestamp_context: TimestampContext<mz_repr::Timestamp>,
+    pub determination: TimestampDetermination<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
     pub source_arity: usize,
-    pub id_bundle: CollectionIdBundle,
     pub source_ids: BTreeSet<GlobalId>,
 }
 
@@ -306,10 +301,9 @@ impl crate::coord::Coordinator {
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
-            timestamp_context,
+            determination,
             conn_id,
             source_arity,
-            id_bundle: _,
             source_ids,
         } = plan;
 
@@ -348,7 +342,7 @@ impl crate::coord::Coordinator {
             };
         }
 
-        let timestamp = timestamp_context.timestamp_or_default();
+        let timestamp = determination.timestamp_context.timestamp_or_default();
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to
@@ -435,7 +429,7 @@ impl crate::coord::Coordinator {
             uuid,
             PendingPeek {
                 sender: rows_tx,
-                conn_id,
+                conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
             },
@@ -492,6 +486,11 @@ impl crate::coord::Coordinator {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
+            self.metrics
+                .canceled_peeks
+                .with_label_values(&[])
+                .inc_by(u64::cast_from(uuids.len()));
+
             let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
             for (uuid, compute_instance) in &uuids {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
@@ -572,7 +571,8 @@ fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
+    use mz_expr::func::IsNull;
+    use mz_expr::{MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::explain::text::text_string_at;
     use mz_repr::explain::{DummyHumanizer, RenderingContext};
@@ -580,7 +580,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_fast_path_plan_as_text() {
         let typ = RelationType::new(vec![ColumnType {
             scalar_type: ScalarType::String,

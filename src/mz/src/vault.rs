@@ -15,7 +15,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use serde::{de::Visitor, Deserialize, Serialize};
+use serde::de::Visitor;
+use serde::{Deserialize, Serialize};
 
 use crate::configuration::FronteggAPIToken;
 
@@ -72,10 +73,11 @@ impl Token {
 
 #[cfg(not(target_os = "macos"))]
 mod keychain {
+    use anyhow::{bail, Result};
+
     use crate::configuration::FronteggAPIToken;
 
     use super::Token;
-    use anyhow::{bail, Result};
 
     pub fn get_app_password(_: &str, _: &str) -> Result<String> {
         bail!("no credentials set. authenticate using mz login")

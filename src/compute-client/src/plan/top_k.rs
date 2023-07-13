@@ -17,13 +17,12 @@
 //! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
+use mz_expr::ColumnOrder;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::ColumnOrder;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-
-use super::bucketing_of_expected_group_size;
+use crate::plan::bucketing_of_expected_group_size;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.top_k.rs"));
 
@@ -283,12 +282,13 @@ impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use super::*;
+
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn top_k_plan_protobuf_roundtrip(expect in any::<TopKPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoTopKPlan>(&expect);
             assert!(actual.is_ok());

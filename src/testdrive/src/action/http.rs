@@ -8,12 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
+use reqwest::header::CONTENT_TYPE;
 use reqwest::Method;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
-
-use reqwest::header::CONTENT_TYPE;
 
 pub async fn run_request(
     mut cmd: BuiltinCommand,

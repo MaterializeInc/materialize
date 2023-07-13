@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 def test_egress_ips(mz: MaterializeApplication) -> None:

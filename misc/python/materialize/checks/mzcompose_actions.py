@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
@@ -30,7 +30,7 @@ class StartMz(MzcomposeAction):
         self,
         tag: Optional[MzVersion] = None,
         environment_extra: List[str] = [],
-        system_parameter_defaults: Optional[List[str]] = None,
+        system_parameter_defaults: Optional[Dict[str, str]] = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
@@ -73,39 +73,56 @@ class ConfigureMz(MzcomposeAction):
         input = dedent(
             """
             # Run any query to have the materialize user implicitly created if
-            # it didn't exist yet. Required for the ALTER ROLE later.
+            # it didn't exist yet. Required for the GRANT later.
             > SELECT 1;
             1
-
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET max_tables = 1000;
-            ALTER SYSTEM SET max_sinks = 1000;
-            ALTER SYSTEM SET max_sources = 1000;
-            ALTER SYSTEM SET max_materialized_views = 1000;
-            ALTER SYSTEM SET max_objects_per_schema = 1000;
-            ALTER SYSTEM SET max_secrets = 1000;
             """
         )
 
-        if e.current_mz_version >= MzVersion(0, 45, 0):
-            # Since we already test with RBAC enabled, we have to give materialize
-            # user the relevant attributes so the existing tests keep working.
-            input += "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;\n"
+        system_settings = {
+            "ALTER SYSTEM SET max_tables = 1000;",
+            "ALTER SYSTEM SET max_sinks = 1000;",
+            "ALTER SYSTEM SET max_sources = 1000;",
+            "ALTER SYSTEM SET max_materialized_views = 1000;",
+            "ALTER SYSTEM SET max_objects_per_schema = 1000;",
+            "ALTER SYSTEM SET max_secrets = 1000;",
+            "ALTER SYSTEM SET max_clusters = 1000;",
+        }
+
+        # Since we already test with RBAC enabled, we have to give materialize
+        # user the relevant attributes so the existing tests keep working.
+        if MzVersion(0, 45, 0) <= e.current_mz_version < MzVersion.parse("0.59.0-dev"):
+            system_settings.add(
+                "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
+            )
+        elif e.current_mz_version >= MzVersion.parse("0.59.0"):
+            system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
         if e.current_mz_version >= MzVersion(0, 47, 0):
-            input += "ALTER SYSTEM SET enable_rbac_checks TO true;\n"
+            system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
 
         if e.current_mz_version >= MzVersion.parse("0.51.0-dev"):
-            input += "ALTER SYSTEM SET enable_ld_rbac_checks TO true;\n"
+            system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
 
         if e.current_mz_version >= MzVersion.parse("0.52.0-dev"):
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant privileges so the existing tests keep working.
-            input += "GRANT CREATE ON DATABASE materialize TO materialize;\n"
-            input += "GRANT CREATE ON SCHEMA materialize.public TO materialize;\n"
-            input += "GRANT CREATE ON CLUSTER default TO materialize;\n"
+            system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
+            system_settings.add(
+                "GRANT CREATE ON SCHEMA materialize.public TO materialize;"
+            )
+            system_settings.add("GRANT CREATE ON CLUSTER default TO materialize;")
+
+        system_settings = system_settings - e.system_settings
+
+        if system_settings:
+            input += (
+                "$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}\n"
+                + "\n".join(system_settings)
+            )
 
         self.handle = e.testdrive(input=input)
+        e.system_settings.update(system_settings)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)
@@ -131,8 +148,16 @@ class UseClusterdCompute(MzcomposeAction):
             else "STORAGECTL ADDRESS 'clusterd_compute_1:2100'"
         )
 
+        if self.base_version >= MzVersion(0, 55, 0):
+            c.sql(
+                "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;",
+                port=6877,
+                user="mz_system",
+            )
+
         c.sql(
             f"""
+
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
                 {storage_addresses},

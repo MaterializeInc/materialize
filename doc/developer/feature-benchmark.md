@@ -48,6 +48,15 @@ To use a specific SIZE for sources, sinks and dataflows:
 ./mzcompose run default --this-size 2 --other-size 4 ...
 ```
 
+To benchmark specific product features:
+
+```
+./mzcompose run default --this-params="enable_disk_cluster_replicas=false;disk_cluster_replicas_default=false" --other-params="..."
+```
+
+Make sure to describe the desired state of any relevant flags exhaustively in order to avoid the unwanted
+interference of any defaults that may be in effect and that can change over time from release to release.
+
 ## Running manually in Buildkite
 
 Go to the [Buildkite Nightly Job](https://buildkite.com/materialize/nightlies), click the down arrow button
@@ -144,6 +153,12 @@ the retry attempts.
 
 Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
 output until reliably reproduced locally.
+
+# Measuring memory consumption
+
+If started with `--measure-memory`, the feature benchmark will measure memory consumption and report any regressions.
+
+`docker stats` is used to measure the memory consumption of the entire Materialize container, which includes CRDB.
 
 # Troubleshooting
 

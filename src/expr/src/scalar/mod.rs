@@ -7,37 +7,36 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use itertools::Itertools;
-use mz_repr::adt::date::DateError;
-use mz_repr::adt::timestamp::TimestampError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::mem;
 use std::ops::BitOrAssign;
+use std::{fmt, mem};
 
+use itertools::Itertools;
+use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
-use mz_proto::IntoRustIfSome;
+use mz_ore::str::StrExt;
+use mz_ore::vec::swap_remove_multiple;
+use mz_pgrepr::TypeFromOidError;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::date::DateError;
+use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::range::InvalidRangeError;
+use mz_repr::adt::regex::Regex;
+use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::strconv::{ParseError, ParseHexError};
+use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_lowertest::MzReflect;
-use mz_ore::collections::CollectionExt;
-use mz_ore::iter::IteratorExt;
-use mz_ore::vec::swap_remove_multiple;
-use mz_pgrepr::TypeFromOidError;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::array::InvalidArrayError;
-use mz_repr::adt::datetime::DateTimeUnits;
-use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
-use mz_repr::arb_datum;
-use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
-
-use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-use self::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
-use crate::scalar::func::parse_timezone;
+use crate::scalar::func::{
+    parse_timezone, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
+use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
 
@@ -2151,18 +2150,18 @@ pub enum EvalError {
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
-    Float32OutOfRange,
-    Float64OutOfRange,
-    Int16OutOfRange,
-    Int32OutOfRange,
-    Int64OutOfRange,
-    UInt16OutOfRange,
-    UInt32OutOfRange,
-    UInt64OutOfRange,
-    MzTimestampOutOfRange,
+    Float32OutOfRange(String),
+    Float64OutOfRange(String),
+    Int16OutOfRange(String),
+    Int32OutOfRange(String),
+    Int64OutOfRange(String),
+    UInt16OutOfRange(String),
+    UInt32OutOfRange(String),
+    UInt64OutOfRange(String),
+    MzTimestampOutOfRange(String),
     MzTimestampStepOverflow,
-    OidOutOfRange,
-    IntervalOutOfRange,
+    OidOutOfRange(String),
+    IntervalOutOfRange(String),
     TimestampCannotBeNan,
     TimestampOutOfRange,
     DateOutOfRange,
@@ -2196,6 +2195,7 @@ pub enum EvalError {
     InvalidRegex(String),
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
+    InvalidDatePart(String),
     NegSqrt,
     NullCharacterNotPermitted,
     UnknownUnits(String),
@@ -2225,6 +2225,25 @@ pub enum EvalError {
     InvalidRange(InvalidRangeError),
     InvalidRoleId(String),
     InvalidPrivileges(String),
+    LetRecLimitExceeded(String),
+    MultiDimensionalArraySearch,
+    MustNotBeNull(String),
+    InvalidIdentifier {
+        ident: String,
+        detail: Option<String>,
+    },
+    ArrayFillWrongArraySubscripts,
+    // TODO: propagate this check more widly throughout the expr crate
+    MaxArraySizeExceeded(usize),
+    DateDiffOverflow {
+        unit: String,
+        a: String,
+        b: String,
+    },
+    // The error for ErrorIfNull; this should not be used in other contexts as a generic error
+    // printer.
+    IfNullError(String),
+    LengthTooLarge,
 }
 
 impl fmt::Display for EvalError {
@@ -2248,18 +2267,24 @@ impl fmt::Display for EvalError {
             EvalError::FloatOverflow => f.write_str("value out of range: overflow"),
             EvalError::FloatUnderflow => f.write_str("value out of range: underflow"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
-            EvalError::Float32OutOfRange => f.write_str("real out of range"),
-            EvalError::Float64OutOfRange => f.write_str("double precision out of range"),
-            EvalError::Int16OutOfRange => f.write_str("smallint out of range"),
-            EvalError::Int32OutOfRange => f.write_str("integer out of range"),
-            EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
-            EvalError::UInt16OutOfRange => f.write_str("uint2 out of range"),
-            EvalError::UInt32OutOfRange => f.write_str("uint4 out of range"),
-            EvalError::UInt64OutOfRange => f.write_str("uint8 out of range"),
-            EvalError::MzTimestampOutOfRange => f.write_str("mz_timestamp out of range"),
+            EvalError::Float32OutOfRange(val) => write!(f, "{} real out of range", val.quoted()),
+            EvalError::Float64OutOfRange(val) => {
+                write!(f, "{} double precision out of range", val.quoted())
+            }
+            EvalError::Int16OutOfRange(val) => write!(f, "{} smallint out of range", val.quoted()),
+            EvalError::Int32OutOfRange(val) => write!(f, "{} integer out of range", val.quoted()),
+            EvalError::Int64OutOfRange(val) => write!(f, "{} bigint out of range", val.quoted()),
+            EvalError::UInt16OutOfRange(val) => write!(f, "{} uint2 out of range", val.quoted()),
+            EvalError::UInt32OutOfRange(val) => write!(f, "{} uint4 out of range", val.quoted()),
+            EvalError::UInt64OutOfRange(val) => write!(f, "{} uint8 out of range", val.quoted()),
+            EvalError::MzTimestampOutOfRange(val) => {
+                write!(f, "{} mz_timestamp out of range", val.quoted())
+            }
             EvalError::MzTimestampStepOverflow => f.write_str("step mz_timestamp overflow"),
-            EvalError::OidOutOfRange => f.write_str("OID out of range"),
-            EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
+            EvalError::OidOutOfRange(val) => write!(f, "{} OID out of range", val.quoted()),
+            EvalError::IntervalOutOfRange(val) => {
+                write!(f, "{} interval out of range", val.quoted())
+            }
             EvalError::TimestampCannotBeNan => f.write_str("timestamp cannot be NaN"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::DateOutOfRange => f.write_str("date out of range"),
@@ -2301,6 +2326,7 @@ impl fmt::Display for EvalError {
                 "invalid byte sequence '{}' for encoding '{}'",
                 byte_sequence, encoding_name
             ),
+            EvalError::InvalidDatePart(part) => write!(f, "invalid datepart {}", part.quoted()),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::NullCharacterNotPermitted => f.write_str("null character not permitted"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
@@ -2378,6 +2404,32 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRange(e) => e.fmt(f),
             EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
             EvalError::InvalidPrivileges(msg) => write!(f, "{msg}"),
+            EvalError::LetRecLimitExceeded(max_iters) => {
+                write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
+                       max_iters)
+            }
+            EvalError::MultiDimensionalArraySearch => write!(
+                f,
+                "searching for elements in multidimensional arrays is not supported"
+            ),
+            EvalError::MustNotBeNull(v) => write!(f, "{v} must not be null"),
+            EvalError::InvalidIdentifier { ident, .. } => {
+                write!(f, "string is not a valid identifier: {}", ident.quoted())
+            }
+            EvalError::ArrayFillWrongArraySubscripts => {
+                f.write_str("wrong number of array subscripts")
+            }
+            EvalError::MaxArraySizeExceeded(max_size) => {
+                write!(
+                    f,
+                    "array size exceeds the maximum allowed ({max_size} bytes)"
+                )
+            }
+            EvalError::DateDiffOverflow { unit, a, b } => {
+                write!(f, "datediff overflow, {unit} of {a}, {b}")
+            }
+            EvalError::IfNullError(s) => f.write_str(s),
+            EvalError::LengthTooLarge => write!(f, "requested length too large"),
         }
     }
 }
@@ -2395,6 +2447,10 @@ impl EvalError {
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
+            EvalError::InvalidIdentifier { detail, .. } => detail.clone(),
+            EvalError::ArrayFillWrongArraySubscripts => {
+                Some("Low bound array has different size than dimensions array.".to_string())
+            }
             _ => None,
         }
     }
@@ -2407,7 +2463,7 @@ impl EvalError {
             EvalError::LikeEscapeTooLong => {
                 Some("Escape string must be empty or one character.".into())
             }
-            EvalError::MzTimestampOutOfRange => Some(
+            EvalError::MzTimestampOutOfRange(_) => Some(
                 "Integer, numeric, and text casts to mz_timestamp must be in the form of whole \
                 milliseconds since the Unix epoch. Values with fractional parts cannot be \
                 converted to mz_timestamp."
@@ -2488,18 +2544,40 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::FloatOverflow => FloatOverflow(()),
             EvalError::FloatUnderflow => FloatUnderflow(()),
             EvalError::NumericFieldOverflow => NumericFieldOverflow(()),
-            EvalError::Float32OutOfRange => Float32OutOfRange(()),
-            EvalError::Float64OutOfRange => Float64OutOfRange(()),
-            EvalError::Int16OutOfRange => Int16OutOfRange(()),
-            EvalError::Int32OutOfRange => Int32OutOfRange(()),
-            EvalError::Int64OutOfRange => Int64OutOfRange(()),
-            EvalError::UInt16OutOfRange => Uint16OutOfRange(()),
-            EvalError::UInt32OutOfRange => Uint32OutOfRange(()),
-            EvalError::UInt64OutOfRange => Uint64OutOfRange(()),
-            EvalError::MzTimestampOutOfRange => MzTimestampOutOfRange(()),
+            EvalError::Float32OutOfRange(val) => Float32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Float64OutOfRange(val) => Float64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int16OutOfRange(val) => Int16OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int32OutOfRange(val) => Int32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int64OutOfRange(val) => Int64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::UInt16OutOfRange(val) => Uint16OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::UInt32OutOfRange(val) => Uint32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::UInt64OutOfRange(val) => Uint64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::MzTimestampOutOfRange(val) => MzTimestampOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::MzTimestampStepOverflow => MzTimestampStepOverflow(()),
-            EvalError::OidOutOfRange => OidOutOfRange(()),
-            EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
+            EvalError::OidOutOfRange(val) => OidOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::IntervalOutOfRange(val) => IntervalOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::TimestampCannotBeNan => TimestampCannotBeNan(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
             EvalError::DateOutOfRange => DateOutOfRange(()),
@@ -2538,6 +2616,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRegex(v) => InvalidRegex(v.clone()),
             EvalError::InvalidRegexFlag(v) => InvalidRegexFlag(v.into_proto()),
             EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.clone()),
+            EvalError::InvalidDatePart(part) => InvalidDatePart(part.to_string()),
             EvalError::NegSqrt => NegSqrt(()),
             EvalError::NullCharacterNotPermitted => NullCharacterNotPermitted(()),
             EvalError::UnknownUnits(v) => UnknownUnits(v.clone()),
@@ -2581,6 +2660,26 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
             EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
             EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
+            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
+            EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
+            EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
+            EvalError::InvalidIdentifier { ident, detail } => {
+                InvalidIdentifier(ProtoInvalidIdentifier {
+                    ident: ident.clone(),
+                    detail: detail.into_proto(),
+                })
+            }
+            EvalError::ArrayFillWrongArraySubscripts => ArrayFillWrongArraySubscripts(()),
+            EvalError::MaxArraySizeExceeded(max_size) => {
+                MaxArraySizeExceeded(u64::cast_from(*max_size))
+            }
+            EvalError::DateDiffOverflow { unit, a, b } => DateDiffOverflow(ProtoDateDiffOverflow {
+                unit: unit.to_owned(),
+                a: a.to_owned(),
+                b: b.to_owned(),
+            }),
+            EvalError::IfNullError(s) => IfNullError(s.clone()),
+            EvalError::LengthTooLarge => LengthTooLarge(()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2600,18 +2699,18 @@ impl RustType<ProtoEvalError> for EvalError {
                 FloatOverflow(()) => Ok(EvalError::FloatOverflow),
                 FloatUnderflow(()) => Ok(EvalError::FloatUnderflow),
                 NumericFieldOverflow(()) => Ok(EvalError::NumericFieldOverflow),
-                Float32OutOfRange(()) => Ok(EvalError::Float32OutOfRange),
-                Float64OutOfRange(()) => Ok(EvalError::Float64OutOfRange),
-                Int16OutOfRange(()) => Ok(EvalError::Int16OutOfRange),
-                Int32OutOfRange(()) => Ok(EvalError::Int32OutOfRange),
-                Int64OutOfRange(()) => Ok(EvalError::Int64OutOfRange),
-                Uint16OutOfRange(()) => Ok(EvalError::UInt16OutOfRange),
-                Uint32OutOfRange(()) => Ok(EvalError::UInt32OutOfRange),
-                Uint64OutOfRange(()) => Ok(EvalError::UInt64OutOfRange),
-                MzTimestampOutOfRange(()) => Ok(EvalError::MzTimestampOutOfRange),
+                Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value)),
+                Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value)),
+                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value)),
+                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value)),
+                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value)),
+                Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value)),
+                Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value)),
+                Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value)),
+                MzTimestampOutOfRange(val) => Ok(EvalError::MzTimestampOutOfRange(val.value)),
                 MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
-                OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
-                IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
+                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value)),
+                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value)),
                 TimestampCannotBeNan(()) => Ok(EvalError::TimestampCannotBeNan),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
@@ -2644,6 +2743,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRegex(v) => Ok(EvalError::InvalidRegex(v)),
                 InvalidRegexFlag(v) => Ok(EvalError::InvalidRegexFlag(char::from_proto(v)?)),
                 InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v)),
+                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part)),
                 NegSqrt(()) => Ok(EvalError::NegSqrt),
                 NullCharacterNotPermitted(()) => Ok(EvalError::NullCharacterNotPermitted),
                 UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
@@ -2679,6 +2779,24 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
                 InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
                 InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
+                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
+                MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
+                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
+                InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
+                    ident: v.ident,
+                    detail: v.detail,
+                }),
+                ArrayFillWrongArraySubscripts(()) => Ok(EvalError::ArrayFillWrongArraySubscripts),
+                MaxArraySizeExceeded(max_size) => {
+                    Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
+                }
+                DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
+                    unit: v.unit,
+                    a: v.a,
+                    b: v.b,
+                }),
+                IfNullError(v) => Ok(EvalError::IfNullError(v)),
+                LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
@@ -2700,10 +2818,11 @@ impl RustType<ProtoDims> for (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
 
-    #[test]
+    use super::*;
+
+    #[mz_ore::test]
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2810,7 +2929,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2819,7 +2938,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
             let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
             assert!(actual.is_ok());
@@ -2828,7 +2947,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

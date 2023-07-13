@@ -79,20 +79,21 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use mz_ore::soft_assert;
+use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use timely::progress::Antichain;
 
 pub mod objects;
 
 mod postgres;
 mod transaction;
-mod upgrade;
+
+// TODO(parkmycar): This shouldn't be public, but it is for now to prevent dead code warnings.
+pub mod upgrade;
 
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
@@ -102,7 +103,19 @@ pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 /// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
 /// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 14;
+pub const STASH_VERSION: u64 = 27;
+
+/// The minimum [`Stash`] version number that we support migrating from.
+///
+/// After bumping this we can delete the old migrations.
+pub const MIN_STASH_VERSION: u64 = 13;
+
+/// The key within the Config Collection that stores the version of the Stash.
+pub const USER_VERSION_KEY: &str = "user_version";
+pub const COLLECTION_CONFIG: TypedCollection<
+    objects::proto::ConfigKey,
+    objects::proto::ConfigValue,
+> = TypedCollection::new("config");
 
 pub type Diff = i64;
 pub type Timestamp = i64;
@@ -110,9 +123,14 @@ pub type Id = i64;
 
 // A common trait for uses of K and V to express in a single place all of the
 // traits required by async_trait and StashCollection.
-pub trait Data: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync {}
-
-impl<T: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync> Data for T {}
+pub trait Data:
+    prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>
+{
+}
+impl<T: prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>> Data
+    for T
+{
+}
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
 /// state of the collection is durable.
@@ -198,6 +216,14 @@ impl StashError {
             _ => false,
         }
     }
+
+    /// Reports whether the error can be recovered if we opened the stash in writeable
+    pub fn can_recover_with_write_mode(&self) -> bool {
+        match &self.inner {
+            InternalStashError::StashNotWritable(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -205,6 +231,11 @@ enum InternalStashError {
     Postgres(::tokio_postgres::Error),
     Fence(String),
     PeekSinceUpper(String),
+    IncompatibleVersion(u64),
+    Proto(TryFromProtoError),
+    Decoding(prost::DecodeError),
+    Uninitialized,
+    StashNotWritable(String),
     Other(String),
 }
 
@@ -213,8 +244,15 @@ impl fmt::Display for StashError {
         f.write_str("stash error: ")?;
         match &self.inner {
             InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
+            InternalStashError::Proto(e) => write!(f, "proto: {e}"),
+            InternalStashError::Decoding(e) => write!(f, "prost decoding: {e}"),
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),
+            InternalStashError::IncompatibleVersion(v) => {
+                write!(f, "incompatible Stash version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}")
+            }
+            InternalStashError::Uninitialized => write!(f, "uninitialized"),
+            InternalStashError::StashNotWritable(e) => f.write_str(e),
             InternalStashError::Other(e) => f.write_str(e),
         }
     }
@@ -228,10 +266,18 @@ impl From<InternalStashError> for StashError {
     }
 }
 
-impl From<serde_json::Error> for StashError {
-    fn from(e: serde_json::Error) -> StashError {
+impl From<prost::DecodeError> for StashError {
+    fn from(e: prost::DecodeError) -> Self {
         StashError {
-            inner: InternalStashError::Other(e.to_string()),
+            inner: InternalStashError::Decoding(e),
+        }
+    }
+}
+
+impl From<TryFromProtoError> for StashError {
+    fn from(e: TryFromProtoError) -> Self {
+        StashError {
+            inner: InternalStashError::Proto(e),
         }
     }
 }
@@ -254,6 +300,14 @@ impl From<&str> for StashError {
 
 impl From<std::io::Error> for StashError {
     fn from(e: std::io::Error) -> StashError {
+        StashError {
+            inner: InternalStashError::Other(e.to_string()),
+        }
+    }
+}
+
+impl From<anyhow::Error> for StashError {
+    fn from(e: anyhow::Error) -> Self {
         StashError {
             inner: InternalStashError::Other(e.to_string()),
         }
@@ -296,7 +350,7 @@ pub struct AppendBatch {
     pub lower: Antichain<Timestamp>,
     pub upper: Antichain<Timestamp>,
     pub timestamp: Timestamp,
-    pub entries: Vec<((Value, Value), Timestamp, Diff)>,
+    pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
 }
 
 impl<K, V> StashCollection<K, V> {
@@ -342,9 +396,9 @@ where
     V: Data,
 {
     pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
-        let key = serde_json::to_value(key).expect("must serialize");
-        let value = serde_json::to_value(value).expect("must serialize");
-        batch.entries.push(((key, value), batch.timestamp, diff));
+        let key = key.encode_to_vec();
+        let val = value.encode_to_vec();
+        batch.entries.push(((key, val), batch.timestamp, diff));
     }
 }
 
@@ -434,10 +488,7 @@ where
             .await
     }
 
-    pub async fn peek(&self, stash: &mut Stash) -> Result<Vec<(K, V, Diff)>, StashError>
-    where
-        K: Hash,
-    {
+    pub async fn peek(&self, stash: &mut Stash) -> Result<Vec<(K, V, Diff)>, StashError> {
         let name = self.name;
         stash
             .with_transaction(move |tx| {
@@ -449,10 +500,7 @@ where
             .await
     }
 
-    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError>
-    where
-        K: Hash,
-    {
+    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError> {
         let name = self.name;
         stash
             .with_transaction(move |tx| {
@@ -545,7 +593,7 @@ where
     where
         I: IntoIterator<Item = (K, V)>,
         // TODO: Figure out if it's possible to remove the 'static bounds.
-        K: Clone + Hash + 'static,
+        K: Clone + 'static,
         V: Clone + 'static,
     {
         let name = self.name;
@@ -644,7 +692,7 @@ where
     pub async fn upsert<I>(&self, stash: &mut Stash, entries: I) -> Result<(), StashError>
     where
         I: IntoIterator<Item = (K, V)>,
-        K: Hash + 'static,
+        K: 'static,
         V: 'static,
     {
         let name = self.name;
@@ -694,7 +742,7 @@ where
     pub async fn delete<P>(&self, stash: &mut Stash, predicate: P) -> Result<(), StashError>
     where
         P: Fn(&K, &V) -> bool + Clone + Sync + Send + 'static,
-        K: Hash + Clone,
+        K: Clone,
         V: Clone,
     {
         let name = self.name;
@@ -743,7 +791,7 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn delete_keys(&self, stash: &mut Stash, keys: BTreeSet<K>) -> Result<(), StashError>
     where
-        K: Hash + Clone + 'static,
+        K: Clone + 'static,
         V: Clone,
     {
         use futures::StreamExt;
@@ -789,7 +837,7 @@ where
     pub async fn update<T>(&self, stash: &mut Stash, transform: T) -> Result<(), StashError>
     where
         T: Fn(&K, &V) -> Option<V> + Clone + Sync + Send + 'static,
-        K: Hash + Clone,
+        K: Clone,
         V: Clone,
     {
         let name = self.name;
@@ -851,23 +899,43 @@ pub struct TableTransaction<K, V> {
 
 impl<K, V> TableTransaction<K, V>
 where
-    K: Ord + Eq + Hash + Clone,
+    K: Ord + Eq + Clone,
     V: Ord + Clone,
 {
-    /// Create a new TableTransaction with initial data.
-    /// `uniqueness_violation` is a function whether there is a
-    /// uniqueness violation among two values.
-    pub fn new(initial: BTreeMap<K, V>, uniqueness_violation: fn(a: &V, b: &V) -> bool) -> Self {
-        Self {
+    /// Create a new TableTransaction with initial data. `uniqueness_violation` is a function
+    /// whether there is a uniqueness violation among two values.
+    ///
+    /// Internally the [`Stash`] serializes data as protobuf. All fields in a proto message are
+    /// optional, which makes using them in Rust cumbersome. Generic parameters `KP` and `VP` are
+    /// protobuf types which deserialize to `K` and `V` that a [`TableTransaction`] is generic
+    /// over.
+    pub fn new<KP, VP>(
+        initial: BTreeMap<KP, VP>,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    ) -> Result<Self, TryFromProtoError>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
+        let initial = initial
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
             initial,
             pending: BTreeMap::new(),
             uniqueness_violation,
-        }
+        })
     }
 
     /// Consumes and returns the pending changes and their diffs. `Diff` is
     /// guaranteed to be 1 or -1.
-    pub fn pending(self) -> Vec<(K, V, Diff)> {
+    pub fn pending<KP, VP>(self) -> Vec<(KP, VP, Diff)>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
         soft_assert!(self.verify().is_ok());
         // Pending describes the desired final state for some keys. K,V pairs should be
         // retracted if they already exist and were deleted or are being updated.
@@ -890,6 +958,7 @@ where
                 }
             })
             .flatten()
+            .map(|(key, val, diff)| (key.into_proto(), val.into_proto(), diff))
             .collect()
     }
 
@@ -1083,84 +1152,4 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
-}
-
-/// Helper function to consolidate `serde_json::Value`. `Value` doesn't
-/// implement `Ord` which is required by `consolidate`, so we must serialize and
-/// deserialize through bytes.
-fn consolidate<'a, I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
-where
-    I: IntoIterator<Item = &'a ((Value, Value), Diff)>,
-{
-    // This assumes the to bytes representation is deterministic. The current
-    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
-    // guarantee.
-    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
-    let mut rows = rows
-        .into_iter()
-        .map(|((key, value), diff)| {
-            let key = serde_json::to_vec(key).expect("must serialize");
-            let value = serde_json::to_vec(value).expect("must serialize");
-            ((key, value), *diff)
-        })
-        .collect();
-    differential_dataflow::consolidation::consolidate(&mut rows);
-    rows.into_iter().map(|((key, value), diff)| {
-        let key = serde_json::from_slice(&key).expect("must deserialize");
-        let value = serde_json::from_slice(&value).expect("must deserialize");
-        ((key, value), diff)
-    })
-}
-
-fn consolidate_kv<'a, K, V, I>(rows: I) -> impl Iterator<Item = ((K, V), Diff)>
-where
-    I: IntoIterator<Item = &'a ((Value, Value), Diff)>,
-    K: Data,
-    V: Data,
-{
-    consolidate(rows).map(|((key, value), diff)| {
-        let key: K = serde_json::from_value(key).expect("must deserialize");
-        let value: V = serde_json::from_value(value).expect("must deserialize");
-        ((key, value), diff)
-    })
-}
-
-/// Helper function to consolidate `serde_json::Value` updates. `Value` doesn't
-/// implement `Ord` which is required by `consolidate_updates`, so we must
-/// serialize and deserialize through bytes.
-fn consolidate_updates<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Timestamp, Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
-{
-    // This assumes the to bytes representation is deterministic. The current
-    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
-    // guarantee.
-    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
-    let mut rows = rows
-        .into_iter()
-        .map(|((key, value), ts, diff)| {
-            let key = serde_json::to_vec(&key).expect("must serialize");
-            let value = serde_json::to_vec(&value).expect("must serialize");
-            ((key, value), ts, diff)
-        })
-        .collect();
-    differential_dataflow::consolidation::consolidate_updates(&mut rows);
-    rows.into_iter().map(|((key, value), ts, diff)| {
-        let key = serde_json::from_slice(&key).expect("must deserialize");
-        let value = serde_json::from_slice(&value).expect("must deserialize");
-        ((key, value), ts, diff)
-    })
-}
-
-fn consolidate_updates_kv<K, V, I>(rows: I) -> impl Iterator<Item = ((K, V), Timestamp, Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
-    K: Data,
-    V: Data,
-{
-    consolidate_updates(rows).map(|((key, value), ts, diff)| {
-        let key: K = serde_json::from_value(key).expect("must deserialize");
-        let value: V = serde_json::from_value(value).expect("must deserialize");
-        ((key, value), ts, diff)
-    })
 }

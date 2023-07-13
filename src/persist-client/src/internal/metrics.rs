@@ -75,6 +75,12 @@ pub struct Metrics {
     pub locks: LocksMetrics,
     /// Metrics for StateWatch.
     pub watch: WatchMetrics,
+    /// Metrics for PubSub client.
+    pub pubsub_client: PubSubClientMetrics,
+    /// Metrics for mfp/filter pushdown.
+    pub pushdown: PushdownMetrics,
+    /// Metrics for blob caching.
+    pub blob_cache_mem: BlobMemCache,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -117,6 +123,9 @@ impl Metrics {
             audit: UsageAuditMetrics::new(registry),
             locks: vecs.locks_metrics(),
             watch: WatchMetrics::new(registry),
+            pubsub_client: PubSubClientMetrics::new(registry),
+            pushdown: PushdownMetrics::new(registry),
+            blob_cache_mem: BlobMemCache::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -350,7 +359,8 @@ impl MetricsVecs {
     fn cmds_metrics(&self, registry: &MetricsRegistry) -> CmdsMetrics {
         CmdsMetrics {
             init_state: self.cmd_metrics("init_state"),
-            add_and_remove_rollups: self.cmd_metrics("add_and_remove_rollups"),
+            add_rollup: self.cmd_metrics("add_rollup"),
+            remove_rollups: self.cmd_metrics("remove_rollups"),
             register: self.cmd_metrics("register"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
             compare_and_append_noop:             registry.register(metric!(
@@ -553,7 +563,8 @@ impl CmdMetrics {
 #[derive(Debug)]
 pub struct CmdsMetrics {
     pub(crate) init_state: CmdMetrics,
-    pub(crate) add_and_remove_rollups: CmdMetrics,
+    pub(crate) add_rollup: CmdMetrics,
+    pub(crate) remove_rollups: CmdMetrics,
     pub(crate) register: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) compare_and_append_noop: IntCounter,
@@ -848,25 +859,28 @@ pub struct GcMetrics {
 
 #[derive(Debug)]
 pub struct GcStepTimings {
+    pub(crate) find_removable_rollups: Counter,
     pub(crate) fetch_seconds: Counter,
-    pub(crate) apply_diff_seconds: Counter,
+    pub(crate) find_deletable_blobs_seconds: Counter,
     pub(crate) delete_rollup_seconds: Counter,
-    pub(crate) write_rollup_seconds: Counter,
     pub(crate) delete_batch_part_seconds: Counter,
     pub(crate) truncate_diff_seconds: Counter,
-    pub(crate) finish_seconds: Counter,
+    pub(crate) remove_rollups_from_state: Counter,
+    pub(crate) post_gc_calculations_seconds: Counter,
 }
 
 impl GcStepTimings {
     fn new(step_timings: CounterVec) -> Self {
         Self {
+            find_removable_rollups: step_timings.with_label_values(&["find_removable_rollups"]),
             fetch_seconds: step_timings.with_label_values(&["fetch"]),
-            apply_diff_seconds: step_timings.with_label_values(&["apply_diff"]),
+            find_deletable_blobs_seconds: step_timings.with_label_values(&["find_deletable_blobs"]),
             delete_rollup_seconds: step_timings.with_label_values(&["delete_rollup"]),
-            write_rollup_seconds: step_timings.with_label_values(&["write_rollup"]),
             delete_batch_part_seconds: step_timings.with_label_values(&["delete_batch_part"]),
             truncate_diff_seconds: step_timings.with_label_values(&["truncate_diff"]),
-            finish_seconds: step_timings.with_label_values(&["finish"]),
+            remove_rollups_from_state: step_timings
+                .with_label_values(&["remove_rollups_from_state"]),
+            post_gc_calculations_seconds: step_timings.with_label_values(&["post_gc_calculations"]),
         }
     }
 }
@@ -1097,10 +1111,14 @@ pub struct ShardsMetrics {
     upper: mz_ore::metrics::IntGaugeVec,
     encoded_rollup_size: mz_ore::metrics::UIntGaugeVec,
     encoded_diff_size: mz_ore::metrics::IntCounterVec,
+    hollow_batch_count: mz_ore::metrics::UIntGaugeVec,
+    spine_batch_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_count: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
+    rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    seqnos_since_last_rollup: mz_ore::metrics::UIntGaugeVec,
     gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
     gc_live_diffs: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
@@ -1111,10 +1129,11 @@ pub struct ShardsMetrics {
     usage_referenced_not_current_state_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_not_leaked_not_referenced_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_leaked_bytes: mz_ore::metrics::UIntGaugeVec,
-    pushdown_parts_filtered_count: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_filtered_bytes: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_fetched_count: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_fetched_bytes: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
+    blob_gets: mz_ore::metrics::IntCounterVec,
+    blob_sets: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1157,6 +1176,16 @@ impl ShardsMetrics {
                 help: "total encoded diff size by shard",
                 var_labels: ["shard"],
             )),
+            hollow_batch_count: registry.register(metric!(
+                name: "mz_persist_shard_hollow_batch_count",
+                help: "count of hollow batches by shard",
+                var_labels: ["shard"],
+            )),
+            spine_batch_count: registry.register(metric!(
+                name: "mz_persist_shard_spine_batch_count",
+                help: "count of spine batches by shard",
+                var_labels: ["shard"],
+            )),
             batch_part_count: registry.register(metric!(
                 name: "mz_persist_shard_batch_part_count",
                 help: "count of batch parts by shard",
@@ -1167,6 +1196,11 @@ impl ShardsMetrics {
                 help: "count of updates by shard",
                 var_labels: ["shard"],
             )),
+            rollup_count: registry.register(metric!(
+                name: "mz_persist_shard_rollup_count",
+                help: "count of rollups by shard",
+                var_labels: ["shard"],
+            )),
             largest_batch_size: registry.register(metric!(
                 name: "mz_persist_shard_largest_batch_size",
                 help: "largest encoded batch size by shard",
@@ -1175,6 +1209,11 @@ impl ShardsMetrics {
             seqnos_held: registry.register(metric!(
                 name: "mz_persist_shard_seqnos_held",
                 help: "maximum count of gc-ineligible states by shard",
+                var_labels: ["shard"],
+            )),
+            seqnos_since_last_rollup: registry.register(metric!(
+                name: "mz_persist_shard_seqnos_since_last_rollup",
+                help: "count of seqnos since last rollup",
                 var_labels: ["shard"],
             )),
             gc_seqno_held_parts: registry.register(metric!(
@@ -1227,24 +1266,29 @@ impl ShardsMetrics {
                 help: "data reclaimable by a leaked blob detector",
                 var_labels: ["shard"],
             )),
-            pushdown_parts_filtered_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_filtered_count",
-                help: "count of parts filtered by pushdown",
+            pubsub_push_diff_applied: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_applied",
+                help: "number of diffs received via pubsub that applied",
                 var_labels: ["shard"],
             )),
-            pushdown_parts_filtered_bytes: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_filtered_bytes",
-                help: "total size of parts filtered by pushdown in bytes",
+            pubsub_push_diff_not_applied_stale: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied_stale",
+                help: "number of diffs received via pubsub that did not apply due to staleness",
                 var_labels: ["shard"],
             )),
-            pushdown_parts_fetched_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_fetched_count",
-                help: "count of parts not filtered by pushdown",
+            pubsub_push_diff_not_applied_out_of_order: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied_out_of_order",
+                help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
                 var_labels: ["shard"],
             )),
-            pushdown_parts_fetched_bytes: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_fetched_bytes",
-                help: "total size of parts not filtered by pushdown in bytes",
+            blob_gets: registry.register(metric!(
+                name: "mz_persist_shard_blob_gets",
+                help: "number of Blob::get calls for this shard",
+                var_labels: ["shard"],
+            )),
+            blob_sets: registry.register(metric!(
+                name: "mz_persist_shard_blob_sets",
+                help: "number of Blob::set calls for this shard",
                 var_labels: ["shard"],
             )),
             shards,
@@ -1294,9 +1338,13 @@ pub struct ShardMetrics {
     pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub latest_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub hollow_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub seqnos_since_last_rollup: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1308,8 +1356,12 @@ pub struct ShardMetrics {
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-
-    pub pushdown: PushdownMetrics,
+    pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_out_of_order:
+        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1329,17 +1381,29 @@ impl ShardMetrics {
             encoded_diff_size: shards_metrics
                 .encoded_diff_size
                 .get_delete_on_drop_counter(vec![shard.clone()]),
+            hollow_batch_count: shards_metrics
+                .hollow_batch_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            spine_batch_count: shards_metrics
+                .spine_batch_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
             batch_part_count: shards_metrics
                 .batch_part_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             update_count: shards_metrics
                 .update_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
+            rollup_count: shards_metrics
+                .rollup_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
             largest_batch_size: shards_metrics
                 .largest_batch_size
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            seqnos_since_last_rollup: shards_metrics
+                .seqnos_since_last_rollup
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             gc_seqno_held_parts: shards_metrics
                 .gc_seqno_held_parts
@@ -1371,7 +1435,21 @@ impl ShardMetrics {
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
-            pushdown: PushdownMetrics::for_shard(&shard, shards_metrics),
+            pubsub_push_diff_applied: shards_metrics
+                .pubsub_push_diff_applied
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            pubsub_push_diff_not_applied_stale: shards_metrics
+                .pubsub_push_diff_not_applied_stale
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            pubsub_push_diff_not_applied_out_of_order: shards_metrics
+                .pubsub_push_diff_not_applied_out_of_order
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            blob_gets: shards_metrics
+                .blob_gets
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            blob_sets: shards_metrics
+                .blob_sets
+                .get_delete_on_drop_counter(vec![shard]),
         }
     }
 
@@ -1495,6 +1573,217 @@ impl AlertsMetrics {
     }
 }
 
+/// Metrics for the PubSubServer implementation.
+#[derive(Debug)]
+pub struct PubSubServerMetrics {
+    pub(crate) active_connections: UIntGauge,
+    pub(crate) broadcasted_diff_count: IntCounter,
+    pub(crate) broadcasted_diff_bytes: IntCounter,
+    pub(crate) broadcasted_diff_dropped_channel_full: IntCounter,
+
+    pub(crate) push_seconds: Counter,
+    pub(crate) subscribe_seconds: Counter,
+    pub(crate) unsubscribe_seconds: Counter,
+    pub(crate) connection_cleanup_seconds: Counter,
+
+    pub(crate) push_call_count: IntCounter,
+    pub(crate) subscribe_call_count: IntCounter,
+    pub(crate) unsubscribe_call_count: IntCounter,
+}
+
+impl PubSubServerMetrics {
+    pub(crate) fn new(registry: &MetricsRegistry) -> Self {
+        let op_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_server_operation_seconds",
+                help: "time spent in pubsub server performing each operation",
+                var_labels: ["op"],
+        ));
+        let call_count: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_server_call_count",
+                help: "count of each pubsub server message received",
+                var_labels: ["call"],
+        ));
+
+        Self {
+            active_connections: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_active_connections",
+                    help: "number of active connections to server",
+            )),
+            broadcasted_diff_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_broadcasted_diff_count",
+                    help: "count of total broadcast diff messages sent",
+            )),
+            broadcasted_diff_bytes: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_broadcasted_diff_bytes",
+                    help: "count of total broadcast diff bytes sent",
+            )),
+            broadcasted_diff_dropped_channel_full: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_broadcasted_diff_dropped_channel_full",
+                    help: "count of diffs dropped due to full connection channel",
+            )),
+
+            push_seconds: op_timings.with_label_values(&["push"]),
+            subscribe_seconds: op_timings.with_label_values(&["subscribe"]),
+            unsubscribe_seconds: op_timings.with_label_values(&["unsubscribe"]),
+            connection_cleanup_seconds: op_timings.with_label_values(&["cleanup"]),
+
+            push_call_count: call_count.with_label_values(&["push"]),
+            subscribe_call_count: call_count.with_label_values(&["subscribe"]),
+            unsubscribe_call_count: call_count.with_label_values(&["unsubscribe"]),
+        }
+    }
+}
+
+/// Metrics for the PubSubClient implementation.
+#[derive(Debug)]
+pub struct PubSubClientMetrics {
+    pub sender: PubSubClientSenderMetrics,
+    pub receiver: PubSubClientReceiverMetrics,
+    pub grpc_connection: PubSubGrpcClientConnectionMetrics,
+}
+
+impl PubSubClientMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        PubSubClientMetrics {
+            sender: PubSubClientSenderMetrics::new(registry),
+            receiver: PubSubClientReceiverMetrics::new(registry),
+            grpc_connection: PubSubGrpcClientConnectionMetrics::new(registry),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PubSubGrpcClientConnectionMetrics {
+    pub(crate) connected: UIntGauge,
+    pub(crate) connection_established_count: IntCounter,
+    pub(crate) connect_call_attempt_count: IntCounter,
+    pub(crate) broadcast_recv_lagged_count: IntCounter,
+    pub(crate) grpc_error_count: IntCounter,
+}
+
+impl PubSubGrpcClientConnectionMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        Self {
+            connected: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_connected",
+                    help: "whether the grpc client is currently connected",
+            )),
+            connection_established_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_connection_established_count",
+                    help: "count of grpc connection establishments to pubsub server",
+            )),
+            connect_call_attempt_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_connect_call_attempt_count",
+                    help: "count of connection call attempts (including retries) to pubsub server",
+            )),
+            broadcast_recv_lagged_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_broadcast_recv_lagged_count",
+                    help: "times a message was missed by broadcast receiver due to lag",
+            )),
+            grpc_error_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_error_count",
+                    help: "count of grpc errors received",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PubSubClientReceiverMetrics {
+    pub(crate) push_received: IntCounter,
+    pub(crate) unknown_message_received: IntCounter,
+    pub(crate) approx_diff_latency_seconds: Histogram,
+
+    pub(crate) state_pushed_diff_fast_path: IntCounter,
+    pub(crate) state_pushed_diff_slow_path_succeeded: IntCounter,
+    pub(crate) state_pushed_diff_slow_path_failed: IntCounter,
+}
+
+impl PubSubClientReceiverMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let call_received: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_received",
+                help: "times a pubsub client call was received",
+                var_labels: ["call"],
+        ));
+
+        Self {
+            push_received: call_received.with_label_values(&["push"]),
+            unknown_message_received: call_received.with_label_values(&["unknown"]),
+            approx_diff_latency_seconds: registry.register(metric!(
+                name: "mz_persist_pubsub_client_approx_diff_apply_latency_seconds",
+                help: "histogram of (approximate) latency between sending a diff and applying it",
+                buckets: prometheus::exponential_buckets(0.001, 2.0, 13).expect("buckets"),
+            )),
+
+            state_pushed_diff_fast_path: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_fast_path",
+                help: "count fast-path state push_diff calls",
+            )),
+            state_pushed_diff_slow_path_succeeded: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_succeeded",
+                help: "count of successful slow-path state push_diff calls",
+            )),
+            state_pushed_diff_slow_path_failed: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_failed",
+                help: "count of unsuccessful slow-path state push_diff calls",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PubSubClientSenderMetrics {
+    pub push: PubSubClientCallMetrics,
+    pub subscribe: PubSubClientCallMetrics,
+    pub unsubscribe: PubSubClientCallMetrics,
+}
+
+#[derive(Debug)]
+pub struct PubSubClientCallMetrics {
+    pub(crate) succeeded: IntCounter,
+    pub(crate) bytes_sent: IntCounter,
+    pub(crate) failed: IntCounter,
+}
+
+impl PubSubClientSenderMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let call_bytes_sent: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_bytes_sent",
+                help: "number of bytes sent for a given pubsub client call",
+                var_labels: ["call"],
+        ));
+        let call_succeeded: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_succeeded",
+                help: "times a pubsub client call succeeded",
+                var_labels: ["call"],
+        ));
+        let call_failed: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_failed",
+                help: "times a pubsub client call failed",
+                var_labels: ["call"],
+        ));
+
+        Self {
+            push: PubSubClientCallMetrics {
+                succeeded: call_succeeded.with_label_values(&["push"]),
+                failed: call_failed.with_label_values(&["push"]),
+                bytes_sent: call_bytes_sent.with_label_values(&["push"]),
+            },
+            subscribe: PubSubClientCallMetrics {
+                succeeded: call_succeeded.with_label_values(&["subscribe"]),
+                failed: call_failed.with_label_values(&["subscribe"]),
+                bytes_sent: call_bytes_sent.with_label_values(&["subscribe"]),
+            },
+            unsubscribe: PubSubClientCallMetrics {
+                succeeded: call_succeeded.with_label_values(&["unsubscribe"]),
+                failed: call_failed.with_label_values(&["unsubscribe"]),
+                bytes_sent: call_bytes_sent.with_label_values(&["unsubscribe"]),
+            },
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct LocksMetrics {
     pub(crate) applier_read_cacheable: LockMetrics,
@@ -1503,7 +1792,7 @@ pub struct LocksMetrics {
     pub(crate) watch: LockMetrics,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LockMetrics {
     pub(crate) acquire_count: IntCounter,
     pub(crate) blocking_acquire_count: IntCounter,
@@ -1514,6 +1803,8 @@ pub struct LockMetrics {
 pub struct WatchMetrics {
     pub(crate) listen_woken_via_watch: IntCounter,
     pub(crate) listen_woken_via_sleep: IntCounter,
+    pub(crate) listen_resolved_via_watch: IntCounter,
+    pub(crate) listen_resolved_via_sleep: IntCounter,
     pub(crate) snapshot_woken_via_watch: IntCounter,
     pub(crate) snapshot_woken_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
@@ -1534,6 +1825,14 @@ impl WatchMetrics {
             listen_woken_via_sleep: registry.register(metric!(
                 name: "mz_persist_listen_woken_via_sleep",
                 help: "count of listen next batches wakes via sleep",
+            )),
+            listen_resolved_via_watch: registry.register(metric!(
+                name: "mz_persist_listen_resolved_via_watch",
+                help: "count of listen next batches resolved via watch notify",
+            )),
+            listen_resolved_via_sleep: registry.register(metric!(
+                name: "mz_persist_listen_resolved_via_sleep",
+                help: "count of listen next batches resolved via sleep",
             )),
             snapshot_woken_via_watch: registry.register(metric!(
                 name: "mz_persist_snapshot_woken_via_watch",
@@ -1573,27 +1872,83 @@ impl WatchMetrics {
 
 #[derive(Debug)]
 pub struct PushdownMetrics {
-    pub(crate) parts_filtered_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_filtered_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_fetched_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_fetched_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) parts_filtered_count: IntCounter,
+    pub(crate) parts_filtered_bytes: IntCounter,
+    pub(crate) parts_fetched_count: IntCounter,
+    pub(crate) parts_fetched_bytes: IntCounter,
+    pub(crate) parts_audited_count: IntCounter,
+    pub(crate) parts_audited_bytes: IntCounter,
 }
 
 impl PushdownMetrics {
-    fn for_shard(shard_id: &str, shards_metrics: &ShardsMetrics) -> Self {
+    fn new(registry: &MetricsRegistry) -> Self {
         PushdownMetrics {
-            parts_filtered_count: shards_metrics
-                .pushdown_parts_filtered_count
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_filtered_bytes: shards_metrics
-                .pushdown_parts_filtered_bytes
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_fetched_count: shards_metrics
-                .pushdown_parts_fetched_count
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_fetched_bytes: shards_metrics
-                .pushdown_parts_fetched_bytes
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
+            parts_filtered_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_count",
+                help: "count of parts filtered by pushdown",
+            )),
+            parts_filtered_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_bytes",
+                help: "total size of parts filtered by pushdown in bytes",
+            )),
+            parts_fetched_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_count",
+                help: "count of parts not filtered by pushdown",
+            )),
+            parts_fetched_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_bytes",
+                help: "total size of parts not filtered by pushdown in bytes",
+            )),
+            parts_audited_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_audited_count",
+                help: "count of parts fetched only for pushdown audit",
+            )),
+            parts_audited_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_audited_bytes",
+                help: "total size of parts fetched only for pushdown audit",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // TODO: Remove this when we reintroduce the cache.
+pub struct BlobMemCache {
+    pub(crate) size_blobs: UIntGauge,
+    pub(crate) size_bytes: UIntGauge,
+    pub(crate) hits_blobs: IntCounter,
+    pub(crate) hits_bytes: IntCounter,
+    pub(crate) evictions: IntCounter,
+}
+
+impl BlobMemCache {
+    fn new(registry: &MetricsRegistry) -> Self {
+        BlobMemCache {
+            size_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_size_blobs",
+                help: "count of blobs in the cache",
+                const_labels: {"cache" => "mem"},
+            )),
+            size_bytes: registry.register(metric!(
+                name: "mz_persist_blob_cache_size_bytes",
+                help: "total size of blobs in the cache",
+                const_labels: {"cache" => "mem"},
+            )),
+            hits_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_hits_blobs",
+                help: "count of blobs served via cache instead of s3",
+                const_labels: {"cache" => "mem"},
+            )),
+            hits_bytes: registry.register(metric!(
+                name: "mz_persist_blob_cache_hits_bytes",
+                help: "total size of blobs served via cache instead of s3",
+                const_labels: {"cache" => "mem"},
+            )),
+            evictions: registry.register(metric!(
+                name: "mz_persist_blob_cache_evictions",
+                help: "count of capacity-based cache evictions",
+                const_labels: {"cache" => "mem"},
+            )),
         }
     }
 }

@@ -78,7 +78,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(feature = "tokio-console")]
 use std::time::Duration;
@@ -87,10 +86,6 @@ use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
 use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};
-use opentelemetry::sdk::resource::Resource;
-use opentelemetry::KeyValue;
-use tracing_subscriber::filter::Targets;
-
 use mz_build_info::BuildInfo;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
@@ -98,7 +93,7 @@ use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics,
 };
-use mz_ore::cli::{DefaultTrue, KeyValueArg};
+use mz_ore::cli::KeyValueArg;
 #[cfg(feature = "tokio-console")]
 use mz_ore::netio::SocketAddr;
 #[cfg(feature = "tokio-console")]
@@ -107,6 +102,9 @@ use mz_ore::tracing::{
     OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
     TracingGuard, TracingHandle,
 };
+use mz_tracing::CloneableEnvFilter;
+use opentelemetry::sdk::resource::Resource;
+use opentelemetry::KeyValue;
 
 /// Command line arguments for application tracing.
 ///
@@ -119,6 +117,10 @@ use mz_ore::tracing::{
 /// orchestrators and does not belong in a foundational crate like `mz_ore`.
 #[derive(Debug, Clone, clap::Parser)]
 pub struct TracingCliArgs {
+    /// This arg has been replaced. Use the `log_filter` system variable or
+    /// `--startup-log-filter` arg instead.
+    #[clap(long, env = "LOG_FILTER", value_name = "FILTER")]
+    pub log_filter: Option<CloneableEnvFilter>,
     /// Which tracing events to log to stderr.
     ///
     /// This value is a comma-separated list of filter directives. Each filter
@@ -146,11 +148,11 @@ pub struct TracingCliArgs {
     /// The default value for this option is "info".
     #[clap(
         long,
-        env = "LOG_FILTER",
+        env = "STARTUP_LOG_FILTER",
         value_name = "FILTER",
         default_value = "info"
     )]
-    pub log_filter: SerializableTargets,
+    pub startup_log_filter: CloneableEnvFilter,
     /// The format to use for stderr log messages.
     #[clap(long, env = "LOG_FORMAT", default_value_t, value_enum)]
     pub log_format: LogFormat,
@@ -159,19 +161,6 @@ pub struct TracingCliArgs {
     /// Only respected when `--log-format` is `text`.
     #[clap(long, env = "LOG_PREFIX")]
     pub log_prefix: Option<String>,
-    /// Whether OpenTelemetry tracing is enabled by default.
-    ///
-    /// OpenTelemetry tracing can be dynamically toggled during runtime via the
-    /// internal HTTP server.
-    ///
-    /// Requires that the `--opentelemetry-endpoint` option is specified.
-    #[clap(
-        long,
-        env = "OPENTELEMETRY_ENABLED",
-        default_value_t = DefaultTrue::default(),
-        requires = "opentelemetry-endpoint"
-    )]
-    pub opentelemetry_enabled: DefaultTrue,
     /// Export OpenTelemetry tracing events to the provided endpoint.
     ///
     /// The specified endpoint should speak the OTLP/HTTP protocol. If the
@@ -193,22 +182,24 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
+    /// This arg has been replaced. Use the `opentelemetry_filter` system
+    /// variable or `--startup-opentelemetry-filter` arg instead.
+    #[clap(long, env = "OPENTELEMETRY_FILTER")]
+    pub opentelemetry_filter: Option<CloneableEnvFilter>,
     /// Which tracing events to export to the OpenTelemetry endpoint specified
     /// by `--opentelemetry-endpoint`.
     ///
     /// The syntax of this option is the same as the syntax of the
-    /// `--log-filter` option.
+    /// `--startup-log-filter` option.
     ///
     /// Requires that the `--opentelemetry-endpoint` option is specified.
     #[clap(
         long,
-        env = "OPENTELEMETRY_FILTER",
+        env = "STARTUP_OPENTELEMETRY_FILTER",
         requires = "opentelemetry-endpoint",
-        // tokio_postgres has busy `debug` logging.
-        // TODO(guswynn): switch tokio_postgres logging to `trace` upstream
-        default_value = "tokio_postgres=info,debug"
+        default_value = "off"
     )]
-    pub opentelemetry_filter: SerializableTargets,
+    pub startup_opentelemetry_filter: CloneableEnvFilter,
     /// Additional key-value pairs to send with all opentelemetry traces.
     ///
     /// Requires that the `--opentelemetry-endpoint` option is specified.
@@ -288,7 +279,7 @@ impl TracingCliArgs {
                     },
                     LogFormat::Json => StderrLogFormat::Json,
                 },
-                filter: self.log_filter.inner.clone(),
+                filter: self.startup_log_filter.clone().into(),
             },
             opentelemetry: self.opentelemetry_endpoint.clone().map(|endpoint| {
                 OpenTelemetryConfig {
@@ -298,14 +289,13 @@ impl TracingCliArgs {
                         .iter()
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
-                    filter: self.opentelemetry_filter.inner.clone(),
+                    filter: self.startup_opentelemetry_filter.clone().into(),
                     resource: Resource::new(
                         self.opentelemetry_resource
                             .iter()
                             .cloned()
                             .map(|kv| KeyValue::new(kv.key, kv.value)),
                     ),
-                    start_enabled: self.opentelemetry_enabled.value,
                 }
             }),
             #[cfg(feature = "tokio-console")]
@@ -403,14 +393,15 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);
             let TracingCliArgs {
-                log_filter,
+                log_filter: _,
+                startup_log_filter: _,
                 log_prefix,
                 log_format,
                 opentelemetry_endpoint,
                 opentelemetry_header,
-                opentelemetry_filter,
+                opentelemetry_filter: _,
+                startup_opentelemetry_filter: _,
                 opentelemetry_resource,
-                opentelemetry_enabled,
                 #[cfg(feature = "tokio-console")]
                     tokio_console_listen_addr: _,
                 #[cfg(feature = "tokio-console")]
@@ -420,7 +411,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
                 sentry_environment,
             } = &self.tracing_args;
-            args.push(format!("--log-filter={log_filter}"));
             args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
                 args.push(format!("--log-prefix={}-{}", self.namespace, id));
@@ -436,11 +426,9 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                             .expect("opentelemetry-header had non-ascii value"),
                     ));
                 }
-                args.push(format!("--opentelemetry-filter={opentelemetry_filter}",));
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
-                args.push(format!("--opentelemetry-enabled={}", opentelemetry_enabled));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(tokio_console_listen_addr) = tokio_console_listen_addr {
@@ -486,32 +474,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         self.inner.watch_services()
-    }
-}
-
-/// Wraps [`Targets`] to provide a [`Display`](fmt::Display) implementation.
-#[derive(Debug, Clone)]
-pub struct SerializableTargets {
-    /// The parsed targets.
-    pub inner: Targets,
-    /// A string representation of `inner`.
-    pub raw: String,
-}
-
-impl FromStr for SerializableTargets {
-    type Err = tracing_subscriber::filter::ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(SerializableTargets {
-            inner: s.parse()?,
-            raw: s.into(),
-        })
-    }
-}
-
-impl fmt::Display for SerializableTargets {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.raw)
     }
 }
 

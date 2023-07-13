@@ -14,34 +14,31 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arrange, Arranged};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use differential_dataflow::trace::BatchReader;
-use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::Collection;
-use differential_dataflow::Data;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::{Collection, Data};
 use mz_compute_client::plan::AvailableCollections;
-use timely::communication::message::RefOrMut;
-use timely::container::columnation;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::Capability;
-use timely::dataflow::{scopes::Child, Scope, ScopeParent};
-use timely::progress::timestamp::Refines;
-use timely::progress::{Antichain, Timestamp};
-
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::communication::message::RefOrMut;
+use timely::container::columnation;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, ScopeParent};
+use timely::progress::timestamp::Refines;
+use timely::progress::{Antichain, Timestamp};
 
+use crate::render::errors::ErrorLogger;
+use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
-
-use super::errors::ErrorLogger;
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyArrangement<S, K, V> =
@@ -94,8 +91,10 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
-    /// An token that operators can probe to know whether the dataflow is shutting down.
+    /// A token that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_token: ShutdownToken,
+    /// The implementation to use for rendering linear joins.
+    pub(super) linear_join_impl: LinearJoinImpl,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -122,6 +121,7 @@ where
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
+            linear_join_impl: Default::default(),
         }
     }
 }

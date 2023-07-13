@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use crate::EvalError;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 
 sqlfunc!(
     #[sqlname = "mz_aclitem_grantor"]
@@ -27,5 +28,14 @@ sqlfunc!(
     #[sqlname = "mz_aclitem_privileges"]
     fn mz_acl_item_privileges(mz_acl_item: MzAclItem) -> String {
         mz_acl_item.acl_mode.to_string()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_validate_privileges"]
+    fn mz_validate_privileges(privileges: String) -> Result<bool, EvalError> {
+        AclMode::parse_multiple_privileges(&privileges)
+            .map(|_| true)
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))
     }
 );

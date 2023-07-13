@@ -9,16 +9,15 @@
 
 use std::time::Duration;
 
+use mz_ore::task;
+use mz_repr::GlobalId;
+use mz_ssh_util::tunnel::SshTunnelConfig;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
 use tracing::warn;
-
-use mz_ore::task;
-use mz_repr::GlobalId;
-use mz_ssh_util::tunnel::SshTunnelConfig;
 
 use crate::{make_tls, PostgresError};
 

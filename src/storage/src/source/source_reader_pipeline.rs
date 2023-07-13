@@ -42,6 +42,30 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use mz_expr::PartitionId;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
+use mz_ore::now::NowFn;
+use mz_ore::vec::VecExt;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_storage_client::client::SourceStatisticsUpdate;
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::SourceError;
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::{
+    MzOffset, SourceConnection, SourceExport, SourceTimestamp,
+};
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+};
+use mz_timely_util::capture::UnboundedTokioCapture;
+use mz_timely_util::operator::StreamExt as _;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
@@ -55,34 +79,9 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace, warn};
 
-use mz_expr::PartitionId;
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
-use mz_ore::error::ErrorExt;
-use mz_ore::now::NowFn;
-use mz_ore::vec::VecExt;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
-use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
-use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::SourceError;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
-    MzOffset, SourceConnection, SourceExport, SourceTimestamp, SourceToken,
-};
-use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-};
-use mz_timely_util::capture::UnboundedTokioCapture;
-use mz_timely_util::operator::StreamExt as _;
-
 use crate::healthcheck::write_to_persist;
 use crate::internal_control::InternalStorageCommand;
-use crate::render::sources::{OutputIndex, WorkerId};
+use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -94,6 +93,8 @@ use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 /// How long to wait before initiating a `SuspendAndRestart` command, to
 /// prevent hot restart loops.
 const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
+
+pub type SourceStatistics = StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>;
 
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.
@@ -121,16 +122,21 @@ pub struct RawSourceCreationConfig {
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
-    pub resume_upper: Antichain<mz_repr::Timestamp>,
-    /// The upper frontier this source should resume ingestion at in the source time domain. Since
-    /// every source has a different timestamp type we carry the timestamps of this frontier in an
-    /// encoded `Vec<Row>` form which will get decoded once we reach the connection specialized
-    /// functions.
-    pub source_resume_upper: Vec<Row>,
+    pub as_of: Antichain<mz_repr::Timestamp>,
+    /// For each source export, the upper frontier this source should resume ingestion at in the
+    /// source time domain.
+    pub resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
+    /// For each source export, the upper frontier this source should resume ingestion at in the
+    /// source time domain.
+    ///
+    /// Since every source has a different timestamp type we carry the timestamps of this frontier
+    /// in an encoded `Vec<Row>` form which will get decoded once we reach the connection
+    /// specialized functions.
+    pub source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
-    pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
+    pub source_statistics: SourceStatistics,
     /// Enables reporting the remap operator's write frontier.
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
     /// Configuration parameters, possibly from LaunchDarkly
@@ -138,11 +144,15 @@ pub struct RawSourceCreationConfig {
 }
 
 impl RawSourceCreationConfig {
+    /// Returns the worker id responsible for handling the given partition.
+    pub fn responsible_worker<P: Hash>(&self, partition: P) -> usize {
+        let key = usize::cast_from((self.id, partition).hashed());
+        key % self.worker_count
+    }
+
     /// Returns true if this worker is responsible for handling the given partition.
     pub fn responsible_for<P: Hash>(&self, partition: P) -> bool {
-        let key = usize::cast_from((self.id, partition).hashed());
-        // Distribute partitions equally amongst workers.
-        (key % self.worker_count) == self.worker_id
+        self.responsible_worker(partition) == self.worker_id
     }
 }
 
@@ -161,40 +171,35 @@ pub struct SourceCreationParams {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
+///
+/// The `resume_stream` parameter will contain frontier updates whenever times are durably
+/// recorded which allows the ingestion to release upstream resources.
+pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    calc: R,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Option<Rc<dyn Any>>,
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
-    R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
     let id = config.id;
     info!(
         %id,
-        resume_upper = %config.resume_upper.pretty(),
+        as_of = %config.as_of.pretty(),
         "timely-{worker_id} building source pipeline",
     );
-    let (resume_stream, resume_token) =
-        super::resumption::resumption_operator(scope, config.clone(), calc);
 
-    let reclock_follower = {
-        let upper_ts = config.resume_upper.as_option().copied().unwrap();
-        // Same value as our use of `derive_new_compaction_since`.
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        ReclockFollower::new(as_of)
-    };
+    let reclock_follower = ReclockFollower::new(config.as_of.clone());
 
     let (resume_tx, resume_rx) = tokio::sync::mpsc::unbounded_channel();
     let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -231,10 +236,9 @@ where
     let (remap_stream, remap_token) =
         remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
 
-    let (streams, _reclock_token) =
-        reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
+    let streams = reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
-    let token = Rc::new((token, remap_token, resume_token));
+    let token = Rc::new((token, remap_token));
 
     (streams, health, Some(token))
 }
@@ -260,7 +264,7 @@ fn source_render_operator<G, C>(
         Diff,
     >,
     Stream<G, Infallible>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
 where
@@ -285,10 +289,7 @@ where
     let mut data_input = builder.new_input(&data.inner, Pipeline);
     let (mut data_output, data) = builder.new_output();
     let (mut _progress_output, derived_progress) = builder.new_output();
-    let (mut health_output, derived_health): (
-        _,
-        timely::dataflow::StreamCore<G, Vec<(OutputIndex, HealthStatusUpdate)>>,
-    ) = builder.new_output();
+    let (mut health_output, derived_health) = builder.new_output();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -311,9 +312,11 @@ where
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
 
-                let status_wrapper = Some((*output_index, status));
-                if statuses.last() != status_wrapper.as_ref() {
-                    statuses.push(status_wrapper.expect("definitely Some"));
+                let status = (*output_index, status);
+                if statuses.last() != Some(&status) {
+                    statuses.push(status.clone());
+                    // The global status contains the most recent update of the subsources
+                    statuses.push((0, status.1));
                 }
 
                 match message {
@@ -339,14 +342,10 @@ where
         }
     });
 
-    let health = health
-        .concat(&derived_health)
-        .map(move |(output_index, status)| (worker_id, output_index, status));
-
     (
         data.as_collection(),
         progress.unwrap_or(derived_progress),
-        health,
+        health.concat(&derived_health),
         token,
     )
 }
@@ -394,8 +393,9 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
+    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     primary_source_id: GlobalId,
-    health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    health_stream: &Stream<G, (OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
 ) -> Rc<dyn Any> {
     // Derived config options
@@ -404,6 +404,9 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     let now = storage_state.now.clone();
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
+    // Inject the originating worker id to each item before exchanging to the chosen worker
+    let health_stream = health_stream.map(move |status| (healthcheck_worker_id, status));
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
@@ -467,19 +470,21 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         // Write the initial starting state to the status shard for all managed sources
         if is_active_worker {
             for state in health_states.values() {
-                if let Some((status_shard, persist_client)) = state.persist_details {
-                    let status = HealthStatus::Starting;
-                    write_to_persist(
-                        state.source_id,
-                        status.name(),
-                        status.error(),
-                        now.clone(),
-                        persist_client,
-                        status_shard,
-                        &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                        status.hint(),
-                    )
-                    .await;
+                if !resume_uppers[&state.source_id].is_empty() {
+                    if let Some((status_shard, persist_client)) = state.persist_details {
+                        let status = HealthStatus::Starting;
+                        write_to_persist(
+                            state.source_id,
+                            status.name(),
+                            status.error(),
+                            now.clone(),
+                            persist_client,
+                            status_shard,
+                            &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                            status.hint(),
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -487,7 +492,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         let mut outputs_seen = BTreeSet::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                for (worker_id, output_index, health_event) in rows.drain(..) {
+                for (worker_id, (output_index, health_event)) in rows.drain(..) {
                     let HealthState {
                         source_id,
                         healths,
@@ -679,8 +684,9 @@ where
         timestamp_interval,
         encoding: _,
         storage_metadata,
-        resume_upper,
-        source_resume_upper: _,
+        as_of,
+        resume_uppers: _,
+        source_resume_uppers: _,
         base_metrics: _,
         now,
         persist_clients,
@@ -706,10 +712,6 @@ where
 
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let upper_ts = resume_upper.as_option().copied().unwrap();
-
-        // Same value as our use of `derive_new_compaction_since`.
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
             storage_metadata.clone(),
@@ -746,7 +748,7 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        loop {
+        while !cap_set.is_empty() {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
                 _ = ticker.tick() => {
@@ -818,13 +820,10 @@ fn reclock_operator<G, K, V, FromTime, D>(
         >,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
-) -> (
-    Vec<(
-        Collection<G, SourceOutput<K, V>, D>,
-        Collection<G, SourceError, Diff>,
-    )>,
-    Option<SourceToken>,
-)
+) -> Vec<(
+    Collection<G, SourceOutput<K, V>, D>,
+    Collection<G, SourceError, Diff>,
+)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     K: timely::Data + MaybeLength,
@@ -841,8 +840,9 @@ where
         timestamp_interval: _,
         encoding: _,
         storage_metadata: _,
-        resume_upper,
-        source_resume_upper: _,
+        as_of: _,
+        resume_uppers,
+        source_resume_uppers: _,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -873,6 +873,8 @@ where
 
         let mut source_metrics = SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
 
+        // Compute the overall resume upper to report for the ingestion
+        let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
         source_metrics.resume_upper.set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
@@ -1083,13 +1085,10 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    (
-        ok_streams
-            .into_iter()
-            .zip_eq(err_streams.into_iter())
-            .collect(),
-        None,
-    )
+    ok_streams
+        .into_iter()
+        .zip_eq(err_streams.into_iter())
+        .collect()
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
@@ -1188,18 +1187,27 @@ async fn handle_message<K, V, T, D>(
     T: SourceTimestamp,
     D: Semigroup,
 {
-    let (partition, offset) = time
-        .try_into_compat_ts()
-        .expect("data at invalid timestamp");
-
     let output = match message {
         Ok(message) => {
+            let (partition, offset) = time
+                .try_into_compat_ts()
+                .expect("data at invalid timestamp");
+
             // Note: empty and null payload/keys are currently treated as the same thing.
             if let Some(len) = message.key.len() {
                 *bytes_read += len;
             }
             if let Some(len) = message.value.len() {
                 *bytes_read += len;
+            }
+
+            match metric_updates.entry(partition) {
+                Entry::Occupied(mut entry) => {
+                    entry.insert((offset, ts, entry.get().2 + 1));
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert((offset, ts, 1));
+                }
             }
 
             (
@@ -1225,12 +1233,4 @@ async fn handle_message<K, V, T, D>(
 
     let ts_cap = cap_set.delayed(&ts);
     output_handle.give(&ts_cap, (output, ts, diff)).await;
-    match metric_updates.entry(partition) {
-        Entry::Occupied(mut entry) => {
-            entry.insert((offset, ts, entry.get().2 + 1));
-        }
-        Entry::Vacant(entry) => {
-            entry.insert((offset, ts, 1));
-        }
-    }
 }

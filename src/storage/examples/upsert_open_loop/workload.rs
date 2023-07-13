@@ -16,9 +16,8 @@ use std::io::Write;
 use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec64;
-
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist_types::Codec64;
 
 /// A configurable data generator for benchmarking.
 #[derive(Clone, Debug)]
@@ -318,7 +317,7 @@ pub fn flat_blob(data: &DataGenerator) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn size_invariants() {
         fn testcase(c: DataGenerator) {
             let (mut actual_len, mut actual_goodput_bytes) = (0, 0);
@@ -338,7 +337,7 @@ mod tests {
         testcase(DataGenerator::new(1000, 32, 100));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn goodput_pretty() {
         fn testcase(bytes: usize) -> String {
             DataGenerator::new(1, bytes, 1).goodput_pretty()

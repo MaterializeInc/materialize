@@ -14,19 +14,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use fail::fail_point;
-use serde_json::json;
-use timely::progress::Antichain;
-use tracing::Level;
-use tracing::{event, warn};
-
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -39,20 +36,22 @@ use mz_storage_client::controller::{
 };
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
+use serde_json::json;
+use timely::progress::Antichain;
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
     TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
+use crate::coord::read_policy::SINCE_GRANULARITY;
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, AdapterError, AdapterNotice};
-
-use super::read_policy::SINCE_GRANULARITY;
-use super::timeline::{TimelineContext, TimelineState};
+use crate::{catalog, flags, AdapterError, AdapterNotice};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -105,6 +104,7 @@ impl Coordinator {
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut peeks_to_drop = vec![];
+        let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
@@ -188,6 +188,7 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
@@ -196,6 +197,7 @@ impl Coordinator {
                     // Assume they all need to be updated.
                     // We could see if the config's have actually changed, but
                     // this is simpler.
+                    update_tracing_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
@@ -224,14 +226,14 @@ impl Coordinator {
                     .map(|dependent_id| (dependent_id, sink_id, sub))
             })
             .map(|(dependent_id, sink_id, active_subscribe)| {
-                let conn_id = active_subscribe.conn_id;
+                let conn_id = &active_subscribe.conn_id;
                 let entry = self.catalog().get_entry(dependent_id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id));
 
                 (
-                    (conn_id, name.to_string()),
+                    (conn_id.clone(), name.to_string()),
                     ComputeSinkId {
                         cluster_id: active_subscribe.cluster_id,
                         global_id: *sink_id,
@@ -250,8 +252,14 @@ impl Coordinator {
                 let entry = self.catalog().get_entry(id);
                 let name = self
                     .catalog()
-                    .resolve_full_name(entry.name(), Some(pending_peek.conn_id));
-                peeks_to_drop.push((name.to_string(), uuid.clone()));
+                    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
+                peeks_to_drop.push((
+                    format!("relation {}", name.to_string().quoted()),
+                    uuid.clone(),
+                ));
+            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
+                let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
+                peeks_to_drop.push((format!("cluster {}", name.quoted()), uuid.clone()));
             }
         }
 
@@ -308,7 +316,7 @@ impl Coordinator {
             &ops,
             session
                 .map(|session| session.conn_id())
-                .unwrap_or(SYSTEM_CONN_ID),
+                .unwrap_or(&SYSTEM_CONN_ID),
         )?;
 
         // This will produce timestamps that are guaranteed to increase on each
@@ -442,6 +450,9 @@ impl Coordinator {
             }
             if update_metrics_retention {
                 self.update_metrics_retention();
+            }
+            if update_tracing_config {
+                self.update_tracing_config();
             }
         }
         .await;
@@ -649,7 +660,7 @@ impl Coordinator {
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog_mut().drop_temp_item_ops(&session.conn_id());
+        let ops = self.catalog_mut().drop_temp_item_ops(session.conn_id());
         if ops.is_empty() {
             return;
         }
@@ -658,13 +669,18 @@ impl Coordinator {
             .expect("unable to drop temporary items for conn_id");
     }
 
+    fn update_tracing_config(&mut self) {
+        let tracing = flags::tracing_config(self.catalog().system_config());
+        tracing.apply(&self.tracing_handle);
+    }
+
     fn update_compute_config(&mut self) {
-        let config_params = self.catalog().compute_config();
+        let config_params = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(config_params);
     }
 
     fn update_storage_config(&mut self) {
-        let config_params = self.catalog().storage_config();
+        let config_params = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(config_params);
     }
 
@@ -826,7 +842,7 @@ impl Coordinator {
     fn validate_resource_limits(
         &self,
         ops: &Vec<catalog::Op>,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<(), AdapterError> {
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
@@ -900,11 +916,7 @@ impl Coordinator {
                             new_tables += 1;
                         }
                         CatalogItem::Source(source) => {
-                            if source.is_external() {
-                                // Only sources that ingest data from an external system count
-                                // towards resource limits.
-                                new_sources += 1
-                            }
+                            new_sources += source.user_controllable_persist_shard_count()
                         }
                         CatalogItem::Sink(_) => new_sinks += 1,
                         CatalogItem::MaterializedView(_) => {
@@ -920,45 +932,45 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::DropObject(id) => {
-                    match id {
-                        ObjectId::Cluster(_) => {
-                            new_clusters -= 1;
+                Op::DropObject(id) => match id {
+                    ObjectId::Cluster(_) => {
+                        new_clusters -= 1;
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                        let cluster = self.catalog().get_cluster_replica(*cluster_id, *replica_id);
+                        if let ReplicaLocation::Managed(location) = &cluster.config.location {
+                            let replica_allocation = self
+                                .catalog()
+                                .cluster_replica_sizes()
+                                .0
+                                .get(&location.size)
+                                .expect(
+                                    "location size is validated against the cluster replica sizes",
+                                );
+                            new_credit_consumption_rate -= replica_allocation.credits_per_hour
                         }
-                        ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                            *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                            let cluster =
-                                self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                            if let ReplicaLocation::Managed(location) = &cluster.config.location {
-                                let replica_allocation = self
-                                    .catalog()
-                                    .cluster_replica_sizes()
-                                    .0
-                                    .get(&location.size)
-                                    .expect("location size is validated against the cluster replica sizes");
-                                new_credit_consumption_rate -= replica_allocation.credits_per_hour
-                            }
+                    }
+                    ObjectId::Database(_) => {
+                        new_databases -= 1;
+                    }
+                    ObjectId::Schema((database_spec, _)) => {
+                        if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
                         }
-                        ObjectId::Database(_) => {
-                            new_databases -= 1;
-                        }
-                        ObjectId::Schema((database_spec, _)) => {
-                            if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
-                                *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                            }
-                        }
-                        ObjectId::Role(_) => {
-                            new_roles -= 1;
-                        }
-                        ObjectId::Item(id) => {
-                            let entry = self.catalog().get_entry(id);
-                            *new_objects_per_schema
-                                .entry((
-                                    entry.name().qualifiers.database_spec.clone(),
-                                    entry.name().qualifiers.schema_spec.clone(),
-                                ))
-                                .or_insert(0) -= 1;
-                            match entry.item() {
+                    }
+                    ObjectId::Role(_) => {
+                        new_roles -= 1;
+                    }
+                    ObjectId::Item(id) => {
+                        let entry = self.catalog().get_entry(id);
+                        *new_objects_per_schema
+                            .entry((
+                                entry.name().qualifiers.database_spec.clone(),
+                                entry.name().qualifiers.schema_spec.clone(),
+                            ))
+                            .or_insert(0) -= 1;
+                        match entry.item() {
                                 CatalogItem::Connection(connection) => match connection.connection {
                                     mz_storage_client::types::connections::Connection::AwsPrivatelink(
                                         _,
@@ -971,11 +983,7 @@ impl Coordinator {
                                     new_tables -= 1;
                                 }
                                 CatalogItem::Source(source) => {
-                                    if source.is_external() {
-                                        // Only sources that ingest data from an external system count
-                                        // towards resource limits.
-                                        new_sources -= 1;
-                                    }
+                                    new_sources -= source.user_controllable_persist_shard_count()
                                 }
                                 CatalogItem::Sink(_) => new_sinks -= 1,
                                 CatalogItem::MaterializedView(_) => {
@@ -990,18 +998,21 @@ impl Coordinator {
                                 | CatalogItem::Type(_)
                                 | CatalogItem::Func(_) => {}
                             }
-                        }
                     }
-                }
+                },
                 Op::AlterRole { .. }
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::UpdatePrivilege { .. }
+                | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
+                | Op::RenameCluster { .. }
+                | Op::RenameClusterReplica { .. }
                 | Op::RenameItem { .. }
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
+                | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
@@ -1036,14 +1047,16 @@ impl Coordinator {
             "table",
             MAX_TABLES.name(),
         )?;
-        // Only sources that ingest data from an external system count
-        // towards resource limits.
-        let current_sources = self
+
+        let current_sources: usize = self
             .catalog()
             .user_sources()
             .filter_map(|source| source.source())
-            .filter(|source| source.is_external())
-            .count();
+            .map(|source| source.user_controllable_persist_shard_count())
+            .sum::<i64>()
+            .try_into()
+            .expect("non-negative sum of sources");
+
         self.validate_resource_limit(
             current_sources,
             new_sources,

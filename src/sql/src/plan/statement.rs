@@ -21,27 +21,29 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
-use crate::ast::{Ident, ObjectType, Statement, UnresolvedItemName};
+use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
+    SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
+    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options};
-use crate::plan::{Params, Plan, PlanContext, PlanKind};
-use crate::session::vars::SystemVars;
+use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
+use crate::session::vars::FeatureFlag;
 
+mod acl;
 pub(crate) mod ddl;
 mod dml;
 mod raise;
 mod scl;
 pub(crate) mod show;
 mod tcl;
+mod validate;
 
 pub(crate) use ddl::PgConfigOptionExtracted;
 use mz_repr::role_id::RoleId;
@@ -112,9 +114,9 @@ pub fn describe(
 
     let desc = match stmt {
         // DDL statements.
+        Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
-        Statement::AlterOwner(stmt) => ddl::describe_alter_owner(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
@@ -132,6 +134,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
@@ -141,10 +144,18 @@ pub fn describe(
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
-        Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
-        Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
-        Statement::GrantPrivilege(stmt) => ddl::describe_grant_privilege(&scx, stmt)?,
-        Statement::RevokePrivilege(stmt) => ddl::describe_revoke_privilege(&scx, stmt)?,
+        Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
+
+        // `ACL` statements.
+        Statement::AlterOwner(stmt) => acl::describe_alter_owner(&scx, stmt)?,
+        Statement::GrantRole(stmt) => acl::describe_grant_role(&scx, stmt)?,
+        Statement::RevokeRole(stmt) => acl::describe_revoke_role(&scx, stmt)?,
+        Statement::GrantPrivileges(stmt) => acl::describe_grant_privileges(&scx, stmt)?,
+        Statement::RevokePrivileges(stmt) => acl::describe_revoke_privileges(&scx, stmt)?,
+        Statement::AlterDefaultPrivileges(stmt) => {
+            acl::describe_alter_default_privileges(&scx, stmt)?
+        }
+        Statement::ReassignOwned(stmt) => acl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -206,6 +217,10 @@ pub fn describe(
 
         // Other statements.
         Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
+        Statement::Show(ShowStatement::InspectShard(stmt)) => {
+            scl::describe_inspect_shard(&scx, stmt)?
+        }
+        Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -247,9 +262,9 @@ pub fn plan(
 
     let plan = match stmt {
         // DDL statements.
+        Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
-        Statement::AlterOwner(stmt) => ddl::plan_alter_owner(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
@@ -267,6 +282,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
@@ -276,10 +292,16 @@ pub fn plan(
             ddl::plan_create_materialized_view(scx, stmt, params)
         }
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
-        Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
-        Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
-        Statement::GrantPrivilege(stmt) => ddl::plan_grant_privilege(scx, stmt),
-        Statement::RevokePrivilege(stmt) => ddl::plan_revoke_privilege(scx, stmt),
+        Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
+
+        // `ACL` statements.
+        Statement::AlterOwner(stmt) => acl::plan_alter_owner(scx, stmt),
+        Statement::GrantRole(stmt) => acl::plan_grant_role(scx, stmt),
+        Statement::RevokeRole(stmt) => acl::plan_revoke_role(scx, stmt),
+        Statement::GrantPrivileges(stmt) => acl::plan_grant_privileges(scx, stmt),
+        Statement::RevokePrivileges(stmt) => acl::plan_revoke_privileges(scx, stmt),
+        Statement::AlterDefaultPrivileges(stmt) => acl::plan_alter_default_privileges(scx, stmt),
+        Statement::ReassignOwned(stmt) => acl::plan_reassign_owned(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
@@ -335,6 +357,8 @@ pub fn plan(
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
+        Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
+        Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
     };
 
     if let Ok(plan) = &plan {
@@ -504,7 +528,9 @@ impl<'a> StatementContext<'a> {
     pub fn allocate_temporary_full_name(&self, name: PartialItemName) -> FullItemName {
         FullItemName {
             database: RawDatabaseSpecifier::Ambient,
-            schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
+            schema: name
+                .schema
+                .unwrap_or_else(|| mz_repr::namespaces::MZ_TEMP_SCHEMA.to_owned()),
             item: name.item,
         }
     }
@@ -697,96 +723,31 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn get_object_type(&self, id: &ObjectId) -> ObjectType {
+        self.catalog.get_object_type(id)
+    }
+
+    pub fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType {
         match id {
-            ObjectId::Cluster(_) => ObjectType::Cluster,
-            ObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-            ObjectId::Database(_) => ObjectType::Database,
-            ObjectId::Schema(_) => ObjectType::Schema,
-            ObjectId::Role(_) => ObjectType::Role,
-            ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
+            SystemObjectId::Object(id) => SystemObjectType::Object(self.get_object_type(id)),
+            SystemObjectId::System => SystemObjectType::System,
         }
     }
 
-    pub fn unsafe_mode(&self) -> bool {
-        self.catalog.config().unsafe_mode
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
-        if !self.unsafe_mode() {
-            return Err(PlanError::RequiresUnsafe {
-                feature: feature_name.to_string(),
-            });
-        }
+    /// Returns an error if the named `FeatureFlag` is not set to `on`.
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        flag.enabled(Some(self.catalog.system_vars()), None, None)?;
         Ok(())
     }
 
-    fn require_var_or_unsafe_mode<F>(
+    /// Equivalent to [`Self::require_feature_flag`] but with the ability for the caller to control
+    /// the error message.
+    pub fn require_feature_flag_w_dynamic_desc(
         &self,
-        feature_flag: F,
-        feature_name: &str,
-    ) -> Result<(), PlanError>
-    where
-        F: Fn(&SystemVars) -> bool,
-    {
-        if !self.unsafe_mode() && !feature_flag(self.catalog.system_vars()) {
-            return Err(PlanError::RequiresVarOrUnsafe {
-                feature: feature_name.to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub fn require_upsert_source_disk_available(&self) -> Result<(), PlanError> {
-        self.require_var_or_unsafe_mode(
-            SystemVars::enable_upsert_source_disk,
-            "`WITH (DISK)` syntax",
-        )
-    }
-
-    pub fn require_with_mutually_recursive(&self) -> Result<(), PlanError> {
-        self.require_var_or_unsafe_mode(
-            SystemVars::enable_with_mutually_recursive,
-            "`WITH MUTUALLY RECURSIVE` syntax",
-        )
-    }
-
-    pub fn require_format_json(&self) -> Result<(), PlanError> {
-        self.require_var_or_unsafe_mode(SystemVars::enable_format_json, "`FORMAT JSON`")
-    }
-
-    pub fn require_envelope_upsert_in_subscribe(&self) -> Result<(), PlanError> {
-        if !self.unsafe_mode()
-            && !self
-                .catalog
-                .system_vars()
-                .enable_envelope_upsert_in_subscribe()
-        {
-            sql_bail!("`ENVELOPE UPSERT (KEY (..))` is not enabled")
-        }
-        Ok(())
-    }
-
-    pub fn require_envelope_debezium_in_subscribe(&self) -> Result<(), PlanError> {
-        if !self.unsafe_mode()
-            && !self
-                .catalog
-                .system_vars()
-                .enable_envelope_debezium_in_subscribe()
-        {
-            sql_bail!("`ENVELOPE DEBEZIUM (KEY (..))` is not enabled")
-        }
-        Ok(())
-    }
-
-    pub fn require_within_timestamp_order_by_in_subscribe(&self) -> Result<(), PlanError> {
-        if !self.unsafe_mode()
-            && !self
-                .catalog
-                .system_vars()
-                .enable_within_timestamp_order_by()
-        {
-            sql_bail!("`WITHIN TIMESTAMP ORDER BY ..` is not enabled")
-        }
+        flag: &FeatureFlag,
+        desc: String,
+        detail: String,
+    ) -> Result<(), PlanError> {
+        flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
         Ok(())
     }
 
@@ -902,5 +863,36 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
         self.catalog.get_owner_id(id)
+    }
+
+    pub fn humanize_resolved_name(
+        &self,
+        name: &ResolvedItemName,
+    ) -> Result<PartialItemName, PlanError> {
+        let item = self.get_item_by_resolved_name(name)?;
+        Ok(self.catalog.minimal_qualification(item.name()))
+    }
+
+    /// WARNING! This style of name resolution assumes the referred-to objects exists (i.e. panics
+    /// if objects do not exist) so should never be used to handle user input.
+    pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
+        tracing::trace!("dangerous_resolve_name {:?}", name);
+        let name = UnresolvedItemName::qualified(&name);
+        let entry = match self.resolve_item(RawItemName::Name(name.clone())) {
+            Ok(entry) => entry,
+            Err(_) => self
+                .resolve_function(name.clone())
+                .expect("name referred to an existing object"),
+        };
+
+        let partial = normalize::unresolved_item_name(name).unwrap();
+        let full_name = self.allocate_full_name(partial).unwrap();
+
+        ResolvedItemName::Item {
+            id: entry.id(),
+            qualifiers: entry.name().qualifiers.clone(),
+            full_name,
+            print_id: true,
+        }
     }
 }

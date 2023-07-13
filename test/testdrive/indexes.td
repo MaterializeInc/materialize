@@ -263,18 +263,27 @@ bar_ind bar <VARIABLE_OUTPUT> {a}
 > DROP CLUSTER clstr CASCADE;
 
 # Test creating indexes on system objects
-> CREATE INDEX sys_ind ON mz_array_types (id)
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+SET CLUSTER TO default
+CREATE INDEX sys_ind ON mz_array_types (id)
+
 > SET CLUSTER TO mz_introspection
 > SHOW INDEXES ON mz_array_types
 sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
 > SHOW INDEXES FROM mz_catalog WHERE name = 'sys_ind'
 sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
 > SET CLUSTER TO default
-> DROP INDEX sys_ind
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+DROP INDEX sys_ind
+ALTER SYSTEM SET enable_rbac_checks TO false
 
 # Test that creating indexes on objects in the mz_internal schema fails
 ! CREATE INDEX illegal_sys_ind ON mz_internal.mz_view_keys (object_id)
 contains:cannot create index with unstable dependencies
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO true
 
 > SHOW INDEXES IN CLUSTER mz_introspection
 mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_introspection    {id,worker_id}
@@ -316,5 +325,7 @@ mz_show_sources_ind                                         mz_sources          
 mz_show_tables_ind                                          mz_tables                                    mz_introspection    {schema_id}
 mz_show_types_ind                                           mz_types                                     mz_introspection    {schema_id}
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
+mz_sink_statistics_ind                                      mz_sink_statistics                           mz_introspection    {id}
+mz_source_statistics_ind                                    mz_source_statistics                         mz_introspection    {id}
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}

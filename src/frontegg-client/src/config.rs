@@ -25,9 +25,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use reqwest::Url;
 
-use mz_frontegg_auth::AppPassword;
-
-use crate::client::Client;
+use crate::client::{Authentication, Client};
 
 /// The default endpoint the client will use to issue the requests. Currently
 /// points to Materialize admin endpoint.
@@ -41,7 +39,7 @@ pub static DEFAULT_ENDPOINT: Lazy<Url> = Lazy::new(|| {
 pub struct ClientConfig {
     /// A singular, legitimate app password that will remain in use to identify
     /// the user throughout the client's existence.
-    pub app_password: AppPassword,
+    pub authentication: Authentication,
 }
 
 /// A builder for a [`Client`].
@@ -76,7 +74,7 @@ impl ClientBuilder {
             .unwrap();
         Client {
             inner,
-            app_password: config.app_password,
+            authentication: config.authentication,
             endpoint: self.endpoint,
             auth: Default::default(),
         }

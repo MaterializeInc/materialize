@@ -17,17 +17,15 @@ from materialize.util import MzVersion
 class Owners(Check):
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
-            (
-                f"""
-            $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            f"""
+            $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
             GRANT CREATE ON CLUSTER default TO {role}
-            """
-                if self.current_version >= MzVersion.parse("0.52.0-dev")
-                else ""
-            )
-            + f"""
+            $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            GRANT CREATEDB ON SYSTEM TO {role}
+            $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            ALTER ROLE {role} CREATEDB
             $ postgres-execute connection=postgres://{role}@materialized:6875/materialize
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}
@@ -95,7 +93,21 @@ class Owners(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            "> CREATE ROLE owner_role_01 CREATEDB CREATECLUSTER"
+            dedent(
+                """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEROLE ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATEROLE
+
+                > CREATE ROLE owner_role_01
+                >[version<5900] ALTER ROLE owner_role_01 CREATEDB CREATECLUSTER
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
+                """
+            )
             + self._create_objects("owner_role_01", 1, expensive=True)
         )
 
@@ -104,10 +116,38 @@ class Owners(Check):
             Testdrive(s)
             for s in [
                 self._create_objects("owner_role_01", 2)
-                + "> CREATE ROLE owner_role_02 CREATEDB CREATECLUSTER",
+                + dedent(
+                    """
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEROLE ON SYSTEM TO materialize
+
+                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER ROLE materialize CREATEROLE
+
+                    > CREATE ROLE owner_role_02
+                    >[version<5900] ALTER ROLE owner_role_02 CREATEDB CREATECLUSTER
+
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
+                    """
+                ),
                 self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_02", 4)
-                + "> CREATE ROLE owner_role_03 CREATEDB CREATECLUSTER",
+                + dedent(
+                    """
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEROLE ON SYSTEM TO materialize
+
+                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER ROLE materialize CREATEROLE
+
+                    > CREATE ROLE owner_role_03
+                    >[version<5900] ALTER ROLE owner_role_03 CREATEDB CREATECLUSTER
+
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
+                    """
+                ),
             ]
         ]
 
@@ -326,6 +366,7 @@ class Owners(Check):
                 contains: column "privileges" does not exist
 
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
+                owner_cluster1 mz_introspection=U/owner_role_01
                 owner_cluster1 owner_role_01=UC/owner_role_01
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'

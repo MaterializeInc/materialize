@@ -9,11 +9,11 @@
 
 //! Configuration parameter types.
 
-use serde::{Deserialize, Serialize};
-
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_tracing::params::TracingParameters;
+use serde::{Deserialize, Serialize};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -24,15 +24,20 @@ include!(concat!(
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct StorageParameters {
-    /// Controls whether or not to use the new storage `persist_sink` implementation in storage
-    /// ingestions.
-    pub enable_multi_worker_storage_persist_sink: bool,
     /// Persist client configuration.
     pub persist: PersistParameters,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
     pub keep_n_source_status_history_entries: usize,
+    pub keep_n_sink_status_history_entries: usize,
+    /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
+    pub upsert_rocksdb_tuning_config: mz_rocksdb_types::RocksDBTuningParameters,
+    /// Whether or not to allow shard finalization to occur. Note that this will
+    /// only disable the actual finalization of shards, not registering them for
+    /// finalization.
+    pub finalize_shards: bool,
+    pub tracing: TracingParameters,
 }
 
 impl StorageParameters {
@@ -40,35 +45,44 @@ impl StorageParameters {
     pub fn update(
         &mut self,
         StorageParameters {
-            enable_multi_worker_storage_persist_sink,
             persist,
             pg_replication_timeouts,
             keep_n_source_status_history_entries,
+            keep_n_sink_status_history_entries,
+            upsert_rocksdb_tuning_config,
+            finalize_shards,
+            tracing,
         }: StorageParameters,
     ) {
-        self.enable_multi_worker_storage_persist_sink = enable_multi_worker_storage_persist_sink;
         self.persist.update(persist);
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
+        self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
+        self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
+        self.finalize_shards = finalize_shards;
+        self.tracing.update(tracing);
     }
 }
 
 impl RustType<ProtoStorageParameters> for StorageParameters {
     fn into_proto(&self) -> ProtoStorageParameters {
         ProtoStorageParameters {
-            enable_multi_worker_storage_persist_sink: self.enable_multi_worker_storage_persist_sink,
             persist: Some(self.persist.into_proto()),
             pg_replication_timeouts: Some(self.pg_replication_timeouts.into_proto()),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
+            keep_n_sink_status_history_entries: u64::cast_from(
+                self.keep_n_sink_status_history_entries,
+            ),
+            upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
+            finalize_shards: self.finalize_shards,
+            tracing: Some(self.tracing.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoStorageParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            enable_multi_worker_storage_persist_sink: proto
-                .enable_multi_worker_storage_persist_sink,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoStorageParameters::persist")?,
@@ -78,6 +92,16 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,
             ),
+            keep_n_sink_status_history_entries: usize::cast_from(
+                proto.keep_n_sink_status_history_entries,
+            ),
+            upsert_rocksdb_tuning_config: proto
+                .upsert_rocksdb_tuning_config
+                .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
+            finalize_shards: proto.finalize_shards,
+            tracing: proto
+                .tracing
+                .into_rust_if_some("ProtoStorageParameters::tracing")?,
         })
     }
 }

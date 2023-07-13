@@ -21,14 +21,16 @@ import importlib
 import importlib.abc
 import importlib.util
 import inspect
+import json
 import os
+import re
 import subprocess
 import sys
 import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
-from inspect import getmembers, isfunction
+from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
@@ -52,7 +54,7 @@ from typing import (
 import pg8000
 import sqlparse
 import yaml
-from pg8000 import Cursor
+from pg8000 import Connection, Cursor
 
 from materialize import mzbuild, spawn, ui
 from materialize.mzcompose import loader
@@ -138,6 +140,7 @@ class Composition:
                 "mydata": None,
                 "tmp": None,
                 "secrets": None,
+                "scratch": None,
             }
         )
 
@@ -425,6 +428,19 @@ class Composition:
         elapsed = time.time() - start_time
         self.test_results[name] = Composition.TestResult(elapsed, error)
 
+    def sql_connection(
+        self,
+        service: str = "materialized",
+        user: str = "materialize",
+        port: Optional[int] = None,
+        password: Optional[str] = None,
+    ) -> Connection:
+        """Get a connection (with autocommit enabled) to the materialized service."""
+        port = self.port(service, port) if port else self.default_port(service)
+        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
+        conn.autocommit = True
+        return conn
+
     def sql_cursor(
         self,
         service: str = "materialized",
@@ -433,9 +449,7 @@ class Composition:
         password: Optional[str] = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
-        conn.autocommit = True
+        conn = self.sql_connection(service, user, port, password)
         return conn.cursor()
 
     def sql(
@@ -525,6 +539,7 @@ class Composition:
         capture_stderr: bool = False,
         stdin: Optional[str] = None,
         check: bool = True,
+        workdir: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -541,6 +556,7 @@ class Composition:
         return self.invoke(
             "exec",
             *(["--detach"] if detach else []),
+            *(["--workdir", workdir] if workdir else []),
             "-T",
             service,
             *(
@@ -703,12 +719,67 @@ class Composition:
         print(f"Sleeping for {duration} seconds...")
         time.sleep(duration)
 
+    def container_id(self, service: str) -> str:
+        """Return the container_id for the specified service
+
+        Delegates to `docker compose ps`
+        """
+        output_str = self.invoke("ps", "--quiet", service, capture=True).stdout
+        assert output_str is not None
+
+        output_list = output_str.strip("\n").split("\n")
+        assert len(output_list) == 1
+        assert output_list[0] is not None
+
+        return str(output_list[0])
+
+    def stats(
+        self,
+        service: str,
+    ) -> str:
+        """Delegates to `docker stats`
+
+        Args:
+            service: The service whose container's stats will be probed.
+        """
+
+        return subprocess.run(
+            [
+                "docker",
+                "stats",
+                self.container_id(service),
+                "--format",
+                "{{json .}}",
+                "--no-stream",
+                "--no-trunc",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        ).stdout
+
+    def mem(self, service: str) -> int:
+        stats_str = self.stats(service)
+        stats = json.loads(stats_str)
+        assert service in stats["Name"]
+        mem_str, _ = stats["MemUsage"].split("/")  # "MemUsage":"1.542GiB / 62.8GiB"
+        mem_float = float(re.findall(r"[\d.]+", mem_str)[0])
+        if "MiB" in mem_str:
+            mem_float = mem_float * 10**6
+        elif "GiB" in mem_str:
+            mem_float = mem_float * 10**9
+        else:
+            assert False, f"Unable to parse {mem_str}"
+        return round(mem_float)
+
     def testdrive(
         self,
         input: str,
         service: str = "testdrive",
         persistent: bool = True,
         args: List[str] = [],
+        caller: Optional[Traceback] = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -719,10 +790,14 @@ class Composition:
             persistent: Whether a persistent testdrive container will be used.
         """
 
+        caller = caller or getframeinfo(stack()[1][0])
+
+        args_with_source = args + [f"--source={caller.filename}:{caller.lineno}"]
+
         if persistent:
-            self.exec(service, *args, stdin=input)
+            self.exec(service, *args_with_source, stdin=input)
         else:
-            self.run(service, *args, stdin=input)
+            self.run(service, *args_with_source, stdin=input)
 
 
 class ServiceHealthcheck(TypedDict, total=False):
@@ -956,22 +1031,22 @@ def _wait_for_pg(
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
-            cur = conn.cursor()
-            cur.execute(query)
-            if expected == "any" and cur.rowcount == -1:
-                ui.progress(" success!", finish=True)
-                return
-            result = list(cur.fetchall())
-            if expected == "any" or result == expected:
-                if print_result:
-                    say(f"query result: {result}")
-                else:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                if expected == "any" and cur.rowcount == -1:
                     ui.progress(" success!", finish=True)
-                return
-            else:
-                say(
-                    f"host={host} port={port} did not return rows matching {expected} got: {result}"
-                )
+                    return
+                result = list(cur.fetchall())
+                if expected == "any" or result == expected:
+                    if print_result:
+                        say(f"query result: {result}")
+                    else:
+                        ui.progress(" success!", finish=True)
+                    return
+                else:
+                    say(
+                        f"host={host} port={port} did not return rows matching {expected} got: {result}"
+                    )
         except Exception as e:
             ui.progress(f"{e if print_result else ''} {int(remaining)}")
             error = e

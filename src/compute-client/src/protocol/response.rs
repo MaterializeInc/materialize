@@ -11,16 +11,15 @@
 
 use std::num::NonZeroUsize;
 
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{Diff, GlobalId, Row};
+use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
-
-use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row};
-use mz_timely_util::progress::any_antichain;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -464,17 +463,16 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
             assert!(actual.is_ok());

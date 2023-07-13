@@ -9,11 +9,9 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fmt;
-use std::io;
-use std::num::ParseIntError;
-use std::num::TryFromIntError;
+use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::{fmt, io};
 
 use itertools::Itertools;
 use mz_expr::EvalError;
@@ -22,21 +20,22 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{separated, StrExt};
 use mz_postgres_util::PostgresError;
 use mz_repr::adt::char::InvalidCharLengthError;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::strconv;
-use mz_repr::ColumnName;
-use mz_repr::GlobalId;
+use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ObjectType, Privilege, UnresolvedItemName};
-use mz_sql_parser::parser::ParserError;
+use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::parser::{ParserError, ParserStatementError};
 
-use crate::catalog::{CatalogError, CatalogItemType};
-use crate::names::PartialItemName;
-use crate::names::ResolvedItemName;
+use crate::catalog::{
+    CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
+};
+use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::session::vars::VarError;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
@@ -49,12 +48,7 @@ pub enum PlanError {
     NeverSupported {
         feature: String,
         documentation_link: String,
-    },
-    RequiresUnsafe {
-        feature: String,
-    },
-    RequiresVarOrUnsafe {
-        feature: String,
+        details: Option<String>,
     },
     UnknownColumn {
         table: Option<PartialItemName>,
@@ -90,26 +84,44 @@ pub enum PlanError {
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
+    UpsertSinkWithInvalidKey {
+        name: String,
+        desired_key: Vec<String>,
+        valid_keys: Vec<Vec<String>>,
+    },
+    InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
-        expected_type: ObjectType,
-        actual_type: ObjectType,
+        expected_type: SystemObjectType,
+        actual_type: SystemObjectType,
         object_name: String,
     },
     InvalidPrivilegeTypes {
-        privilege_types: Vec<Privilege>,
-        object_type: ObjectType,
+        invalid_privileges: AclMode,
+        object_description: ErrorMessageObjectDescription,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
+    ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
     DropSubsource {
         subsource: String,
+        source: String,
+    },
+    DropProgressCollection {
+        progress_collection: String,
+        source: String,
+    },
+    DropNonSubsource {
+        non_subsource: String,
+        source: String,
+    },
+    DropLastSubsource {
         source: String,
     },
     AlterViewOnMaterializedView(String),
@@ -143,7 +155,6 @@ pub enum PlanError {
     UnknownFunction {
         name: String,
         arg_types: Vec<String>,
-        alternative_hint: Option<String>,
     },
     IndistinctFunction {
         name: String,
@@ -170,10 +181,17 @@ pub enum PlanError {
         cluster_name: String,
         linked_object_name: String,
     },
+    ManagedCluster {
+        cluster_name: String,
+    },
     EmptyPublication(String),
-    DuplicateSubsourceReference {
+    SubsourceNameConflict {
         name: UnresolvedItemName,
         upstream_references: Vec<UnresolvedItemName>,
+    },
+    SubsourceDuplicateReference {
+        name: UnresolvedItemName,
+        target_names: Vec<UnresolvedItemName>,
     },
     PostgresDatabaseMissingFilteredSchemas {
         schemas: Vec<String>,
@@ -181,6 +199,10 @@ pub enum PlanError {
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
+    FromValueRequiresParen,
+    VarError(VarError),
+    UnsolvablePolymorphicFunctionInput,
+    ShowCommandInView,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -195,16 +217,37 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidOptionValue { err, .. } => err.detail(),
-            Self::RequiresUnsafe { .. } => {
-                Some("The requested feature is used only for internal development and testing of Materialize.".into())
+            Self::UpsertSinkWithInvalidKey {
+                name,
+                desired_key,
+                valid_keys,
+            } => {
+                let valid_keys = if valid_keys.is_empty() {
+                    "There are no known valid unique keys for the underlying relation.".into()
+                } else {
+                    format!(
+                        "The following keys are known to be unique for the underlying relation:\n{}",
+                        valid_keys
+                            .iter()
+                            .map(|k|
+                                format!("  ({})", k.iter().map(|c| c.as_str().quoted()).join(", "))
+                            )
+                            .join("\n"),
+                    )
+                };
+                Some(format!(
+                    "Materialize could not prove that the specified upsert envelope key ({}) \
+                    was a unique key of the underlying relation {}. {valid_keys}",
+                    separated(", ", desired_key.iter().map(|c| c.as_str().quoted())),
+                    name.quoted()
+                ))
             }
-            Self::RequiresVarOrUnsafe { .. } => {
-                Some("The requested feature is not currently enabled on this account.".into())
-            }
+            Self::VarError(e) => e.detail(),
             _ => None,
         }
     }
@@ -214,8 +257,11 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
-            Self::DropSubsource { source, .. } => Some(format!(
-                "Use DROP SOURCE {source} to drop this subsource's primary source and all of its other subsources"
+            Self::DropSubsource { source, subsource } => Some(format!(
+                "Use ALTER SOURCE {source} DROP SUBSOURCE {subsource}"
+            )),
+            Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
+                "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
@@ -251,12 +297,7 @@ impl PlanError {
                 None
             }
             Self::InvalidOptionValue { err, .. } => err.hint(),
-            Self::UnknownFunction { alternative_hint, ..} => {
-                match alternative_hint {
-                    Some(_) => alternative_hint.clone(),
-                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
-                }
-            }
+            Self::UnknownFunction { ..} => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
             Self::IndistinctFunction {..} => {
                 Some("Could not choose a best candidate function. You might need to add explicit type casts.".into())
             }
@@ -270,7 +311,7 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
-            Self::DuplicateSubsourceReference { .. } => {
+            Self::SubsourceNameConflict { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
@@ -282,6 +323,11 @@ impl PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
             }
+            Self::UpsertSinkWithInvalidKey { .. } | Self::UpsertSinkWithoutKey => {
+                Some("See: https://materialize.com/s/sink-key-selection".into())
+            }
+            Self::Catalog(e) => e.hint(),
+            Self::VarError(e) => e.hint(),
             _ => None,
         }
     }
@@ -297,16 +343,8 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::NeverSupported { feature, documentation_link: documentation_path } => {
+            Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
                 write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
-                Ok(())
-            }
-            Self::RequiresUnsafe { feature} => {
-                write!(f, "{feature} is not supported",)?;
-                Ok(())
-            }
-            Self::RequiresVarOrUnsafe { feature} => {
-                write!(f, "{feature} is not enabled",)?;
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(
@@ -378,16 +416,21 @@ impl fmt::Display for PlanError {
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
+            Self::UpsertSinkWithInvalidKey { .. } => {
+                write!(f, "upsert key could not be validated as unique")
+            }
+            Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
+            Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
-            Self::InvalidPrivilegeTypes{privilege_types, object_type} => {
-                write!(f, "invalid privilege types {} for {}", privilege_types.into_iter().join(", "), object_type)
+            Self::InvalidPrivilegeTypes{ invalid_privileges, object_description, } => {
+                write!(f, "invalid privilege types {} for {}", invalid_privileges.to_error_string(), object_description)
             },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
@@ -419,7 +462,10 @@ impl fmt::Display for PlanError {
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
-            Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
+            Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
+            Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
+            Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
+            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
@@ -455,10 +501,14 @@ impl fmt::Display for PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
+            Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
-            Self::DuplicateSubsourceReference { name, upstream_references } => {
+            Self::SubsourceNameConflict { name, upstream_references } => {
                 write!(f, "multiple tables with name {}: {}", name.to_ast_string_stable(), itertools::join(upstream_references.iter().map(|n| n.to_ast_string_stable()), ", "))
+            },
+            Self::SubsourceDuplicateReference { name, target_names } => {
+                write!(f, "table {} referred to by multiple subsources: {}", name.to_ast_string_stable(), itertools::join(target_names.iter().map(|n| n.to_ast_string_stable()), ", "))
             },
             Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
                 write!(f, "FOR SCHEMAS (..) included {}, but PostgreSQL database has no schema with that name", itertools::join(schemas.iter(), ", "))
@@ -472,6 +522,14 @@ impl fmt::Display for PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
+            Self::FromValueRequiresParen => f.write_str(
+                "VALUES expression in FROM clause must be surrounded by parentheses"
+            ),
+            Self::VarError(e) => e.fmt(f),
+            Self::UnsolvablePolymorphicFunctionInput => f.write_str(
+                "could not determine polymorphic type because input has type unknown"
+            ),
+            Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
         }
     }
 }
@@ -545,9 +603,21 @@ impl From<ParserError> for PlanError {
     }
 }
 
+impl From<ParserStatementError> for PlanError {
+    fn from(e: ParserStatementError) -> PlanError {
+        PlanError::ParserStatement(e)
+    }
+}
+
 impl From<PostgresError> for PlanError {
     fn from(e: PostgresError) -> PlanError {
         PlanError::PostgresConnectionErr { cause: Arc::new(e) }
+    }
+}
+
+impl From<VarError> for PlanError {
+    fn from(e: VarError) -> Self {
+        PlanError::VarError(e)
     }
 }
 

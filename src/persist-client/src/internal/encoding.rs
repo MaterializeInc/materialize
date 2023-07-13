@@ -7,16 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::halt;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_types::stats::ProtoStructStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use proptest::prelude::Arbitrary;
+use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -24,8 +30,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 use uuid::Uuid;
-
-use mz_ore::halt;
 
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -60,6 +64,103 @@ impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
         }
+    }
+}
+
+/// A proto that is decoded on use.
+///
+/// Because of the way prost works, decoding a large protobuf may result in a
+/// number of very short lived allocations in our RustType/ProtoType decode path
+/// (e.g. this happens for a repeated embedded message). Not every use of
+/// persist State needs every transitive bit of it to be decoded, so we opt
+/// certain parts of it (initially stats) to be decoded on use.
+///
+/// This has the dual benefit of only paying for the short-lived allocs when
+/// necessary and also allowing decoding to be gated by a feature flag. The
+/// tradeoffs are that we might decode more than once and that we have to handle
+/// invalid proto errors in more places.
+///
+/// Mechanically, this is accomplished by making the field a proto `bytes` types
+/// instead of `ProtoFoo`. These bytes then contain the serialization of
+/// ProtoFoo. NB: Swapping between the two is actually a forward and backward
+/// compatible change.
+///
+/// > Embedded messages are compatible with bytes if the bytes contain an
+/// > encoded version of the message.
+///
+/// (See <https://protobuf.dev/programming-guides/proto3/#updating>)
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LazyProto<T> {
+    buf: Bytes,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T: Message + Default> Debug for LazyProto<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.decode() {
+            Ok(proto) => Debug::fmt(&proto, f),
+            Err(err) => f
+                .debug_struct(&format!("LazyProto<{}>", std::any::type_name::<T>()))
+                .field("err", &err)
+                .finish(),
+        }
+    }
+}
+
+impl<T> PartialEq for LazyProto<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl<T> Eq for LazyProto<T> {}
+
+impl<T> PartialOrd for LazyProto<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for LazyProto<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let LazyProto {
+            buf: self_buf,
+            _phantom: _,
+        } = self;
+        let LazyProto {
+            buf: other_buf,
+            _phantom: _,
+        } = other;
+        self_buf.cmp(other_buf)
+    }
+}
+
+impl<T: Message + Default> From<&T> for LazyProto<T> {
+    fn from(value: &T) -> Self {
+        let buf = Bytes::from(value.encode_to_vec());
+        LazyProto {
+            buf,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: Message + Default> LazyProto<T> {
+    pub fn decode(&self) -> Result<T, prost::DecodeError> {
+        T::decode(&*self.buf)
+    }
+}
+
+impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
+    fn into_proto(&self) -> Bytes {
+        self.buf.clone()
+    }
+
+    fn from_proto(buf: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            buf,
+            _phantom: PhantomData,
+        })
     }
 }
 
@@ -547,6 +648,7 @@ where
 /// A decoded version of [ProtoStateRollup] for which we have not yet checked
 /// that codecs match the ones in durable state.
 #[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct UntypedState<T> {
     pub(crate) key_codec: String,
     pub(crate) val_codec: String,
@@ -762,6 +864,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
                 debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
             }
         }
+        debug_assert_eq!(ret.validate(), Ok(()), "{:?}", ret);
         Ok(ret)
     }
 }
@@ -919,25 +1022,78 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
 
 impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     fn into_proto(&self) -> ProtoHollowBatchPart {
-        let key_stats = self.stats.as_ref().map(|x| x.key.into_proto());
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
-            key_stats,
+            key_stats: self.stats.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
-        let stats = match proto.key_stats {
-            Some(x) => Some(Arc::new(PartStats {
-                key: x.into_rust()?,
-            })),
-            None => None,
-        };
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
-            stats,
+            stats: proto.key_stats.into_rust()?,
+        })
+    }
+}
+
+/// Aggregate statistics about data contained in a part.
+///
+/// These are "lazy" in the sense that we don't decode them (or even validate
+/// the encoded version) until they're used.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct LazyPartStats {
+    key: LazyProto<ProtoStructStats>,
+}
+
+impl LazyPartStats {
+    pub fn encode(x: &PartStats, map_proto: impl FnOnce(&mut ProtoStructStats)) -> Self {
+        let PartStats { key } = x;
+        let mut proto_stats = ProtoStructStats::from_rust(key);
+        map_proto(&mut proto_stats);
+        LazyPartStats {
+            key: LazyProto::from(&proto_stats),
+        }
+    }
+    /// Decodes and returns PartStats from the encoded representation.
+    ///
+    /// This does not cache the returned value, it decodes each time it's
+    /// called.
+    pub fn decode(&self) -> PartStats {
+        let key = self.key.decode().expect("valid proto");
+        PartStats {
+            key: key.into_rust().expect("valid stats"),
+        }
+    }
+}
+
+impl RustType<Bytes> for LazyPartStats {
+    fn into_proto(&self) -> Bytes {
+        let LazyPartStats { key } = self;
+        key.into_proto()
+    }
+
+    fn from_proto(proto: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(LazyPartStats {
+            key: proto.into_rust()?,
+        })
+    }
+}
+
+pub(crate) fn any_some_lazy_part_stats() -> impl Strategy<Value = Option<LazyPartStats>> {
+    proptest::prelude::any::<LazyPartStats>().prop_map(Some)
+}
+
+#[allow(unused_parens)]
+impl Arbitrary for LazyPartStats {
+    type Parameters = ();
+    type Strategy =
+        proptest::strategy::Map<(<PartStats as Arbitrary>::Strategy), fn((PartStats)) -> Self>;
+
+    fn arbitrary_with(_: ()) -> Self::Strategy {
+        Strategy::prop_map((proptest::prelude::any::<PartStats>()), |(x)| {
+            LazyPartStats::encode(&x, |_| {})
         })
     }
 }
@@ -1000,6 +1156,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SerdeWriterEnrichedHollowBatch {
     pub(crate) shard_id: ShardId,
+    pub(crate) version: Version,
     pub(crate) batch: Vec<u8>,
 }
 
@@ -1007,6 +1164,7 @@ impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterE
     fn from(x: WriterEnrichedHollowBatch<T>) -> Self {
         SerdeWriterEnrichedHollowBatch {
             shard_id: x.shard_id,
+            version: x.version,
             batch: x.batch.into_proto().encode_to_vec(),
         }
     }
@@ -1014,13 +1172,19 @@ impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterE
 
 impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnrichedHollowBatch<T> {
     fn from(x: SerdeWriterEnrichedHollowBatch) -> Self {
-        let proto_batch = ProtoHollowBatch::decode(x.batch.as_slice())
+        let SerdeWriterEnrichedHollowBatch {
+            shard_id,
+            version,
+            batch,
+        } = x;
+        let proto_batch = ProtoHollowBatch::decode(batch.as_slice())
             .expect("internal error: could not decode WriterEnrichedHollowBatch");
         let batch = proto_batch
             .into_rust()
             .expect("internal error: could not decode WriterEnrichedHollowBatch");
         WriterEnrichedHollowBatch {
-            shard_id: x.shard_id,
+            shard_id,
+            version,
             batch,
         }
     }
@@ -1031,8 +1195,10 @@ mod tests {
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
+    use proptest::prelude::*;
 
     use crate::internal::paths::PartialRollupKey;
+    use crate::internal::state::tests::any_state;
     use crate::internal::state::HandleDebugState;
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
@@ -1040,7 +1206,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn applier_version_state() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1075,7 +1241,7 @@ mod tests {
         assert!(v1_res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn applier_version_state_diff() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1104,7 +1270,7 @@ mod tests {
         assert!(v1_res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hollow_batch_migration_keys() {
         let x = HollowBatch {
             desc: Description::new(
@@ -1139,7 +1305,7 @@ mod tests {
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn reader_state_migration_lease_duration() {
         let x = LeasedReaderState {
             seqno: SeqNo(1),
@@ -1161,7 +1327,7 @@ mod tests {
         assert_eq!(<LeasedReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_state_migration_most_recent_write() {
         let proto = ProtoWriterState {
             last_heartbeat_timestamp_ms: 1,
@@ -1188,7 +1354,7 @@ mod tests {
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn state_migration_rollups() {
         let r1 = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
@@ -1225,9 +1391,9 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-    fn state_diff_migration_rollups() {
+    async fn state_diff_migration_rollups() {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,
@@ -1316,5 +1482,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(SeqNo(1), r1_rollup), (SeqNo(2), r2_rollup)]
         );
+    }
+
+    #[mz_ore::test]
+    fn state_proto_roundtrip() {
+        fn testcase<T: Timestamp + Lattice + Codec64>(state: State<T>) {
+            let before = UntypedState {
+                key_codec: <() as Codec>::codec_name(),
+                val_codec: <() as Codec>::codec_name(),
+                ts_codec: <T as Codec64>::codec_name(),
+                diff_codec: <i64 as Codec64>::codec_name(),
+                state,
+            };
+            let proto = before.into_proto();
+            let after = proto.into_rust().unwrap();
+            assert_eq!(before, after);
+        }
+
+        proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
     }
 }

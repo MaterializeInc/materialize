@@ -18,7 +18,8 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::PartialOrder;
@@ -239,6 +240,7 @@ impl<P: Ord + Eq> PartialOrder for Interval<P> {
 impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
     fn results_in(&self, src: &Interval<P>) -> Option<Interval<P>> {
         use std::cmp::{max, min};
+
         use Interval::*;
         match (self, src) {
             // A range followed by another range contraints the range
@@ -378,7 +380,7 @@ mod test {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn basic_properties() {
         let minimum: Partitioned<u64, u64> = Partitioned::minimum();
         assert_eq!(minimum, Partitioned::with_range(None, None, 0));
@@ -416,7 +418,7 @@ mod test {
         assert!(PartialOrder::less_equal(&upper, &upper));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn antichain_properties() {
         let mut frontier = Antichain::new();
 
@@ -454,7 +456,7 @@ mod test {
         assert!(!frontier.less_than(&Partitioned::with_range(Some(2), Some(6), 4)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn summary_properties() {
         let summary1 = PartitionedSummary::with_range(Some(10), Some(100), 5);
         let summary2 = PartitionedSummary::with_range(Some(20), Some(30), 5);

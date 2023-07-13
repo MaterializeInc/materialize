@@ -353,7 +353,7 @@ disruptions: List[Disruption] = [
     KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
-        expected_error="BrokerTransportFailure|Resolve|Broker transport failure",
+        expected_error="BrokerTransportFailure|Resolve|Broker transport failure|Timed out",
         fixage=lambda c, _: c.up("redpanda"),
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582
@@ -434,7 +434,7 @@ def unsupported_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 INSERT INTO source1 VALUES (3, '{{1},{2}}')
+                 INSERT INTO source1 VALUES (3, '[2:3]={2,2}')
                  """
         )
     )

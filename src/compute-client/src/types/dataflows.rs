@@ -11,25 +11,22 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationType};
+use mz_storage_client::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationType};
-use mz_storage_client::controller::CollectionMetadata;
-
 use crate::plan::Plan;
-
-use super::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use super::sources::{SourceInstanceArguments, SourceInstanceDesc};
-
-use self::proto_dataflow_description::{
+use crate::types::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
+use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::types::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -70,17 +67,18 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
 
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
-    /// that both `as_of` and `until` have a single coordinate and that
-    /// the `until` value corresponds to the `as_of` value plus one.
+    /// that `as_of` has a single coordinate and that the `until`
+    /// value corresponds to the `as_of` value plus one.
     pub fn is_single_time(&self) -> bool {
         // TODO: this would be much easier to check if `until` was a strict lower bound,
         // and we would be testing that `until == as_of`.
-        match (self.as_of.as_ref(), self.until.as_option()) {
-            (Some(as_of), Some(until)) => {
-                as_of.as_option().and_then(|as_of| as_of.checked_add(1)) == Some(*until)
-            }
-            _ => false,
-        }
+        let Some(as_of) = self.as_of.as_ref() else { return false; };
+        !as_of.is_empty()
+            && as_of
+                .as_option()
+                .and_then(|as_of| as_of.checked_add(1))
+                .as_ref()
+                == self.until.as_option()
     }
 }
 
@@ -619,10 +617,9 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use crate::types::dataflows::DataflowDescription;
 
@@ -632,7 +629,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
 
-        #[test]
+        #[mz_ore::test]
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert!(actual.is_ok());

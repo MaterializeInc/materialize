@@ -19,8 +19,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{GlobalId, Row};
 
-use super::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::explain::ExplainSource;
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
 use crate::{
     AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -298,9 +297,26 @@ impl MirRelationExpr {
                     })?;
                 }
             }
-            LetRec { ids, values, body } => {
-                let bindings = ids.iter().zip(values.iter()).collect::<Vec<_>>();
+            LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), limits.len());
+                let bindings =
+                    itertools::izip!(ids.iter(), values.iter(), limits.iter()).collect::<Vec<_>>();
                 let head = body.as_ref();
+
+                // Determine whether all `limits` are the same.
+                // If all of them are the same, then we print it on top of the block (or not print
+                // it at all if it's None). If there are differences, then we print them on the
+                // ctes.
+                let all_limits_same = limits
+                    .iter()
+                    .reduce(|first, i| if i == first { first } else { &None })
+                    .unwrap_or(&None);
 
                 if ctx.config.linear_chains {
                     unreachable!(); // We exclude this case in `as_explain_single_plan`.
@@ -308,10 +324,20 @@ impl MirRelationExpr {
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
-                    writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
+                    write!(f, "{}With Mutually Recursive", ctx.indent)?;
+                    if let Some(limit) = all_limits_same {
+                        write!(f, " {}", limit)?;
+                    }
+                    writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
-                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        for (id, value, limit) in bindings.iter().rev() {
+                            write!(f, "{}cte", ctx.indent)?;
+                            if all_limits_same.is_none() {
+                                if let Some(limit) = limit {
+                                    write!(f, " {}", limit)?;
+                                }
+                            }
+                            writeln!(f, " {} =", id)?;
                             ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
@@ -369,8 +395,12 @@ impl MirRelationExpr {
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates = separated(" AND ", predicates);
-                        write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        if predicates.is_empty() {
+                            write!(f, "{}Filter", ctx.indent)?;
+                        } else {
+                            let predicates = separated(" AND ", predicates);
+                            write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        }
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
@@ -546,7 +576,7 @@ impl MirRelationExpr {
                 group_key,
                 aggregates,
                 expected_group_size,
-                monotonic: _, // TODO: monotonic should be an attribute
+                monotonic,
                 input,
             } => {
                 FmtNode {
@@ -563,6 +593,9 @@ impl MirRelationExpr {
                         if aggregates.len() > 0 {
                             let aggregates = separated(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
+                        }
+                        if *monotonic {
+                            write!(f, " monotonic")?;
                         }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
@@ -599,7 +632,9 @@ impl MirRelationExpr {
                         if offset > &0 {
                             write!(f, " offset={}", offset)?
                         }
-                        write!(f, " monotonic={}", monotonic)?;
+                        if *monotonic {
+                            write!(f, " monotonic")?;
+                        }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }

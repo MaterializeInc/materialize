@@ -13,19 +13,18 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
-use timely::dataflow::operators::ToStream;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::GeneratorMessageType;
 use mz_storage_client::types::sources::{
-    Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
+    Generator, GeneratorMessageType, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+    SourceTimestamp,
 };
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use timely::dataflow::operators::ToStream;
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
@@ -33,12 +32,15 @@ use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 mod auction;
 mod counter;
 mod datums;
+mod marketing;
 mod tpch;
 
 pub use auction::Auction;
 pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
+
+use self::marketing::Marketing;
 
 pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Generator> {
     match g {
@@ -47,6 +49,7 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
             max_cardinality: max_cardinality.clone(),
         }),
         LoadGenerator::Datums => Box::new(Datums {}),
+        LoadGenerator::Marketing => Box::new(Marketing {}),
         LoadGenerator::Tpch {
             count_supplier,
             count_part,
@@ -101,8 +104,11 @@ impl SourceRender for LoadGeneratorSourceConnection {
                 return;
             }
 
-            let resume_upper =
-                Antichain::from_iter(config.source_resume_upper.iter().map(MzOffset::decode_row));
+            let resume_upper = Antichain::from_iter(
+                config.source_resume_uppers[&config.id]
+                    .iter()
+                    .map(MzOffset::decode_row),
+            );
 
             let Some(mut offset) = resume_upper.into_option() else {
                 return

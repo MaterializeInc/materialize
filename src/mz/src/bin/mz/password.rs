@@ -10,10 +10,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use reqwest::Client;
-
 use mz::configuration::ValidProfile;
 use mz::utils::RequestBuilderExt;
+use reqwest::Client;
 
 use crate::FronteggAppPassword;
 

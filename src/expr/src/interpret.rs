@@ -10,107 +10,12 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc,
 };
-
-/// Tracks whether a function is monotonic, either increasing or decreasing.
-/// This property is useful for static analysis because a monotonic function maps ranges to ranges:
-/// ie. if `a` is between `b` and `c` inclusive, then `f(a)` is between `f(b)` and `f(c)` inclusive.
-/// (However, if either `f(b)` and `f(c)` error or return null, we don't assume anything about `f(a)`.
-///
-/// This should likely be moved to a function annotation in the future.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum Monotonic {
-    /// Monotonic in this argument. (Either increasing or decreasing, non-strict.)
-    Yes,
-    /// We haven't classified this one yet. (Conservatively treated as "no", but a distinct
-    /// enum so it's easy to tell whether someone's thought about a particular function yet.)
-    /// This should likely be removed when this becomes a function annotation.
-    Maybe,
-    /// We don't know any useful properties of this function.
-    No,
-}
-
-fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
-    use crate::func::impls as funcs;
-    use Monotonic::*;
-    use UnaryFunc::*;
-    match func {
-        // Casts are generally monotonic.
-        CastUint64ToNumeric(_)
-        | CastNumericToUint64(_)
-        | CastNumericToMzTimestamp(_)
-        | CastUint64ToMzTimestamp(_)
-        | CastTimestampToMzTimestamp(_)
-        | CastTimestampTzToMzTimestamp(_) => Yes,
-        // Including JSON casts.
-        CastJsonbToNumeric(_)
-        | CastJsonbToBool(_)
-        | CastJsonbToString(_)
-        | CastJsonbToInt64(_)
-        | CastJsonbToFloat64(_) => Yes,
-
-        // Extracting the "most significant bits" of the a timestamp is monotonic.
-        ExtractTimestamp(funcs::ExtractTimestamp(units))
-        | ExtractTimestampTz(funcs::ExtractTimestampTz(units)) => match units {
-            DateTimeUnits::Epoch
-            | DateTimeUnits::Millennium
-            | DateTimeUnits::Century
-            | DateTimeUnits::Decade
-            | DateTimeUnits::Year => Yes,
-            _ => No,
-        },
-        DateTruncTimestamp(_) | DateTruncTimestampTz(_) => Yes,
-        // Negation is monotonically decreasing, but that's fine.
-        NegInt64(_) | NegNumeric(_) | Not(_) => Yes,
-        // Trivially monotonic, since all non-null values map to `false`.
-        IsNull(_) => Yes,
-        AbsInt64(_) => No,
-        _ => Maybe,
-    }
-}
-
-/// Describes the pointwise behaviour of each of the two arguments of the function.
-/// (ie. the first element of the tuple is `Monotonic::Yes` if, for any value of the second argument
-/// increasing the first argument causes the result of the function to either monotonically
-/// increase or decrease.) For example, subtraction is considered monotonic in both arguments:
-/// in the first because `a - C` increases monotonically as `a` increases, and in the second because
-/// `C - b` decreases monotonically as `b` increases.
-fn binary_monotonic(func: &BinaryFunc) -> (Monotonic, Monotonic) {
-    use BinaryFunc::*;
-    use Monotonic::*;
-
-    match func {
-        AddInt64 | MulInt64 | AddNumeric | MulNumeric | SubInt64 | SubNumeric => (Yes, Yes),
-        AddInterval | SubInterval => (Yes, Yes),
-        AddTimestampInterval
-        | AddTimestampTzInterval
-        | SubTimestampInterval
-        | SubTimestampTzInterval => (Yes, Yes),
-        // Monotonic in the left argument, but the right hand side has a discontinuity.
-        // Could be treated as monotonic if we also captured the valid domain of the function args.
-        DivInt64 | DivNumeric => (Yes, No),
-        Lt | Lte | Gt | Gte => (Yes, Yes),
-        _ => (Maybe, Maybe),
-    }
-}
-
-/// Describes the pointwise behaviour of each of the arguments to our variadic function.
-/// (ie. returns `Monotonic::Yes` if, for each argument of the function, increasing that argument
-/// causes the result of the function to either monotonically increase or decrease.)
-fn variadic_monotonic(func: &VariadicFunc) -> Monotonic {
-    use Monotonic::*;
-    use VariadicFunc::*;
-    match func {
-        And | Or | Coalesce => Yes,
-        _ => Maybe,
-    }
-}
 
 /// An inclusive range of non-null datum values.
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -346,57 +251,67 @@ impl<'a> ResultSpec<'a> {
         self.fallible
     }
 
-    /// This function "maps" a function across the set of valid datums, returning the set of possible
-    /// results.
+    /// This method "maps" a function across the `ResultSpec`.
     ///
-    /// If we actually stored a set of every possible value, this could by done by passing
-    /// each datum to the function one-by-one and unioning the resulting sets. This is possible
-    /// when our values set is empty or     contains a single datum, but when it contains a range,
-    /// we need a little metadata about the function to be able to infer a useful result.
+    /// As mentioned above, `ResultSpec` represents an approximate set of results.
+    /// If we actually stored each result in the set, `flat_map` could be implemented by passing
+    /// each result to the function one-by-one and unioning the resulting sets. This is possible
+    /// when our values set is empty or contains a single datum, but when it contains a range,
+    /// we can't enumerate all possible values of the set. We handle this by:
+    /// - tracking whether the function is monotone, in which case we can map the range by just
+    ///   mapping the endpoints;
+    /// - using a safe default when we can't infer a tighter bound on the set, eg. [Self::anything].
     fn flat_map(
-        self,
-        is_monotonic: Monotonic,
-        mut datum_map: impl FnMut(Datum<'a>) -> ResultSpec<'a>,
+        &self,
+        is_monotone: bool,
+        mut result_map: impl FnMut(Result<Datum<'a>, EvalError>) -> ResultSpec<'a>,
     ) -> ResultSpec<'a> {
         let null_spec = if self.nullable {
-            datum_map(Datum::Null)
+            result_map(Ok(Datum::Null))
         } else {
             ResultSpec::nothing()
         };
 
-        let error_spec = ResultSpec {
-            fallible: self.fallible,
-            ..Self::nothing()
+        let error_spec = if self.fallible {
+            // Since we only care about whether / not an error is possible, and not the specific
+            // error, create an arbitrary error here.
+            // NOTE! This assumes that functions do not discriminate on the type of the error.
+            let map_err = result_map(Err(EvalError::Internal(String::new())));
+            let raise_err = ResultSpec::fails();
+            // SQL has a very loose notion of evaluation order: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-EXPRESS-EVAL
+            // Here, we account for the possibility that the expression is evaluated strictly,
+            // raising the error, or that it's evaluated lazily by the result_map function
+            // (which may return a non-error result even when given an error as input).
+            raise_err.union(map_err)
+        } else {
+            ResultSpec::nothing()
         };
 
         let values_spec = match self.values {
             Values::Empty => ResultSpec::nothing(),
             // If this range contains a single datum, just call the function.
-            Values::Within(min, max) if min == max => datum_map(min),
+            Values::Within(min, max) if min == max => result_map(Ok(min)),
             // If this is a range of booleans, we know all the values... just try them.
             Values::Within(Datum::False, Datum::True) => {
-                datum_map(Datum::False).union(datum_map(Datum::True))
+                result_map(Ok(Datum::False)).union(result_map(Ok(Datum::True)))
             }
             // Otherwise, if our function is monotonic, we can try mapping the input
             // range to an output range.
-            Values::Within(min, max) => match is_monotonic {
-                Monotonic::Yes => {
-                    let min_column = datum_map(min);
-                    let max_column = datum_map(max);
-                    if min_column.nullable
-                        || min_column.fallible
-                        || max_column.nullable
-                        || max_column.fallible
-                    {
-                        ResultSpec::anything()
-                    } else {
-                        min_column.union(max_column)
-                    }
+            Values::Within(min, max) if is_monotone => {
+                let min_column = result_map(Ok(min));
+                let max_column = result_map(Ok(max));
+                if min_column.nullable
+                    || min_column.fallible
+                    || max_column.nullable
+                    || max_column.fallible
+                {
+                    ResultSpec::anything()
+                } else {
+                    min_column.union(max_column)
                 }
-                Monotonic::Maybe | Monotonic::No => ResultSpec::anything(),
-            },
+            }
             // TODO: we could return a narrower result for eg. `Values::Nested` with all-`Within` fields.
-            Values::Nested(_) | Values::All => ResultSpec::anything(),
+            Values::Within(_, _) | Values::Nested(_) | Values::All => ResultSpec::anything(),
         };
 
         null_spec.union(error_spec).union(values_spec)
@@ -509,14 +424,14 @@ pub trait Interpreter {
 
 /// Wrap another interpreter, but tack a few extra columns on at the end. An internal implementation
 /// detail of `eval_mfp` and `eval_mfp_plan`.
-struct MfpEval<'a, E: Interpreter + ?Sized> {
+pub(crate) struct MfpEval<'a, E: Interpreter + ?Sized> {
     evaluator: &'a E,
     input_arity: usize,
     expressions: Vec<E::Summary>,
 }
 
 impl<'a, E: Interpreter + ?Sized> MfpEval<'a, E> {
-    fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
+    pub(crate) fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
         let mut mfp_eval = MfpEval {
             evaluator,
             input_arity,
@@ -571,131 +486,109 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
     }
 }
 
-/// For a given column and expression, does the range of the column influence the range of the
-/// expression? (ie. if the expression is a filter, could we tell that the filter
-/// will never return True?)
-#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug)]
-pub enum Pushdownable {
-    /// We don't have any information to push down filters on this column:
-    /// either it's not referenced at all, or we've applied some non-monotonic function that we can't
-    /// push filters through. (This is the default.)
-    No,
-    /// We may or may not be able to push down filters on the given column. (The expression
-    /// includes a function we haven't classified yet.)
-    Maybe,
-    /// We can definitely push down a filter on this column. (The expression references the column
-    /// in such a way that the range of possible values of the column affects the range of output
-    /// values of the expression in a particular way.)
-    Yes,
+/// A binary function we've added special-case handling for; including:
+/// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
+///   default function-handling logic entirely.
+/// - Metadata on whether / not this function is pushdownable. See [Trace].
+struct SpecialBinary {
+    map_fn: for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
+    pushdownable: (bool, bool),
 }
 
-/// Maps column identifiers to pushdown information. We can't tell how many columns are in the
-/// relation just from inspecting the expression, so the `Vec` may not include every column; an entry
-/// of `No` is treated the same as the entry not being present.
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub struct RelationTrace(pub Vec<Pushdownable>);
-
-/// An interpreter that traces how information about the source columns flows through the expression.
-#[derive(Debug)]
-pub struct Trace;
-
-impl RelationTrace {
-    pub fn new() -> RelationTrace {
-        RelationTrace(vec![])
-    }
-
-    pub fn get(&mut self, id: usize) -> Pushdownable {
-        self.0.get(id).copied().unwrap_or(Pushdownable::No)
-    }
-
-    pub fn set(&mut self, id: usize, value: Pushdownable) {
-        if self.0.len() <= id {
-            self.0.resize(id + 1, Pushdownable::No);
-        }
-        self.0[id] = value;
-    }
-
-    fn apply_fn(mut self, is_monotonic: Monotonic) -> Self {
-        match is_monotonic {
-            Monotonic::Yes => {
-                // Still correlated, nothing to do.
+impl SpecialBinary {
+    /// Returns the special-case handling for a particular function, if it exists.
+    fn for_func(func: &BinaryFunc) -> Option<SpecialBinary> {
+        /// Eager in the same sense as `func.rs` uses the term; this assumes that
+        /// nulls and errors propagate up, and we only need to define the behaviour
+        /// on values.
+        fn eagerly<'b>(
+            left: ResultSpec<'b>,
+            right: ResultSpec<'b>,
+            value_fn: impl FnOnce(Values<'b>, Values<'b>) -> ResultSpec<'b>,
+        ) -> ResultSpec<'b> {
+            let result = match (left.values, right.values) {
+                (Values::Empty, _) | (_, Values::Empty) => ResultSpec::nothing(),
+                (l, r) => value_fn(l, r),
+            };
+            ResultSpec {
+                fallible: left.fallible || right.fallible || result.fallible,
+                nullable: left.nullable || right.nullable || result.nullable,
+                values: result.values,
             }
-            Monotonic::No => {
-                // A function that we know we can't see through. No reason to expect the range
-                // of the columns to affect the range of the expression.
-                for col in &mut self.0 {
-                    *col = Pushdownable::No;
+        }
+
+        fn jsonb_get_string<'b>(
+            left: ResultSpec<'b>,
+            right: ResultSpec<'b>,
+            stringify: bool,
+        ) -> ResultSpec<'b> {
+            eagerly(left, right, |left, right| {
+                let nested_spec = match (left, right) {
+                    (Values::Nested(mut map_spec), Values::Within(key, key2)) if key == key2 => {
+                        map_spec.remove(&key)
+                    }
+                    _ => None,
+                };
+
+                if let Some(field_spec) = nested_spec {
+                    if stringify {
+                        // We only preserve value-range information when stringification
+                        // is a noop. (Common in real queries.)
+                        let values = match field_spec.values {
+                            Values::Empty => Values::Empty,
+                            Values::Within(min @ Datum::String(_), max @ Datum::String(_)) => {
+                                Values::Within(min, max)
+                            }
+                            Values::Within(_, _) | Values::Nested(_) | Values::All => Values::All,
+                        };
+                        ResultSpec {
+                            values,
+                            ..field_spec
+                        }
+                    } else {
+                        field_spec
+                    }
+                } else {
+                    // TODO: it should be possible to narrow this further...
+                    ResultSpec::anything()
                 }
-            }
-            Monotonic::Maybe => {
-                // A function that we may or may not be able to see through.
-                for col in &mut self.0 {
-                    *col = Pushdownable::Maybe.min(*col);
-                }
-            }
-        }
-        self
-    }
-
-    fn union(mut self, other: RelationTrace) -> RelationTrace {
-        for (id, pushdownable) in other.0.into_iter().enumerate() {
-            let pushdownable = self.get(id).max(pushdownable);
-            self.set(id, pushdownable);
-        }
-        self
-    }
-}
-
-impl Interpreter for Trace {
-    /// For every column in the data, we track whether or not that column is "pusdownable".
-    /// (If the column is not present in the summary, we default to `false`.
-    type Summary = RelationTrace;
-
-    fn column(&self, id: usize) -> Self::Summary {
-        let mut trace = RelationTrace::new();
-        trace.set(id, Pushdownable::Yes);
-        trace
-    }
-
-    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
-        RelationTrace::new()
-    }
-
-    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        RelationTrace::new()
-    }
-
-    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr.apply_fn(unary_monotonic(func))
-    }
-
-    fn binary(
-        &self,
-        func: &BinaryFunc,
-        left: Self::Summary,
-        right: Self::Summary,
-    ) -> Self::Summary {
-        // TODO: this is duplicative! If we have more than one or two special-cased functions
-        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
-        let (left_monotonic, right_monotonic) = match func {
-            BinaryFunc::JsonbGetString { stringify: false } => (Monotonic::Yes, Monotonic::No),
-            _ => binary_monotonic(func),
-        };
-        left.apply_fn(left_monotonic)
-            .union(right.apply_fn(right_monotonic))
-    }
-
-    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        let is_monotonic = variadic_monotonic(func);
-        exprs
-            .into_iter()
-            .fold(RelationTrace::new(), |acc, columns| {
-                acc.union(columns.apply_fn(is_monotonic))
             })
-    }
+        }
 
-    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        cond.union(then.union(els))
+        fn eq<'b>(left: ResultSpec<'b>, right: ResultSpec<'b>) -> ResultSpec<'b> {
+            eagerly(left, right, |left, right| {
+                // `eq` might return true if there's any overlap between the range of its two arguments...
+                let maybe_true = match left.clone().intersect(right.clone()) {
+                    Values::Empty => ResultSpec::nothing(),
+                    _ => ResultSpec::value(Datum::True),
+                };
+
+                // ...and may return false if the union contains at least two distinct values.
+                // Note that the `Empty` case is handled by `eagerly` above.
+                let maybe_false = match left.union(right) {
+                    Values::Within(a, b) if a == b => ResultSpec::nothing(),
+                    _ => ResultSpec::value(Datum::False),
+                };
+
+                maybe_true.union(maybe_false)
+            })
+        }
+
+        match func {
+            BinaryFunc::JsonbGetString { stringify } => Some(SpecialBinary {
+                map_fn: if *stringify {
+                    |l, r| jsonb_get_string(l, r, true)
+                } else {
+                    |l, r| jsonb_get_string(l, r, false)
+                },
+                pushdownable: (true, false),
+            }),
+            BinaryFunc::Eq => Some(SpecialBinary {
+                map_fn: eq,
+                pushdownable: (true, true),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -712,24 +605,32 @@ pub struct ColumnSpec<'a> {
 ///   expression might have. (See the `eval_` methods.)
 #[derive(Clone, Debug)]
 pub struct ColumnSpecs<'a> {
-    pub columns: Vec<ColumnSpec<'a>>,
+    pub relation: &'a RelationType,
+    pub columns: Vec<ResultSpec<'a>>,
     pub unmaterializables: BTreeMap<UnmaterializableFunc, ResultSpec<'a>>,
     pub arena: &'a RowArena,
 }
 
 impl<'a> ColumnSpecs<'a> {
+    // Interpreting a variadic function can lead to exponential blowup: there are up to 4 possibly-
+    // interesting values for each argument (error, null, range bounds...) and in the worst case
+    // we may need to test every combination. We mitigate that here in two ways:
+    // - Adding a linear-time optimization for associative functions like AND, OR, COALESCE.
+    // - Limiting the number of arguments we'll pass on to eval. If this limit is crossed, we'll
+    //   return our default / safe overapproximation instead.
+    const MAX_EVAL_ARGS: usize = 6;
+
     /// Create a new, empty set of column specs. (Initially, the only assumption we make about the
     /// data in the column is that it matches the type.)
-    pub fn new(relation: RelationType, arena: &'a RowArena) -> Self {
+    pub fn new(relation: &'a RelationType, arena: &'a RowArena) -> Self {
+        let columns = relation
+            .column_types
+            .iter()
+            .map(|ct| ResultSpec::has_type(ct, false))
+            .collect();
         ColumnSpecs {
-            columns: relation
-                .column_types
-                .into_iter()
-                .map(|ct| ColumnSpec {
-                    range: ResultSpec::has_type(&ct, false),
-                    col_type: ct,
-                })
-                .collect(),
+            relation,
+            columns,
             unmaterializables: Default::default(),
             arena,
         }
@@ -738,7 +639,7 @@ impl<'a> ColumnSpecs<'a> {
     /// Restrict the set of possible values in a given column. (By intersecting it with the existing
     /// spec.)
     pub fn push_column(&mut self, id: usize, update: ResultSpec<'a>) {
-        let range = &mut self.columns.get_mut(id).expect("valid column id").range;
+        let range = self.columns.get_mut(id).expect("valid column id");
         *range = range.clone().intersect(update);
     }
 
@@ -768,13 +669,54 @@ impl<'a> ColumnSpecs<'a> {
             },
         }
     }
+
+    fn set_literal(expr: &mut MirScalarExpr, update: Result<Datum, EvalError>) {
+        match expr {
+            MirScalarExpr::Literal(literal, col_type) => match update {
+                Err(error) => *literal = Err(error),
+                Ok(datum) => {
+                    assert!(
+                        datum.is_instance_of(col_type),
+                        "{datum:?} must be an instance of {col_type:?}"
+                    );
+                    match literal {
+                        // Reuse the allocation if we can
+                        Ok(row) => row.packer().push(datum),
+                        literal => *literal = Ok(Row::pack_slice(&[datum])),
+                    }
+                }
+            },
+            _ => panic!("not a literal"),
+        }
+    }
+
+    fn set_argument(expr: &mut MirScalarExpr, arg: usize, value: Result<Datum, EvalError>) {
+        match (expr, arg) {
+            (MirScalarExpr::CallUnary { expr, .. }, 0) => Self::set_literal(expr, value),
+            (MirScalarExpr::CallBinary { expr1, .. }, 0) => Self::set_literal(expr1, value),
+            (MirScalarExpr::CallBinary { expr2, .. }, 1) => Self::set_literal(expr2, value),
+            (MirScalarExpr::CallVariadic { exprs, .. }, n) if n < exprs.len() => {
+                Self::set_literal(&mut exprs[n], value)
+            }
+            _ => panic!("illegal argument for expression"),
+        }
+    }
+
+    /// A literal with the given type and a trivial default value. Callers should ensure that
+    /// [Self::set_literal] is called on the resulting expression to give it a meaningful value
+    /// before evaluating.
+    fn placeholder(col_type: ColumnType) -> MirScalarExpr {
+        MirScalarExpr::Literal(Err(EvalError::Internal("".to_owned())), col_type)
+    }
 }
 
 impl<'a> Interpreter for ColumnSpecs<'a> {
     type Summary = ColumnSpec<'a>;
 
     fn column(&self, id: usize) -> Self::Summary {
-        self.columns[id].clone()
+        let col_type = self.relation.column_types[id].clone();
+        let range = self.columns[id].clone();
+        ColumnSpec { col_type, range }
     }
 
     fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary {
@@ -797,18 +739,18 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
-        let is_monotonic = unary_monotonic(func);
-        let expr = MirScalarExpr::CallUnary {
+        let is_monotone = func.is_monotone();
+        let mut expr = MirScalarExpr::CallUnary {
             func: func.clone(),
-            expr: Box::new(MirScalarExpr::Column(0)),
+            expr: Box::new(Self::placeholder(summary.col_type.clone())),
         };
+        let mapped_spec = summary.range.flat_map(is_monotone, |datum| {
+            Self::set_argument(&mut expr, 0, datum);
+            self.eval_result(expr.eval(&[], self.arena))
+        });
         let col_type = func.output_type(summary.col_type);
-        let range = summary
-            .range
-            .flat_map(is_monotonic, |datum| {
-                self.eval_result(expr.eval(&[datum], self.arena))
-            })
-            .intersect(ResultSpec::has_type(&col_type, true));
+
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
 
         ColumnSpec { col_type, range }
     }
@@ -819,106 +761,77 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        let (left_monotonic, right_monotonic) = binary_monotonic(func);
-        let expr = MirScalarExpr::CallBinary {
-            func: func.clone(),
-            expr1: Box::new(MirScalarExpr::Column(0)),
-            expr2: Box::new(MirScalarExpr::Column(1)),
-        };
-        let col_type = func.output_type(left.col_type, right.col_type);
+        let (left_monotonic, right_monotonic) = func.is_monotone();
 
-        let range_special = match func {
-            BinaryFunc::JsonbGetString { stringify } => {
-                right
-                    .range
-                    .clone()
-                    .flat_map(Monotonic::No, |datum| match datum {
-                        Datum::Null => ResultSpec::null(),
-                        key => match &left.range.values {
-                            Values::Empty => ResultSpec::nothing(),
-                            Values::Nested(map_spec) => map_spec.get(&key).cloned().map_or_else(
-                                ResultSpec::anything,
-                                |field_spec| {
-                                    if *stringify {
-                                        // We only preserve value-range information when stringification
-                                        // is a noop. (Common in real queries.)
-                                        let values = match field_spec.values {
-                                            Values::Empty => Values::Empty,
-                                            Values::Within(
-                                                min @ Datum::String(_),
-                                                max @ Datum::String(_),
-                                            ) => Values::Within(min, max),
-                                            Values::Within(_, _)
-                                            | Values::Nested(_)
-                                            | Values::All => Values::All,
-                                        };
-                                        ResultSpec {
-                                            values,
-                                            ..field_spec
-                                        }
-                                    } else {
-                                        field_spec
-                                    }
-                                },
-                            ),
-                            _ => ResultSpec::anything(),
-                        },
-                    })
-            }
-            _ => ResultSpec::anything(),
-        };
-
-        let range = left
-            .range
-            .flat_map(left_monotonic, |left| {
-                right.range.clone().flat_map(right_monotonic, |right| {
-                    self.eval_result(expr.eval(&[left, right], self.arena))
+        let mapped_spec = if let Some(special) = SpecialBinary::for_func(func) {
+            (special.map_fn)(left.range, right.range)
+        } else {
+            let mut expr = MirScalarExpr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(Self::placeholder(left.col_type.clone())),
+                expr2: Box::new(Self::placeholder(right.col_type.clone())),
+            };
+            left.range.flat_map(left_monotonic, |left_result| {
+                Self::set_argument(&mut expr, 0, left_result);
+                right.range.flat_map(right_monotonic, |right_result| {
+                    Self::set_argument(&mut expr, 1, right_result);
+                    self.eval_result(expr.eval(&[], self.arena))
                 })
             })
-            .intersect(ResultSpec::has_type(&col_type, true))
-            .intersect(range_special);
+        };
+
+        let col_type = func.output_type(left.col_type, right.col_type);
+
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
         ColumnSpec { col_type, range }
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
-        fn eval_loop<'a>(
-            is_monotonic: Monotonic,
-            stack: &mut Vec<Datum<'a>>,
-            remaining: &[ResultSpec<'a>],
-            datum_map: &mut impl FnMut(&[Datum<'a>]) -> ResultSpec<'a>,
-        ) -> ResultSpec<'a> {
-            if remaining.is_empty() {
-                datum_map(stack)
-            } else {
-                remaining[0].clone().flat_map(is_monotonic, |datum| {
-                    stack.push(datum);
-                    let result = eval_loop(is_monotonic, stack, &remaining[1..], datum_map);
-                    stack.pop();
-                    result
-                })
-            }
-        }
-        let fn_expr = MirScalarExpr::CallVariadic {
-            func: func.clone(),
-            exprs: (0..args.len()).map(MirScalarExpr::Column).collect(),
-        };
-        let mut col_types = vec![];
-        let mut ranges = vec![];
-        for ColumnSpec { col_type, range } in args {
-            col_types.push(col_type);
-            ranges.push(range);
+        if func.is_associative() && args.len() > 2 {
+            // To avoid a combinatorial explosion, evaluate large variadic calls as a series of
+            // smaller ones, since associativity guarantees we'll get compatible results.
+            return args
+                .into_iter()
+                .reduce(|a, b| self.variadic(func, vec![a, b]))
+                .expect("reducing over a non-empty argument list");
         }
 
+        let mapped_spec = if args.len() >= Self::MAX_EVAL_ARGS {
+            ResultSpec::anything()
+        } else {
+            fn eval_loop<'a>(
+                is_monotonic: bool,
+                expr: &mut MirScalarExpr,
+                args: &[ColumnSpec<'a>],
+                index: usize,
+                datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
+            ) -> ResultSpec<'a> {
+                if index >= args.len() {
+                    datum_map(expr)
+                } else {
+                    args[index].range.flat_map(is_monotonic, |datum| {
+                        ColumnSpecs::set_argument(expr, index, datum);
+                        eval_loop(is_monotonic, expr, args, index + 1, datum_map)
+                    })
+                }
+            }
+
+            let mut fn_expr = MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: args
+                    .iter()
+                    .map(|spec| Self::placeholder(spec.col_type.clone()))
+                    .collect(),
+            };
+            eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
+                self.eval_result(expr.eval(&[], self.arena))
+            })
+        };
+
+        let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
 
-        let mut stack = vec![];
-        let range = eval_loop(
-            variadic_monotonic(func),
-            &mut stack,
-            &ranges,
-            &mut |datums| self.eval_result(fn_expr.eval(datums, self.arena)),
-        )
-        .intersect(ResultSpec::has_type(&col_type, true));
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
 
         ColumnSpec { col_type, range }
     }
@@ -931,9 +844,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let range = cond
             .range
-            .flat_map(Monotonic::Yes, |datum| match datum {
-                Datum::True => then.range.clone(),
-                Datum::False => els.range.clone(),
+            .flat_map(true, |datum| match datum {
+                Ok(Datum::True) => then.range.clone(),
+                Ok(Datum::False) => els.range.clone(),
                 _ => ResultSpec::fails(),
             })
             .intersect(ResultSpec::has_type(&col_type, true));
@@ -942,34 +855,343 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 }
 
+/// An interpreter that returns whether or not a particular expression is "pushdownable".
+/// Broadly speaking, an expression is pushdownable if the result of evaluating the expression
+/// depends on the range of possible column values in a way that `ColumnSpecs` is able to reason about.
+/// `Column` is trivially pushdownable; `Literal` and `CallUnmaterializable`
+/// are not, since their results don't depend on the range of possible values in any column.
+///
+/// Functions are the most complex case. We say that a function is pushdownable for a particular
+/// argument if `ColumnSpecs` can determine the spec of the function's output given the input spec for
+/// that argument. (In practice, this is true when either the function is monotone in that argument
+/// or it's been special-cased in the interpreter.) And we say a function-call expression is
+/// pushdownable overall if at least one of its arguments is pushdownable, and the function is
+/// is pushdownable in that argument. For example, `3 + #0` is pushdownable (because the second
+/// argument to `+` is pushdownable and `+` is monotone) but `3 / #0` is not (because while the
+/// second argument is pushdownable, `/` is not monotone on the right-hand side).
+#[derive(Debug)]
+pub struct Trace;
+
+impl Interpreter for Trace {
+    type Summary = bool;
+
+    fn column(&self, _id: usize) -> Self::Summary {
+        true
+    }
+
+    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
+        false
+    }
+
+    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
+        false
+    }
+
+    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
+        expr && func.is_monotone()
+    }
+
+    fn binary(
+        &self,
+        func: &BinaryFunc,
+        left: Self::Summary,
+        right: Self::Summary,
+    ) -> Self::Summary {
+        // TODO: this is duplicative! If we have more than one or two special-cased functions
+        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
+        let (left_pushdownable, right_pushdownable) = match SpecialBinary::for_func(func) {
+            None => func.is_monotone(),
+            Some(special) => special.pushdownable,
+        };
+        (left && left_pushdownable) || (right && right_pushdownable)
+    }
+
+    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
+        if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
+            // We can't efficiently evaluate functions with very large argument lists;
+            // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
+            return false;
+        }
+
+        let pushdownable_fn = func.is_monotone();
+        exprs
+            .into_iter()
+            .any(|pushdownable_arg| pushdownable_arg && pushdownable_fn)
+    }
+
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
+        cond || (then || els)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
-    use mz_ore::panic;
+    use itertools::Itertools;
+    use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
+    use proptest::prelude::*;
+    use proptest::sample::{select, Index};
 
-    use crate::func::{AbsInt64, CastJsonbToNumeric};
+    use crate::func::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
     use super::*;
 
-    fn gen_datums_for_type(typ: &ScalarType) -> impl Strategy<Value = Datum<'static>> {
-        let values: Vec<_> = typ.interesting_datums().collect();
-        prop::sample::select(values).boxed()
+    #[derive(Debug)]
+    struct ExpressionData {
+        relation_type: RelationType,
+        specs: Vec<ResultSpec<'static>>,
+        rows: Vec<Row>,
+        expr: MirScalarExpr,
     }
 
-    fn gen_column() -> impl Strategy<Value = (ColumnType, Datum<'static>)> {
-        any::<ColumnType>()
+    // Currently there's no good way to check whether a particular function accepts a particular
+    // type as argument, which means we need to list everything out explicitly here. Restrict our interest
+    // to a reasonable number of functions, to keep things tractable
+    // TODO: replace this with function-level info once it's available.
+    const NUM_TYPE: ScalarType = ScalarType::Numeric { max_scale: None };
+    static SCALAR_TYPES: &[ScalarType] = &[
+        ScalarType::Bool,
+        ScalarType::Jsonb,
+        NUM_TYPE,
+        ScalarType::Date,
+        ScalarType::Timestamp,
+        ScalarType::MzTimestamp,
+        ScalarType::String,
+    ];
+
+    const INTERESTING_UNARY_FUNCS: &[UnaryFunc] = {
+        &[
+            UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+            UnaryFunc::NegNumeric(NegNumeric),
+            UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
+            UnaryFunc::CastJsonbToBool(CastJsonbToBool),
+            UnaryFunc::CastJsonbToString(CastJsonbToString),
+            UnaryFunc::DateTruncTimestamp(DateTruncTimestamp(DateTimeUnits::Epoch)),
+            UnaryFunc::ExtractTimestamp(ExtractTimestamp(DateTimeUnits::Epoch)),
+            UnaryFunc::ExtractDate(ExtractDate(DateTimeUnits::Epoch)),
+            UnaryFunc::Not(Not),
+            UnaryFunc::IsNull(IsNull),
+            UnaryFunc::IsFalse(IsFalse),
+        ]
+    };
+
+    fn unary_typecheck(func: &UnaryFunc, arg: &ColumnType) -> bool {
+        use UnaryFunc::*;
+        match func {
+            CastNumericToMzTimestamp(_) | NegNumeric(_) => arg.scalar_type.base_eq(&NUM_TYPE),
+            CastJsonbToNumeric(_) | CastJsonbToBool(_) | CastJsonbToString(_) => {
+                arg.scalar_type.base_eq(&ScalarType::Jsonb)
+            }
+            ExtractTimestamp(_) | DateTruncTimestamp(_) => {
+                arg.scalar_type.base_eq(&ScalarType::Timestamp)
+            }
+            ExtractDate(_) => arg.scalar_type.base_eq(&ScalarType::Date),
+            Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
+            IsNull(_) => true,
+            _ => false,
+        }
+    }
+
+    const INTERESTING_BINARY_FUNCS: &[BinaryFunc] = {
+        use BinaryFunc::*;
+        &[
+            AddTimestampInterval,
+            AddNumeric,
+            SubNumeric,
+            MulNumeric,
+            DivNumeric,
+            Eq,
+            Lt,
+            Gt,
+            Lte,
+            Gte,
+            DateTruncTimestamp,
+            JsonbGetString { stringify: true },
+            JsonbGetString { stringify: false },
+        ]
+    };
+
+    fn binary_typecheck(func: &BinaryFunc, arg0: &ColumnType, arg1: &ColumnType) -> bool {
+        use BinaryFunc::*;
+        match func {
+            AddTimestampInterval => {
+                arg0.scalar_type.base_eq(&ScalarType::Timestamp)
+                    && arg1.scalar_type.base_eq(&ScalarType::Interval)
+            }
+            AddNumeric | SubNumeric | MulNumeric | DivNumeric => {
+                arg0.scalar_type.base_eq(&NUM_TYPE) && arg1.scalar_type.base_eq(&NUM_TYPE)
+            }
+            Eq | Lt | Gt | Lte | Gte => arg0.scalar_type.base_eq(&arg1.scalar_type),
+            DateTruncTimestamp => {
+                arg0.scalar_type.base_eq(&ScalarType::String)
+                    && arg1.scalar_type.base_eq(&ScalarType::Timestamp)
+            }
+            JsonbGetString { .. } => {
+                arg0.scalar_type.base_eq(&ScalarType::Jsonb)
+                    && arg1.scalar_type.base_eq(&ScalarType::String)
+            }
+            _ => false,
+        }
+    }
+
+    const INTERESTING_VARIADIC_FUNCS: &[VariadicFunc] = {
+        use VariadicFunc::*;
+        &[Coalesce, Greatest, Least, And, Or, Concat, ConcatWs]
+    };
+
+    fn variadic_typecheck(func: &VariadicFunc, args: &[ColumnType]) -> bool {
+        use VariadicFunc::*;
+        fn all_eq<'a>(iter: impl IntoIterator<Item = &'a ColumnType>, other: &ScalarType) -> bool {
+            iter.into_iter().all(|t| t.scalar_type.base_eq(other))
+        }
+        match func {
+            Coalesce | Greatest | Least => match args {
+                [] => true,
+                [first, rest @ ..] => all_eq(rest, &first.scalar_type),
+            },
+            And | Or => all_eq(args, &ScalarType::Bool),
+            Concat => all_eq(args, &ScalarType::String),
+            ConcatWs => args.len() > 1 && all_eq(args, &ScalarType::String),
+            _ => false,
+        }
+    }
+
+    fn gen_datums_for_type(typ: &ColumnType) -> BoxedStrategy<Datum<'static>> {
+        let mut values: Vec<Datum<'static>> = typ.scalar_type.interesting_datums().collect();
+        if typ.nullable {
+            values.push(Datum::Null)
+        }
+        select(values).boxed()
+    }
+
+    fn gen_column() -> impl Strategy<Value = (ColumnType, Datum<'static>, ResultSpec<'static>)> {
+        let col_type = (select(SCALAR_TYPES), any::<bool>())
+            .prop_map(|(t, b)| t.nullable(b))
             .prop_filter("need at least one value", |c| {
                 c.scalar_type.interesting_datums().count() > 0
+            });
+
+        let result_spec = select(vec![
+            ResultSpec::nothing(),
+            ResultSpec::null(),
+            ResultSpec::anything(),
+            ResultSpec::value_all(),
+        ]);
+
+        (col_type, result_spec).prop_flat_map(|(col, result_spec)| {
+            gen_datums_for_type(&col).prop_map(move |datum| {
+                let result_spec = result_spec.clone().union(ResultSpec::value(datum));
+                (col.clone(), datum, result_spec)
             })
-            .prop_flat_map(|col| {
-                gen_datums_for_type(&col.scalar_type).prop_map(move |datum| (col.clone(), datum))
-            })
+        })
     }
 
-    #[test]
+    fn gen_expr_for_relation(
+        relation: &RelationType,
+    ) -> BoxedStrategy<(MirScalarExpr, ColumnType)> {
+        let column_gen = {
+            let column_types = relation.column_types.clone();
+            any::<Index>()
+                .prop_map(move |idx| {
+                    let id = idx.index(column_types.len());
+                    (MirScalarExpr::Column(id), column_types[id].clone())
+                })
+                .boxed()
+        };
+
+        let literal_gen = (select(SCALAR_TYPES), any::<bool>())
+            .prop_map(|(s, b)| s.nullable(b))
+            .prop_flat_map(|ct| {
+                let error_gen = any::<EvalError>().prop_map(Err).boxed();
+                let value_gen = gen_datums_for_type(&ct)
+                    .prop_map(move |datum| Ok(Row::pack_slice(&[datum])))
+                    .boxed();
+                error_gen.prop_union(value_gen).prop_map(move |result| {
+                    (MirScalarExpr::Literal(result, ct.clone()), ct.clone())
+                })
+            })
+            .boxed();
+
+        column_gen
+            .prop_union(literal_gen)
+            .prop_recursive(4, 64, 8, |self_gen| {
+                let unary_gen = (select(INTERESTING_UNARY_FUNCS), self_gen.clone())
+                    .prop_filter_map("unary func", |(func, (expr_in, type_in))| {
+                        if !unary_typecheck(&func, &type_in) {
+                            return None;
+                        }
+                        let type_out = func.output_type(type_in);
+                        let expr_out = MirScalarExpr::CallUnary {
+                            func,
+                            expr: Box::new(expr_in),
+                        };
+                        Some((expr_out, type_out))
+                    })
+                    .boxed();
+                let binary_gen = (
+                    select(INTERESTING_BINARY_FUNCS),
+                    self_gen.clone(),
+                    self_gen.clone(),
+                )
+                    .prop_filter_map(
+                        "binary func",
+                        |(func, (expr_left, type_left), (expr_right, type_right))| {
+                            if !binary_typecheck(&func, &type_left, &type_right) {
+                                return None;
+                            }
+                            let type_out = func.output_type(type_left, type_right);
+                            let expr_out = MirScalarExpr::CallBinary {
+                                func,
+                                expr1: Box::new(expr_left),
+                                expr2: Box::new(expr_right),
+                            };
+                            Some((expr_out, type_out))
+                        },
+                    )
+                    .boxed();
+                let variadic_gen = (
+                    select(INTERESTING_VARIADIC_FUNCS),
+                    prop::collection::vec(self_gen, 1..4),
+                )
+                    .prop_filter_map("variadic func", |(func, exprs)| {
+                        let (exprs_in, type_in): (_, Vec<_>) = exprs.into_iter().unzip();
+                        if !variadic_typecheck(&func, &type_in) {
+                            return None;
+                        }
+                        let type_out = func.output_type(type_in);
+                        let expr_out = MirScalarExpr::CallVariadic {
+                            func,
+                            exprs: exprs_in,
+                        };
+                        Some((expr_out, type_out))
+                    })
+                    .boxed();
+
+                unary_gen
+                    .prop_union(binary_gen)
+                    .boxed()
+                    .prop_union(variadic_gen)
+            })
+            .boxed()
+    }
+
+    fn gen_expr_data() -> impl Strategy<Value = ExpressionData> {
+        let columns = prop::collection::vec(gen_column(), 1..10);
+        columns.prop_flat_map(|data| {
+            let (columns, datums, specs): (Vec<_>, Vec<_>, Vec<_>) = data.into_iter().multiunzip();
+            let relation = RelationType::new(columns);
+            let row = Row::pack_slice(&datums);
+            gen_expr_for_relation(&relation).prop_map(move |(expr, _)| ExpressionData {
+                relation_type: relation.clone(),
+                specs: specs.clone(),
+                rows: vec![row.clone()],
+                expr,
+            })
+        })
+    }
+
+    #[mz_ore::test]
     fn test_trivial_spec_matches() {
         fn check(datum: PropDatum) -> Result<(), TestCaseError> {
             let datum: Datum = (&datum).into();
@@ -989,113 +1211,148 @@ mod tests {
         assert!(ResultSpec::fails().may_fail());
     }
 
-    #[test]
-    #[ignore]
+    #[mz_ore::test]
     fn test_equivalence() {
-        fn check(
-            expr: MirScalarExpr,
-            columns: Vec<(ColumnType, Datum<'static>)>,
-        ) -> Result<(), TestCaseError> {
-            let (columns, datums): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
-            let relation = RelationType::new(columns);
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                specs,
+                rows,
+                expr,
+            } = data;
 
-            // Unfortunately, our expr generator does not guarantee that the generated expr
-            // is safe to eval. (`eval` will often panic on expressions that are impossible to
-            // create normally.) First check that eval does not panic on the given inputs, and
-            // that the expression is well-typed.
-            let maybe_panic = panic::catch_unwind(|| {
-                let arena = RowArena::new();
-                let _ = expr.typ(&relation.column_types);
-                expr.eval(&datums, &arena).map(|_| ())
-            });
-
-            prop_assume!(!matches!(maybe_panic, Err(_)), "skip invalid expressions");
-            prop_assume!(
-                !matches!(maybe_panic, Ok(Err(EvalError::Internal(_)))),
-                "skip internal errors"
-            );
-
-            // From here, we can assume that evaluating the expression with the given props
-            // is safe. We want to ensure that the spec we get when evaluating an expression using
+            // We want to ensure that the spec we get when evaluating an expression using
             // `ColumnSpecs` always contains the _actual_ value of that column when evaluated with
             // eval. (This is an important correctness property of abstract interpretation.)
             let arena = RowArena::new();
-            let eval_result = expr.eval(&datums, &arena);
-
-            let mut interpreter = ColumnSpecs::new(relation, &arena);
-
-            for (id, datum) in datums.iter().enumerate() {
-                interpreter.push_column(id, ResultSpec::value(*datum));
+            let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
             }
+
             let spec = interpreter.expr(&expr);
 
-            match eval_result {
-                Ok(value) => {
-                    assert!(spec.range.may_contain(value))
-                }
-                Err(_) => {
-                    assert!(spec.range.may_fail());
+            for row in &rows {
+                let datums: Vec<_> = row.iter().collect();
+                let eval_result = expr.eval(&datums, &arena);
+                match eval_result {
+                    Ok(value) => {
+                        assert!(spec.range.may_contain(value))
+                    }
+                    Err(_) => {
+                        assert!(spec.range.may_fail());
+                    }
                 }
             }
 
             Ok(())
         }
 
-        proptest!(|(expr: MirScalarExpr, columns in prop::collection::vec(gen_column(), 0..10))| {
-            check(expr, columns)?;
+        proptest!(|(data in gen_expr_data())| {
+            check(data)?;
         });
     }
 
-    #[test]
-    fn test_regression() {
-        let expr = MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![
-                MirScalarExpr::Literal(Err(EvalError::CharacterNotValidForEncoding(0)), ScalarType::Bool.nullable(false)),
-                MirScalarExpr::Literal(Ok(Row::pack_slice(&[Datum::True])), ScalarType::Bool.nullable(false)),
+    #[mz_ore::test]
+    fn test_mfp() {
+        // Regression test for https://github.com/MaterializeInc/materialize/issues/19338
+        use MirScalarExpr::*;
+        let mfp = MapFilterProject {
+            expressions: vec![],
+            predicates: vec![
+                // Always fails on the known input range
+                (
+                    1,
+                    CallUnary {
+                        func: UnaryFunc::IsNull(IsNull),
+                        expr:
+                            Box::new(CallBinary {
+                                func: BinaryFunc::MulInt32,
+                                expr1: Box::new(Column(0)),
+                                expr2: Box::new(Column(0)),
+                            }),
+                    },
+                ),
+                // Always returns false on the known input range
+                (
+                    1,
+                    CallBinary {
+                        func: BinaryFunc::Eq,
+                        expr1: Box::new(Column(0)),
+                        expr2: Box::new(Literal(
+                            Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
+                            ScalarType::Int32.nullable(false),
+                        )),
+                    },
+                ),
             ],
+            projection: vec![],
+            input_arity: 1,
         };
+
+        let relation = RelationType::new(vec![ScalarType::Int32.nullable(true)]);
         let arena = RowArena::new();
-        let result = expr.eval(&[], &arena);
-        // NB: this is inconsistent with the result of the interpreter, which assumes all functions
-        // evaluate their arguments!
-        // TODO(mfp): change the interpreter to be consistent with `eval` on this.
-        assert_eq!(result, Ok(Datum::True))
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
+        let spec = interpreter.mfp_filter(&mfp);
+        assert!(spec.range.may_fail());
     }
 
-    #[test]
+    #[mz_ore::test]
+    fn test_concat() {
+        let expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Concat,
+            exprs: vec![
+                MirScalarExpr::Column(0),
+                MirScalarExpr::literal_ok(Datum::String("a"), ScalarType::String),
+                MirScalarExpr::literal_ok(Datum::String("b"), ScalarType::String),
+            ],
+        };
+
+        let relation = RelationType::new(vec![ScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let interpreter = ColumnSpecs::new(&relation, &arena);
+        let spec = interpreter.expr(&expr);
+        assert!(spec.range.may_contain(Datum::String("blab")));
+    }
+
+    #[mz_ore::test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
             Ok(Row::pack_slice(&[Datum::Int64(10)])),
-            ScalarType::UInt64.nullable(false),
+            ScalarType::Int64.nullable(false),
         );
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
             expr1: Box::new(MirScalarExpr::CallUnmaterializable(
                 UnmaterializableFunc::MzNow,
             )),
-            expr2: Box::new(MirScalarExpr::CallBinary {
-                func: BinaryFunc::MulInt64,
-                expr1: Box::new(period_ms.clone()),
-                expr2: Box::new(MirScalarExpr::CallBinary {
-                    func: BinaryFunc::DivInt64,
-                    expr1: Box::new(MirScalarExpr::Column(0)),
-                    expr2: Box::new(period_ms),
+            expr2: Box::new(MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastInt64ToMzTimestamp(CastInt64ToMzTimestamp),
+                expr: Box::new(MirScalarExpr::CallBinary {
+                    func: BinaryFunc::MulInt64,
+                    expr1: Box::new(period_ms.clone()),
+                    expr2: Box::new(MirScalarExpr::CallBinary {
+                        func: BinaryFunc::DivInt64,
+                        expr1: Box::new(MirScalarExpr::Column(0)),
+                        expr2: Box::new(period_ms),
+                    }),
                 }),
             }),
         };
+        let relation = RelationType::new(vec![ScalarType::Int64.nullable(false)]);
 
         {
             // Non-overlapping windows
             let arena = RowArena::new();
-            let mut interpreter = ColumnSpecs::new(
-                RelationType::new(vec![ScalarType::UInt64.nullable(false)]),
-                &arena,
-            );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_unmaterializable(
                 UnmaterializableFunc::MzNow,
-                ResultSpec::value_between(10i64.into(), 20i64.into()),
+                ResultSpec::value_between(
+                    Datum::MzTimestamp(10.into()),
+                    Datum::MzTimestamp(20.into()),
+                ),
             );
             interpreter.push_column(0, ResultSpec::value_between(30i64.into(), 40i64.into()));
 
@@ -1109,13 +1366,13 @@ mod tests {
         {
             // Overlapping windows
             let arena = RowArena::new();
-            let mut interpreter = ColumnSpecs::new(
-                RelationType::new(vec![ScalarType::UInt64.nullable(false)]),
-                &arena,
-            );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_unmaterializable(
                 UnmaterializableFunc::MzNow,
-                ResultSpec::value_between(10i64.into(), 35i64.into()),
+                ResultSpec::value_between(
+                    Datum::MzTimestamp(10.into()),
+                    Datum::MzTimestamp(35.into()),
+                ),
             );
             interpreter.push_column(0, ResultSpec::value_between(30i64.into(), 40i64.into()));
 
@@ -1127,7 +1384,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_jsonb() {
         let arena = RowArena::new();
 
@@ -1143,11 +1400,8 @@ mod tests {
             }),
         };
 
-        // Non-overlapping windows
-        let mut interpreter = ColumnSpecs::new(
-            RelationType::new(vec![ScalarType::Jsonb.nullable(true)]),
-            &arena,
-        );
+        let relation = RelationType::new(vec![ScalarType::Jsonb.nullable(true)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(
             0,
             ResultSpec::map_spec(
@@ -1169,11 +1423,10 @@ mod tests {
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
 
-        let _input_type = ScalarType::UInt64.nullable(false);
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
             expr1: Box::new(MirScalarExpr::Column(0)),
@@ -1186,15 +1439,7 @@ mod tests {
                 }),
             }),
         };
-        let trace = Trace.expr(&expr);
-        assert_eq!(
-            trace,
-            RelationTrace(vec![
-                Pushdownable::Yes, // one side of a conditional
-                Pushdownable::Yes, // other side of the conditional, nested in +
-                Pushdownable::No,  // not referenced!
-                Pushdownable::No   // referenced, but we can't see through abs()
-            ])
-        )
+        let pushdownable = Trace.expr(&expr);
+        assert!(pushdownable);
     }
 }

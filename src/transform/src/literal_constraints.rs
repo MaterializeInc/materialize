@@ -18,8 +18,8 @@
 //! `SELECT f1, f2, f3 FROM t, (SELECT * FROM (VALUES (lit1, lit2))) as filter_list
 //!  WHERE t.f1 = filter_list.column1 AND t.f2 = filter_list.column2`
 
-use crate::canonicalize_mfp::CanonicalizeMfp;
-use crate::{IndexOracle, TransformArgs};
+use std::collections::{BTreeMap, BTreeSet};
+
 use itertools::Itertools;
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::{Visit, VisitChildren};
@@ -30,17 +30,15 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
-use std::collections::{BTreeMap, BTreeSet};
+
+use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::{IndexOracle, TransformArgs};
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
 pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
     target = "optimizer"
     level = "trace",

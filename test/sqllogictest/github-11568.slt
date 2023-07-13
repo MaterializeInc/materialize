@@ -11,6 +11,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+----
+COMPLETE 0
+
 statement ok
 create cluster c replicas (r1 (STORAGECTL ADDRESSES ['s:1'], STORAGE ADDRESSES ['st:1'], COMPUTECTL ADDRESSES ['c:1'], COMPUTE ADDRESSES ['ct:1']))
 

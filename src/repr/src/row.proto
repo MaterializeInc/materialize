@@ -102,7 +102,7 @@ message ProtoArray {
 }
 
 message ProtoArrayDimension {
-    uint64 lower_bound = 1;
+    int64 lower_bound = 1;
     uint64 length = 2;
 }
 

@@ -8,12 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{env, fs};
 
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
@@ -24,8 +23,12 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_postgres_util::make_tls;
 use mz_stash::StashFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
@@ -34,13 +37,10 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
-use mz_ore::error::ErrorExt;
-use mz_ore::retry::Retry;
-use mz_ore::task;
-use mz_postgres_util::make_tls;
-
 use crate::error::PosError;
-use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
+use crate::parser::{
+    validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint,
+};
 use crate::util;
 use crate::util::postgres::postgres_client;
 
@@ -57,6 +57,8 @@ mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
+mod version_check;
+mod webhook;
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -77,6 +79,8 @@ pub struct Config {
     /// If unspecified, testdrive creates a temporary directory with a random
     /// name.
     pub temp_dir: Option<String>,
+    /// Source string to print out on errors.
+    pub source: Option<String>,
     /// The default timeout for cancellable operations.
     pub default_timeout: Duration,
     /// The default number of tries for retriable operations.
@@ -158,6 +162,7 @@ pub struct State {
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
     materialize_sql_addr: String,
+    materialize_http_addr: String,
     materialize_internal_sql_addr: String,
     materialize_internal_http_addr: String,
     materialize_user: String,
@@ -338,19 +343,27 @@ impl State {
             }
         }
 
+        // Alter materialize user with all system privileges.
+        inner_client
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                self.materialize_user
+            ))
+            .await?;
+
         // Grant initial privileges.
         inner_client
             .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT CREATE ON DATABASE materialize TO {}",
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
                 self.materialize_user
             ))
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT CREATE ON SCHEMA materialize.public TO {}",
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
                 self.materialize_user
             ))
             .await?;
@@ -359,7 +372,7 @@ impl State {
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT CREATE ON CLUSTER default TO {}",
+                "GRANT ALL PRIVILEGES ON CLUSTER default TO {}",
                 self.materialize_user
             ))
             .await?;
@@ -472,11 +485,26 @@ pub(crate) trait Run {
 #[async_trait]
 impl Run for PosCommand {
     async fn run(self, state: &mut State) -> Result<ControlFlow, PosError> {
+        macro_rules! handle_version {
+            ($version_constraint:expr) => {
+                match $version_constraint {
+                    Some(VersionConstraint { min, max }) => {
+                        match version_check::run_version_check(min, max, state).await {
+                            Ok(true) => return Ok(ControlFlow::Continue),
+                            Ok(false) => {}
+                            Err(err) => return Err(PosError::new(err, self.pos)),
+                        }
+                    }
+                    None => {}
+                }
+            };
+        }
+
         let wrap_err = |e| PosError::new(e, self.pos);
         //         Substitute variables at startup except for the command-specific ones
         // Those will be substituted at runtime
         let ignore_prefix = match &self.command {
-            Command::Builtin(builtin) => Some(builtin.name.clone()),
+            Command::Builtin(builtin, _) => Some(builtin.name.clone()),
             _ => None,
         };
         let subst = |msg: &str, vars: &BTreeMap<String, String>| {
@@ -487,7 +515,8 @@ impl Run for PosCommand {
         };
 
         let r = match self.command {
-            Command::Builtin(mut builtin) => {
+            Command::Builtin(mut builtin, version_constraint) => {
+                handle_version!(version_constraint);
                 for val in builtin.args.values_mut() {
                     *val = subst(val, &state.cmd_vars)?;
                 }
@@ -500,6 +529,7 @@ impl Run for PosCommand {
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
+                    "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
@@ -528,6 +558,7 @@ impl Run for PosCommand {
                     }
                     "set" => set::set_vars(builtin, state),
                     "set-from-sql" => set::run_set_from_sql(builtin, state).await,
+                    "webhook-append" => webhook::run_append(builtin, state).await,
                     // "verify-timestamp-compaction" => Box::new(
                     //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
                     //         builtin,
@@ -542,7 +573,8 @@ impl Run for PosCommand {
                     }
                 }
             }
-            Command::Sql(mut sql) => {
+            Command::Sql(mut sql, version_constraint) => {
+                handle_version!(version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
@@ -553,7 +585,8 @@ impl Run for PosCommand {
                 }
                 sql::run_sql(sql, state).await
             }
-            Command::FailSql(mut sql) => {
+            Command::FailSql(mut sql, version_constraint) => {
+                handle_version!(version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
                     SqlExpectedError::Contains(s) => {
@@ -640,6 +673,7 @@ pub async fn create_state(
 
     let (
         materialize_sql_addr,
+        materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,
@@ -670,17 +704,21 @@ pub async fn create_state(
                 .context("setting session parameter")?;
         }
 
-        // Old versions of Materialize did not support `current_user`, so we
-        // fail gracefully.
-        let materialize_user = match pgclient.query_one("SELECT current_user", &[]).await {
-            Ok(row) => row.get(0),
-            Err(_) => "<unknown user>".to_owned(),
-        };
+        let materialize_user = config
+            .materialize_pgconfig
+            .get_user()
+            .expect("testdrive URL must contain user")
+            .to_string();
 
         let materialize_sql_addr = format!(
             "{}:{}",
             materialize_url.host_str().unwrap(),
             materialize_url.port().unwrap()
+        );
+        let materialize_http_addr = format!(
+            "{}:{}",
+            materialize_url.host_str().unwrap(),
+            config.materialize_http_port
         );
         let materialize_internal_sql_addr = format!(
             "{}:{}",
@@ -694,6 +732,7 @@ pub async fn create_state(
         );
         (
             materialize_sql_addr,
+            materialize_http_addr,
             materialize_internal_sql_addr,
             materialize_internal_http_addr,
             materialize_user,
@@ -784,6 +823,7 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
         materialize_sql_addr,
+        materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,

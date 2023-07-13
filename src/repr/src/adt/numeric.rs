@@ -17,13 +17,12 @@ use std::fmt;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
-use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
 
@@ -432,7 +431,7 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     Ok(d)
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_roundtrip() {
     fn inner(s: &str) {
@@ -468,7 +467,7 @@ fn test_twos_complement_roundtrip() {
     inner("-7.2e-35");
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_comp_numeric_primitive() {
     fn inner_inner<P>(i: P, i_be_bytes: &mut [u8])
@@ -596,7 +595,7 @@ fn test_twos_comp_numeric_primitive() {
     inner_i128(i128::MIN / 7 + 7);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_to_numeric_fail() {
     fn inner(b: &mut [u8]) {
@@ -614,7 +613,7 @@ fn test_twos_complement_to_numeric_fail() {
     inner(&mut e);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_wide_twos_complement_roundtrip() {
     fn inner(s: &str) {
@@ -765,19 +764,20 @@ impl DecimalLike for Numeric {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use super::*;
+
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
             let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert!(actual.is_ok());

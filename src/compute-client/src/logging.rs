@@ -12,13 +12,12 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, prop, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 
@@ -463,12 +462,13 @@ impl LogVariant {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use super::*;
+
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn logging_config_protobuf_roundtrip(expect in any::<LoggingConfig>()) {
             let actual = protobuf_roundtrip::<_, ProtoLoggingConfig>(&expect);
             assert!(actual.is_ok());

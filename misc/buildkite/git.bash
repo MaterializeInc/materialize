@@ -8,16 +8,13 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
-# This requires BUILDKITE_REPO_REF to be set.
 
 set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-if [[ -z ${BUILDKITE_REPO_REF+x} ]]; then
-  export BUILDKITE_REPO_REF="origin"
-fi
+export BUILDKITE_REPO_REF="${BUILDKITE_REPO_REF:-origin}"
+export BUILDKITE_PULL_REQUEST_BASE_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
 
 configure_git_user() {
   if [[ "$BUILDKITE" == "true" ]]; then

@@ -16,10 +16,10 @@ SELECT * FROM VALUES (1)
 query error Expected identifier, found number
 SELECT * FROM VALUES (1), (2)
 
-query error function noexist\(\) does not exist
+query error db error: ERROR: function "noexist" does not exist
 SELECT noexist()
 
-query error function noexist\(\) does not exist
+query error db error: ERROR: function "noexist" does not exist
 SELECT * FROM noexist()
 
 statement error Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found identifier "material"

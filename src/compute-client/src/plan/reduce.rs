@@ -62,19 +62,15 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::{permutation_for_arrangement, AggregateExpr, AggregateFunc, MirScalarExpr};
+use mz_ore::soft_assert_or_log;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::permutation_for_arrangement;
-use mz_expr::AggregateExpr;
-use mz_expr::AggregateFunc;
-use mz_expr::MirScalarExpr;
-use mz_ore::soft_assert_or_log;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
-use super::{bucketing_of_expected_group_size, AvailableCollections};
+use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -157,9 +153,6 @@ pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
-    /// Plan for not computing any aggregations, just determining the set of distinct keys. A
-    /// specialization of [ReducePlan::Distinct] maintaining rows not in the output.
-    DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
     /// Plan for computing only hierarchical aggregations.
@@ -223,7 +216,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
         ProtoReducePlan {
             kind: Some(match self {
                 ReducePlan::Distinct => Distinct(()),
-                ReducePlan::DistinctNegated => DistinctNegated(()),
                 ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
                 ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
                 ReducePlan::Basic(plan) => Basic(plan.into_proto()),
@@ -239,7 +231,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
         Ok(match kind {
             Distinct(()) => ReducePlan::Distinct,
-            DistinctNegated(()) => ReducePlan::DistinctNegated,
             Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
             Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
             Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
@@ -655,7 +646,7 @@ impl ReducePlan {
                     assert!(collation.basic.is_none());
                     collation.basic = Some(e);
                 }
-                ReducePlan::Distinct | ReducePlan::DistinctNegated | ReducePlan::Collation(_) => {
+                ReducePlan::Distinct | ReducePlan::Collation(_) => {
                     panic!("Inner reduce plan was unsupported type!")
                 }
             }
@@ -759,16 +750,11 @@ impl ReducePlan {
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
-        match self {
-            ReducePlan::DistinctNegated => AvailableCollections::new_raw(),
-            _ => {
-                let key = (0..key_arity)
-                    .map(mz_expr::MirScalarExpr::Column)
-                    .collect::<Vec<_>>();
-                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
-            }
-        }
+        let key = (0..key_arity)
+            .map(mz_expr::MirScalarExpr::Column)
+            .collect::<Vec<_>>();
+        let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
     }
 }
 
@@ -934,6 +920,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::ListConcat { .. }
         | AggregateFunc::StringAgg { .. }
         | AggregateFunc::RowNumber { .. }
+        | AggregateFunc::Rank { .. }
         | AggregateFunc::DenseRank { .. }
         | AggregateFunc::LagLead { .. }
         | AggregateFunc::FirstValue { .. }
@@ -943,14 +930,15 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     // This test causes stack overflows if not run with --release,
     // ignore by default.
     proptest! {
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);

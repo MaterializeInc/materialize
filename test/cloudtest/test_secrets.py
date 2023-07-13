@@ -7,12 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import subprocess
 from textwrap import dedent
 
 import pytest
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
@@ -24,17 +25,14 @@ def test_secrets(mz: MaterializeApplication) -> None:
             > CREATE SECRET username AS '123';
             > CREATE SECRET password AS '234';
 
-            > CREATE CONNECTION secrets_conn TO KAFKA (
+            # Our Redpanda instance is not configured for SASL, so we can not
+            # really establish a successful connection.
+            ! CREATE CONNECTION secrets_conn TO KAFKA (
                 BROKER '${testdrive.kafka-addr}',
                 SASL MECHANISMS 'PLAIN',
                 SASL USERNAME = SECRET username,
                 SASL PASSWORD = SECRET password
               );
-
-            # Our Redpanda instance is not configured for SASL, so we can not
-            # really establish a successful connection.
-            ! CREATE SOURCE secrets_source
-              FROM KAFKA CONNECTION secrets_conn (TOPIC 'foo_bar');
             contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
             """
         )
@@ -102,6 +100,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
+          $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+          ALTER SYSTEM SET enable_connection_validation_syntax = true
+
           > CREATE CLUSTER to_be_killed REPLICAS (to_be_killed (SIZE '1'));
 
           > CREATE SECRET to_be_deleted AS 'postgres'
@@ -111,7 +112,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
                 SASL MECHANISMS 'PLAIN',
                 SASL USERNAME = SECRET to_be_deleted,
                 SASL PASSWORD = SECRET to_be_deleted
-              );
+              ) WITH (VALIDATE = false);
 
           > CREATE CONNECTION pg_conn_with_deleted_secret TO POSTGRES (
             HOST 'postgres',
@@ -180,7 +181,12 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+
+    try:
+        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
 
     mz.testdrive.run(
         input=dedent(

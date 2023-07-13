@@ -15,13 +15,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, BoxFuture};
-use futures::future::{FutureExt, TryFutureExt};
+use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::retry::Retry;
 use postgres_openssl::MakeTlsConnector;
 use prometheus::{IntCounter, IntCounterVec};
 use rand::Rng;
-
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
@@ -29,12 +30,10 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
 use tracing::{error, event, info, warn, Level};
 
-use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::retry::Retry;
-
+use crate::upgrade;
 use crate::{
     AppendBatch, Data, Diff, Id, InternalStashError, StashCollection, StashError, Timestamp,
+    COLLECTION_CONFIG, MIN_STASH_VERSION, STASH_VERSION, USER_VERSION_KEY,
 };
 
 // TODO: Change the indexes on data to be more applicable to the current
@@ -58,8 +57,8 @@ CREATE TABLE collections (
 
 CREATE TABLE data (
     collection_id bigint NOT NULL REFERENCES collections (collection_id),
-    key jsonb NOT NULL,
-    value jsonb NOT NULL,
+    key bytea NOT NULL,
+    value bytea NOT NULL,
     time bigint NOT NULL,
     diff bigint NOT NULL
 );
@@ -341,31 +340,25 @@ impl StashFactory {
             metrics: Arc::clone(&self.metrics),
             collections: BTreeMap::new(),
         };
-        // Do the initial connection once here so we don't get stuck in
-        // transact's retry loop if the url is bad.
+
+        // Do the initial connection once here so we don't get stuck in transact's retry loop if the
+        // url is bad. We also need to allow for a down server, though, so retry for a while before
+        // bailing. These numbers are made up.
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = Box::pin(retry);
         loop {
-            let res = conn.connect().await;
-            if let Err(StashError {
-                inner: InternalStashError::Postgres(err),
-            }) = &res
-            {
-                // We want this function (`new`) to quickly return an error if
-                // the connection string is bad or the server is unreachable. If
-                // the server returns a retryable transaction error though,
-                // allow it to retry. This is mostly useful for tests which hit
-                // this particular error a lot, but is also good for production.
-                // See: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference.html
-                if let Some(dberr) = err.as_db_error() {
-                    if dberr.code() == &SqlState::T_R_SERIALIZATION_FAILURE
-                        && dberr.message().contains("restart transaction")
-                    {
-                        warn!("tokio-postgres stash connection error, retrying: {err}");
-                        continue;
+            match conn.connect().await {
+                Ok(()) => break,
+                Err(err) => {
+                    warn!("initial stash connection error, retrying: {err}");
+                    if retry.next().await.is_none() {
+                        return Err(err);
                     }
                 }
             }
-            res?;
-            break;
         }
 
         if matches!(conn.txn_mode, TransactionMode::Savepoint) {
@@ -555,28 +548,14 @@ impl Stash {
                 .get(0);
             if !fence_exists {
                 if !matches!(self.txn_mode, TransactionMode::Writeable) {
-                    return Err(format!(
-                        "stash tables do not exist; will not create in {:?} mode",
-                        self.txn_mode
-                    )
-                    .into());
+                    return Err(StashError {
+                        inner: InternalStashError::StashNotWritable(format!(
+                            "stash tables do not exist; will not create in {:?} mode",
+                            self.txn_mode
+                        )),
+                    });
                 }
                 tx.batch_execute(SCHEMA).await?;
-            }
-
-            // Migration added in 0.45.0. This block can be removed anytime after that
-            // release.
-            {
-                // We can't add the column for other txn modes, and they don't
-                // even require it since they use the read-only fetch_epoch
-                // query.
-                if matches!(self.txn_mode, TransactionMode::Writeable) {
-                    tx
-                    .batch_execute(
-                        "ALTER TABLE fence ADD COLUMN IF NOT EXISTS version bigint DEFAULT 1 NOT NULL;",
-                    )
-                    .await?;
-                }
             }
 
             let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
@@ -615,6 +594,7 @@ impl Stash {
             };
 
             tx.commit().await?;
+
             self.epoch = Some(epoch);
         }
 
@@ -763,6 +743,12 @@ impl Stash {
             &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
+        // Use a function so we can instrument.
+        #[tracing::instrument(name = "stash::batch_execute", level = "debug", skip(client))]
+        async fn batch_execute(client: &Client, stmt: &str) -> Result<(), tokio_postgres::Error> {
+            client.batch_execute(stmt).await
+        }
+
         let reconnect = match &self.client {
             Some(client) => client.is_closed(),
             None => true,
@@ -780,8 +766,7 @@ impl Stash {
             TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
-        client
-            .batch_execute(tx_start)
+        batch_execute(client, tx_start)
             .await
             .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
@@ -832,7 +817,7 @@ impl Stash {
             });
         }
 
-        if let Err(_) = client.batch_execute(tx_end).await {
+        if let Err(_) = batch_execute(client, tx_end).await {
             return Err(TransactionError::Commit {
                 committed_if_version,
                 result: res,
@@ -870,6 +855,84 @@ impl Stash {
             return Err(InternalStashError::Fence("unexpected epoch or nonce".into()).into());
         }
         Ok(version == committed_if_version)
+    }
+
+    /// Returns whether this Stash is initialized. We consider a Stash to be initialized if
+    /// it contains an entry in the [`COLLECTION_CONFIG`] with the key of [`USER_VERSION_KEY`].
+    #[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
+    pub async fn is_initialized(&mut self) -> Result<bool, StashError> {
+        // Check to see what collections exist, this prevents us from unnecessarily creating a
+        // config collection, if one doesn't yet exist.
+        let collections = self.collections().await?;
+        let exists = collections
+            .iter()
+            .any(|(_id, name)| name == COLLECTION_CONFIG.name);
+
+        // If our config collection exists, then we'll try to read a version number.
+        if exists {
+            let items = COLLECTION_CONFIG.iter(self).await?;
+            let contains_version = items
+                .into_iter()
+                .any(|((key, _value), _ts, _diff)| key.key == USER_VERSION_KEY);
+            Ok(contains_version)
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
+    pub async fn upgrade(&mut self) -> Result<(), StashError> {
+        // Run migrations until we're up-to-date.
+        while run_upgrade(self).await? < STASH_VERSION {}
+
+        pub async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
+            stash
+                .with_transaction(move |mut tx| {
+                    async move {
+                        let version = COLLECTION_CONFIG.version(&mut tx).await?;
+
+                        // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
+                        // but const expressions aren't yet supported in match statements.
+                        const TOO_OLD_VERSION: u64 = MIN_STASH_VERSION - 1;
+                        const FUTURE_VERSION: u64 = STASH_VERSION + 1;
+                        let incompatible = StashError {
+                            inner: InternalStashError::IncompatibleVersion(version),
+                        };
+
+                        match version {
+                            ..=TOO_OLD_VERSION => return Err(incompatible),
+
+                            13 => upgrade::v13_to_v14::upgrade(),
+                            14 => upgrade::v14_to_v15::upgrade(),
+                            15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
+                            16 => upgrade::v16_to_v17::upgrade(),
+                            17 => upgrade::v17_to_v18::upgrade(&mut tx).await?,
+                            18 => upgrade::v18_to_v19::upgrade(&mut tx).await?,
+                            19 => upgrade::v19_to_v20::upgrade(&mut tx).await?,
+                            20 => upgrade::v20_to_v21::upgrade(&mut tx).await?,
+                            21 => upgrade::v21_to_v22::upgrade(&mut tx).await?,
+                            22 => upgrade::v22_to_v23::upgrade(&mut tx).await?,
+                            23 => upgrade::v23_to_v24::upgrade(&mut tx).await?,
+                            24 => upgrade::v24_to_v25::upgrade(&mut tx).await?,
+                            25 => upgrade::v25_to_v26::upgrade(),
+                            26 => upgrade::v26_to_v27::upgrade(),
+
+                            // Up-to-date, no migration needed!
+                            STASH_VERSION => return Ok(STASH_VERSION),
+                            FUTURE_VERSION.. => return Err(incompatible),
+                        };
+                        // Set the new version.
+                        let new_version = version + 1;
+                        COLLECTION_CONFIG.set_version(&mut tx, new_version).await?;
+
+                        Ok(new_version)
+                    }
+                    .boxed()
+                })
+                .await
+        }
+
+        Ok(())
     }
 }
 
@@ -1226,23 +1289,21 @@ impl Consolidator {
                 // In a single query we can detect all candidate entries (things
                 // with a negative diff) and delete and return all associated
                 // keys.
-                let rows = tx
+                let mut rows = tx
                     .query(self.stmt_candidates.as_ref().unwrap(), &[&id, since])
                     .await?
                     .into_iter()
                     .map(|row| {
                         (
-                            (
-                                row.get::<_, serde_json::Value>("key"),
-                                row.get::<_, serde_json::Value>("value"),
-                            ),
+                            (row.get::<_, Vec<u8>>("key"), row.get::<_, Vec<u8>>("value")),
                             row.get::<_, Diff>("diff"),
                         )
                     })
                     .collect::<Vec<_>>();
                 let deleted = rows.len();
                 // Perform the consolidation in Rust.
-                let rows = crate::consolidate(&rows);
+                differential_dataflow::consolidation::consolidate(&mut rows);
+
                 // Then for any items that have a positive diff, INSERT them
                 // back into the database. Our current production stash usage
                 // will never have any results here (all consolidations sum to

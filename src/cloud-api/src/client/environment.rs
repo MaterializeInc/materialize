@@ -15,10 +15,14 @@
 //! For a better experience retrieving all the available
 //! environments, use [`Client::get_all_environments()`]
 
-use reqwest::Method;
-use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
-use super::{cloud_provider::CloudProvider, region::Region, Client, Error};
+use reqwest::Method;
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::client::cloud_provider::CloudProvider;
+use crate::client::region::Region;
+use crate::client::{Client, Error};
 
 /// An environment is represented in this structure
 #[derive(Debug, Deserialize, Clone)]
@@ -41,7 +45,7 @@ impl Client {
     pub async fn get_environment(&self, region: Region) -> Result<Environment, Error> {
         // Send request to the subdomain
         let req = self
-            .build_region_request(Method::GET, ["api", "environment"], region)
+            .build_environment_request(Method::GET, ["api", "environment"], region)
             .await?;
 
         let environments: Vec<Environment> = self.send_request(req).await?;
@@ -76,7 +80,7 @@ impl Client {
         &self,
         version: Option<String>,
         environmentd_extra_args: Vec<String>,
-        region: Region,
+        cloud_provider: CloudProvider,
     ) -> Result<Region, Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -96,17 +100,78 @@ impl Client {
         };
 
         let req = self
-            .build_region_request(Method::POST, ["api", "environmentassignment"], region)
+            .build_region_request(
+                Method::POST,
+                ["api", "environmentassignment"],
+                cloud_provider,
+            )
             .await?;
         let req = req.json(&body);
         self.send_request(req).await
     }
 
-    /// Deletes an environment in a particular region for the current user
-    pub async fn delete_environment(&self, region: Region) -> Result<Region, Error> {
-        let req = self
-            .build_region_request(Method::DELETE, ["api", "environmentassignment"], region)
-            .await?;
-        self.send_request(req).await
+    /// Deletes an environment in a particular region for the current user.
+    ///
+    /// This operation has a long duration, it can take
+    /// several minutes to complete.
+    /// The first few requests will return a 504,
+    /// indicating that the API is working on the deletion.
+    /// A request returning a 202 indicates that
+    /// no environment is available to delete (the delete request is complete.)
+    pub async fn delete_environment(&self, cloud_provider: CloudProvider) -> Result<(), Error> {
+        /// A struct that deserializes nothing.
+        ///
+        /// Useful for deserializing empty response bodies.
+        struct Empty;
+
+        impl<'de> Deserialize<'de> for Empty {
+            fn deserialize<D>(_: D) -> Result<Empty, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Ok(Empty)
+            }
+        }
+
+        // We need to continuously try to delete the environment
+        // until it succeeds (Status code: 202) or an unexpected error occurs.
+        let mut loops = 0;
+        loop {
+            loops += 1;
+
+            let req = self
+                .build_region_request(
+                    Method::DELETE,
+                    ["api", "environmentassignment"],
+                    cloud_provider.clone(),
+                )
+                .await?;
+
+            // This timeout corresponds to the same in our cloud services tests.
+            let req = req.timeout(Duration::from_secs(305));
+
+            match self.send_request::<Empty>(req).await {
+                Ok(_) => break Ok(()), // The request was successful, no environment is available to delete anymore.
+                Err(Error::Api(err)) => {
+                    if err.status_code != 504 {
+                        // The error was not a timeout (status code 504), so it's unexpected and we should return it
+                        return Err(Error::Api(err));
+                    }
+                    // If the error was a timeout, it means the API is still working on deleting the environment.
+                }
+                Err(Error::Transport(e)) => {
+                    if !e.is_timeout() {
+                        return Err(Error::Transport(e));
+                    }
+                }
+                // The request failed with a non-API error, so we should return it
+                Err(e) => return Err(e),
+            }
+
+            // Too many requests/timeouts were reached.
+            if loops == 10 {
+                return Err(Error::TimeoutError);
+            }
+        }
     }
 }

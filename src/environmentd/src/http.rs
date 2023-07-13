@@ -18,50 +18,51 @@
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Query};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::{routing, Extension, Router};
+use axum::{routing, Extension, Json, Router};
 use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
+use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
+use mz_http_util::DynamicFilterTarget;
+use mz_ore::cast::u64_to_usize;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
-use mz_sql::session::vars::VarInput;
+use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
-use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
-use mz_ore::cast::u64_to_usize;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::TracingHandle;
-use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
-
 use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
-
-pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod catalog;
 mod memory;
 mod probe;
 mod root;
 mod sql;
+mod webhook;
+
+pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
@@ -72,6 +73,7 @@ pub struct HttpConfig {
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +92,7 @@ pub enum TlsMode {
 pub struct WsState {
     frontegg: Arc<Option<FronteggAuthentication>>,
     adapter_client: mz_adapter::Client,
+    active_connection_count: SharedConnectionCounter,
 }
 
 #[derive(Debug)]
@@ -105,6 +108,7 @@ impl HttpServer {
             frontegg,
             adapter_client,
             allowed_origin,
+            active_connection_count,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
@@ -122,6 +126,7 @@ impl HttpServer {
                 async move { http_auth(req, next, tls_mode, &base_frontegg).await }
             }))
             .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(Arc::clone(&active_connection_count)))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -140,6 +145,7 @@ impl HttpServer {
             .with_state(WsState {
                 frontegg,
                 adapter_client,
+                active_connection_count,
             });
         let router = Router::new().merge(base_router).merge(ws_router);
         HttpServer { tls, router }
@@ -180,20 +186,143 @@ impl Server for HttpServer {
 
 pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
-    pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub promote_leader: oneshot::Sender<()>,
+    pub ready_to_promote: oneshot::Receiver<()>,
 }
 
 pub struct InternalHttpServer {
     router: Router,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LeaderStatusResponse {
+    pub status: LeaderStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LeaderStatus {
+    /// The current leader returns this. It shouldn't need to know that another instance is attempting to update it.
+    IsLeader,
+    /// The new pod should return this status until it is ready to become the leader, or it has determined that it cannot proceed.
+    Initializing,
+    /// Once we receive this status, we can tell it to become the leader and migrate the EIP.
+    ReadyToPromote,
+}
+
+#[derive(Debug)]
+pub enum LeaderState {
+    IsLeader,
+    Initializing {
+        // Invariant: promote_leader is Some in Initializing and ReadyToPromote: we need
+        // to be able to move them from one state to the other and to access it by value
+        // without the fiddly work of moving the state in and out of LeaderState mutex.
+        promote_leader: Option<oneshot::Sender<()>>,
+        ready_to_promote: oneshot::Receiver<()>,
+    },
+    ReadyToPromote {
+        // Same invariant as Initializing
+        promote_leader: Option<oneshot::Sender<()>>,
+    },
+}
+
+fn state_to_status(state: &LeaderState) -> LeaderStatus {
+    match state {
+        LeaderState::IsLeader => LeaderStatus::IsLeader,
+        LeaderState::Initializing { .. } => LeaderStatus::Initializing,
+        LeaderState::ReadyToPromote { .. } => LeaderStatus::ReadyToPromote,
+    }
+}
+
+pub async fn handle_leader_status(
+    State(state): State<Arc<Mutex<LeaderState>>>,
+) -> impl IntoResponse {
+    let mut leader_state = state.lock().expect("lock poisoned");
+    match &mut *leader_state {
+        LeaderState::IsLeader => (),
+        LeaderState::Initializing {
+            promote_leader,
+            ready_to_promote,
+        } => {
+            match ready_to_promote.try_recv() {
+                Ok(_) => {
+                    assert!(promote_leader.is_some(), "invariant");
+                    *leader_state = LeaderState::ReadyToPromote {
+                        promote_leader: promote_leader.take(),
+                    };
+                }
+                Err(TryRecvError::Empty) => {
+                    // Continue waiting.
+                }
+                Err(TryRecvError::Closed) => {
+                    *leader_state = LeaderState::IsLeader; // server has started, it is the leader now
+                }
+            }
+        }
+        LeaderState::ReadyToPromote { .. } => (),
+    }
+    let status = state_to_status(&leader_state);
+    drop(leader_state);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(LeaderStatusResponse { status })),
+    )
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BecomeLeaderResponse {
+    pub result: BecomeLeaderResult,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BecomeLeaderResult {
+    Success, // 200 http status: also return this if we are already the leader
+    Failure {
+        // 500 http status if called when not `ReadyToPromote`.
+        message: String,
+    },
+}
+
+pub async fn handle_leader_promote(
+    State(state): State<Arc<Mutex<LeaderState>>>,
+) -> impl IntoResponse {
+    let mut leader_state = state.lock().expect("lock poisoned");
+
+    match &mut *leader_state {
+        LeaderState::IsLeader => (),
+        LeaderState::Initializing { .. } => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!(BecomeLeaderResult::Failure {
+                    message: "Not ready to promote, still initializing".into(),
+                })),
+            );
+        }
+        LeaderState::ReadyToPromote { promote_leader } => {
+            // even if send fails it means the server has started and we're already the leader
+            let _ = promote_leader.take().expect("invariant").send(());
+        }
+    }
+    // We're either already the leader or should be if we reach this.
+    *leader_state = LeaderState::IsLeader;
+    drop(leader_state);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(BecomeLeaderResponse {
+            result: BecomeLeaderResult::Success,
+        })),
+    )
+}
+
 impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
             metrics_registry,
-            tracing_handle,
             adapter_client_rx,
+            active_connection_count,
+            promote_leader,
+            ready_to_promote,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let router = base_router(BaseRouterConfig { profiling: true })
@@ -211,27 +340,26 @@ impl InternalHttpServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put({
-                    let tracing_handle = tracing_handle.clone();
-                    move |payload| async move {
-                        mz_http_util::handle_reload_tracing_filter(
-                            &tracing_handle,
-                            TracingHandle::reload_opentelemetry_filter,
-                            payload,
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
+                            Use the `opentelemetry_filter` system variable."
+                                .to_string(),
                         )
-                        .await
                     }
                 }),
             )
             .route(
                 "/api/stderr/config",
                 routing::put({
-                    move |payload| async move {
-                        mz_http_util::handle_reload_tracing_filter(
-                            &tracing_handle,
-                            TracingHandle::reload_stderr_log_filter,
-                            payload,
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
+                            Use the `log_filter` system variable."
+                                .to_string(),
                         )
-                        .await
                     }
                 }),
             )
@@ -242,8 +370,20 @@ impl InternalHttpServer {
             )
             .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
-            .layer(Extension(adapter_client_rx.shared()));
-        InternalHttpServer { router }
+            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(active_connection_count));
+
+        let leader_router = Router::new()
+            .route("/api/leader/status", routing::get(handle_leader_status))
+            .route("/api/leader/promote", routing::post(handle_leader_promote))
+            .with_state(Arc::new(Mutex::new(LeaderState::Initializing {
+                promote_leader: Some(promote_leader),
+                ready_to_promote,
+            })));
+
+        InternalHttpServer {
+            router: router.merge(leader_router),
+        }
     }
 }
 
@@ -262,6 +402,8 @@ impl Server for InternalHttpServer {
 
 type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
+type SharedConnectionCounter = Arc<Mutex<ConnectionCounter>>;
+
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
@@ -271,15 +413,26 @@ enum ConnProtocol {
 #[derive(Clone, Debug)]
 struct AuthedUser(User);
 
-pub struct AuthedClient(pub SessionClient);
+pub struct AuthedClient {
+    pub client: SessionClient,
+    pub drop_connection: Option<DropConnection>,
+}
 
 impl AuthedClient {
-    async fn new(adapter_client: &Client, user: AuthedUser) -> Result<Self, AdapterError> {
+    async fn new(
+        adapter_client: &Client,
+        user: AuthedUser,
+        active_connection_count: SharedConnectionCounter,
+    ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
-        let adapter_client = adapter_client.new_conn()?;
-        let session = adapter_client.new_session(user);
+        let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
+        let conn_id = adapter_client.new_conn_id()?;
+        let session = adapter_client.new_session(conn_id, user);
         let (adapter_client, _) = adapter_client.startup(session).await?;
-        Ok(AuthedClient(adapter_client))
+        Ok(AuthedClient {
+            client: adapter_client,
+            drop_connection,
+        })
     }
 }
 
@@ -315,12 +468,17 @@ where
                 "adapter client missing".into(),
             )
         })?;
-        let mut client = AuthedClient::new(&adapter_client, user.clone())
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
+        let mut client = AuthedClient::new(
+            &adapter_client,
+            user.clone(),
+            Arc::clone(active_connection_count),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         // Apply options that were provided in query params.
-        let session = client.0.session();
+        let session = client.client.session();
         let maybe_options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
             // count as a failure to deserialize
@@ -332,7 +490,10 @@ where
         if let Ok(options) = maybe_options {
             for (key, val) in options {
                 const LOCAL: bool = false;
-                if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+                if let Err(err) = session
+                    .vars_mut()
+                    .set(None, &key, VarInput::Flat(&val), LOCAL)
+                {
                     session.add_notice(AdapterNotice::BadStartupSetting {
                         name: key.to_string(),
                         reason: err.to_string(),
@@ -440,6 +601,7 @@ async fn init_ws(
     WsState {
         frontegg,
         adapter_client,
+        active_connection_count,
     }: &WsState,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
@@ -486,13 +648,18 @@ async fn init_ws(
         anyhow::bail!("unexpected")
     };
     let user = auth(frontegg, creds).await?;
-    let mut client = AuthedClient::new(adapter_client, user).await?;
+
+    let mut client =
+        AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
 
     // Assign any options we got from our WebSocket startup.
-    let session = client.0.session();
+    let session = client.client.session();
     for (key, val) in options {
         const LOCAL: bool = false;
-        if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+        if let Err(err) = session
+            .vars_mut()
+            .set(None, &key, VarInput::Flat(&val), LOCAL)
+        {
             session.add_notice(AdapterNotice::BadStartupSetting {
                 name: key,
                 reason: err.to_string(),
@@ -551,11 +718,7 @@ async fn auth(
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
             User {
-                external_metadata: Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
-                    group_id: claims.tenant_id,
-                    admin: claims.admin(frontegg.admin_role()),
-                }),
+                external_metadata: Some(ExternalUserMetadata::from(&claims)),
                 name: claims.email,
             }
         }
@@ -584,6 +747,10 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             routing::get(move || async move { root::handle_home(profiling).await }),
         )
         .route("/api/sql", routing::post(sql::handle_sql))
+        .route(
+            "/api/webhook/:database/:schema/:id",
+            routing::post(webhook::handle_webhook),
+        )
         .route("/memory", routing::get(memory::handle_memory))
         .route(
             "/hierarchical-memory",

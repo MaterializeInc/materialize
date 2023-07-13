@@ -16,7 +16,6 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
 use mz_persist::retry::Retry;
@@ -107,6 +106,20 @@ pub struct PersistConfig {
     pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
+    /// Timeout per connection attempt to Persist PubSub service.
+    pub pubsub_connect_attempt_timeout: Duration,
+    /// Maximum backoff when retrying connection establishment to Persist PubSub service.
+    pub pubsub_connect_max_backoff: Duration,
+    /// Size of channel used to buffer send messages to PubSub service.
+    pub pubsub_client_sender_channel_size: usize,
+    /// Size of channel used to buffer received messages from PubSub service.
+    pub pubsub_client_receiver_channel_size: usize,
+    /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
+    pub pubsub_server_connection_channel_size: usize,
+    /// Size of channel used by the state cache to broadcast shard state references.
+    pub pubsub_state_cache_shard_ref_channel_size: usize,
+    /// Backoff after an established connection to Persist PubSub service fails.
+    pub pubsub_reconnect_backoff: Duration,
 }
 
 impl PersistConfig {
@@ -120,6 +133,9 @@ impl PersistConfig {
             dynamic: Arc::new(DynamicConfig {
                 batch_builder_max_outstanding_parts: AtomicUsize::new(2),
                 blob_target_size: AtomicUsize::new(Self::DEFAULT_BLOB_TARGET_SIZE),
+                blob_cache_mem_limit_bytes: AtomicUsize::new(
+                    Self::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
+                ),
                 compaction_heuristic_min_inputs: AtomicUsize::new(8),
                 compaction_heuristic_min_parts: AtomicUsize::new(8),
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
@@ -128,10 +144,11 @@ impl PersistConfig {
                 consensus_connection_pool_ttl: Duration::from_secs(300),
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
+                consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
-                state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
-                    30 * Self::NEED_ROLLUP_THRESHOLD,
-                )),
+                state_versions_recent_live_diffs_limit: AtomicUsize::new(
+                    30 * Self::DEFAULT_ROLLUP_THRESHOLD,
+                ),
                 usage_state_fetch_concurrency_limit: AtomicUsize::new(8),
                 sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
@@ -143,6 +160,9 @@ impl PersistConfig {
                 stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
+                pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
+                pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
+                rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -151,6 +171,13 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
+            pubsub_connect_attempt_timeout: Duration::from_secs(5),
+            pubsub_connect_max_backoff: Duration::from_secs(60),
+            pubsub_client_sender_channel_size: 25,
+            pubsub_client_receiver_channel_size: 25,
+            pubsub_server_connection_channel_size: 25,
+            pubsub_state_cache_shard_ref_channel_size: 25,
+            pubsub_reconnect_backoff: Duration::from_secs(5),
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is
@@ -197,12 +224,20 @@ impl PersistConfig {
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Default value for [`DynamicConfig::consensus_tcp_user_timeout`].
+    pub const DEFAULT_CRDB_TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
     pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
     pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
+    /// Default value for [`DynamicConfig::pubsub_client_enabled`].
+    pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = true;
+    /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
+    pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
+    /// Default value for [`DynamicConfig::rollup_threshold`].
+    pub const DEFAULT_ROLLUP_THRESHOLD: usize = 128;
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -214,14 +249,22 @@ impl PersistConfig {
         clamp: Duration::from_secs(16),
     };
 
+    pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
+
+    /// Default value for [`DynamicConfig::blob_cache_mem_limit_bytes`].
+    ///
+    /// This initial value was tuned via a one-time experiment that showed an
+    /// environment running our demo "auction" source + mv got 90%+ cache hits
+    /// with a 1 MiB cache. This doesn't scale up to prod data sizes and doesn't
+    /// help with multi-process replicas, but the memory usage seems
+    /// unobjectionable enough to have it for the cases that it does help.
+    pub const DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES: usize = 1024 * 1024;
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
     // ProtoReaderState migration.
     pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
-
-    // Tuning notes: Picked arbitrarily.
-    pub(crate) const NEED_ROLLUP_THRESHOLD: u64 = 128;
 
     // TODO: Get rid of this in favor of using PersistParameters at the
     // relevant callsites.
@@ -252,6 +295,14 @@ impl ConsensusKnobs for PersistConfig {
             .read()
             .expect("lock poisoned")
     }
+
+    fn tcp_user_timeout(&self) -> Duration {
+        *self
+            .dynamic
+            .consensus_tcp_user_timeout
+            .read()
+            .expect("lock poisoned")
+    }
 }
 
 /// Persist configurations that can be dynamically updated.
@@ -277,6 +328,7 @@ impl ConsensusKnobs for PersistConfig {
 pub struct DynamicConfig {
     batch_builder_max_outstanding_parts: AtomicUsize,
     blob_target_size: AtomicUsize,
+    blob_cache_mem_limit_bytes: AtomicUsize,
     compaction_heuristic_min_inputs: AtomicUsize,
     compaction_heuristic_min_parts: AtomicUsize,
     compaction_heuristic_min_updates: AtomicUsize,
@@ -285,11 +337,15 @@ pub struct DynamicConfig {
     state_versions_recent_live_diffs_limit: AtomicUsize,
     usage_state_fetch_concurrency_limit: AtomicUsize,
     consensus_connect_timeout: RwLock<Duration>,
+    consensus_tcp_user_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
     stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
+    pubsub_client_enabled: AtomicBool,
+    pubsub_push_diff_enabled: AtomicBool,
+    rollup_threshold: AtomicUsize,
 
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
@@ -368,6 +424,11 @@ impl DynamicConfig {
         self.blob_target_size.load(Self::LOAD_ORDERING)
     }
 
+    /// Capacity of in-mem blob cache in bytes.
+    pub fn blob_cache_mem_limit_bytes(&self) -> usize {
+        self.blob_cache_mem_limit_bytes.load(Self::LOAD_ORDERING)
+    }
+
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
@@ -431,6 +492,16 @@ impl DynamicConfig {
             .expect("lock poisoned")
     }
 
+    /// The TCP user timeout for a Consensus Postgres/CRDB connection. Specifies the amount
+    /// of time that transmitted data may remain unacknowledged before the TCP connection is
+    /// forcibly closed.
+    pub fn consensus_tcp_user_timeout(&self) -> Duration {
+        *self
+            .consensus_tcp_user_timeout
+            .read()
+            .expect("lock poisoned")
+    }
+
     /// The maximum number of concurrent blob deletes during garbage collection.
     pub fn gc_blob_delete_concurrency_limit(&self) -> usize {
         self.gc_blob_delete_concurrency_limit
@@ -472,6 +543,28 @@ impl DynamicConfig {
         self.stats_filter_enabled.load(Self::LOAD_ORDERING)
     }
 
+    /// Determines whether PubSub clients should connect to the PubSub server.
+    pub fn pubsub_client_enabled(&self) -> bool {
+        self.pubsub_client_enabled.load(Self::LOAD_ORDERING)
+    }
+
+    /// For connected clients, determines whether to push state diffs to the PubSub server.
+    /// For the server, determines whether to broadcast state diffs to subscribed clients.
+    pub fn pubsub_push_diff_enabled(&self) -> bool {
+        self.pubsub_push_diff_enabled.load(Self::LOAD_ORDERING)
+    }
+
+    /// Determines how often to write rollups, assigning a maintenance task
+    /// after `rollup_threshold` seqnos have passed since the last rollup.
+    ///
+    /// Tuning note: in the absence of a long reader seqno hold, and with
+    /// incremental GC, this threshold will determine about how many live
+    /// diffs are held in Consensus. Lowering this value decreases the live
+    /// diff count at the cost of more maintenance work + blob writes.
+    pub fn rollup_threshold(&self) -> usize {
+        self.rollup_threshold.load(Self::LOAD_ORDERING)
+    }
+
     /// The maximum number of concurrent state fetches during usage computation.
     pub fn usage_state_fetch_concurrency_limit(&self) -> usize {
         self.usage_state_fetch_concurrency_limit
@@ -500,6 +593,10 @@ impl DynamicConfig {
     pub fn set_compaction_memory_bound_bytes(&self, val: usize) {
         self.compaction_memory_bound_bytes
             .store(val, Self::LOAD_ORDERING);
+    }
+    #[cfg(test)]
+    pub fn set_rollup_threshold(&self, threshold: usize) {
+        self.rollup_threshold.store(threshold, Self::STORE_ORDERING);
     }
 }
 
@@ -534,10 +631,14 @@ impl BlobKnobs for PersistConfig {
 pub struct PersistParameters {
     /// Configures [`DynamicConfig::blob_target_size`].
     pub blob_target_size: Option<usize>,
+    /// Configures [`DynamicConfig::blob_cache_mem_limit_bytes`].
+    pub blob_cache_mem_limit_bytes: Option<usize>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_connect_timeout`].
     pub consensus_connect_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::consensus_tcp_user_timeout`].
+    pub consensus_tcp_user_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
@@ -550,6 +651,12 @@ pub struct PersistParameters {
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
     pub stats_filter_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::pubsub_client_enabled`]
+    pub pubsub_client_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::pubsub_push_diff_enabled`]
+    pub pubsub_push_diff_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::rollup_threshold`]
+    pub rollup_threshold: Option<usize>,
 }
 
 impl PersistParameters {
@@ -559,34 +666,50 @@ impl PersistParameters {
         // are added.
         let Self {
             blob_target_size: self_blob_target_size,
+            blob_cache_mem_limit_bytes: self_blob_cache_mem_limit_bytes,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
+            consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
+            pubsub_client_enabled: self_pubsub_client_enabled,
+            pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
+            rollup_threshold: self_rollup_threshold,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
+            blob_cache_mem_limit_bytes: other_blob_cache_mem_limit_bytes,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
+            consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
+            pubsub_client_enabled: other_pubsub_client_enabled,
+            pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
+            rollup_threshold: other_rollup_threshold,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
+        }
+        if let Some(v) = other_blob_cache_mem_limit_bytes {
+            *self_blob_cache_mem_limit_bytes = Some(v);
         }
         if let Some(v) = other_compaction_minimum_timeout {
             *self_compaction_minimum_timeout = Some(v);
         }
         if let Some(v) = other_consensus_connect_timeout {
             *self_consensus_connect_timeout = Some(v);
+        }
+        if let Some(v) = other_consensus_tcp_user_timeout {
+            *self_consensus_tcp_user_timeout = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -606,6 +729,15 @@ impl PersistParameters {
         if let Some(v) = other_stats_filter_enabled {
             *self_stats_filter_enabled = Some(v)
         }
+        if let Some(v) = other_pubsub_client_enabled {
+            *self_pubsub_client_enabled = Some(v)
+        }
+        if let Some(v) = other_pubsub_push_diff_enabled {
+            *self_pubsub_push_diff_enabled = Some(v)
+        }
+        if let Some(v) = other_rollup_threshold {
+            *self_rollup_threshold = Some(v)
+        }
     }
 
     /// Return whether all parameters are unset.
@@ -616,24 +748,34 @@ impl PersistParameters {
         // Deconstruct self so we get a compile failure if new fields are added.
         let Self {
             blob_target_size,
+            blob_cache_mem_limit_bytes,
             compaction_minimum_timeout,
             consensus_connect_timeout,
+            consensus_tcp_user_timeout,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            pubsub_client_enabled,
+            pubsub_push_diff_enabled,
+            rollup_threshold,
         } = self;
         blob_target_size.is_none()
+            && blob_cache_mem_limit_bytes.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
+            && consensus_tcp_user_timeout.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
+            && pubsub_client_enabled.is_none()
+            && pubsub_push_diff_enabled.is_none()
+            && rollup_threshold.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -645,19 +787,29 @@ impl PersistParameters {
         // Deconstruct self so we get a compile failure if new fields are added.
         let Self {
             blob_target_size,
+            blob_cache_mem_limit_bytes,
             compaction_minimum_timeout,
             consensus_connect_timeout,
+            consensus_tcp_user_timeout,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            pubsub_client_enabled,
+            pubsub_push_diff_enabled,
+            rollup_threshold,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
                 .blob_target_size
                 .store(*blob_target_size, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(blob_cache_mem_limit_bytes) = blob_cache_mem_limit_bytes {
+            cfg.dynamic
+                .blob_cache_mem_limit_bytes
+                .store(*blob_cache_mem_limit_bytes, DynamicConfig::STORE_ORDERING);
         }
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
@@ -669,6 +821,14 @@ impl PersistParameters {
                 .write()
                 .expect("lock poisoned");
             *timeout = *consensus_connect_timeout;
+        }
+        if let Some(consensus_tcp_user_timeout) = consensus_tcp_user_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .consensus_tcp_user_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *consensus_tcp_user_timeout;
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -704,6 +864,21 @@ impl PersistParameters {
                 .stats_filter_enabled
                 .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(pubsub_client_enabled) = pubsub_client_enabled {
+            cfg.dynamic
+                .pubsub_client_enabled
+                .store(*pubsub_client_enabled, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(pubsub_push_diff_enabled) = pubsub_push_diff_enabled {
+            cfg.dynamic
+                .pubsub_push_diff_enabled
+                .store(*pubsub_push_diff_enabled, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(rollup_threshold) = rollup_threshold {
+            cfg.dynamic
+                .rollup_threshold
+                .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
+        }
     }
 }
 
@@ -711,8 +886,10 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
     fn into_proto(&self) -> ProtoPersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
+            blob_cache_mem_limit_bytes: self.blob_cache_mem_limit_bytes.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
+            consensus_tcp_user_timeout: self.consensus_tcp_user_timeout.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -721,14 +898,19 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
+            pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
+            pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
+            rollup_threshold: self.rollup_threshold.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoPersistParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
+            blob_cache_mem_limit_bytes: proto.blob_cache_mem_limit_bytes.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
+            consensus_tcp_user_timeout: proto.consensus_tcp_user_timeout.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates
@@ -737,6 +919,9 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
+            pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
+            pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
+            rollup_threshold: proto.rollup_threshold.into_rust()?,
         })
     }
 }

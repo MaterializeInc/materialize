@@ -10,9 +10,8 @@
 use std::future::Future;
 use std::time::Duration;
 
-use tracing::warn;
-
 use mz_ore::retry::Retry;
+use tracing::warn;
 
 use crate::Error;
 

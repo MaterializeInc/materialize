@@ -18,6 +18,8 @@ use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::uri::PathAndQuery;
+use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
+use mz_proto::{ProtoType, RustType};
 use once_cell::sync::Lazy;
 use semver::Version;
 use tokio::net::UnixStream;
@@ -33,9 +35,6 @@ use tonic::transport::{Body, Channel, Endpoint, NamedService, Server};
 use tonic::{IntoStreamingRequest, Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
-
-use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
-use mz_proto::{ProtoType, RustType};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 use crate::codec::{StatCodec, StatsCollector};

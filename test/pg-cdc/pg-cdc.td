@@ -144,6 +144,10 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
+> SHOW SUBSOURCES ON test_slot_source
+pk_table subsource
+test_slot_source_progress progress
+
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
@@ -152,62 +156,47 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 # Error checking
 #
 
-> CREATE CONNECTION no_such_host TO POSTGRES (
+! CREATE CONNECTION no_such_host TO POSTGRES (
     HOST 'no_such_postgres.mtrlz.com',
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_host"
-  FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
 
-> CREATE CONNECTION no_such_port TO POSTGRES (
+! CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
     PORT 65534,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_port"
-  FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:error connecting to server: Connection refused
 
-> CREATE CONNECTION no_such_user TO POSTGRES (
+! CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER no_such_user,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_user"
-  FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:password authentication failed for user "no_such_user"
 
 > CREATE SECRET badpass AS 'badpass'
-> CREATE CONNECTION no_such_password TO POSTGRES (
+! CREATE CONNECTION no_such_password TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET badpass
   )
-! CREATE SOURCE "no_such_password"
-  FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:password authentication failed for user "postgres"
 
-> CREATE CONNECTION no_such_dbname TO POSTGRES (
+! CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
     DATABASE no_such_dbname,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_dbname"
-  FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:database "no_such_dbname" does not exist
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
@@ -259,8 +248,6 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     "create"
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
-
 > SHOW SOURCES
 array_types_table     subsource <null>
 conflict_table        subsource <null>
@@ -268,8 +255,8 @@ create                subsource <null>
 escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
-mz_source             postgres  <NUMBER>
-mz_source_progress    subsource <null>
+mz_source             postgres  ${arg.default-storage-size}
+mz_source_progress    progress  <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
@@ -279,14 +266,14 @@ trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
 "\"literal_quotes\""  subsource <null>
 types_table           subsource <null>
-utf<NUMBER>_table     subsource <null>
+utf8_table            subsource <null>
 таблица               subsource <null>
 
-> SELECT * FROM mz_source_progress
-<NUMBER>
+> SELECT lsn > 0 FROM mz_source_progress
+true
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
@@ -301,10 +288,10 @@ $ unset-regex
 
 # Cannot drop subsources independent of primary source
 ! DROP SOURCE conflict_table
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 ! DROP SOURCE conflict_table CASCADE
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 > SELECT * FROM no_replica_identity;
 1
@@ -642,14 +629,11 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
     public.another_enum_table
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
-enum_source             postgres  <NUMBER>
-enum_source_progress    subsource <null>
+enum_source             postgres  ${arg.default-storage-size}
+enum_source_progress    progress  <null>
 enum_table              subsource <null>
-
-$ unset-regex
 
 > SELECT * FROM enum_table
 var0
@@ -672,7 +656,7 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 ! SELECT COUNT(*) = 0 FROM pk_table;
-regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
+regex:publication "mz_source" does not exist
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
@@ -688,11 +672,9 @@ regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
     another_schema
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
-
 > SHOW SOURCES
-another_source          postgres  <NUMBER>
-another_source_progress subsource <null>
+another_source          postgres  ${arg.default-storage-size}
+another_source_progress progress  <null>
 another_table           subsource <null>
 
 > DROP SOURCE another_source

@@ -18,7 +18,7 @@ class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 
     def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.53.0-dev")
+        return self.base_version >= MzVersion.parse("0.60.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

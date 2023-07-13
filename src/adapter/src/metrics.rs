@@ -7,13 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
-
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -25,6 +24,7 @@ pub struct Metrics {
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: HistogramVec,
     pub subscribe_outputs: IntCounterVec,
+    pub canceled_peeks: IntCounterVec,
 }
 
 impl Metrics {
@@ -70,6 +70,10 @@ impl Metrics {
                 help: "The total number of different subscribe outputs used",
                 var_labels: ["session_type", "subscribe_output"],
             )),
+            canceled_peeks: registry.register(metric!(
+                name: "mz_canceled_peeks_total",
+                help: "The total number of canceled peeks since process start.",
+            )),
         }
     }
 }
@@ -95,6 +99,7 @@ where
         StatementKind::CreateConnection => "create_connection",
         StatementKind::CreateDatabase => "create_database",
         StatementKind::CreateSchema => "create_schema",
+        StatementKind::CreateWebhookSource => "create_webhook",
         StatementKind::CreateSource => "create_source",
         StatementKind::CreateSubsource => "create_subsource",
         StatementKind::CreateSink => "create_sink",
@@ -107,6 +112,7 @@ where
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
@@ -120,6 +126,7 @@ where
         StatementKind::AlterConnection => "alter_connection",
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
+        StatementKind::DropOwned => "drop_owned",
         StatementKind::SetVariable => "set_variable",
         StatementKind::ResetVariable => "reset_variable",
         StatementKind::Show => "show",
@@ -138,8 +145,11 @@ where
         StatementKind::Raise => "raise",
         StatementKind::GrantRole => "grant_role",
         StatementKind::RevokeRole => "revoke_role",
-        StatementKind::GrantPrivilege => "grant_privilege",
-        StatementKind::RevokePrivilege => "revoke_privilege",
+        StatementKind::GrantPrivileges => "grant_privileges",
+        StatementKind::RevokePrivileges => "revoke_privileges",
+        StatementKind::AlterDefaultPrivileges => "alter_default_privileges",
+        StatementKind::ReassignOwned => "reassign_owned",
+        StatementKind::ValidateConnection => "validate_connection",
     }
 }
 

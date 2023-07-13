@@ -7,73 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 use mz_persist_types::columnar::{ColumnGet, Data};
-use mz_persist_types::stats::{JsonStats, PrimitiveStats};
+use mz_persist_types::dyn_struct::ValidityRef;
+use mz_persist_types::stats::{JsonMapElementStats, JsonStats, PrimitiveStats};
 use prost::Message;
 
 use crate::row::encoding::{DatumToPersist, NullableProtoDatumToPersist};
 use crate::row::ProtoDatum;
 use crate::{Datum, Row, RowArena};
-
-/// Provides access to statistics about SourceData stored in a Persist part (S3
-/// data blob).
-///
-/// Statistics are best-effort, and individual stats may be omitted at any time,
-/// e.g. if persist cannot determine them accurately, if the values are too
-/// large to store in Consensus, if the statistics data is larger than the part,
-/// if we wrote the data before we started collecting statistics, etc.
-pub trait PersistSourceDataStats: std::fmt::Debug {
-    /// The number of updates (Rows + errors) in the part.
-    fn len(&self) -> Option<usize> {
-        None
-    }
-
-    /// The number of errors in the part.
-    fn err_count(&self) -> Option<usize> {
-        None
-    }
-
-    /// The part's minimum value for the named column, if available.
-    /// A return value of `None` indicates that Persist did not / was
-    /// not able to calculate a minimum for this column.
-    fn col_min<'a>(&'a self, _idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
-        None
-    }
-
-    /// (ditto above, but for the maximum column value)
-    fn col_max<'a>(&'a self, _idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
-        None
-    }
-
-    /// The part's null count for the named column, if available. A
-    /// return value of `None` indicates that Persist did not / was
-    /// not able to calculate the null count for this column.
-    fn col_null_count(&self, _idx: usize) -> Option<usize> {
-        None
-    }
-
-    /// A prefix of column values for the minimum Row in the part. A
-    /// return of `None` indicates that Persist did not / was not able
-    /// to calculate the minimum row. A `Some(usize)` indicates how many
-    /// columns are in the prefix. The prefix may be less than the full
-    /// row if persist cannot determine/store an individual column, for
-    /// the same reasons that `col_min`/`col_max` may omit values.
-    ///
-    /// TODO: If persist adds more "indexes" than the "primary" one (the order
-    /// of columns returned by Schema), we'll want to generalize this to support
-    /// other subsets of columns.
-    fn row_min(&self, _row: &mut Row) -> Option<usize> {
-        None
-    }
-
-    /// (ditto above, but for the maximum row)
-    fn row_max(&self, _row: &mut Row) -> Option<usize> {
-        None
-    }
-}
 
 fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
     let mut datums = row.iter();
@@ -96,16 +39,19 @@ fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
 /// because the non-option version won't generate any Nulls.
 pub(crate) fn proto_datum_min_max_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
+    validity: ValidityRef<'_>,
 ) -> (Vec<u8>, Vec<u8>, usize) {
     let (mut min, mut max) = (Row::default(), Row::default());
     let mut null_count = 0;
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        NullableProtoDatumToPersist::decode(
-            ColumnGet::<Option<Vec<u8>>>::get(col, idx),
-            &mut buf.packer(),
-        );
+        let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
+        if !validity.get(idx) {
+            assert!(val.map_or(true, |x| x.is_empty()));
+            continue;
+        }
+        NullableProtoDatumToPersist::decode(val, &mut buf.packer());
         let datum = as_optional_datum(&buf).expect("not enough datums");
         if datum == Datum::Null {
             null_count += 1;
@@ -135,132 +81,103 @@ pub(crate) fn proto_datum_min_max_nulls(
 /// because the non-option version won't generate any Nulls.
 pub(crate) fn jsonb_stats_nulls(
     col: &<Option<Vec<u8>> as Data>::Col,
+    validity: ValidityRef<'_>,
 ) -> Result<(JsonStats, usize), String> {
-    let mut stats = JsonStats::default();
+    let mut datums = JsonDatums::default();
     let mut null_count = 0;
 
-    let mut buf = Row::default();
+    let arena = RowArena::new();
     for idx in 0..col.len() {
-        NullableProtoDatumToPersist::decode(
-            ColumnGet::<Option<Vec<u8>>>::get(col, idx),
-            &mut buf.packer(),
-        );
-        let datum = as_optional_datum(&buf).expect("not enough datums");
+        let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
+        if !validity.get(idx) {
+            assert!(val.map_or(true, |x| x.is_empty()));
+            continue;
+        }
+        let datum = arena.make_datum(|r| NullableProtoDatumToPersist::decode(val, r));
         // Datum::Null only shows up at the top level of Jsonb, so we handle it
         // here instead of in the recursing function.
         if let Datum::Null = datum {
             null_count += 1;
         } else {
-            let () = jsonb_stats_datum(&mut stats, datum)?;
+            let () = datums.push(datum);
         }
     }
-    Ok((stats, null_count))
+    Ok((datums.to_stats(), null_count))
 }
 
-fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), String> {
-    fn update_stats<T: PartialOrd + ToOwned + ?Sized>(
-        stats: &mut PrimitiveStats<T::Owned>,
-        val: &T,
-    ) {
-        if val < stats.lower.borrow() {
-            stats.lower = val.to_owned();
-        }
-        if val > stats.upper.borrow() {
-            stats.upper = val.to_owned();
-        }
-    }
+#[derive(Default)]
+struct JsonDatums<'a> {
+    count: usize,
+    min_max: Option<(Datum<'a>, Datum<'a>)>,
+    nested: BTreeMap<String, JsonDatums<'a>>,
+}
 
-    match datum {
-        Datum::JsonNull => match stats {
-            JsonStats::None => *stats = JsonStats::JsonNulls,
-            JsonStats::JsonNulls => {}
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::False => match stats {
-            JsonStats::None => {
-                *stats = JsonStats::Bools(PrimitiveStats {
-                    lower: false,
-                    upper: false,
-                })
+impl<'a> JsonDatums<'a> {
+    fn push(&mut self, datum: Datum<'a>) {
+        self.count += 1;
+        self.min_max = match self.min_max.take() {
+            None => Some((datum, datum)),
+            Some((min, max)) => Some((min.min(datum), max.max(datum))),
+        };
+        if let Datum::Map(map) = datum {
+            for (key, val) in map.iter() {
+                let val_datums = self.nested.entry(key.to_owned()).or_default();
+                val_datums.push(val);
             }
-            JsonStats::Bools(stats) => update_stats(stats, &false),
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::True => match stats {
-            JsonStats::None => {
-                *stats = JsonStats::Bools(PrimitiveStats {
-                    lower: true,
-                    upper: true,
-                })
-            }
-            JsonStats::Bools(stats) => update_stats(stats, &true),
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::String(val) => match stats {
-            JsonStats::None => {
-                *stats = JsonStats::Strings(PrimitiveStats {
-                    lower: val.to_owned(),
-                    upper: val.to_owned(),
-                })
-            }
-            JsonStats::Strings(stats) => update_stats(stats, val),
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::Numeric(val) => {
-            let val = f64::try_from(val.0)
-                .map_err(|_| format!("TODO: Could not collect stats for decimal: {}", val))?;
-            match stats {
-                JsonStats::None => {
-                    *stats = JsonStats::Numerics(PrimitiveStats {
-                        lower: val,
-                        upper: val,
-                    })
-                }
-                JsonStats::Numerics(stats) => update_stats(stats, &val),
-                _ => *stats = JsonStats::Mixed,
-            }
-        }
-        Datum::List(_) => match stats {
-            JsonStats::None => *stats = JsonStats::Lists,
-            JsonStats::Lists => {}
-            _ => *stats = JsonStats::Mixed,
-        },
-        Datum::Map(val) => {
-            if let JsonStats::None = stats {
-                *stats = JsonStats::Maps(BTreeMap::new());
-            }
-            match stats {
-                JsonStats::None => unreachable!("set to Maps above"),
-                JsonStats::Maps(stats) => {
-                    for (k, v) in val.iter() {
-                        let key_stats = stats.entry(k.to_owned()).or_default();
-                        let () = jsonb_stats_datum(key_stats, v)?;
-                    }
-                }
-                _ => {
-                    *stats = JsonStats::Mixed;
-                }
-            };
-        }
-        _ => {
-            return Err(format!(
-                "invalid Datum type for ScalarType::Jsonb: {}",
-                datum
-            ))
         }
     }
-    Ok(())
+    fn to_stats(self) -> JsonStats {
+        match self.min_max {
+            None => JsonStats::None,
+            Some((Datum::JsonNull, Datum::JsonNull)) => JsonStats::JsonNulls,
+            Some((min @ (Datum::True | Datum::False), max @ (Datum::True | Datum::False))) => {
+                JsonStats::Bools(PrimitiveStats {
+                    lower: min.unwrap_bool(),
+                    upper: max.unwrap_bool(),
+                })
+            }
+            Some((Datum::String(min), Datum::String(max))) => JsonStats::Strings(PrimitiveStats {
+                lower: min.to_owned(),
+                upper: max.to_owned(),
+            }),
+            Some((min @ Datum::Numeric(_), max @ Datum::Numeric(_))) => {
+                JsonStats::Numerics(PrimitiveStats {
+                    lower: ProtoDatum::from(min).encode_to_vec(),
+                    upper: ProtoDatum::from(max).encode_to_vec(),
+                })
+            }
+            Some((Datum::List(_), Datum::List(_))) => JsonStats::Lists,
+            Some((Datum::Map(_), Datum::Map(_))) => JsonStats::Maps(
+                self.nested
+                    .into_iter()
+                    .map(|(key, value)| {
+                        (
+                            key,
+                            JsonMapElementStats {
+                                len: value.count,
+                                stats: value.to_stats(),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            Some(_) => JsonStats::Mixed,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{Data, PartEncoder, Schema};
+    use mz_persist_types::columnar::{Data, PartEncoder};
     use mz_persist_types::part::PartBuilder;
-    use mz_persist_types::stats::{ColumnStats, DynStats, StructStats};
+    use mz_persist_types::stats::{
+        ColumnStats, DynStats, ProtoStructStats, StructStats, TrimStats,
+    };
     use mz_proto::RustType;
     use proptest::prelude::*;
 
+    use crate::row::encoding::is_no_stats_type;
     use crate::{Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena, ScalarType};
 
     fn datum_stats_roundtrip_trim<'a>(
@@ -269,23 +186,24 @@ mod tests {
     ) {
         let mut part = PartBuilder::new(schema, &UnitSchema);
         {
-            let part_mut = part.get_mut();
-            let mut encoder = schema.encoder(part_mut.key).unwrap();
+            let mut part_mut = part.get_mut();
+            let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
             for datum in datums {
                 encoder.encode(datum);
-                part_mut.ts.push(1);
-                part_mut.diff.push(1);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
             }
         }
         let part = part.finish().unwrap();
-        let expected = part.key_stats(schema).unwrap();
-        let mut actual = StructStats::from_proto(RustType::into_proto(&expected)).unwrap();
+        let expected = part.key_stats().unwrap();
+        let mut actual: ProtoStructStats = RustType::into_proto(&expected);
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.
 
         // Sanity check that trimming the stats doesn't cause them to be invalid
         // (regression for a bug we had that caused panic at stats usage time).
-        actual.trim_to_budget(0, |_| true);
+        actual.trim();
+        let actual: StructStats = RustType::from_proto(actual).unwrap();
         for (name, typ) in schema.iter() {
             struct ColMinMaxNulls<'a>(&'a dyn DynStats);
             impl<'a> DatumToPersistFn<()> for ColMinMaxNulls<'a> {
@@ -306,11 +224,16 @@ mod tests {
                 }
             }
             let col_stats = actual.cols.get(name.as_str()).unwrap();
-            typ.to_persist(ColMinMaxNulls(col_stats.as_ref()))
+            typ.to_persist(ColMinMaxNulls(col_stats.as_ref()));
         }
     }
 
     fn scalar_type_stats_roundtrip_trim(scalar_type: ScalarType) {
+        // Skip types that we don't keep stats for (yet).
+        if is_no_stats_type(&scalar_type) {
+            return;
+        }
+
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {
             rows.push(Row::pack(std::iter::once(datum)));
@@ -334,10 +257,9 @@ mod tests {
 
     // Ideally, this test would live in persist-types next to the stats <->
     // proto code, but it's much easier to proptest them from Datums.
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip_trim() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip_trim(scalar_type)

@@ -10,12 +10,14 @@
 //! Since capabilities and handles
 
 use std::fmt::Debug;
+use std::future::Future;
 use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::{Codec, Codec64, Opaque};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use tracing::instrument;
@@ -23,10 +25,11 @@ use uuid::Uuid;
 
 use crate::internal::machine::Machine;
 use crate::internal::state::Since;
+use crate::stats::SnapshotStats;
 use crate::{parse_id, GarbageCollector};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct CriticalReaderId(pub(crate) [u8; 16]);
 
@@ -294,6 +297,32 @@ where
         }
     }
 
+    /// Returns aggregate statistics about the contents of the shard TVC at the
+    /// given frontier.
+    ///
+    /// This command returns the contents of this shard as of `as_of` once they
+    /// are known. This may "block" (in an async-friendly way) if `as_of` is
+    /// greater or equal to the current `upper` of the shard.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    pub fn snapshot_stats(
+        &self,
+        as_of: Antichain<T>,
+    ) -> impl Future<Output = Result<SnapshotStats<T>, Since<T>>> + Send + 'static {
+        let mut machine = self.machine.clone();
+        async move {
+            let batches = machine.snapshot(&as_of).await?;
+            let num_updates = batches.iter().map(|b| b.len).sum();
+            Ok(SnapshotStats {
+                shard_id: machine.shard_id(),
+                as_of,
+                num_updates,
+            })
+        }
+    }
+
     /// Politely expires this reader, releasing its since capability.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
@@ -304,15 +333,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
-    use serde_json::json;
     use std::str::FromStr;
 
-    use super::*;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+
     use crate::tests::new_test_client;
     use crate::{PersistClient, ShardId};
 
-    #[test]
+    use super::*;
+
+    #[mz_ore::test]
     fn reader_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -345,7 +376,7 @@ mod tests {
         assert_eq!(container.reader_id, id);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn rate_limit() {
         let client = crate::tests::new_test_client().await;
@@ -373,7 +404,7 @@ mod tests {
     }
 
     // Verifies that the handle updates its view of the opaque token correctly
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn handle_opaque_token() {
         let client = new_test_client().await;

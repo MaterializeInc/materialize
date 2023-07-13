@@ -9,11 +9,12 @@
 
 import random
 import threading
-from typing import Any, Optional
+from inspect import Traceback
+from typing import Any, Optional, Set
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mzcompose import Composition
-from materialize.util import MzVersion, released_materialize_versions
+from materialize.util import MzVersion
 
 
 class Executor:
@@ -23,8 +24,12 @@ class Executor:
     # scenarios which are still in development and not available a few versions
     # back already.
     current_mz_version: MzVersion
+    # All the system settings we have already set in previous Mz versions. No
+    # need to set them again in a future version since they should be
+    # persisted.
+    system_settings: Set[str] = set()
 
-    def testdrive(self, input: str) -> Any:
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
         assert False
 
     def mzcompose_composition(self) -> Composition:
@@ -44,8 +49,8 @@ class MzcomposeExecutor(Executor):
     def mzcompose_composition(self) -> Composition:
         return self.composition
 
-    def testdrive(self, input: str) -> None:
-        self.composition.testdrive(input)
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+        self.composition.testdrive(input, caller=caller)
 
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
@@ -53,14 +58,14 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         self.composition = composition
         self.exception: Optional[BaseException] = None
 
-    def testdrive(self, input: str) -> Any:
-        thread = threading.Thread(target=self._testdrive, args=[input])
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
+        thread = threading.Thread(target=self._testdrive, args=[input, caller])
         thread.start()
         return thread
 
-    def _testdrive(self, input: str) -> None:
+    def _testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
         try:
-            self.composition.testdrive(input)
+            self.composition.testdrive(input, caller=caller)
         except BaseException as e:
             self.exception = e
 
@@ -72,13 +77,15 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
 
 
 class CloudtestExecutor(Executor):
-    def __init__(self, application: MaterializeApplication) -> None:
+    def __init__(self, application: MaterializeApplication, version: MzVersion) -> None:
         self.application = application
         self.seed = random.getrandbits(32)
-        self.current_mz_version = released_materialize_versions()[0]
+        self.current_mz_version = version
 
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application
 
-    def testdrive(self, input: str) -> None:
-        self.application.testdrive.run(input=input, no_reset=True, seed=self.seed)
+    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+        self.application.testdrive.run(
+            input=input, no_reset=True, seed=self.seed, caller=caller
+        )

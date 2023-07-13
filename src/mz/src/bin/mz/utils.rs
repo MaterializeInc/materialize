@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, ClientBuilder};
-use std::time::Duration;
 
 /// Create a standard client with common
 /// header values for all requests.
@@ -52,6 +53,12 @@ pub(crate) fn run_loading_spinner(message: String) -> ProgressBar {
     progress_bar.set_message(message);
 
     progress_bar
+}
+
+// Parse a string into a std::time::Duration
+pub(crate) fn parse_timeout(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
+    let secs = arg.parse::<u64>()?;
+    Ok(std::time::Duration::from_secs(secs))
 }
 
 // Validator function that accepts only ASCII letters, digits, underscores, and dashes

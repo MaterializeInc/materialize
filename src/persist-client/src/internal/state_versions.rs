@@ -9,6 +9,7 @@
 
 //! A durable, truncatable log of versions of [State].
 
+use std::borrow::Borrow;
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -20,11 +21,13 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashSet;
 use mz_persist::location::{
     Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
+use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
@@ -91,7 +94,7 @@ use crate::{Metrics, PersistConfig, ShardId};
 ///     for other live states to reference rollups that no longer exist.
 #[derive(Debug)]
 pub struct StateVersions {
-    cfg: PersistConfig,
+    pub(crate) cfg: PersistConfig,
     pub(crate) consensus: Arc<dyn Consensus + Send + Sync>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
@@ -160,18 +163,19 @@ impl StateVersions {
 
         // Shard is not initialized, try initializing it.
         let (initial_state, initial_diff) = self.write_initial_rollup(shard_metrics).await;
-        let cas_res = retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
-            self.try_compare_and_set_current(
-                "maybe_init_shard",
-                shard_metrics,
-                None,
-                &initial_state,
-                &initial_diff,
-            )
-            .await
-            .map_err(|err| err.into())
-        })
-        .await;
+        let (cas_res, _diff) =
+            retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
+                self.try_compare_and_set_current(
+                    "maybe_init_shard",
+                    shard_metrics,
+                    None,
+                    &initial_state,
+                    &initial_diff,
+                )
+                .await
+                .map_err(|err| err.into())
+            })
+            .await;
         match cas_res {
             CaSResult::Committed => Ok(initial_state),
             CaSResult::ExpectationMismatch => {
@@ -219,7 +223,7 @@ impl StateVersions {
         expected: Option<SeqNo>,
         new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
-    ) -> Result<CaSResult, Indeterminate>
+    ) -> Result<(CaSResult, VersionedData), Indeterminate>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -272,13 +276,28 @@ impl StateVersions {
 
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
+                shard_metrics.seqnos_since_last_rollup.set(
+                    new_state
+                        .seqno
+                        .0
+                        .saturating_sub(new_state.latest_rollup().0 .0),
+                );
+                shard_metrics
+                    .spine_batch_count
+                    .set(u64::cast_from(new_state.spine_batch_count()));
+                let size_metrics = new_state.size_metrics();
+                shard_metrics
+                    .hollow_batch_count
+                    .set(u64::cast_from(size_metrics.hollow_batch_count));
                 shard_metrics
                     .batch_part_count
-                    .set(u64::cast_from(new_state.batch_part_count()));
+                    .set(u64::cast_from(size_metrics.batch_part_count));
                 shard_metrics
                     .update_count
-                    .set(u64::cast_from(new_state.num_updates()));
-                let size_metrics = new_state.size_metrics();
+                    .set(u64::cast_from(size_metrics.num_updates));
+                shard_metrics
+                    .rollup_count
+                    .set(u64::cast_from(size_metrics.state_rollup_count));
                 shard_metrics
                     .largest_batch_size
                     .set(u64::cast_from(size_metrics.largest_batch_bytes));
@@ -294,7 +313,7 @@ impl StateVersions {
                 shard_metrics
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
-                Ok(CaSResult::Committed)
+                Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
                 debug!(
@@ -303,7 +322,7 @@ impl StateVersions {
                     cmd_name,
                     expected,
                 );
-                Ok(CaSResult::ExpectationMismatch)
+                Ok((CaSResult::ExpectationMismatch, new))
             }
         }
     }
@@ -429,7 +448,7 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                        warn!("logic error: fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
                     }
                     continue;
                 }
@@ -589,7 +608,7 @@ impl StateVersions {
         };
         let (applied, initial_state) = match empty_state
             .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_and_remove_rollups((rollup_seqno, &rollup), &[])
+                state.add_rollup((rollup_seqno, &rollup))
             }) {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
@@ -770,18 +789,6 @@ pub struct UntypedStateVersionsIter<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
-    pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
-        self,
-    ) -> Result<TypedStateVersionsIter<K, V, T, D>, Box<CodecMismatch>> {
-        let state = self.state.check_codecs(&self.shard_id)?;
-        Ok(TypedStateVersionsIter::new(
-            self.cfg,
-            self.metrics,
-            state,
-            self.diffs,
-        ))
-    }
-
     pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
@@ -906,58 +913,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
     }
 }
 
-/// An iterator over consecutive versions of [TypedState].
-pub struct TypedStateVersionsIter<K, V, T, D> {
-    cfg: PersistConfig,
-    metrics: Arc<Metrics>,
-    state: TypedState<K, V, T, D>,
-    diffs: Vec<VersionedData>,
-}
-
-impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, D> {
-    fn new(
-        cfg: PersistConfig,
-        metrics: Arc<Metrics>,
-        state: TypedState<K, V, T, D>,
-        // diffs is stored reversed so we can efficiently pop off the Vec.
-        mut diffs: Vec<VersionedData>,
-    ) -> Self {
-        assert!(diffs.first().map_or(true, |x| x.seqno == state.seqno));
-        diffs.reverse();
-        TypedStateVersionsIter {
-            cfg,
-            metrics,
-            state,
-            diffs,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.diffs.len()
-    }
-
-    /// Returns the SeqNo of the next state returned by `next`.
-    pub fn peek_seqno(&self) -> Option<SeqNo> {
-        self.diffs.last().map(|x| x.seqno)
-    }
-
-    pub fn next(&mut self) -> Option<&TypedState<K, V, T, D>> {
-        let diff = match self.diffs.pop() {
-            Some(x) => x,
-            None => return None,
-        };
-        let diff_seqno = diff.seqno;
-        self.state
-            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
-        assert_eq!(self.state.seqno, diff_seqno);
-        Some(&self.state)
-    }
-
-    pub fn state(&self) -> &TypedState<K, V, T, D> {
-        &self.state
-    }
-}
-
 /// This represents a diff, either directly or, in the case of the FromInitial
 /// variant, a diff from the initial state. (We could instead compute the diff
 /// from the initial state and replace this with only a `StateDiff<T>`, but don't
@@ -1021,7 +976,36 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 self.full_rollups.insert(x.clone());
             }
         });
-        assert_eq!(self.inc_batches, self.full_batches);
+
+        if let Some(first_incr) = self.inc_batches.first() {
+            let first_full = self
+                .full_batches
+                .first()
+                .expect("full has at least 1 batch");
+            assert_eq!(first_incr.desc.lower(), first_full.desc.lower());
+            PartialOrder::less_equal(first_full.desc.since(), first_incr.desc.since());
+        }
+
+        if let Some(last_incr) = self.inc_batches.last() {
+            let last_full = self.full_batches.last().expect("full has at least 1 batch");
+            assert_eq!(last_incr.desc.upper(), last_full.desc.upper());
+            PartialOrder::less_equal(last_full.desc.since(), last_incr.desc.since());
+        }
+
+        let inc_parts: HashSet<_> = self
+            .inc_batches
+            .iter()
+            .flat_map(|x| x.parts.iter())
+            .map(|x| x.key.borrow())
+            .collect();
+        let full_parts = self
+            .full_batches
+            .iter()
+            .flat_map(|x| x.parts.iter())
+            .map(|x| x.key.borrow())
+            .collect();
+        assert_eq!(inc_parts, full_parts);
+
         assert_eq!(self.inc_rollups, self.full_rollups);
     }
 }
@@ -1034,7 +1018,7 @@ mod tests {
 
     /// Regression test for (part of) #17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn fetch_all_live_states_regression_uninitialized() {
         let client = new_test_client().await;

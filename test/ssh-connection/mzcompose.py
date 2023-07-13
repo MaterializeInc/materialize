@@ -115,6 +115,45 @@ def workflow_kafka_csr_via_ssh_tunnel(c: Composition, redpanda: bool = False) ->
         c.run("testdrive", "--no-reset", "kafka-source-after-ssh-restart.td")
 
 
+def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
+    c.down()
+    dependencies = ["materialized", "ssh-bastion-host"]
+    if redpanda:
+        dependencies += ["redpanda"]
+    else:
+        dependencies += ["zookeeper", "kafka", "schema-registry"]
+    c.up(*dependencies)
+
+    c.run("testdrive", "setup.td")
+
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    def add_hidden_host(container: str) -> None:
+        ip = c.exec(
+            "ssh-bastion-host", "getent", "hosts", container, capture=True
+        ).stdout.split(" ")[0]
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{ip} hidden-{container}' >> /etc/hosts",
+        )
+
+    add_hidden_host("kafka")
+    add_hidden_host("schema-registry")
+
+    c.run("testdrive", "--no-reset", "hidden-hosts.td")
+
+
 # Test that if we restart the bastion AND change its server keys(s), we can
 # still reconnect in the replication stream.
 def workflow_pg_restart_bastion(c: Composition) -> None:
@@ -260,10 +299,12 @@ def workflow_default(c: Composition) -> None:
     # and kafka implementations.
     workflow_basic_ssh_features(c, redpanda=False)
     workflow_basic_ssh_features(c, redpanda=True)
-    workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
-    workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
+    # https://github.com/MaterializeInc/materialize/issues/19252
+    # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
+    # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)
     workflow_pg_via_ssh_tunnel_with_ssl(c)
     workflow_pg_restart_bastion(c)
+    workflow_hidden_hosts(c)

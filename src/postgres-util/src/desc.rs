@@ -12,13 +12,12 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::Oid;
 use tracing::warn;
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 

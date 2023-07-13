@@ -32,16 +32,14 @@ use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::future::join_all;
-use futures_util::FutureExt;
-use futures_util::TryFutureExt;
+use futures_util::{FutureExt, TryFutureExt};
 use mz_ore::bytes::SegmentedBytes;
-use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, trace, trace_span, Instrument};
-use uuid::Uuid;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
+use tokio::runtime::Handle as AsyncHandle;
+use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
@@ -920,16 +918,16 @@ fn openssl_sys_hack() {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::blob_impl_test;
     use tracing::info;
+
+    use crate::location::tests::blob_impl_test;
 
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn s3_blob() -> Result<(), ExternalError> {
-        mz_ore::test::init_logging();
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {
@@ -974,7 +972,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn should_multipart() {
         let config = MultipartConfig::default();
         assert_eq!(config.should_multipart(0), Ok(false));
@@ -1004,7 +1002,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn multipart_iter() {
         let iter = MultipartChunkIter::new(10, 0);
         assert_eq!(iter.collect::<Vec<_>>(), vec![]);

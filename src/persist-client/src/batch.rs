@@ -21,28 +21,29 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{Atomicity, Blob};
+use mz_persist_types::stats::trim_to_budget;
+use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::order::Reverse;
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
-use mz_ore::cast::CastFrom;
-use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, Blob};
-use mz_persist_types::{Codec, Codec64};
-use mz_timely_util::order::Reverse;
-
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{BatchWriteMetrics, Metrics};
-use crate::internal::paths::{PartId, PartialBatchKey};
+use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
+use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::stats::PartStats;
-use crate::write::WriterEnrichedHollowBatch;
-use crate::{PersistConfig, ShardId, WriterId};
+use crate::write::{WriterEnrichedHollowBatch, WriterId};
+use crate::{PersistConfig, ShardId};
 
 /// A handle to a batch of updates that has been written to blob storage but
 /// which has not yet been appended to a shard.
@@ -55,6 +56,9 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) shard_id: ShardId,
+
+    /// The version of Materialize which wrote this batch.
+    pub(crate) version: Version,
 
     /// A handle to the data represented by this batch.
     pub(crate) batch: HollowBatch<T>,
@@ -96,10 +100,12 @@ where
     pub(crate) fn new(
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
+        version: Version,
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
             shard_id,
+            version,
             batch,
             _blob: blob,
             _phantom: PhantomData,
@@ -169,6 +175,7 @@ where
     pub fn into_writer_hollow_batch(mut self) -> WriterEnrichedHollowBatch<T> {
         let ret = WriterEnrichedHollowBatch {
             shard_id: self.shard_id,
+            version: self.version.clone(),
             batch: self.batch.clone(),
         };
         self.mark_consumed();
@@ -190,22 +197,26 @@ pub enum Added {
 /// run of BatchBuilder.
 #[derive(Debug, Clone)]
 pub struct BatchBuilderConfig {
+    writer_key: WriterKey,
     pub(crate) blob_target_size: usize,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
 }
 
-impl From<&PersistConfig> for BatchBuilderConfig {
-    fn from(value: &PersistConfig) -> Self {
+impl BatchBuilderConfig {
+    /// Initialize a batch builder config based on a snapshot of the Persist config.
+    pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
+        let writer_key = WriterKey::for_version(&value.build_version);
         BatchBuilderConfig {
+            writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            // TODO(mfp): Make a dynamic config for this? This initial constant
-            // is the rough upper bound on what we see for the total serialized
+            // TODO: Make a dynamic config for this? This initial constant is
+            // the rough upper bound on what we see for the total serialized
             // batch size in prod, so it will at worst double it.
             stats_budget: 1024,
         }
@@ -287,6 +298,7 @@ where
     inclusive_upper: Antichain<Reverse<T>>,
 
     shard_id: ShardId,
+    version: Version,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
     _schemas: Schemas<K, V>,
@@ -319,13 +331,14 @@ where
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         schemas: Schemas<K, V>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         shard_id: ShardId,
-        writer_id: WriterId,
+        version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
         consolidate: bool,
@@ -333,8 +346,8 @@ where
         let parts = BatchParts::new(
             cfg.clone(),
             Arc::clone(&metrics),
+            shard_metrics,
             shard_id,
-            writer_id,
             lower.clone(),
             Arc::clone(&blob),
             cpu_heavy_runtime,
@@ -359,6 +372,7 @@ where
             num_updates: 0,
             parts,
             shard_id,
+            version,
             since,
             // TODO: The default case would ideally be `{t + 1 for t in self.inclusive_upper}` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -411,6 +425,7 @@ where
         let batch = Batch::new(
             self.blob,
             self.shard_id.clone(),
+            self.version,
             HollowBatch {
                 desc,
                 parts,
@@ -658,19 +673,17 @@ where
 pub(crate) struct BatchParts<T> {
     cfg: BatchBuilderConfig,
     metrics: Arc<Metrics>,
+    shard_metrics: Arc<ShardMetrics>,
     shard_id: ShardId,
-    writer_id: WriterId,
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<Arc<PartStats>>)>)>,
+    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<LazyPartStats>)>)>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
 }
 
 fn force_keep_stats_col(name: &str) -> bool {
-    // TODO(mfp): Flesh out initial heuristics. At the very least, this should
-    // probably be case insensitive.
     name == "mz_internal_super_secret_source_data_errors"
         || name == "timestamp"
         || name == "ts"
@@ -683,8 +696,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         shard_id: ShardId,
-        writer_id: WriterId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
@@ -693,8 +706,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         BatchParts {
             cfg,
             metrics,
+            shard_metrics,
             shard_id,
-            writer_id,
             lower,
             blob,
             cpu_heavy_runtime,
@@ -713,10 +726,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
+        let shard_metrics = Arc::clone(&self.shard_metrics);
         let blob = Arc::clone(&self.blob);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
-        let partial_key = PartialBatchKey::new(&self.writer_id, &PartId::new());
+        let partial_key = PartialBatchKey::new(&self.cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let stats_collection_enabled = self.cfg.stats_collection_enabled;
@@ -738,23 +752,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .spawn_named(|| "batch::encode_part", async move {
                         let stats = if stats_collection_enabled {
                             let stats_start = Instant::now();
-                            // TODO(mfp): For now, if stats collections fails,
-                            // log it with `error!` so it shows up in Sentry,
-                            // but don't crash the process. Turn this into a
-                            // hard error once we've shaken out any issues.
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
-                                // TODO(mfp): HACK Only keep stats if it's not
-                                // empty. This makes it easier to exactly
-                                // roundtrip through the placeholder proto
-                                // serialization, which doesn't keep the
-                                // difference between empty and unset. We could
-                                // make it keep the distinction, but at the cost
-                                // of additional complexity which I don't think
-                                // is worth it.
-                                Ok(x) if x.is_empty() => None,
-                                Ok(mut x) => {
-                                    x.key.trim_to_budget(stats_budget, force_keep_stats_col);
-                                    Some((Arc::new(x), stats_start.elapsed()))
+                                Ok(x) => {
+                                    let x = LazyPartStats::encode(&x, |s| {
+                                        trim_to_budget(s, stats_budget, force_keep_stats_col);
+                                    });
+                                    Some((x, stats_start.elapsed()))
                                 }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);
@@ -787,6 +790,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let start = Instant::now();
                 let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
+                    shard_metrics.blob_sets.inc();
                     blob.set(&key, Bytes::clone(&buf), Atomicity::RequireAtomic)
                         .await
                 })
@@ -874,10 +878,9 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_flushing() {
-        mz_ore::test::init_logging();
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -968,11 +971,9 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_keys() {
-        mz_ore::test::init_logging();
-
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);
@@ -1005,18 +1006,16 @@ mod tests {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
-                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                    assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
                 }
                 _ => panic!("unparseable blob key"),
             }
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_partial_order() {
-        mz_ore::test::init_logging();
-
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);
@@ -1057,7 +1056,7 @@ mod tests {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
-                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                    assert_eq!(writer, WriterKey::for_version(&cache.cfg.build_version));
                 }
                 _ => panic!("unparseable blob key"),
             }

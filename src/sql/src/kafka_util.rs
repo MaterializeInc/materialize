@@ -13,18 +13,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::bail;
-use mz_ore::error::ErrorExt;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::{Offset, TopicPartitionList};
-use tokio::time::Duration;
-
-use mz_kafka_util::client::{
-    BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
-};
+use mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::StringOrSecret;
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::{Offset, TopicPartitionList};
+use tokio::time::Duration;
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
@@ -194,49 +190,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
             _ => None,
         })
     }
-}
-
-/// Create a new `rdkafka::ClientConfig` with the provided
-/// [`options`](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
-/// and test its ability to create an `rdkafka::consumer::BaseConsumer`.
-///
-/// Expected to test the output of `extract_security_config`.
-///
-/// # Panics
-///
-/// - `options` does not contain `bootstrap.servers` as a key
-///
-/// # Errors
-///
-/// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
-pub async fn create_consumer(
-    connection_context: &ConnectionContext,
-    kafka_connection: &KafkaConnection,
-    topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>, PlanError> {
-    let consumer: BaseConsumer<_> = kafka_connection
-        .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
-        .await
-        .map_err(|e| sql_err!("{}", e.display_with_causes()))?;
-    let consumer = Arc::new(consumer);
-
-    let owned_topic = String::from(topic);
-    // Wait for a metadata request for up to two seconds. This greatly
-    // increases the probability that we'll see a connection error if
-    // e.g. the hostname was mistyped. librdkafka doesn't expose a
-    // better API for asking whether a connection succeeded or failed,
-    // unfortunately.
-    //
-    // TODO(guswynn): this is temporary, and we should instead
-    // ensure that at least one metadata request succeeds.
-    task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
-        let consumer = Arc::clone(&consumer);
-        move || consumer.fetch_metadata(Some(&owned_topic), DEFAULT_FETCH_METADATA_TIMEOUT)
-    })
-    .await
-    .map_err(|e| sql_err!("{}", e))?
-    .map_err(|e| sql_err!("librdkafka: {}", e.display_with_causes()))?;
-    Ok(consumer)
 }
 
 /// Returns start offsets for the partitions of `topic` and the provided

@@ -14,3 +14,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc dbeaf5be7c581d2a5eb4959b72b1ffc1b9a980160516e2f9a5753dbac0385ec7 # shrinks to x = "߿®"
+cc cf0b08c15f4e230cbb1424d6c70c968b4c05d2cc1789ea858edf62b07b80d9fd # shrinks to a = false, b = true

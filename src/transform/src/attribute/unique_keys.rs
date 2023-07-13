@@ -11,9 +11,9 @@
 
 use mz_expr::MirRelationExpr;
 
-use super::{
-    arity::Arity, subtree_size::SubtreeSize, Attribute, DerivedAttributes, RequiredAttributes,
-};
+use crate::attribute::arity::Arity;
+use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::{Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the unique keys of each subtree of a [MirRelationExpr] from the
 /// bottom-up.

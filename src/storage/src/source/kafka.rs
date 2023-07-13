@@ -15,9 +15,24 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
+use mz_kafka_util::client::{
+    get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
+    DEFAULT_FETCH_METADATA_TIMEOUT,
+};
+use mz_ore::error::ErrorExt;
+use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{Diff, GlobalId};
+use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
+use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use mz_timely_util::order::Partitioned;
+use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -28,23 +43,11 @@ use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
-use mz_kafka_util::client::{
-    get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
-};
-use mz_ore::error::ErrorExt;
-use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
-use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
-use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
-use mz_timely_util::order::Partitioned;
-
-use self::metrics::KafkaPartitionMetrics;
+use crate::source::kafka::metrics::KafkaPartitionMetrics;
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
@@ -74,8 +77,8 @@ pub struct KafkaSourceReader {
     start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
-    /// The last partition we received
-    partition_info: Arc<Mutex<Option<Vec<PartitionId>>>>,
+    /// The last partition info we received. For each partition we also fetch the high watermark.
+    partition_info: Arc<Mutex<Option<BTreeMap<PartitionId, i64>>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
@@ -131,13 +134,9 @@ impl SourceRender for KafkaSourceConnection {
             let mut data_cap = capabilities.pop().unwrap();
             assert!(capabilities.is_empty());
 
+            let group_id = self.group_id(config.id);
             let KafkaSourceConnection {
-                connection,
-                connection_id,
-                topic,
-                group_id_prefix,
-                environment_id,
-                ..
+                connection, topic, ..
             } = self;
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(None));
@@ -184,13 +183,10 @@ impl SourceRender for KafkaSourceConnection {
                         // ensure that librdkafka does not try to perform its own
                         // consumer group balancing, which would wreak havoc with
                         // our careful partition assignment strategy.
-                        "group.id" => format!(
-                            "{}materialize-{}-{}-{}",
-                            group_id_prefix.unwrap_or_else(String::new),
-                            environment_id,
-                            connection_id,
-                            config.id,
-                        ),
+                        "group.id" => group_id.clone(),
+                        // We just use the `group.id` as the `client.id`, for simplicity,
+                        // as we present to kafka as a single consumer.
+                        "client.id" => group_id,
                     },
                 )
                 .await;
@@ -229,8 +225,7 @@ impl SourceRender for KafkaSourceConnection {
             let mut partition_capabilities = BTreeMap::new();
             let mut max_pid = None;
             let resume_upper = Antichain::from_iter(
-                config
-                    .source_resume_upper
+                config.source_resume_uppers[&config.id]
                     .iter()
                     .map(Partitioned::<_, _>::decode_row),
             );
@@ -297,11 +292,7 @@ impl SourceRender for KafkaSourceConnection {
                             "kafka metadata thread: starting..."
                         );
                         while let Some(partition_info) = partition_info.upgrade() {
-                            let result = get_partitions(
-                                consumer.client(),
-                                &topic,
-                                DEFAULT_FETCH_METADATA_TIMEOUT,
-                            );
+                            let result = fetch_partition_info(consumer.client(), &topic);
                             trace!(
                                 source_id = config.id.to_string(),
                                 worker_id = config.worker_id,
@@ -319,7 +310,6 @@ impl SourceRender for KafkaSourceConnection {
                                         "kafka metadata thread: updated partition metadata info",
                                     );
                                     *status_report.lock().unwrap() = Some(HealthStatus::Running);
-                                    thread::park_timeout(metadata_refresh_frequency);
                                 }
                                 Err(e) => {
                                     *status_report.lock().unwrap() =
@@ -327,9 +317,9 @@ impl SourceRender for KafkaSourceConnection {
                                             error: format!("{}", e.display_with_causes()),
                                             hint: None,
                                         });
-                                    thread::park_timeout(metadata_refresh_frequency);
                                 }
                             }
+                            thread::park_timeout(metadata_refresh_frequency);
                         }
                         info!(
                             source_id = config.id.to_string(),
@@ -398,12 +388,47 @@ impl SourceRender for KafkaSourceConnection {
             };
             tokio::pin!(offset_commit_loop);
 
+            let mut prev_pid_info: Option<BTreeMap<PartitionId, i64>> = None;
             loop {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
-                    let mut max_pid = None;
-                    for pid in partitions {
-                        max_pid = std::cmp::max(max_pid, Some(pid));
+                    let max_pid = partitions.keys().last().cloned();
+                    let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+
+                    // Topics are identified by name but it's possible that a user recreates a
+                    // topic with the same name but different configuration. Ideally we'd want to
+                    // catch all of these cases and immediately error out the source, since the
+                    // data is effectively gone. Unfortunately this is not possible without
+                    // something like KIP-516 so we're left with heuristics.
+                    //
+                    // The first heuristic is whether the reported number of partitions went down
+                    if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
+                        let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
+                        let pid_count = partitions.len();
+                        let err = SourceReaderError::other_definite(
+                            anyhow!( "topic was recreated: partition count regressed from {prev_pid_count} to {pid_count}")
+                        );
+                        let time = data_cap.time().clone();
+                        data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
+                        return;
+                    }
+
+                    // The second heuristic is whether the high watermark regressed
+                    if let Some(prev_pid_info) = prev_pid_info {
+                        for (pid, prev_upper) in prev_pid_info {
+                            let upper = partitions[&pid];
+                            if !(prev_upper <= upper) {
+                                let err = SourceReaderError::other_definite(
+                                    anyhow!("topic was recreated: high watermark of partition {pid} regressed from {prev_upper} to {upper}")
+                                );
+                                let time = data_cap.time().clone();
+                                data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
+                                return;
+                            }
+                        }
+                    }
+
+                    for &pid in partitions.keys() {
                         if config.responsible_for(pid) {
                             reader.ensure_partition(pid);
                             let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
@@ -413,8 +438,8 @@ impl SourceRender for KafkaSourceConnection {
                                 .or_insert_with(|| data_cap.delayed(&part_min_ts));
                         }
                     }
-                    let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
                     data_cap.downgrade(&future_ts);
+                    prev_pid_info = Some(partitions);
                 }
 
                 // Poll the consumer once. We split the consumer's partitions out into separate
@@ -920,11 +945,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use mz_kafka_util::client::create_new_client_config_simple;
     use rdkafka::consumer::{BaseConsumer, Consumer};
     use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
-
-    use mz_kafka_util::client::create_new_client_config_simple;
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer
@@ -937,7 +961,7 @@ mod tests {
     //
     // You need to set up a topic "queue-test" with 1000 "hello" messages in it. Obviously, running
     // this test requires a running Kafka instance at localhost:9092.
-    #[test]
+    #[mz_ore::test]
     #[ignore]
     fn demonstrate_kafka_queue_race_condition() -> Result<(), anyhow::Error> {
         let topic_name = "queue-test";
@@ -1008,4 +1032,20 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// Fetches the list of partitions and their corresponding high watermark
+fn fetch_partition_info<C: ClientContext>(
+    client: &Client<C>,
+    topic: &str,
+) -> Result<BTreeMap<PartitionId, i64>, anyhow::Error> {
+    let pids = get_partitions(client, topic, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+
+    let mut result = BTreeMap::new();
+
+    for pid in pids {
+        let (_low, high) = client.fetch_watermarks(topic, pid, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+        result.insert(pid, high);
+    }
+    Ok(result)
 }

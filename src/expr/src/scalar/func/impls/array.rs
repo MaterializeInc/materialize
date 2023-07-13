@@ -9,12 +9,11 @@
 
 use std::fmt;
 
+use mz_lowertest::MzReflect;
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
@@ -78,6 +77,10 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastArrayToListOneDim {
@@ -130,6 +133,10 @@ impl LazyUnaryFunc for CastArrayToString {
         // inverse of this.
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastArrayToString {
@@ -170,11 +177,7 @@ impl LazyUnaryFunc for CastArrayToArray {
             .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
             .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
 
-        Ok(temp_storage.make_datum(|packer| {
-            packer
-                .push_array(&dims, casted_datums)
-                .expect("failed to construct array");
-        }))
+        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, casted_datums))?)
     }
 
     fn output_type(&self, _input_type: ColumnType) -> ColumnType {
@@ -195,6 +198,10 @@ impl LazyUnaryFunc for CastArrayToArray {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

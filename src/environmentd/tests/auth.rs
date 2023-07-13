@@ -83,8 +83,7 @@ use std::io::{Read, Write};
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -96,6 +95,17 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_frontegg_auth::{
+    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
+    AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
+};
+use mz_ore::assert_contains;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_ore::retry::Retry;
+use mz_ore::task::RuntimeExt;
+use mz_sql::names::PUBLIC_ROLE_NAME;
+use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -116,19 +126,6 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
-
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::{
-    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
-    AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
-};
-use mz_ore::assert_contains;
-use mz_ore::now::NowFn;
-use mz_ore::now::SYSTEM_TIME;
-use mz_ore::retry::Retry;
-use mz_ore::task::RuntimeExt;
-use mz_sql::names::PUBLIC_ROLE_NAME;
-use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 
 pub mod util;
 
@@ -309,7 +306,8 @@ enum Assert<E, D = ()> {
 
 enum TestCase<'a> {
     Pgwire {
-        user: &'static str,
+        user_to_auth_as: &'a str,
+        user_reported_by_system: &'a str,
         password: Option<&'a str>,
         ssl_mode: SslMode,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
@@ -321,7 +319,8 @@ enum TestCase<'a> {
         >,
     },
     Http {
-        user: &'static str,
+        user_to_auth_as: &'a str,
+        user_reported_by_system: &'a str,
         scheme: Scheme,
         headers: &'a HeaderMap,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
@@ -356,7 +355,8 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
     for test in tests {
         match test {
             TestCase::Pgwire {
-                user,
+                user_to_auth_as,
+                user_reported_by_system,
                 password,
                 ssl_mode,
                 configure,
@@ -364,26 +364,26 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
             } => {
                 println!(
                     "pgwire user={} password={:?} ssl_mode={:?}",
-                    user, password, ssl_mode
+                    user_to_auth_as, password, ssl_mode
                 );
 
                 let tls = make_pg_tls(configure);
                 let mut pg_client = server.pg_config();
                 pg_client
                     .ssl_mode(*ssl_mode)
-                    .user(user)
+                    .user(user_to_auth_as)
                     .password(password.unwrap_or(""));
 
                 match assert {
                     Assert::Success => {
                         let mut pg_client = pg_client.connect(tls).unwrap();
                         let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
-                        assert_eq!(row.get::<_, String>(0), *user);
+                        assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
                     }
                     Assert::SuccessSuperuserCheck(is_superuser) => {
                         let mut pg_client = pg_client.connect(tls.clone()).unwrap();
                         let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
-                        assert_eq!(row.get::<_, String>(0), *user);
+                        assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
                         let row = pg_client.query_one("SHOW is_superuser", &[]).unwrap();
                         let expected = if *is_superuser { "on" } else { "off" };
                         assert_eq!(row.get::<_, String>(0), *expected);
@@ -421,7 +421,8 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 }
             }
             TestCase::Http {
-                user,
+                user_to_auth_as,
+                user_reported_by_system,
                 scheme,
                 headers,
                 configure,
@@ -474,7 +475,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     assert_eq!(res.results[0].rows, expected_rows)
                 }
 
-                println!("http user={} scheme={}", user, scheme);
+                println!("http user={} scheme={}", user_to_auth_as, scheme);
 
                 let uri = Uri::builder()
                     .scheme(scheme.clone())
@@ -496,10 +497,18 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
 
                 match assert {
                     Assert::Success => {
-                        assert_success_response(res, vec![vec![user.to_string()]], &runtime);
+                        assert_success_response(
+                            res,
+                            vec![vec![user_reported_by_system.to_string()]],
+                            &runtime,
+                        );
                     }
                     Assert::SuccessSuperuserCheck(is_superuser) => {
-                        assert_success_response(res, vec![vec![user.to_string()]], &runtime);
+                        assert_success_response(
+                            res,
+                            vec![vec![user_reported_by_system.to_string()]],
+                            &runtime,
+                        );
                         let res =
                             query_http_api("SHOW is_superuser", &uri, headers, configure, &runtime);
                         let expected = if *is_superuser { "on" } else { "off" };
@@ -776,7 +785,7 @@ fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
         .unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
@@ -871,11 +880,9 @@ fn test_auth_expiry() {
 }
 
 #[allow(clippy::unit_arg)]
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_base() {
-    mz_ore::test::init_logging();
-
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -889,7 +896,7 @@ fn test_auth_base() {
     let users = BTreeMap::from([
         (
             (client_id.to_string(), secret.to_string()),
-            "user@_.com".to_string(),
+            "uSeR@_.com".to_string(),
         ),
         (
             (system_client_id.to_string(), system_secret.to_string()),
@@ -897,7 +904,7 @@ fn test_auth_base() {
         ),
     ]);
     let roles = BTreeMap::from([
-        ("user@_.com".to_string(), Vec::new()),
+        ("uSeR@_.com".to_string(), Vec::new()),
         (SYSTEM_USER.name.to_string(), Vec::new()),
     ]);
     let encoding_key =
@@ -909,7 +916,7 @@ fn test_auth_base() {
     };
     let claims = Claims {
         exp: 1000,
-        email: "user@_.com".to_string(),
+        email: "uSeR@_.com".to_string(),
         sub: Uuid::new_v4(),
         user_id: None,
         tenant_id,
@@ -966,10 +973,15 @@ fn test_auth_base() {
         },
         mz_frontegg_auth::Client::default(),
     );
-    let frontegg_user = "user@_.com";
+    let frontegg_user = "uSeR@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
+
+    let frontegg_user_lowercase = frontegg_user.to_lowercase();
+    let frontegg_basic_lowercase =
+        Authorization::basic(&frontegg_user_lowercase, frontegg_password);
+    let frontegg_header_basic_lowercase = make_header(frontegg_basic_lowercase);
 
     let frontegg_system_password = &format!("mzp_{system_client_id}{system_secret}");
     let frontegg_system_basic = Authorization::basic(&SYSTEM_USER.name, frontegg_system_password);
@@ -1018,22 +1030,51 @@ fn test_auth_base() {
             },
             // TLS with a password should succeed.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
+            // Email comparisons should be case insensitive.
+            TestCase::Pgwire {
+                user_to_auth_as: &frontegg_user_lowercase,
+                user_reported_by_system: frontegg_user,
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Http {
+                user_to_auth_as: &frontegg_user_lowercase,
+                user_reported_by_system: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic_lowercase,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: frontegg_user_lowercase.to_string(),
+                    password: frontegg_password.to_string(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
             // Password can be base64 encoded UUID bytes.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
@@ -1049,7 +1090,8 @@ fn test_auth_base() {
             },
             // Password can be base64 encoded UUID bytes without padding.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
@@ -1065,7 +1107,8 @@ fn test_auth_base() {
             },
             // Password can include arbitrary special characters.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: {
                     let mut password = frontegg_password.clone();
                     password.insert(10, '-');
@@ -1078,7 +1121,8 @@ fn test_auth_base() {
             },
             // Bearer auth doesn't need the clientid or secret.
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&frontegg_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1086,7 +1130,8 @@ fn test_auth_base() {
             },
             // No TLS fails.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1099,7 +1144,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTP,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1107,7 +1153,8 @@ fn test_auth_base() {
             },
             // Wrong, but existing, username.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1117,7 +1164,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::basic("materialize", frontegg_password)),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1128,7 +1176,8 @@ fn test_auth_base() {
             },
             // Wrong password.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: Some("bad password"),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1138,7 +1187,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::basic(frontegg_user, "bad password")),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1149,7 +1199,8 @@ fn test_auth_base() {
             },
             // Bad password prefix.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: Some(&format!("mznope_{client_id}{secret}")),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1159,7 +1210,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::basic(
                     frontegg_user,
@@ -1173,7 +1225,8 @@ fn test_auth_base() {
             },
             // No password.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1183,7 +1236,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1194,7 +1248,8 @@ fn test_auth_base() {
             },
             // Bad auth scheme
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::from_iter(vec![(
                     AUTHORIZATION,
@@ -1208,7 +1263,8 @@ fn test_auth_base() {
             },
             // Bad tenant.
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&bad_tenant_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1219,7 +1275,8 @@ fn test_auth_base() {
             },
             // Expired.
             TestCase::Http {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&expired_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1230,7 +1287,8 @@ fn test_auth_base() {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: &*SYSTEM_USER.name,
+                user_to_auth_as: &*SYSTEM_USER.name,
+                user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(frontegg_system_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1239,7 +1297,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: &*SYSTEM_USER.name,
+                user_to_auth_as: &*SYSTEM_USER.name,
+                user_reported_by_system: &*SYSTEM_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1262,7 +1321,8 @@ fn test_auth_base() {
             },
             // Public role cannot login.
             TestCase::Pgwire {
-                user: PUBLIC_ROLE_NAME.as_str(),
+                user_to_auth_as: PUBLIC_ROLE_NAME.as_str(),
+                user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
                 password: Some(frontegg_system_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1271,7 +1331,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: PUBLIC_ROLE_NAME.as_str(),
+                user_to_auth_as: PUBLIC_ROLE_NAME.as_str(),
+                user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1304,14 +1365,16 @@ fn test_auth_base() {
         &[
             // Explicitly disabling TLS should succeed.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1319,7 +1382,8 @@ fn test_auth_base() {
             },
             // Preferring TLS should fall back to no TLS.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|_| Ok(())),
@@ -1327,7 +1391,8 @@ fn test_auth_base() {
             },
             // Requiring TLS should fail.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|_| Ok(())),
@@ -1339,7 +1404,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1353,7 +1419,8 @@ fn test_auth_base() {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: &*SYSTEM_USER.name,
+                user_to_auth_as: &*SYSTEM_USER.name,
+                user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
@@ -1374,7 +1441,8 @@ fn test_auth_base() {
         &[
             // Non-existent role will be created.
             TestCase::Pgwire {
-                user: frontegg_user,
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1383,7 +1451,8 @@ fn test_auth_base() {
             // Test that specifying an mzcloud header does nothing and uses the default
             // user.
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1391,7 +1460,8 @@ fn test_auth_base() {
             },
             // Disabling TLS should fail.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
@@ -1404,7 +1474,8 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1412,7 +1483,8 @@ fn test_auth_base() {
             },
             // Preferring TLS should succeed.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1420,14 +1492,16 @@ fn test_auth_base() {
             },
             // Requiring TLS should succeed.
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1435,7 +1509,8 @@ fn test_auth_base() {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: &*SYSTEM_USER.name,
+                user_to_auth_as: &*SYSTEM_USER.name,
+                user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1448,7 +1523,7 @@ fn test_auth_base() {
     drop(server);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
@@ -1485,7 +1560,8 @@ fn test_auth_intermediate_ca() {
         &server,
         &[
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
@@ -1494,7 +1570,8 @@ fn test_auth_intermediate_ca() {
                 })),
             },
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
@@ -1517,14 +1594,16 @@ fn test_auth_intermediate_ca() {
         &server,
         &[
             TestCase::Pgwire {
-                user: "materialize",
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
+                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
@@ -1535,11 +1614,9 @@ fn test_auth_intermediate_ca() {
     drop(server);
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_admin() {
-    mz_ore::test::init_logging();
-
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1622,14 +1699,16 @@ fn test_auth_admin() {
             &server,
             &[
                 TestCase::Pgwire {
-                    user: frontegg_user,
+                    user_to_auth_as: frontegg_user,
+                    user_reported_by_system: frontegg_user,
                     password: Some(frontegg_password),
                     ssl_mode: SslMode::Require,
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(false),
                 },
                 TestCase::Http {
-                    user: frontegg_user,
+                    user_to_auth_as: frontegg_user,
+                    user_reported_by_system: frontegg_user,
                     scheme: Scheme::HTTPS,
                     headers: &frontegg_header_basic,
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1659,14 +1738,16 @@ fn test_auth_admin() {
             &server,
             &[
                 TestCase::Pgwire {
-                    user: admin_frontegg_user,
+                    user_to_auth_as: admin_frontegg_user,
+                    user_reported_by_system: admin_frontegg_user,
                     password: Some(admin_frontegg_password),
                     ssl_mode: SslMode::Require,
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(true),
                 },
                 TestCase::Http {
-                    user: admin_frontegg_user,
+                    user_to_auth_as: admin_frontegg_user,
+                    user_reported_by_system: admin_frontegg_user,
                     scheme: Scheme::HTTPS,
                     headers: &admin_frontegg_header_basic,
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),

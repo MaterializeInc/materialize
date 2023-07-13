@@ -71,7 +71,8 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
         )
     except Exception as e:
         print(f"Got exception when uploading analytics: {e}")
-    print(res.status_code, res.text)
+    else:
+        print(res.status_code, res.text)
 
 
 def get_artifacts() -> Any:

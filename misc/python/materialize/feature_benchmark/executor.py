@@ -7,15 +7,35 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Set
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized
 
 
 class Executor:
+    _known_fragments: Set[str] = set()
+
     def Lambda(self, _lambda: Callable[["Executor"], float]) -> float:
         return _lambda(self)
+
+    def Td(self, input: str) -> Any:
+        raise NotImplementedError
+
+    def Kgen(self, topic: str, args: List[str]) -> Any:
+        raise NotImplementedError
+
+    def add_known_fragment(self, fragment: str) -> bool:
+        """
+        Record whether a TD fragment has been printed already. Returns true
+        if it wasn't added before.
+        """
+        result = fragment not in self._known_fragments
+        self._known_fragments.add(fragment)
+        return result
+
+    def DockerMem(self) -> int:
+        raise NotImplementedError
 
 
 class Docker(Executor):
@@ -49,6 +69,9 @@ class Docker(Executor):
         return self._composition.run(
             "kgen", f"--topic=testdrive-{topic}-{self._seed}", *args
         )
+
+    def DockerMem(self) -> int:
+        return self._composition.mem("materialized")
 
 
 class MzCloud(Executor):

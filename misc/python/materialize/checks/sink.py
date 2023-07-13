@@ -12,6 +12,7 @@ from typing import List
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.util import MzVersion
 
 
 def schemas() -> str:
@@ -64,6 +65,11 @@ class SinkUpsert(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "I2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 {"key1": "U2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
@@ -79,6 +85,11 @@ class SinkUpsert(Check):
                   ENVELOPE DEBEZIUM
                 """,
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "I3${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
                 {"key1": "U3${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
@@ -100,6 +111,12 @@ class SinkUpsert(Check):
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATECLUSTER
 
                 > SELECT * FROM sink_source_view;
                 I2 B 1000
@@ -181,6 +198,14 @@ class SinkTables(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             schemas()
+            + dedent(
+                """
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_table_keys = true;
+                """
+                if self.current_version >= MzVersion(0, 55, 0)
+                else ""
+            )
             + dedent(
                 """
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));

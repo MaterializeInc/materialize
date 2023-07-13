@@ -53,6 +53,20 @@ SELECT * FROM update_me;
  3 | aloha
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schemas that all relations in the query are contained in.
+- `UPDATE` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
+
 ## Related pages
 
 - [`CREATE TABLE`](../create-table)

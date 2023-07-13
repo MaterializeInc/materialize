@@ -12,20 +12,18 @@
 use std::sync::Arc;
 use std::thread::Thread;
 
-use timely::communication::initialize::WorkerGuards;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_storage_client::client::StorageClient;
-use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
+use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::Worker;
+use crate::storage_state::{StorageInstanceContext, Worker};
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
@@ -106,6 +104,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
@@ -117,6 +116,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.connection_context,
             config.instance_context,
             persist_clients,
+            tracing_handle,
         )
         .run();
     }

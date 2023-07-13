@@ -24,10 +24,12 @@
 //! be used to renumber bindings in an expression starting from a provided
 //! `IdGen`, which is used to prepare distinct expressions for inlining.
 
-use mz_expr::MirRelationExpr;
-use mz_ore::id_gen::IdGen;
+use mz_expr::{visit::Visit, MirRelationExpr};
+use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
 
 use crate::TransformArgs;
+
+pub use renumbering::renumber_bindings;
 
 /// Normalize `Let` and `LetRec` structure.
 pub fn normalize_lets(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
@@ -57,10 +59,6 @@ impl NormalizeLets {
 }
 
 impl crate::Transform for NormalizeLets {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -109,8 +107,7 @@ impl NormalizeLets {
         // 2. Bindings across `LetRec`s are assigned identifiers in "visibility order", corresponding to an
         // in-order traversal.
         // TODO: More can and perhaps should be said about "visibility order" and how let promotion is correct.
-        let mut id_gen = IdGen::default();
-        renumbering::renumber_bindings(relation, &mut id_gen)?;
+        renumbering::renumber_bindings(relation, &mut IdGen::default())?;
 
         // Promote all `Let` and `LetRec` AST nodes to the roots.
         // After this, all non-`LetRec` nodes contain no further `Let` or `LetRec` nodes,
@@ -124,32 +121,63 @@ impl NormalizeLets {
 
         // Renumber bindings for good measure.
         // Ideally we could skip when `action` is a no-op, but hard to thread that through at the moment.
-        let mut id_gen = IdGen::default();
-        renumbering::renumber_bindings(relation, &mut id_gen)?;
+        renumbering::renumber_bindings(relation, &mut IdGen::default())?;
 
-        // Disassemble `LetRec` into a `Let` stack if possible.
-        // If a `LetRec` remains, return the would-be `Let` bindings to it.
-        // This is to maintain `LetRec`-freedom for `LetRec`-free expressions.
-        let mut bindings = let_motion::harvest_non_recursive(relation);
-        if let MirRelationExpr::LetRec {
-            ids,
-            values,
-            body: _,
-        } = relation
-        {
-            bindings.extend(ids.drain(..).zip(values.drain(..)));
-            let (new_ids, new_values) = bindings.into_iter().unzip();
-            *ids = new_ids;
-            *values = new_values;
-        } else {
-            for (id, value) in bindings.into_iter().rev() {
-                *relation = MirRelationExpr::Let {
-                    id,
-                    value: Box::new(value),
-                    body: Box::new(relation.take_dangerous()),
-                };
+        // A final bottom-up traversal to normalize the shape of nested LetRec blocks
+        relation.try_visit_mut_post(&mut |relation| -> Result<(), RecursionLimitError> {
+            // Disassemble `LetRec` into a `Let` stack if possible.
+            // If a `LetRec` remains, return the would-be `Let` bindings to it.
+            // This is to maintain `LetRec`-freedom for `LetRec`-free expressions.
+            let mut bindings = let_motion::harvest_non_recursive(relation);
+            if let MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits,
+                body: _,
+            } = relation
+            {
+                bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
+                support::replace_bindings_from_map(bindings, ids, values, limits);
+            } else {
+                for (id, (value, max_iter)) in bindings.into_iter().rev() {
+                    assert!(max_iter.is_none());
+                    *relation = MirRelationExpr::Let {
+                        id,
+                        value: Box::new(value),
+                        body: Box::new(relation.take_dangerous()),
+                    };
+                }
             }
-        }
+
+            // Move a non-recursive suffix of bindings from the end of the LetRec
+            // to the LetRec body.
+            let bindings = let_motion::harvest_nonrec_suffix(relation)?;
+            if let MirRelationExpr::LetRec {
+                ids: _,
+                values: _,
+                limits: _,
+                body,
+            } = relation
+            {
+                for (id, value) in bindings.into_iter().rev() {
+                    **body = MirRelationExpr::Let {
+                        id,
+                        value: Box::new(value),
+                        body: Box::new(body.take_dangerous()),
+                    };
+                }
+            } else {
+                for (id, value) in bindings.into_iter().rev() {
+                    *relation = MirRelationExpr::Let {
+                        id,
+                        value: Box::new(value),
+                        body: Box::new(relation.take_dangerous()),
+                    };
+                }
+            }
+
+            Ok(())
+        })?;
 
         if !was_recursive && relation.is_recursive() {
             Err(crate::TransformError::Internal(
@@ -161,14 +189,32 @@ impl NormalizeLets {
     }
 }
 
-pub use renumbering::renumber_bindings;
-
 // Support methods that are unlikely to be useful to other modules.
 mod support {
 
     use std::collections::BTreeMap;
 
-    use mz_expr::{Id, LocalId, MirRelationExpr};
+    use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+
+    pub(super) fn replace_bindings_from_map(
+        map: BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
+        ids: &mut Vec<LocalId>,
+        values: &mut Vec<MirRelationExpr>,
+        limits: &mut Vec<Option<LetRecLimit>>,
+    ) {
+        let (new_ids, new_values, new_limits) = map_to_3vecs(map);
+        *ids = new_ids;
+        *values = new_values;
+        *limits = new_limits;
+    }
+
+    pub(super) fn map_to_3vecs(
+        map: BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
+    ) -> (Vec<LocalId>, Vec<MirRelationExpr>, Vec<Option<LetRecLimit>>) {
+        let (new_ids, new_values_and_limits): (Vec<_>, Vec<_>) = map.into_iter().unzip();
+        let (new_values, new_limits) = new_values_and_limits.into_iter().unzip();
+        (new_ids, new_values, new_limits)
+    }
 
     /// Logic mapped across each use of a `LocalId`.
     pub(super) fn for_local_id<F>(expr: &MirRelationExpr, mut logic: F)
@@ -208,7 +254,13 @@ mod support {
         expr: &mut MirRelationExpr,
         types: &mut BTreeMap<LocalId, mz_repr::RelationType>,
     ) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::LetRec { ids, values, body } = expr {
+        if let MirRelationExpr::LetRec {
+            ids,
+            values,
+            limits: _,
+            body,
+        } = expr
+        {
             for (id, value) in ids.iter().zip(values.iter_mut()) {
                 refresh_types_helper(value, types)?;
                 let typ = value.typ();
@@ -286,7 +338,11 @@ mod let_motion {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use mz_expr::{LocalId, MirRelationExpr};
+    use itertools::izip;
+    use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
+    use mz_ore::stack::RecursionLimitError;
+
+    use crate::normalize_lets::support::{map_to_3vecs, replace_bindings_from_map};
 
     /// Promotes all `Let` and `LetRec` nodes to the roots of their expressions.
     ///
@@ -300,6 +356,7 @@ mod let_motion {
             if let MirRelationExpr::LetRec {
                 ids: _,
                 values,
+                limits: _,
                 body,
             } = expr
             {
@@ -316,21 +373,27 @@ mod let_motion {
     ///
     /// The traversal is only of the `LetRec` nodes, for which fear of stack exhaustion is nominal.
     fn post_order_harvest_lets(expr: &mut MirRelationExpr) {
-        if let MirRelationExpr::LetRec { ids, values, body } = expr {
+        if let MirRelationExpr::LetRec {
+            ids,
+            values,
+            limits,
+            body,
+        } = expr
+        {
             // Only recursively descend through `LetRec` stages.
             for value in values.iter_mut() {
                 post_order_harvest_lets(value);
             }
 
             let mut bindings = BTreeMap::new();
-            for (id, mut value) in ids.drain(..).zip(values.drain(..)) {
+            for (id, mut value, max_iter) in
+                izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            {
                 bindings.extend(harvest_non_recursive(&mut value));
-                bindings.insert(id, value);
+                bindings.insert(id, (value, max_iter));
             }
             bindings.extend(harvest_non_recursive(body));
-            let (new_ids, new_values) = bindings.into_iter().unzip();
-            *ids = new_ids;
-            *values = new_values;
+            replace_bindings_from_map(bindings, ids, values, limits);
         }
     }
 
@@ -346,15 +409,16 @@ mod let_motion {
         let mut worklist = Vec::new();
         let mut bindings = BTreeMap::new();
         digest_lets_helper(expr, &mut worklist, &mut bindings);
-        while let Some((id, mut value)) = worklist.pop() {
+        while let Some((id, mut value, max_iter)) = worklist.pop() {
             digest_lets_helper(&mut value, &mut worklist, &mut bindings);
-            bindings.insert(id, value);
+            bindings.insert(id, (value, max_iter));
         }
         if !bindings.is_empty() {
-            let (ids, values) = bindings.into_iter().unzip();
+            let (ids, values, limits) = map_to_3vecs(bindings);
             *expr = MirRelationExpr::LetRec {
                 ids,
                 values,
+                limits,
                 body: Box::new(expr.take_dangerous()),
             }
         }
@@ -367,22 +431,28 @@ mod let_motion {
     /// or into `bindings` if they should not be further processed (e.g. from a `LetRec`).
     fn digest_lets_helper(
         expr: &mut MirRelationExpr,
-        worklist: &mut Vec<(LocalId, MirRelationExpr)>,
-        bindings: &mut BTreeMap<LocalId, MirRelationExpr>,
+        worklist: &mut Vec<(LocalId, MirRelationExpr, Option<LetRecLimit>)>,
+        bindings: &mut BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
     ) {
         let mut to_visit = vec![expr];
         while let Some(expr) = to_visit.pop() {
             match expr {
                 MirRelationExpr::Let { id, value, body } => {
                     // push binding into `worklist` as it can be further processed.
-                    worklist.push((*id, value.take_dangerous()));
+                    // `limits` can be None, as we are taking a non-recursive binding.
+                    worklist.push((*id, value.take_dangerous(), None));
                     *expr = body.take_dangerous();
                     // Continue through `Let` nodes as they are certainly non-recursive.
                     to_visit.push(expr);
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits,
+                    body,
+                } => {
                     // push bindings into `bindings` as they should not be further processed.
-                    bindings.extend(ids.drain(..).zip(values.drain(..)));
+                    bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
                     *expr = body.take_dangerous();
                     // Stop at `LetRec` nodes as we cannot always lift `Let` nodes out of them.
                 }
@@ -393,43 +463,103 @@ mod let_motion {
         }
     }
 
-    /// Harvest any safe-to-lift non-recursive bindings from a `LetRec` expression.
+    /// Harvest any safe-to-lift non-recursive bindings from a `LetRec`
+    /// expression.
     ///
-    /// At the moment, we reason that a binding can be lifted without changing the output if both
-    /// 1. it references no other non-lifted binding here, and
-    /// 2. it is referenced by no prior non-lifted binding here.
-    /// The rationale is that (1.) ensures that the binding's value does not change across iterations,
-    /// and that (2.) ensures that all observations of the binding are after it assumes its first value,
-    /// rather than when it could be empty.
+    /// At the moment, we reason that a binding can be lifted without changing
+    /// the output if both:
+    /// 1. It references no other non-lifted binding bound in `expr`,
+    /// 2. It is referenced by no prior non-lifted binding in `expr`.
+    ///
+    /// The rationale is that (1) ensures that the binding's value does not
+    /// change across iterations, and that (2) ensures that all observations of
+    /// the binding are after it assumes its first value, rather than when it
+    /// could be empty.
     pub(crate) fn harvest_non_recursive(
         expr: &mut MirRelationExpr,
-    ) -> BTreeMap<LocalId, MirRelationExpr> {
-        let mut peeled = BTreeMap::new();
-        if let MirRelationExpr::LetRec { ids, values, body } = expr {
-            let mut id_set: BTreeSet<_> = ids.iter().cloned().collect();
-            let mut cannot = BTreeSet::new();
-            let mut retain = BTreeMap::new();
-            let mut counts = BTreeMap::new();
-            for (id, value) in ids.iter().zip(values.drain(..)) {
-                counts.clear();
-                super::support::count_local_id_uses(&value, &mut counts);
-                cannot.extend(counts.keys().cloned());
-                if !cannot.contains(id) && counts.keys().all(|i| !id_set.contains(i)) {
-                    peeled.insert(*id, value);
-                    id_set.remove(id);
+    ) -> BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)> {
+        if let MirRelationExpr::LetRec {
+            ids,
+            values,
+            limits,
+            body,
+        } = expr
+        {
+            // Bindings to lift.
+            let mut lifted = BTreeMap::<LocalId, (MirRelationExpr, Option<LetRecLimit>)>::new();
+            // Bindings to retain.
+            let mut retained = BTreeMap::<LocalId, (MirRelationExpr, Option<LetRecLimit>)>::new();
+
+            // All remaining LocalIds bound by the enclosing LetRec.
+            let mut id_set = ids.iter().cloned().collect::<BTreeSet<LocalId>>();
+            // All LocalIds referenced up to (including) the current binding.
+            let mut cannot = BTreeSet::<LocalId>::new();
+            // The reference count of the current bindings.
+            let mut refcnt = BTreeMap::<LocalId, usize>::new();
+
+            for (id, value, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..)) {
+                refcnt.clear();
+                super::support::count_local_id_uses(&value, &mut refcnt);
+
+                // LocalIds that have already been referenced cannot be lifted.
+                cannot.extend(refcnt.keys().cloned());
+
+                // - The first conjunct excludes bindings that have already been
+                //   referenced.
+                // - The second conjunct excludes bindings that reference a
+                //   LocalId that either defined later or is a known retained.
+                if !cannot.contains(&id) && !refcnt.keys().any(|i| id_set.contains(i)) {
+                    lifted.insert(id, (value, None)); // Non-recursive bindings don't need a limit
+                    id_set.remove(&id);
                 } else {
-                    retain.insert(*id, value);
+                    retained.insert(id, (value, max_iter));
                 }
             }
 
-            let (new_ids, new_values) = retain.into_iter().unzip();
-            *ids = new_ids;
-            *values = new_values;
+            replace_bindings_from_map(retained, ids, values, limits);
             if values.is_empty() {
                 *expr = body.take_dangerous();
             }
+
+            lifted
+        } else {
+            BTreeMap::new()
         }
-        peeled
+    }
+
+    /// Harvest any safe-to-lower non-recursive suffix of binding from a
+    /// `LetRec` expression.
+    pub(crate) fn harvest_nonrec_suffix(
+        expr: &mut MirRelationExpr,
+    ) -> Result<BTreeMap<LocalId, MirRelationExpr>, RecursionLimitError> {
+        if let MirRelationExpr::LetRec {
+            ids,
+            values,
+            limits,
+            body,
+        } = expr
+        {
+            // Bindings to lower.
+            let mut lowered = BTreeMap::<LocalId, MirRelationExpr>::new();
+
+            let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+
+            while ids.last().map(|id| !rec_ids.contains(id)).unwrap_or(false) {
+                let id = ids.pop().expect("non-empty ids");
+                let value = values.pop().expect("non-empty values");
+                let _limit = limits.pop().expect("non-empty limits");
+
+                lowered.insert(id, value); // Non-recursive bindings don't need a limit
+            }
+
+            if values.is_empty() {
+                *expr = body.take_dangerous();
+            }
+
+            Ok(lowered)
+        } else {
+            Ok(BTreeMap::new())
+        }
     }
 
     pub(crate) fn assert_no_lets(expr: &MirRelationExpr) {
@@ -443,7 +573,10 @@ mod inlining {
 
     use std::collections::BTreeMap;
 
-    use mz_expr::{Id, LocalId, MirRelationExpr};
+    use itertools::izip;
+    use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+
+    use crate::normalize_lets::support::replace_bindings_from_map;
 
     pub(super) fn inline_lets(
         expr: &mut MirRelationExpr,
@@ -459,6 +592,7 @@ mod inlining {
             if let MirRelationExpr::LetRec {
                 ids: _,
                 values,
+                limits: _,
                 body,
             } = expr
             {
@@ -473,22 +607,29 @@ mod inlining {
     /// following body.
     ///
     /// A let binding may be inlined only in subsequent bindings or in the body;
-    /// other bindings should not "immediately" observe the binding, and it
+    /// other bindings should not "immediately" observe the binding, as that
     /// would be a change to the semantics of `LetRec`. For example, it would
     /// not be correct to replace `C` with `A` in the definition of `B` here:
     /// ```ignore
     /// let A = ...;
     /// let B = A - C;
-    /// let C = a;
-    ///```
+    /// let C = A;
+    /// ```
     /// The explanation is that `B` should always be the difference between the
     /// current and previous `A`, and that the substitution of `C` would instead
     /// make it always zero, changing its definition.
     ///
-    /// Here a let binding is proposed for inlining if any of the following:
+    /// Here a let binding is proposed for inlining if any of the following is true:
     ///  1. It has a single reference across all bindings and the body.
-    ///  2. It is a "sufficient simple" `Get`, determined in part by the
+    ///  2. It is a "sufficiently simple" `Get`, determined in part by the
     ///     `inline_mfp` argument.
+    ///
+    /// We don't need extra checks for `limits`, because
+    ///  - `limits` is only relevant when a binding is directly used through a back edge (because
+    ///    that is where the rendering puts the `limits` check);
+    ///  - when a binding is directly used through a back edge, it can't be inlined anyway.
+    ///  - Also note that if a `LetRec` completely disappears at the end of `inline_lets_core`, then
+    ///    there was no recursion in it.
     ///
     /// The case of `Constant` binding is handled here (as opposed to
     /// `FoldConstants`) in a somewhat limited manner (see #18180). Although a
@@ -505,7 +646,13 @@ mod inlining {
         expr: &mut MirRelationExpr,
         inline_mfp: bool,
     ) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::LetRec { ids, values, body } = expr {
+        if let MirRelationExpr::LetRec {
+            ids,
+            values,
+            limits,
+            body,
+        } = expr
+        {
             // Count the number of uses of each local id across all expressions.
             let mut counts = BTreeMap::new();
             for value in values.iter() {
@@ -517,7 +664,7 @@ mod inlining {
             //  1. The binding is used once and is available to be directly taken.
             //  2. The binding is simple enough that it can just be cloned.
             //  3. The binding is not available for inlining.
-            let mut inline_offer = BTreeMap::new();
+            let mut inline_offers = BTreeMap::new();
 
             // Each binding may require the expiration of prior inlining offers.
             // This occurs when an inlined body references the prior iterate of a binding,
@@ -535,29 +682,17 @@ mod inlining {
             //      identifier beyond one, as all in values with strictly greater identifiers.
             //   2. by performing the substitution before reasoning, the structure of the value
             //      as it would be substituted is fixed.
-            for (id, mut expr) in ids.drain(..).zip(values.drain(..)) {
+            for (id, mut expr, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            {
                 // Substitute any appropriate prior let bindings.
-                inline_lets_helper(&mut expr, &mut inline_offer)?;
+                inline_lets_helper(&mut expr, &mut inline_offers)?;
 
                 // Determine the first `id'` at which any inlining offer must expire.
                 // An inlining offer expires because it references an `id'` that is not yet bound,
                 // indicating a reference to the *prior* iterate of that identifier. Inlining the
-                // expression once `id'` becomes bound would advance the reference to be to the
+                // expression once `id'` becomes bound would advance the reference to be the
                 // *current* iterate of the identifier.
-                expr.visit_pre(|e| {
-                    if let MirRelationExpr::Get {
-                        id: Id::Local(referenced_id),
-                        ..
-                    } = e
-                    {
-                        if referenced_id >= &id {
-                            expire_offers
-                                .entry(*referenced_id)
-                                .or_insert_with(Vec::new)
-                                .push(id);
-                        }
-                    }
-                });
+                MirRelationExpr::collect_expirations(id, &expr, &mut expire_offers);
 
                 // Gets for `id` only occur in later expressions, so this should still be correct.
                 let num_gets = counts.get(&id).map(|x| *x).unwrap_or(0);
@@ -565,7 +700,7 @@ mod inlining {
                 // are cloned in to `Get` operators, and all others emitted as `Let` bindings.
                 if num_gets == 0 {
                 } else if num_gets == 1 {
-                    inline_offer.insert(id, InlineOffer::Take(Some(expr)));
+                    inline_offers.insert(id, InlineOffer::Take(Some(expr), max_iter));
                 } else {
                     let clone_binding = {
                         let stripped_value = if inline_mfp {
@@ -580,29 +715,27 @@ mod inlining {
                     };
 
                     if clone_binding {
-                        inline_offer.insert(id, InlineOffer::Clone(expr));
+                        inline_offers.insert(id, InlineOffer::Clone(expr, max_iter));
                     } else {
-                        inline_offer.insert(id, InlineOffer::Unavailable(expr));
+                        inline_offers.insert(id, InlineOffer::Unavailable(expr, max_iter));
                     }
                 }
 
                 // We must now discard any offers that reference `id`, as it is no longer correct
                 // to inline such an offer as it would have access to this iteration's binding of
                 // `id` rather than the prior iteration's binding of `id`.
-                if let Some(expirations) = expire_offers.remove(&id) {
-                    for expired_id in expirations.into_iter() {
-                        if let Some(offer) = inline_offer.remove(&expired_id) {
-                            expired_offers.push((expired_id, offer));
-                        }
-                    }
-                }
+                expired_offers.extend(MirRelationExpr::do_expirations(
+                    id,
+                    &mut expire_offers,
+                    &mut inline_offers,
+                ));
             }
             // Complete the inlining in `body`.
-            inline_lets_helper(body, &mut inline_offer)?;
+            inline_lets_helper(body, &mut inline_offers)?;
 
             // Re-introduce expired offers for the subsequent logic that expects to see them all.
             for (id, offer) in expired_offers.into_iter() {
-                inline_offer.insert(id, offer);
+                inline_offers.insert(id, offer);
             }
 
             // We may now be able to discard some of `inline_offer` based on the remaining pattern of `Get` expressions.
@@ -613,26 +746,27 @@ mod inlining {
             let mut todo = Vec::new();
             super::support::for_local_id(body, |id| todo.push(id));
             while let Some(id) = todo.pop() {
-                if let Some(offer) = inline_offer.remove(&id) {
-                    let value = match offer {
-                        InlineOffer::Take(value) => value.ok_or_else(|| {
-                            crate::TransformError::Internal(
-                                "Needed value already taken".to_string(),
-                            )
-                        })?,
-                        InlineOffer::Clone(value) => value,
-                        InlineOffer::Unavailable(value) => value,
+                if let Some(offer) = inline_offers.remove(&id) {
+                    let (value, max_iter) = match offer {
+                        InlineOffer::Take(value, max_iter) => (
+                            value.ok_or_else(|| {
+                                crate::TransformError::Internal(
+                                    "Needed value already taken".to_string(),
+                                )
+                            })?,
+                            max_iter,
+                        ),
+                        InlineOffer::Clone(value, max_iter) => (value, max_iter),
+                        InlineOffer::Unavailable(value, max_iter) => (value, max_iter),
                     };
                     super::support::for_local_id(&value, |id| todo.push(id));
-                    let_bindings.insert(id, value);
+                    let_bindings.insert(id, (value, max_iter));
                 }
             }
 
             // If bindings remain we update the `LetRec`, otherwise we remove it.
             if !let_bindings.is_empty() {
-                let (new_ids, new_values) = let_bindings.into_iter().unzip();
-                *ids = new_ids;
-                *values = new_values;
+                replace_bindings_from_map(let_bindings, ids, values, limits);
             } else {
                 *expr = body.take_dangerous();
             }
@@ -643,11 +777,11 @@ mod inlining {
     /// Possible states of let binding inlineability.
     enum InlineOffer {
         /// There is a unique reference to this value and given the option it should take this expression.
-        Take(Option<MirRelationExpr>),
+        Take(Option<MirRelationExpr>, Option<LetRecLimit>),
         /// Any reference to this value should clone this expression.
-        Clone(MirRelationExpr),
+        Clone(MirRelationExpr, Option<LetRecLimit>),
         /// Any reference to this value should do no inlining of it.
-        Unavailable(MirRelationExpr),
+        Unavailable(MirRelationExpr, Option<LetRecLimit>),
     }
 
     /// Substitute `Get{id}` expressions for any proposed expressions.
@@ -670,7 +804,7 @@ mod inlining {
                     // bindings into bodies that precede them, which would
                     // change the semantics of the expression.
                     match offer {
-                        InlineOffer::Take(value) => {
+                        InlineOffer::Take(value, _max_iter) => {
                             *expr = value.take().ok_or_else(|| {
                                 crate::TransformError::Internal(format!(
                                     "Value already taken for {:?}",
@@ -678,10 +812,10 @@ mod inlining {
                                 ))
                             })?;
                         }
-                        InlineOffer::Clone(value) => {
+                        InlineOffer::Clone(value, _max_iter) => {
                             *expr = value.clone();
                         }
-                        InlineOffer::Unavailable(_) => {
+                        InlineOffer::Unavailable(_, _) => {
                             // Do nothing.
                         }
                     }
@@ -745,7 +879,12 @@ mod renumbering {
                         stack.push(Ok(*id));
                         stack.push(Err(value));
                     }
-                    MirRelationExpr::LetRec { ids, values, body } => {
+                    MirRelationExpr::LetRec {
+                        ids,
+                        values,
+                        limits: _,
+                        body,
+                    } => {
                         stack.push(Err(body));
                         for (id, value) in ids.iter().rev().zip(values.iter().rev()) {
                             stack.push(Ok(*id));

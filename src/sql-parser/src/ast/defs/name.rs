@@ -18,11 +18,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use mz_sql_lexer::keywords::Keyword;
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, QualifiedReplica};
-use crate::keywords::Keyword;
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -44,9 +44,9 @@ impl Ident {
         let mut chars = self.0.chars();
         chars
             .next()
-            .map(|ch| ('a'..='z').contains(&ch) || (ch == '_'))
+            .map(|ch| matches!(ch, 'a'..='z' | '_'))
             .unwrap_or(false)
-            && chars.all(|ch| ('a'..='z').contains(&ch) || (ch == '_') || ('0'..='9').contains(&ch))
+            && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
             && !self
                 .as_keyword()
                 .map(Keyword::is_sometimes_reserved)
@@ -165,7 +165,7 @@ impl_display!(UnresolvedDatabaseName);
 
 // The name of an item not yet created during name resolution, which should be
 // resolveable as an item name later.
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub enum DeferredItemName<T: AstInfo> {
     Named(T::ItemName),
     Deferred(UnresolvedItemName),

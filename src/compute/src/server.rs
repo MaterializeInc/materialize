@@ -17,15 +17,6 @@ use std::sync::Arc;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::Operator;
-use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::{Scheduler, SyncActivator};
-use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -34,7 +25,16 @@ use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::Operator;
+use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::{Scheduler, SyncActivator};
+use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
@@ -145,6 +145,8 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// A process-global handle to tracing configuration.
+    tracing_handle: Arc<TracingHandle>,
 }
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
@@ -158,6 +160,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             ActivatorSender,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker {
             timely_worker,
@@ -166,6 +169,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             compute_metrics: config.compute_metrics,
             persist_clients,
             compute_state: None,
+            tracing_handle,
         }
         .run()
     }
@@ -387,6 +391,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
+                let command_history =
+                    ComputeCommandHistory::new(self.compute_metrics.for_history());
+
                 self.compute_state = Some(ComputeState {
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
@@ -401,10 +408,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     dropped_collections: Vec::new(),
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),
-                    command_history: ComputeCommandHistory::default(),
+                    command_history,
                     max_result_size: u32::MAX,
                     dataflow_max_inflight_bytes: usize::MAX,
+                    linear_join_impl: Default::default(),
                     metrics: self.compute_metrics.clone(),
+                    tracing_handle: Arc::clone(&self.tracing_handle),
                 });
             }
             _ => (),
@@ -697,21 +706,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history = ComputeCommandHistory::default();
+            let mut command_history =
+                ComputeCommandHistory::new(self.compute_metrics.for_history());
             for command in new_commands.iter() {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }
             compute_state.command_history = command_history;
-            compute_state.metrics.command_history_size.set(
-                u64::try_from(compute_state.command_history.len()).expect(
-                    "The compute command history size must be non-negative and fit a 64-bit number",
-                ),
-            );
-            compute_state.metrics.dataflow_count_in_history.set(
-                u64::try_from(compute_state.command_history.dataflow_count()).expect(
-                    "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
-                ),
-            );
         }
         Ok(())
     }

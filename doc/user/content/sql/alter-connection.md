@@ -48,6 +48,14 @@ every execution of the `ROTATE KEYS` command. If you rotate keys twice in
 succession without adding the new keys to the bastion server, Materialize will
 be unable to authenticate with the bastion server.
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the connection.
+
 ## Related pages
 
 - [`CREATE CONNECTION`](/sql/create-connection/)

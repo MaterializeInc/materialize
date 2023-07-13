@@ -10,6 +10,7 @@
 use std::fmt;
 
 use mz_ore::str::StrExt;
+use mz_proto::TryFromProtoError;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
@@ -46,6 +47,8 @@ pub enum ErrorKind {
     ReservedSchemaName(String),
     #[error("role name {} is reserved", .0.quoted())]
     ReservedRoleName(String),
+    #[error("role name {} is reserved", .0.quoted())]
+    ReservedSystemRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
     #[error("replica name {} is reserved", .0.quoted())]
@@ -93,6 +96,8 @@ pub enum ErrorKind {
         role_name: String,
         member_name: String,
     },
+    #[error("cluster '{0}' is managed and cannot be directly modified")]
+    ManagedCluster(String),
 }
 
 impl Error {
@@ -108,6 +113,9 @@ impl Error {
             }
             ErrorKind::ReservedRoleName(_) => {
                 Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+            }
+            ErrorKind::ReservedSystemRoleName(_) => {
+                Some("The role prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
             }
             ErrorKind::ReservedClusterName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())
@@ -131,6 +139,12 @@ impl From<SqlCatalogError> for Error {
 impl From<mz_stash::StashError> for Error {
     fn from(e: mz_stash::StashError) -> Error {
         Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<TryFromProtoError> for Error {
+    fn from(e: TryFromProtoError) -> Error {
+        Error::new(ErrorKind::from(mz_stash::StashError::from(e)))
     }
 }
 

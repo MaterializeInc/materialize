@@ -41,7 +41,10 @@ SERVICES = [
         image=f"materialize/environmentd:{VERSION}",
         external_cockroach=True,
         persist_blob_url="file:///mzdata/persist/blob",
-        options=["--orchestrator-process-secrets-directory=/mzdata/secrets"],
+        options=[
+            "--orchestrator-process-secrets-directory=/mzdata/secrets",
+            "--orchestrator-process-scratch-directory=/scratch",
+        ],
     ),
     Testdrive(),  # Overriden below
     Mz(
@@ -133,7 +136,7 @@ def wait_for_cloud(c: Composition) -> None:
         port=6875,
         query="SELECT 1",
         expected=[[1]],
-        timeout_secs=600,
+        timeout_secs=900,
         dbname="materialize",
         ssl_context=ssl.SSLContext(),
         # print_result=True

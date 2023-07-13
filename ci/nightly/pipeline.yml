@@ -24,10 +24,11 @@ steps:
           - { value: limits }
           - { value: limits-instance-size }
           - { value: testdrive-partitions-5 }
-          - { value: testdrive-replicas-4}
-          - { value: testdrive-size-1}
-          - { value: testdrive-size-8}
-          - { value: testdrive-in-cloudtest}
+          - { value: testdrive-replicas-4 }
+          - { value: testdrive-size-1 }
+          - { value: testdrive-size-8 }
+          - { value: testdrive-in-cloudtest }
+          - { value: upsert-compaction-disabled }
           - { value: feature-benchmark }
           - { value: zippy-kafka-sources }
           - { value: zippy-kafka-parallel-insert }
@@ -38,6 +39,7 @@ steps:
           - { value: zippy-crdb-latest }
           - { value: secrets }
           - { value: checks-restart-cockroach }
+          - { value: checks-restart-entire-mz }
           - { value: checks-parallel-drop-create-default-replica }
           - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
@@ -60,6 +62,7 @@ steps:
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
+          - { value: output-consistency-test }
           - { value: sqlsmith }
           - { value: sqlsmith-explain }
           - { value: sqlancer-pqs }
@@ -67,6 +70,8 @@ steps:
           - { value: sqlancer-having }
           - { value: sqlancer-query-partitioning }
           - { value: crdb-restarts }
+          - { value: pubsub-disruption }
+          - { value: data-ingest }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -128,7 +133,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--redpanda, --aws-region=us-east-2]
+          args: [--redpanda, --aws-region=us-east-1]
 
 # Disabled due to taking too long for the value provided
 #  - id: redpanda-testdrive-aarch64
@@ -141,7 +146,7 @@ steps:
 #      - ./ci/plugins/scratch-aws-access: ~
 #      - ./ci/plugins/mzcompose:
 #          composition: testdrive
-#          args: [--redpanda, --aws-region=us-east-2]
+#          args: [--redpanda, --aws-region=us-east-1]
 
   - id: limits
     label: "Product limits"
@@ -176,7 +181,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --kafka-default-partitions=5]
+          args: [--aws-region=us-east-1, --kafka-default-partitions=5]
 
   - id: testdrive-replicas-4
     label: ":racing_car: testdrive 4 replicas"
@@ -188,7 +193,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --replicas=4]
+          args: [--aws-region=us-east-1, --replicas=4]
 
   - id: testdrive-size-1
     label: ":racing_car: testdrive with SIZE 1"
@@ -200,7 +205,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --default-size=1]
+          args: [--aws-region=us-east-1, --default-size=1]
 
   - id: testdrive-size-8
     label: ":racing_car: testdrive with SIZE 8"
@@ -212,7 +217,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --default-size=8]
+          args: [--aws-region=us-east-1, --default-size=8]
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)
@@ -223,7 +228,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, --aws-region=us-east-2, test/cloudtest/test_full_testdrive.py]
+          args: [-m=long, --aws-region=us-east-1, test/cloudtest/test_full_testdrive.py]
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
@@ -235,8 +240,19 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --persistent-user-tables]
+          args: [--aws-region=us-east-1, --persistent-user-tables]
     skip: Persistence tests disabled
+
+  - id: upsert-compaction-disabled
+    label: Upsert (compaction disabled)
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upsert
+          args: [--compaction-disabled]
+    agents:
+      queue: linux-x86_64
 
   - id: zippy-kafka-sources
     label: "Zippy Kafka Sources"
@@ -339,6 +355,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
+
+  - id: checks-restart-entire-mz
+    label: "Checks + restart of the entire Mz"
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
@@ -485,7 +512,7 @@ steps:
 
   - id: checks-upgrade-matrix
     label: "Random upgrades over the entire matrix"
-    timeout_in_minutes: 120
+    timeout_in_minutes: 180
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -503,7 +530,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long,  --aws-region=us-east-2, test/cloudtest/test_upgrade.py]
+          args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist
@@ -590,6 +617,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
 
+  - id: output-consistency-test
+    label: "Output consistency test"
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: output-consistency
+          args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+
   - id: sqlsmith
     label: "SQLsmith"
     artifact_paths: junit_*.xml
@@ -666,6 +704,25 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
+
+  - id: pubsub-disruption
+    label: "PubSub disruption"
+    artifact_paths: junit_*.xml
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pubsub-disruption
+
+  - id: data-ingest
+    label: "Data Ingest"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: data-ingest
 
   - wait: ~
     continue_on_failure: true

@@ -28,7 +28,6 @@ use prometheus::core::{AtomicI64, GenericCounterVec};
 
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
-    pub(super) enable_multi_worker_storage_persist_sink: IntGaugeVec,
     pub(super) capability: UIntGaugeVec,
     pub(super) resume_upper: IntGaugeVec,
     /// A timestamp gauge representing forward progress
@@ -45,11 +44,6 @@ pub(super) struct SourceSpecificMetrics {
 impl SourceSpecificMetrics {
     fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
-            enable_multi_worker_storage_persist_sink: registry.register(metric!(
-                name: "mz_source_enable_multi_worker_storage_persist_sink",
-                help: "Whether or not the new multi-worker persist_sink is actively being used",
-                var_labels: ["source_id", "worker_id", "parent_source_id", "output"],
-            )),
             // TODO(guswynn): some of these metrics are not clear when subsources are involved, and
             // should be fixed
             capability: registry.register(metric!(
@@ -209,8 +203,11 @@ impl PostgresSourceSpecificMetrics {
 pub(super) struct UpsertMetrics {
     pub(super) rehydration_latency: GaugeVec,
     pub(super) rehydration_total: UIntGaugeVec,
+    pub(super) rehydration_updates: UIntGaugeVec,
 
     // These are used by `shared`.
+    pub(super) merge_snapshot_latency: HistogramVec,
+    pub(super) merge_snapshot_updates: HistogramVec,
     pub(super) multi_get_latency: HistogramVec,
     pub(super) multi_get_size: HistogramVec,
     pub(super) multi_put_latency: HistogramVec,
@@ -245,9 +242,36 @@ impl UpsertMetrics {
             )),
             rehydration_total: registry.register(metric!(
                 name: "mz_storage_upsert_state_rehydration_total",
-                help: "The number of values, per-worker, \
-                    rehydrated into the upsert state for this source",
+                help: "The number of values \
+                    per-worker, rehydrated into the upsert state for \
+                    this source",
                 var_labels: ["source_id", "worker_id"],
+            )),
+            rehydration_updates: registry.register(metric!(
+                name: "mz_storage_upsert_state_rehydration_updates",
+                help: "The number of updates (both negative and positive), \
+                    per-worker, rehydrated into the upsert state for \
+                    this source",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            // Choose a relatively low number of representative buckets.
+            merge_snapshot_latency: registry.register(metric!(
+                name: "mz_storage_upsert_merge_snapshot_latency",
+                help: "The latencies, in fractional seconds, \
+                    of merging snapshot updates into upsert state for this source. \
+                    Specific implementations of upsert state may have more detailed \
+                    metrics about sub-batches.",
+                var_labels: ["source_id"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            merge_snapshot_updates: registry.register(metric!(
+                name: "mz_storage_upsert_merge_snapshot_updates",
+                help: "The batch size, \
+                    of merging snapshot updates into upsert state for this source. \
+                    Specific implementations of upsert state may have more detailed \
+                    metrics about sub-batches.",
+                var_labels: ["source_id"],
+                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             multi_get_latency: registry.register(metric!(
                 name: "mz_storage_upsert_multi_get_latency",
@@ -376,6 +400,8 @@ impl UpsertMetrics {
 
 #[derive(Debug)]
 pub(crate) struct UpsertSharedMetrics {
+    pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) merge_snapshot_updates: DeleteOnDropHistogram<'static, Vec<String>>,
     pub(crate) multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     pub(crate) multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
     pub(crate) multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
@@ -386,6 +412,12 @@ impl UpsertSharedMetrics {
     fn new(source_id: &GlobalId, metrics: &UpsertMetrics) -> Self {
         let source_id = source_id.to_string();
         UpsertSharedMetrics {
+            merge_snapshot_latency: metrics
+                .merge_snapshot_latency
+                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+            merge_snapshot_updates: metrics
+                .merge_snapshot_updates
+                .get_delete_on_drop_histogram(vec![source_id.clone()]),
             multi_get_latency: metrics
                 .multi_get_latency
                 .get_delete_on_drop_histogram(vec![source_id.clone()]),

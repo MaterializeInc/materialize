@@ -12,7 +12,7 @@
 > SHOW SOURCES
 accounts                subsource      <null>
 auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  subsource <null>
+auction_house_progress  progress       <null>
 auctions                subsource      <null>
 bids                    subsource      <null>
 organizations           subsource      <null>
@@ -24,7 +24,7 @@ users                   subsource      <null>
 
 > SHOW SOURCES FROM a;
 auction_bids            load-generator ${arg.default-storage-size}
-auction_bids_progress   subsource      <null>
+auction_bids_progress   progress       <null>
 bids                    subsource      <null>
 
 # For Tables with mentioned schema should work
@@ -34,7 +34,7 @@ bids                    subsource      <null>
 > SHOW SOURCES FROM another;
 accounts                subsource      <null>
 auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  subsource <null>
+auction_house_progress  progress       <null>
 auctions                subsource      <null>
 bids                    subsource      <null>
 organizations           subsource      <null>
@@ -49,7 +49,7 @@ users                   subsource      <null>
 
 > SHOW SOURCES FROM foo;
 auction_subset            load-generator ${arg.default-storage-size}
-auction_subset_progress   subsource      <null>
+auction_subset_progress   progress       <null>
 foo_bids                  subsource      <null>
 
 > SHOW SOURCES FROM bar;
@@ -111,7 +111,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 <NUMBER>
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM auction_house_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 

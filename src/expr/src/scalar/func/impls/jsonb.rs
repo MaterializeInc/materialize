@@ -9,13 +9,12 @@
 
 use std::fmt;
 
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, Datum, Row, RowPacker, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::impls::numeric::*;
 use crate::scalar::func::EagerUnaryFunc;
@@ -34,6 +33,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_smallint"]
+    #[is_monotone = true]
     fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
@@ -47,6 +47,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_integer"]
+    #[is_monotone = true]
     fn cast_jsonb_to_int32<'a>(a: JsonbRef<'a>) -> Result<i32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()),
@@ -60,6 +61,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_bigint"]
+    #[is_monotone = true]
     fn cast_jsonb_to_int64<'a>(a: JsonbRef<'a>) -> Result<i64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()),
@@ -73,6 +75,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_real"]
+    #[is_monotone = true]
     fn cast_jsonb_to_float32<'a>(a: JsonbRef<'a>) -> Result<f32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()),
@@ -86,6 +89,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_double"]
+    #[is_monotone = true]
     fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()),
@@ -127,6 +131,10 @@ impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
 }
 
 impl fmt::Display for CastJsonbToNumeric {
@@ -137,6 +145,7 @@ impl fmt::Display for CastJsonbToNumeric {
 
 sqlfunc!(
     #[sqlname = "jsonb_to_boolean"]
+    #[is_monotone = true]
     fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
         match a.into_datum() {
             Datum::True => Ok(true),
@@ -175,10 +184,13 @@ sqlfunc!(
 sqlfunc!(
     fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
         match a.into_datum() {
-            Datum::List(list) => match i32::try_from(list.iter().count()) {
-                Ok(len) => Ok(Some(len)),
-                Err(_) => Err(EvalError::Int32OutOfRange),
-            },
+            Datum::List(list) => {
+                let count = list.iter().count();
+                match i32::try_from(count) {
+                    Ok(len) => Ok(Some(len)),
+                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
+                }
+            }
             _ => Ok(None),
         }
     }

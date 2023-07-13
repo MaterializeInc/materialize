@@ -17,30 +17,28 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tracing::{error, warn};
-
 use mz_cluster_client::client::ClusterReplicaLocation;
+pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
+    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
 use mz_ore::halt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tracing::{error, warn};
 
 use crate::Controller;
-
-pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 
 /// Identifies a cluster.
 pub type ClusterId = ComputeInstanceId;
@@ -58,7 +56,7 @@ pub struct ClusterConfig {
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Identifies a cluster replica.
-pub type ReplicaId = mz_compute_client::controller::ReplicaId;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Configures a cluster replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,6 +74,8 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The disk limit for each process in the replica.
+    pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
     pub scale: u16,
     /// The number of worker threads in the replica.
@@ -85,7 +85,7 @@ pub struct ReplicaAllocation {
     pub credits_per_hour: Numeric,
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 // We test this particularly because we deserialize values from strings.
 fn test_replica_allocation_deserialization() {
@@ -93,6 +93,7 @@ fn test_replica_allocation_deserialization() {
         {
             "cpu_limit": 1.0,
             "memory_limit": "10GiB",
+            "disk_limit": "100MiB",
             "scale": 16,
             "workers": 1,
             "credits_per_hour": "16"
@@ -180,6 +181,8 @@ pub struct ManagedReplicaLocation {
     /// `true` if the AZ was specified by the user and must be respected;
     /// `false` if it was picked arbitrarily by Materialize.
     pub az_user_specified: bool,
+    /// Whether the replica needs scratch disk space.
+    pub disk: bool,
 }
 
 /// Configures logging for a cluster replica.
@@ -392,9 +395,8 @@ where
         self.deprovision_replica(cluster_id, replica_id).await?;
         self.metrics_tasks.remove(&replica_id);
 
-        // Storage does not support active-active replication and so does not
-        // have an API for dropping replicas.
         self.active_compute().drop_replica(cluster_id, replica_id)?;
+        self.storage.drop_replica(cluster_id, replica_id);
         Ok(())
     }
 
@@ -475,6 +477,7 @@ where
             ClusterRole::System => "system",
             ClusterRole::User => "user",
         };
+        let persist_pubsub_url = self.persist_pubsub_url.clone();
         let service = self
             .orchestrator
             .ensure_service(
@@ -495,6 +498,7 @@ where
                             format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
+                            format!("--persist-pubsub-url={}", persist_pubsub_url),
                         ]
                     },
                     ports: vec![
@@ -557,6 +561,8 @@ where
                             },
                         },
                     ]),
+                    disk_limit: location.allocation.disk_limit,
+                    disk: location.disk,
                 },
             )
             .await?;

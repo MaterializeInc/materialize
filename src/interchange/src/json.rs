@@ -10,12 +10,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde_json::{json, Map};
-
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType};
+use serde_json::{json, Map};
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes;

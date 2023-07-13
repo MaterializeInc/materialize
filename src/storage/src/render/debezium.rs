@@ -12,10 +12,6 @@ use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Capability, OkErr, Operator};
-use timely::dataflow::{Scope, ScopeParent};
-
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
@@ -24,6 +20,9 @@ use mz_storage_client::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,
 };
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::{Capability, OkErr, Operator};
+use timely::dataflow::{Scope, ScopeParent};
 
 use crate::source::types::DecodeResult;
 

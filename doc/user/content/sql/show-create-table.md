@@ -31,6 +31,14 @@ SHOW CREATE TABLE t;
  materialize.public.t | CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4", "b" "pg_catalog"."text" NOT NULL)
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the table.
+
 ## Related pages
 
 - [`SHOW TABLES`](../show-tables)

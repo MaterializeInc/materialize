@@ -19,22 +19,20 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
 
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::{Codec, Codec64};
-
 use crate::error::InvalidUsage;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, ReadMetrics};
+use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
-use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -49,6 +47,7 @@ where
 {
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) schemas: Schemas<K, V>,
 
@@ -68,6 +67,7 @@ where
         let b = BatchFetcher {
             blob: Arc::clone(&handle.blob),
             metrics: Arc::clone(&handle.metrics),
+            shard_metrics: Arc::clone(&handle.machine.applier.shard_metrics),
             shard_id: handle.machine.shard_id(),
             schemas: handle.schemas.clone(),
             _phantom: PhantomData,
@@ -108,6 +108,7 @@ where
             self.blob.as_ref(),
             Arc::clone(&self.metrics),
             &self.metrics.read.batch_fetcher,
+            &self.shard_metrics,
             None,
             self.schemas.clone(),
         )
@@ -169,6 +170,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
+    shard_metrics: &ShardMetrics,
     reader_id: Option<&LeasedReaderId>,
     schemas: Schemas<K, V>,
 ) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
@@ -194,6 +196,7 @@ where
         &part.shard_id,
         blob,
         &metrics,
+        shard_metrics,
         read_metrics,
         &part.key,
         &part.desc,
@@ -221,7 +224,11 @@ where
         ts_filter,
         part: encoded_part,
         schemas,
-        filter_pushdown_audit: part.filter_pushdown_audit.then(|| part.key.0.clone()),
+        filter_pushdown_audit: if part.filter_pushdown_audit {
+            part.stats.clone()
+        } else {
+            None
+        },
         _phantom: PhantomData,
     };
 
@@ -232,6 +239,7 @@ pub(crate) async fn fetch_batch_part<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
+    shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
@@ -242,6 +250,7 @@ where
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        shard_metrics.blob_gets.inc();
         blob.get(&key.complete(shard_id)).await
     })
     .instrument(get_span.clone())
@@ -343,12 +352,12 @@ where
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
     pub(crate) key: PartialBatchKey,
-    pub(crate) stats: Option<Arc<PartStats>>,
     pub(crate) encoded_size_bytes: usize,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
+    pub(crate) stats: Option<LazyPartStats>,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -376,6 +385,7 @@ where
             encoded_size_bytes: self.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
+            stats: self.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
@@ -432,7 +442,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
     schemas: Schemas<K, V>,
-    filter_pushdown_audit: Option<String>,
+    filter_pushdown_audit: Option<LazyPartStats>,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
@@ -454,10 +464,10 @@ impl<K: Codec, V: Codec, T, D> FetchedPart<K, V, T, D> {
     /// Returns Some if this part was only fetched as part of a filter pushdown
     /// audit. See [LeasedBatchPart::request_filter_pushdown_audit].
     ///
-    /// If set, the String is for debugging and should be included in any error
-    /// messages.
-    pub fn is_filter_pushdown_audit(&self) -> Option<&String> {
-        self.filter_pushdown_audit.as_ref()
+    /// If set, the value in the Option is for debugging and should be included
+    /// in any error messages.
+    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug> {
+        self.filter_pushdown_audit.clone()
     }
 }
 
@@ -621,6 +631,7 @@ pub struct SerdeLeasedBatchPart {
     encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
+    stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
 }
 
@@ -646,18 +657,15 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             ),
             key: x.key,
             encoded_size_bytes: x.encoded_size_bytes,
-            // TODO(mfp): We don't need stats after the batch is Exchanged into
-            // the fetch operator. This is unfortunately non-obvious, so perhaps
-            // better would be to lift stats off LeasedBatchPart.
-            stats: None,
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
+            stats: x.stats,
             filter_pushdown_audit: x.filter_pushdown_audit,
         }
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn client_exchange_data() {
     // The whole point of SerdeLeasedBatchPart is that it can be exchanged
     // between timely workers, including over the network. Enforce then that it

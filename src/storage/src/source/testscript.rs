@@ -12,15 +12,14 @@ use std::convert::Infallible;
 use std::rc::Rc;
 
 use differential_dataflow::{AsCollection, Collection};
-use timely::dataflow::operators::ToStream;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-
 use mz_ore::collections::CollectionExt;
 use mz_repr::Diff;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::{MzOffset, TestScriptSourceConnection};
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use timely::dataflow::operators::ToStream;
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};

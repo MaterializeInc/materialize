@@ -18,6 +18,10 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_ore::cast::CastFrom;
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -30,15 +34,8 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::replay::MzReplay;
-
-use crate::logging::{ComputeLog, LogVariant};
+use crate::logging::{ComputeLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
-
-use super::EventQueue;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
@@ -306,7 +303,7 @@ struct DemuxState {
     /// Maps dataflow exports to their imports and frontier delay tracking state.
     export_imports: BTreeMap<GlobalId, BTreeMap<GlobalId, FrontierDelayState>>,
     /// Maps pending peeks to their installation time (in ns).
-    peek_stash: BTreeMap<Uuid, u128>,
+    peek_stash: BTreeMap<Uuid, Duration>,
 }
 
 /// State for tracking import-export frontier lag.
@@ -315,7 +312,7 @@ struct FrontierDelayState {
     /// A list of input timestamps that have appeared on the input
     /// frontier, but that the output frontier has not yet advanced beyond,
     /// and the time at which we were informed of their availability.
-    time_deque: VecDeque<(mz_repr::Timestamp, u128)>,
+    time_deque: VecDeque<(mz_repr::Timestamp, Duration)>,
     /// A histogram of emitted delays (bucket size to bucket_count).
     delay_map: BTreeMap<u128, i64>,
 }
@@ -482,7 +479,7 @@ impl DemuxHandler<'_, '_> {
         let ts = self.ts();
         self.output.peek.give((peek, ts, 1));
 
-        let existing = self.state.peek_stash.insert(uuid, self.time.as_nanos());
+        let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
             error!(
                 uuid = ?uuid,
@@ -497,7 +494,7 @@ impl DemuxHandler<'_, '_> {
         self.output.peek.give((peek, ts, -1));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
-            let elapsed_ns = self.time.as_nanos() - start;
+            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
             self.output.peek_duration.give((elapsed_pow, ts, 1));
         } else {
@@ -532,7 +529,7 @@ impl DemuxHandler<'_, '_> {
                 while let Some(current_front) = time_deque.pop_front() {
                     let (import_frontier, update_time) = current_front;
                     if frontier >= import_frontier {
-                        let elapsed_ns = self.time.as_nanos() - update_time;
+                        let elapsed_ns = self.time.saturating_sub(update_time).as_nanos();
                         let elapsed_pow = elapsed_ns.next_power_of_two();
                         let datum = FrontierDelayDatum {
                             export_id,
@@ -578,9 +575,7 @@ impl DemuxHandler<'_, '_> {
         // sink recording in the current `ComputeState` until Timely eventually drops it.
         if let Some(import_map) = self.state.export_imports.get_mut(&export_id) {
             if let Some(delay_state) = import_map.get_mut(&import_id) {
-                delay_state
-                    .time_deque
-                    .push_back((frontier, self.time.as_nanos()));
+                delay_state.time_deque.push_back((frontier, self.time));
             } else {
                 error!(
                     export = ?export_id, import = ?import_id,

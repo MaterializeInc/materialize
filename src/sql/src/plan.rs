@@ -36,50 +36,63 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use serde::{Deserialize, Serialize};
-
-pub use error::PlanError;
-pub use explain::normalize_subqueries;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::adt::mz_acl_item::AclMode;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::TransactionIsolationLevel;
+
+use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
-pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
-pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
+use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
-    Statement, StatementKind, TransactionAccessMode,
+    ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, Raw, Statement,
+    StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference, RoleAttributes};
-use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
-
-pub use self::expr::{
-    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
+use crate::catalog::{
+    CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
+    RoleAttributes,
 };
-pub use crate::plan::statement::ddl::PlannedRoleAttributes;
+use crate::names::{
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    SystemObjectId,
+};
 
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
+pub(crate) mod notice;
 pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
+pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
+
+use crate::plan::with_options::OptionalInterval;
+pub use error::PlanError;
+pub use explain::normalize_subqueries;
+pub use expr::{
+    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    WindowExprType,
+};
+pub use notice::PlanNotice;
+pub use optimize::OptimizerConfig;
+pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use scope::Scope;
+pub use side_effecting_func::SideEffectingFunc;
+pub use statement::ddl::PlannedRoleAttributes;
+pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -91,6 +104,7 @@ pub enum Plan {
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
+    CreateWebhookSource(CreateWebhookSourcePlan),
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
@@ -103,26 +117,32 @@ pub enum Plan {
     DiscardTemp,
     DiscardAll,
     DropObjects(DropObjectsPlan),
+    DropOwned(DropOwnedPlan),
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
     ShowVariable(ShowVariablePlan),
+    InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
+    SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
-    Peek(PeekPlan),
+    Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
     CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
     Insert(InsertPlan),
+    AlterCluster(AlterClusterPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    AlterClusterRename(AlterClusterRenamePlan),
+    AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
@@ -141,8 +161,12 @@ pub enum Plan {
     RotateKeys(RotateKeysPlan),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
-    GrantPrivilege(GrantPrivilegePlan),
-    RevokePrivilege(RevokePrivilegePlan),
+    GrantPrivileges(GrantPrivilegesPlan),
+    RevokePrivileges(RevokePrivilegesPlan),
+    AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
+    ReassignOwned(ReassignOwnedPlan),
+    SideEffectingFunc(SideEffectingFunc),
+    ValidateConnection(ValidateConnectionPlan),
 }
 
 impl Plan {
@@ -150,14 +174,23 @@ impl Plan {
     /// [`PlanKind`].
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
+            StatementKind::AlterCluster => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
+            }
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,
                 PlanKind::AlterNoop,
             ],
             StatementKind::AlterObjectRename => {
-                vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
+                vec![
+                    PlanKind::AlterClusterRename,
+                    PlanKind::AlterClusterReplicaRename,
+                    PlanKind::AlterItemRename,
+                    PlanKind::AlterNoop,
+                ]
             }
             StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
@@ -173,7 +206,7 @@ impl Plan {
             StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
+            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -184,6 +217,7 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
+            StatementKind::CreateWebhookSource => vec![PlanKind::CreateWebhookSource],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 vec![PlanKind::CreateSource]
             }
@@ -195,30 +229,34 @@ impl Plan {
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
             StatementKind::DropObjects => vec![PlanKind::DropObjects],
+            StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
-            StatementKind::GrantPrivilege => vec![PlanKind::GrantPrivilege],
+            StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
+            StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
-            StatementKind::RevokePrivilege => vec![PlanKind::RevokePrivilege],
+            StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Peek],
-            StatementKind::SetTransaction => vec![],
+            StatementKind::Select => vec![PlanKind::Select, PlanKind::SideEffectingFunc],
+            StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
-                PlanKind::Peek,
+                PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
+                PlanKind::InspectShard,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
             StatementKind::Update => vec![PlanKind::ReadThenWrite],
+            StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
         }
     }
 
@@ -231,6 +269,7 @@ impl Plan {
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
+            Plan::CreateWebhookSource(_) => "create source",
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
@@ -259,16 +298,19 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
             },
+            Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
             Plan::ShowVariable(_) => "show variable",
+            Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
+            Plan::SetTransaction(_) => "set transaction",
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
             Plan::AbortTransaction(_) => "abort",
-            Plan::Peek(_) => "select",
+            Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
             Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
@@ -291,6 +333,9 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
             },
+            Plan::AlterCluster(_) => "alter cluster",
+            Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
@@ -333,8 +378,12 @@ impl Plan {
             Plan::RotateKeys(_) => "rotate keys",
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
-            Plan::GrantPrivilege(_) => "grant privilege",
-            Plan::RevokePrivilege(_) => "revoke privilege",
+            Plan::GrantPrivileges(_) => "grant privilege",
+            Plan::RevokePrivileges(_) => "revoke privilege",
+            Plan::AlterDefaultPrivileges(_) => "alter default privileges",
+            Plan::ReassignOwned(_) => "reassign owned",
+            Plan::SideEffectingFunc(_) => "side effecting func",
+            Plan::ValidateConnection(_) => "validate connection",
         }
     }
 }
@@ -393,7 +442,27 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateClusterPlan {
     pub name: String,
+    pub variant: CreateClusterVariant,
+}
+
+#[derive(Debug)]
+pub enum CreateClusterVariant {
+    Managed(CreateClusterManagedPlan),
+    Unmanaged(CreateClusterUnmanagedPlan),
+}
+
+#[derive(Debug)]
+pub struct CreateClusterUnmanagedPlan {
     pub replicas: Vec<(String, ReplicaConfig)>,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterManagedPlan {
+    pub replication_factor: u32,
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub compute: ComputeReplicaConfig,
+    pub disk: bool,
 }
 
 #[derive(Debug)]
@@ -432,7 +501,21 @@ pub enum ReplicaConfig {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
+        disk: bool,
     },
+}
+
+/// TODO(parkmycar): once we install webhook sources on clusterd, this struct should be
+/// delete/merged in favor of [`CreateSourcePlan`].
+///
+/// See <https://github.com/MaterializeInc/materialize/issues/19951>.
+#[derive(Debug)]
+pub struct CreateWebhookSourcePlan {
+    pub name: QualifiedItemName,
+    pub if_not_exists: bool,
+    pub create_sql: String,
+    pub desc: RelationDesc,
+    pub timeline: Timeline,
 }
 
 #[derive(Debug)]
@@ -448,17 +531,7 @@ pub struct CreateSourcePlan {
 pub struct CreateSourcePlans {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
-    pub depends_on: Vec<GlobalId>,
-}
-
-impl From<(GlobalId, CreateSourcePlan, Vec<GlobalId>)> for CreateSourcePlans {
-    fn from(plan: (GlobalId, CreateSourcePlan, Vec<GlobalId>)) -> Self {
-        CreateSourcePlans {
-            source_id: plan.0,
-            plan: plan.1,
-            depends_on: plan.2,
-        }
-    }
+    pub resolved_ids: ResolvedIds,
 }
 
 /// Specifies the cluster for a source or a sink.
@@ -503,6 +576,14 @@ pub struct CreateConnectionPlan {
     pub name: QualifiedItemName,
     pub if_not_exists: bool,
     pub connection: Connection,
+    pub validate: bool,
+}
+
+#[derive(Debug)]
+pub struct ValidateConnectionPlan {
+    pub id: GlobalId,
+    /// The connection to validate.
+    pub connection: mz_storage_client::types::connections::Connection,
 }
 
 #[derive(Debug)]
@@ -582,8 +663,25 @@ pub struct DropObjectsPlan {
 }
 
 #[derive(Debug)]
+pub struct DropOwnedPlan {
+    /// The role IDs that own the objects.
+    pub role_ids: Vec<RoleId>,
+    /// All object IDs to drop.
+    pub drop_ids: Vec<ObjectId>,
+    /// The privileges to revoke.
+    pub privilege_revokes: Vec<(SystemObjectId, MzAclItem)>,
+    /// The default privileges to revoke.
+    pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
+}
+
+#[derive(Debug)]
 pub struct ShowVariablePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct InspectShardPlan {
+    pub id: GlobalId,
 }
 
 #[derive(Debug)]
@@ -604,8 +702,14 @@ pub struct ResetVariablePlan {
     pub name: String,
 }
 
+#[derive(Debug)]
+pub struct SetTransactionPlan {
+    pub local: bool,
+    pub modes: Vec<TransactionMode>,
+}
+
 #[derive(Clone, Debug)]
-pub struct PeekPlan {
+pub struct SelectPlan {
     pub source: MirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
@@ -735,8 +839,8 @@ pub struct AlterIndexResetOptionsPlan {
 
 #[derive(Debug, Clone)]
 
-pub enum AlterOptionParameter {
-    Set(String),
+pub enum AlterOptionParameter<T = String> {
+    Set(T),
     Reset,
     Unchanged,
 }
@@ -748,9 +852,37 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceAction {
+    Resize(AlterOptionParameter),
+    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterOptionParameter,
+    pub action: AlterSourceAction,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterPlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub options: PlanClusterOption,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterRenamePlan {
+    pub id: ClusterId,
+    pub name: String,
+    pub to_name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterReplicaRenamePlan {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: QualifiedReplica,
+    pub to_name: String,
 }
 
 #[derive(Debug)]
@@ -843,8 +975,8 @@ pub struct RaisePlan {
 
 #[derive(Debug)]
 pub struct GrantRolePlan {
-    /// The role that is gaining a member.
-    pub role_id: RoleId,
+    /// The roles that are gaining members.
+    pub role_ids: Vec<RoleId>,
     /// The roles that will be added to `role_id`.
     pub member_ids: Vec<RoleId>,
     /// The role that granted the membership.
@@ -853,8 +985,8 @@ pub struct GrantRolePlan {
 
 #[derive(Debug)]
 pub struct RevokeRolePlan {
-    /// The role that is losing a member.
-    pub role_id: RoleId,
+    /// The roles that are losing members.
+    pub role_ids: Vec<RoleId>,
     /// The roles that will be removed from `role_id`.
     pub member_ids: Vec<RoleId>,
     /// The role that revoked the membership.
@@ -862,27 +994,48 @@ pub struct RevokeRolePlan {
 }
 
 #[derive(Debug)]
-pub struct GrantPrivilegePlan {
-    /// /// The privileges being granted on an object.
+pub struct UpdatePrivilege {
+    /// The privileges being granted/revoked on an object.
     pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
-    /// The roles that will granted the privileges.
-    pub grantees: Vec<RoleId>,
+    /// The ID of the object receiving privileges.
+    pub target_id: SystemObjectId,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }
 
 #[derive(Debug)]
-pub struct RevokePrivilegePlan {
-    /// The privileges being revoked.
-    pub acl_mode: AclMode,
-    /// The ID of the object.
-    pub object_id: ObjectId,
+pub struct GrantPrivilegesPlan {
+    /// Description of each privilege being granted.
+    pub update_privileges: Vec<UpdatePrivilege>,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<RoleId>,
+}
+
+#[derive(Debug)]
+pub struct RevokePrivilegesPlan {
+    /// Description of each privilege being revoked.
+    pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will have privileges revoked.
     pub revokees: Vec<RoleId>,
-    /// The role that will revoke the privileges.
-    pub grantor: RoleId,
+}
+#[derive(Debug)]
+pub struct AlterDefaultPrivilegesPlan {
+    /// Description of objects that match this default privilege.
+    pub privilege_objects: Vec<DefaultPrivilegeObject>,
+    /// The privilege to be granted/revoked from the matching objects.
+    pub privilege_acl_items: Vec<DefaultPrivilegeAclItem>,
+    /// Whether this is a grant or revoke.
+    pub is_grant: bool,
+}
+
+#[derive(Debug)]
+pub struct ReassignOwnedPlan {
+    /// The roles whose owned objects are being reassigned.
+    pub old_roles: Vec<RoleId>,
+    /// The new owner of the objects.
+    pub new_role: RoleId,
+    /// All object IDs to reassign.
+    pub reassign_ids: Vec<ObjectId>,
 }
 
 #[derive(Clone, Debug)]
@@ -915,8 +1068,7 @@ pub struct Ingestion {
     pub desc: SourceDesc,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
-    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
-    pub progress_subsource: Option<GlobalId>,
+    pub progress_subsource: GlobalId,
 }
 
 #[derive(Clone, Debug)]
@@ -1070,6 +1222,35 @@ pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.
     LogicalCompactionWindow(Option<Duration>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanClusterOption {
+    pub availability_zones: AlterOptionParameter<Vec<String>>,
+    pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
+    pub introspection_debugging: AlterOptionParameter<bool>,
+    pub introspection_interval: AlterOptionParameter<OptionalInterval>,
+    pub managed: AlterOptionParameter<bool>,
+    pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
+    pub replication_factor: AlterOptionParameter<u32>,
+    pub size: AlterOptionParameter,
+    pub disk: AlterOptionParameter<bool>,
+}
+
+impl Default for PlanClusterOption {
+    fn default() -> Self {
+        Self {
+            availability_zones: AlterOptionParameter::Unchanged,
+            idle_arrangement_merge_effort: AlterOptionParameter::Unchanged,
+            introspection_debugging: AlterOptionParameter::Unchanged,
+            introspection_interval: AlterOptionParameter::Unchanged,
+            managed: AlterOptionParameter::Unchanged,
+            replicas: AlterOptionParameter::Unchanged,
+            replication_factor: AlterOptionParameter::Unchanged,
+            size: AlterOptionParameter::Unchanged,
+            disk: AlterOptionParameter::Unchanged,
+        }
+    }
 }
 
 /// A vector of values to which parameter references should be bound.

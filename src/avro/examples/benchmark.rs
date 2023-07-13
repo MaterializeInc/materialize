@@ -93,11 +93,9 @@
 
 use std::time::{Duration, Instant};
 
-use mz_avro::{
-    schema::Schema,
-    types::{Record, ToAvro, Value},
-    Reader, Writer,
-};
+use mz_avro::schema::Schema;
+use mz_avro::types::{Record, ToAvro, Value};
+use mz_avro::{Reader, Writer};
 
 fn nanos(duration: Duration) -> u64 {
     duration.as_secs() * 1_000_000_000 + duration.subsec_nanos() as u64

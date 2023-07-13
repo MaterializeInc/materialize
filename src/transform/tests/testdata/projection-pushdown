@@ -304,7 +304,7 @@ build apply=ProjectionPushdown
 ----
 Project (#0, #0, #0)
   Project (#2)
-    TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first] monotonic=false
+    TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first]
       Get x
 
 build apply=ProjectionPushdown
@@ -318,7 +318,7 @@ build apply=ProjectionPushdown
 ----
 Project (#0, #0)
   Project (#1)
-    TopK order_by=[#0 asc nulls_first] monotonic=false
+    TopK order_by=[#0 asc nulls_first]
       Project (#1, #2)
         Get x
 
@@ -331,7 +331,7 @@ build apply=ProjectionPushdown
         )
     [#2 #1])
 ----
-TopK group_by=[#0] order_by=[#1 asc nulls_first] monotonic=false
+TopK group_by=[#0] order_by=[#1 asc nulls_first]
   Project (#2, #1)
     Get x
 

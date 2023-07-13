@@ -10,12 +10,11 @@
 use std::fmt;
 
 use dec::{OrderedDecimal, Rounding};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
@@ -24,6 +23,7 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(NegNumeric)]
+    #[is_monotone = true]
     fn neg_numeric(mut a: Numeric) -> Numeric {
         numeric::cx_datum().neg(&mut a);
         numeric::munge_numeric(&mut a).unwrap();
@@ -41,6 +41,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "ceilnumeric"]
+    #[is_monotone = true]
     fn ceil_numeric(mut a: Numeric) -> Numeric {
         // ceil will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -73,6 +74,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "floornumeric"]
+    #[is_monotone = true]
     fn floor_numeric(mut a: Numeric) -> Numeric {
         // floor will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -128,6 +130,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "roundnumeric"]
+    #[is_monotone = true]
     fn round_numeric(mut a: Numeric) -> Numeric {
         // round will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -140,6 +143,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "truncnumeric"]
+    #[is_monotone = true]
     fn trunc_numeric(mut a: Numeric) -> Numeric {
         // trunc will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -170,12 +174,15 @@ sqlfunc!(
     #[sqlname = "numeric_to_smallint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt16ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        let i = cx.try_into_i32(a).or(Err(EvalError::Int16OutOfRange))?;
-        i16::try_from(i).or(Err(EvalError::Int16OutOfRange))
+        let i = cx
+            .try_into_i32(a)
+            .or(Err(EvalError::Int16OutOfRange(a.to_string())))?;
+        i16::try_from(i).or(Err(EvalError::Int16OutOfRange(i.to_string())))
     }
 );
 
@@ -183,11 +190,13 @@ sqlfunc!(
     #[sqlname = "numeric_to_integer"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt32ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        cx.try_into_i32(a).or(Err(EvalError::Int32OutOfRange))
+        cx.try_into_i32(a)
+            .or(Err(EvalError::Int32OutOfRange(a.to_string())))
     }
 );
 
@@ -195,11 +204,13 @@ sqlfunc!(
     #[sqlname = "numeric_to_bigint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt64ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        cx.try_into_i64(a).or(Err(EvalError::Int64OutOfRange))
+        cx.try_into_i64(a)
+            .or(Err(EvalError::Int64OutOfRange(a.to_string())))
     }
 );
 
@@ -207,10 +218,11 @@ sqlfunc!(
     #[sqlname = "numeric_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
         let i = a.to_string().parse::<f32>().unwrap();
         if i.is_infinite() {
-            Err(EvalError::Float32OutOfRange)
+            Err(EvalError::Float32OutOfRange(i.to_string()))
         } else {
             Ok(i)
         }
@@ -221,10 +233,11 @@ sqlfunc!(
     #[sqlname = "numeric_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
         let i = a.to_string().parse::<f64>().unwrap();
         if i.is_infinite() {
-            Err(EvalError::Float64OutOfRange)
+            Err(EvalError::Float64OutOfRange(i.to_string()))
         } else {
             Ok(i)
         }
@@ -246,12 +259,15 @@ sqlfunc!(
     #[sqlname = "numeric_to_uint2"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint16ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        let u = cx.try_into_u32(a).or(Err(EvalError::UInt16OutOfRange))?;
-        u16::try_from(u).or(Err(EvalError::UInt16OutOfRange))
+        let u = cx
+            .try_into_u32(a)
+            .or(Err(EvalError::UInt16OutOfRange(a.to_string())))?;
+        u16::try_from(u).or(Err(EvalError::UInt16OutOfRange(u.to_string())))
     }
 );
 
@@ -259,11 +275,13 @@ sqlfunc!(
     #[sqlname = "numeric_to_uint4"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint32ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        cx.try_into_u32(a).or(Err(EvalError::UInt32OutOfRange))
+        cx.try_into_u32(a)
+            .or(Err(EvalError::UInt32OutOfRange(a.to_string())))
     }
 );
 
@@ -271,11 +289,13 @@ sqlfunc!(
     #[sqlname = "numeric_to_uint8"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint64ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
         cx.clear_status();
-        cx.try_into_u64(a).or(Err(EvalError::UInt64OutOfRange))
+        cx.try_into_u64(a)
+            .or(Err(EvalError::UInt64OutOfRange(a.to_string())))
     }
 );
 

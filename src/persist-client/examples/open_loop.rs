@@ -16,20 +16,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist::workload::DataGenerator;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
+use mz_persist_client::rpc::PubSubClientConnection;
+use mz_persist_client::{PersistLocation, ShardId};
 use prometheus::Encoder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, info_span, trace, Instrument};
-
-use mz_ore::cast::CastFrom;
-use mz_persist::workload::DataGenerator;
-use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::{PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 use crate::BUILD_INFO;
@@ -132,6 +132,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist = PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
+        |_, _| PubSubClientConnection::noop(),
     )
     .open(location)
     .await?;
@@ -449,7 +450,6 @@ where
 
 mod api {
     use async_trait::async_trait;
-
     use mz_persist::indexed::columnar::ColumnarRecords;
 
     /// An interface to write a batch of data into a persistent system.
@@ -476,15 +476,14 @@ mod raw_persist_benchmark {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use mz_persist_types::codec_impls::VecU8Schema;
-    use timely::progress::Antichain;
-    use tokio::sync::mpsc::Sender;
-
     use mz_ore::cast::CastFrom;
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
     use mz_persist_client::{PersistClient, ShardId};
+    use mz_persist_types::codec_impls::VecU8Schema;
     use mz_persist_types::Codec64;
+    use timely::progress::Antichain;
+    use tokio::sync::mpsc::Sender;
     use tokio::task::JoinHandle;
     use tracing::{info_span, Instrument};
 

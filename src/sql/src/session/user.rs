@@ -48,8 +48,6 @@ pub struct User {
 pub struct ExternalUserMetadata {
     /// The ID of the user in the external system.
     pub user_id: Uuid,
-    /// The ID of the user's active group in the external system.
-    pub group_id: Uuid,
     /// Indicates if the user is an admin in the external system.
     pub admin: bool,
 }
@@ -83,5 +81,10 @@ impl User {
     /// Returns whether this is user is the `mz_system` user.
     pub fn is_system_user(&self) -> bool {
         self == &*SYSTEM_USER
+    }
+
+    /// Returns whether we should limit this user's connections to max_connections
+    pub fn limit_max_connections(&self) -> bool {
+        !self.is_internal() && !self.is_external_admin()
     }
 }

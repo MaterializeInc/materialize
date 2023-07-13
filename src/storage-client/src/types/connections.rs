@@ -10,24 +10,16 @@
 //! Connection types.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use rdkafka::client::BrokerAddr;
-use rdkafka::config::FromClientConfigAndContext;
-use rdkafka::ClientContext;
-use serde::{Deserialize, Serialize};
-use tokio::net;
-use tokio_postgres::config::SslMode;
-use url::Url;
-
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_kafka_util::client::{BrokerRewrite, BrokerRewritingClientContext};
+use mz_kafka_util::client::{
+    BrokerRewrite, BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
+};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -35,6 +27,17 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_tracing::CloneableEnvFilter;
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use rdkafka::client::BrokerAddr;
+use rdkafka::config::FromClientConfigAndContext;
+use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::ClientContext;
+use serde::{Deserialize, Serialize};
+use tokio::net;
+use tokio_postgres::config::SslMode;
+use url::Url;
 
 use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
 use crate::types::connections::aws::AwsConfig;
@@ -133,12 +136,15 @@ impl ConnectionContext {
     /// (e.g., via a configuration option in a SQL statement). See
     /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
-        filter: &tracing_subscriber::filter::Targets,
+        startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
-            librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
+            librdkafka_log_level: mz_ore::tracing::crate_level(
+                &startup_log_level.clone().into(),
+                "librdkafka",
+            ),
             aws_external_id_prefix,
             secrets_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -164,6 +170,35 @@ pub enum Connection {
     Ssh(SshConnection),
     Aws(AwsConfig),
     AwsPrivatelink(AwsPrivatelinkConnection),
+}
+
+impl Connection {
+    /// Whether this connection should be validated by default on creation.
+    pub fn validate_by_default(&self) -> bool {
+        match self {
+            Connection::Kafka(conn) => conn.validate_by_default(),
+            Connection::Csr(conn) => conn.validate_by_default(),
+            Connection::Postgres(conn) => conn.validate_by_default(),
+            Connection::Ssh(conn) => conn.validate_by_default(),
+            Connection::Aws(conn) => conn.validate_by_default(),
+            Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
+        }
+    }
+
+    /// Validates this connection by attempting to connect to the upstream system.
+    pub async fn validate(
+        &self,
+        connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
+        match self {
+            Connection::Kafka(conn) => conn.validate(connection_context).await,
+            Connection::Csr(conn) => conn.validate(connection_context).await,
+            Connection::Postgres(conn) => conn.validate(connection_context).await,
+            Connection::Ssh(conn) => conn.validate(connection_context).await,
+            Connection::Aws(conn) => conn.validate(connection_context).await,
+            Connection::AwsPrivatelink(conn) => conn.validate(connection_context).await,
+        }
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -271,39 +306,6 @@ impl KafkaConnection {
         extra_options: &BTreeMap<&str, String>,
     ) -> Result<T, anyhow::Error>
     where
-        C: ClientContext + Clone,
-        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
-    {
-        let retry = if self
-            .brokers
-            .iter()
-            .any(|b| matches!(b.tunnel, Tunnel::Ssh(_)))
-        {
-            // This is a temporary workaround until
-            // <https://github.com/MaterializeInc/materialize/issues/18491>
-            // happens. This can slow down ddl statements.
-            mz_ore::retry::Retry::default().max_duration(Duration::from_secs(30))
-        } else {
-            mz_ore::retry::Retry::default().max_tries(1)
-        };
-
-        retry
-            .retry_async(|_| async {
-                let context = context.clone();
-                self.create_with_context_inner(connection_context, context, extra_options)
-                    .await
-            })
-            .await
-    }
-
-    /// Creates a Kafka client for the connection.
-    pub async fn create_with_context_inner<C, T>(
-        &self,
-        connection_context: &ConnectionContext,
-        context: C,
-        extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, anyhow::Error>
-    where
         C: ClientContext,
         T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
     {
@@ -405,6 +407,36 @@ impl KafkaConnection {
         }
 
         Ok(config.create_with_context(context)?)
+    }
+
+    async fn validate(&self, connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+        let consumer: BaseConsumer<_> = self
+            .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
+            .await?;
+
+        // librdkafka doesn't expose an API for determining whether a connection to
+        // the Kafka cluster has been successfully established. So we make a
+        // metadata request, though we don't care about the results, so that we can
+        // report any errors making that request. If the request succeeds, we know
+        // we were able to contact at least one broker, and that's a good proxy for
+        // being able to contact all the brokers in the cluster.
+        //
+        // The downside of this approach is it produces a generic error message like
+        // "metadata fetch error" with no additional details. The real networking
+        // error is buried in the librdkafka logs, which are not visible to users.
+        //
+        // TODO(benesch): pull out more error details from the librdkafka logs and
+        // include them in the error message.
+        mz_ore::task::spawn_blocking(
+            || "kafka_get_metadata",
+            move || consumer.fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT),
+        )
+        .await??;
+        Ok(())
+    }
+
+    fn validate_by_default(&self) -> bool {
+        true
     }
 }
 
@@ -566,6 +598,12 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
+        // `net::lookup_host` requires a port but the port will be ignored when
+        // passed to `resolve_to_addrs`. We use a dummy port that will be easy
+        // to spot in the logs to make it obvious if some component downstream
+        // incorrectly starts using this port.
+        const DUMMY_PORT: u16 = 11111;
+
         match &self.tunnel {
             Tunnel::Direct => {}
             Tunnel::Ssh(ssh_tunnel) => {
@@ -585,29 +623,43 @@ impl CsrConnection {
                     )
                     .await?;
 
-                // Install the SSH tunnel as a proxy whose URL is dynamically
-                // computed for every request. This ensures that, if the tunnel
-                // fails and restarts at a new address, requests will start
-                // using the new tunnel address.
+                // Carefully inject the SSH tunnel into the client
+                // configuration. This is delicate because we need TLS
+                // verification to continue to use the remote hostname rather
+                // than the tunnel hostname.
 
-                let remote_url = self.url.clone();
-                client_config = client_config.dynamic_url(move || {
-                    let addr = ssh_tunnel.local_addr();
-                    let mut url = remote_url.clone();
-                    url.set_host(Some(&addr.ip().to_string()))
-                        .expect("cannot fail");
-                    url.set_port(Some(addr.port())).expect("cannot fail");
-                    url
-                });
+                client_config = client_config
+                    // `resolve_to_addrs` allows us to rewrite the hostname
+                    // at the DNS level, which means the TCP connection is
+                    // correctly routed through the tunnel, but TLS verification
+                    // is still performed against the remote hostname.
+                    // Unfortunately the port here is ignored...
+                    .resolve_to_addrs(
+                        host,
+                        &[SocketAddr::new(ssh_tunnel.local_addr().ip(), DUMMY_PORT)],
+                    )
+                    // ...so we also dynamically rewrite the URL to use the
+                    // current port for the SSH tunnel.
+                    //
+                    // WARNING: this is brittle, because we only dynamically
+                    // update the client configuration with the tunnel *port*,
+                    // and not the hostname This works fine in practice, because
+                    // only the SSH tunnel port will change if the tunnel fails
+                    // and has to be restarted (the hostname is always
+                    // 127.0.0.1)--but this is an an implementation detail of
+                    // the SSH tunnel code that we're relying on.
+                    .dynamic_url({
+                        let remote_url = self.url.clone();
+                        move || {
+                            let mut url = remote_url.clone();
+                            url.set_port(Some(ssh_tunnel.local_addr().port()))
+                                .expect("cannot fail");
+                            url
+                        }
+                    });
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
-
-                // `net::lookup_host` requires a port but the port will be ignored
-                // when passed to `resolve_to_addrs`. We use a dummy port that will
-                // be easy to spot in the logs to make it obvious if some component
-                // downstream incorrectly starts using this port.
-                const DUMMY_PORT: u16 = 11111;
 
                 // TODO: use types to enforce that the URL has a string hostname.
                 let host = self
@@ -627,6 +679,15 @@ impl CsrConnection {
         }
 
         client_config.build()
+    }
+
+    async fn validate(&self, connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+        self.connect(connection_context).await?;
+        Ok(())
+    }
+
+    fn validate_by_default(&self) -> bool {
+        true
     }
 }
 
@@ -807,6 +868,16 @@ impl PostgresConnection {
         };
 
         Ok(mz_postgres_util::Config::new(config, tunnel)?)
+    }
+
+    async fn validate(&self, connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+        let config = self.config(&*connection_context.secrets_reader).await?;
+        config.connect("connection validation").await?;
+        Ok(())
+    }
+
+    fn validate_by_default(&self) -> bool {
+        true
     }
 }
 
@@ -1048,5 +1119,28 @@ impl SshTunnel {
                 remote_port,
             )
             .await
+    }
+}
+impl SshConnection {
+    #[allow(clippy::unused_async)]
+    async fn validate(&self, _connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+        Err(anyhow!("Validating SSH connections is not supported yet"))
+    }
+
+    fn validate_by_default(&self) -> bool {
+        false
+    }
+}
+
+impl AwsPrivatelinkConnection {
+    #[allow(clippy::unused_async)]
+    async fn validate(&self, _connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+        Err(anyhow!(
+            "Validating AWS Privatelink connections is not supported yet"
+        ))
+    }
+
+    fn validate_by_default(&self) -> bool {
+        false
     }
 }

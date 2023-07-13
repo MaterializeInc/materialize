@@ -1,12 +1,12 @@
 ---
 title: "DROP USER"
-description: "`DROP USER` removes a role from your Materialize instance."
+description: "`DROP USER` removes a role from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP USER` removes a role from your Materialize instance.
+`DROP USER` removes a role from Materialize.
 
 ## Syntax
 
@@ -20,6 +20,14 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 ## Details
 
 `DROP USER` is an alias for [`DROP ROLE`](../drop-role).
+
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

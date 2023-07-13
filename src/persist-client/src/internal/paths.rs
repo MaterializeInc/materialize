@@ -7,10 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_persist::location::SeqNo;
-use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter, Write};
 use std::ops::Deref;
 use std::str::FromStr;
+
+use mz_persist::location::SeqNo;
+use proptest_derive::Arbitrary;
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::internal::encoding::parse_id;
@@ -47,6 +51,64 @@ impl PartId {
     }
 }
 
+/// A component that provides information about the writer of a blob.
+/// For older blobs, this is a UUID for the specific writer instance;
+/// for newer blobs, this is a string representing the version at which the blob was written.
+/// In either case, it's used to help determine whether a blob may eventually
+/// be linked into state, or whether it's junk that we can clean up.
+/// Note that the ordering is meaningful: all writer-id keys are considered smaller than
+/// all version keys.
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone)]
+pub enum WriterKey {
+    Id(WriterId),
+    Version(String),
+}
+
+impl WriterKey {
+    /// This uses the version numbering scheme specified in [mz_build_info::BuildInfo::version_num].
+    /// (And asserts that the version isn't so large that that scheme is no longer sufficient.)
+    pub fn for_version(version: &Version) -> WriterKey {
+        assert!(version.major <= 99);
+        assert!(version.minor <= 999);
+        assert!(version.patch <= 99);
+        WriterKey::Version(format!(
+            "{:02}{:03}{:02}",
+            version.major, version.minor, version.patch
+        ))
+    }
+}
+
+impl FromStr for WriterKey {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("empty version string".to_owned());
+        }
+
+        let key = match &s[..1] {
+            "w" => WriterKey::Id(WriterId::from_str(s)?),
+            "n" => WriterKey::Version(s[1..].to_owned()),
+            c => {
+                return Err(format!("unknown prefix for version: {c}"));
+            }
+        };
+        Ok(key)
+    }
+}
+
+impl Display for WriterKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriterKey::Id(id) => id.fmt(f),
+            WriterKey::Version(s) => {
+                f.write_char('n')?;
+                f.write_str(s)
+            }
+        }
+    }
+}
+
 /// Partially encoded path used in [mz_persist::location::Blob] storage.
 /// Composed of a [WriterId] and [PartId]. Can be completed with a [ShardId] to
 /// form a full [BlobKey].
@@ -54,12 +116,12 @@ impl PartId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PartialBatchKey(pub(crate) String);
 
 impl PartialBatchKey {
-    pub fn new(writer_id: &WriterId, part_id: &PartId) -> Self {
-        PartialBatchKey(format!("{}/{}", writer_id, part_id))
+    pub fn new(version: &WriterKey, part_id: &PartId) -> Self {
+        PartialBatchKey(format!("{}/{}", version, part_id))
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
@@ -118,7 +180,7 @@ impl RollupId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PartialRollupKey(pub(crate) String);
 
 impl PartialRollupKey {
@@ -151,7 +213,7 @@ impl Deref for PartialRollupKey {
 #[derive(Debug, PartialEq)]
 pub enum PartialBlobKey {
     /// A parsed [PartialBatchKey].
-    Batch(WriterId, PartId),
+    Batch(WriterKey, PartId),
     /// A parsed [PartialRollupKey].
     Rollup(SeqNo, RollupId),
 }
@@ -184,8 +246,8 @@ impl BlobKey {
         let ids = key.split('/').collect::<Vec<_>>();
 
         match ids[..] {
-            [shard, writer, part] if writer.starts_with('w') => Ok(
-                (ShardId::from_str(shard)?, PartialBlobKey::Batch(WriterId::from_str(writer)?, PartId::from_str(part)?))
+            [shard, writer, part] if writer.starts_with('w') | writer.starts_with('n') => Ok(
+                (ShardId::from_str(shard)?, PartialBlobKey::Batch(WriterKey::from_str(writer)?, PartId::from_str(part)?))
             ),
             [shard, seqno, rollup] if seqno.starts_with('v') => Ok(
                 (ShardId::from_str(shard)?, PartialBlobKey::Rollup(SeqNo::from_str(seqno)?, RollupId::from_str(rollup)?))
@@ -204,7 +266,7 @@ pub enum BlobKeyPrefix<'a> {
     Shard(&'a ShardId),
     /// Scoped to the batch blobs of an individual writer
     #[cfg(test)]
-    Writer(&'a ShardId, &'a WriterId),
+    Writer(&'a ShardId, &'a WriterKey),
     /// Scoped to all state rollup blobs  of an individual shard
     #[cfg(test)]
     Rollups(&'a ShardId),
@@ -227,25 +289,51 @@ impl std::fmt::Display for BlobKeyPrefix<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use semver::Version;
 
-    #[test]
+    fn gen_version() -> impl Strategy<Value = Version> {
+        (0u64..=99, 0u64..=999, 0u64..=99)
+            .prop_map(|(major, minor, patch)| Version::new(major, minor, patch))
+    }
+
+    #[mz_ore::test]
+    fn key_ordering_compatible() {
+        // The WriterKey's ordering should never disagree with the Version ordering.
+        // (Though the writer key might compare equal when the version does not.)
+        proptest!(|(a in gen_version(), b in gen_version())| {
+            let a_key = WriterKey::for_version(&a);
+            let b_key = WriterKey::for_version(&b);
+            if a >= b {
+                assert!(a_key >= b_key);
+            }
+            if a <= b {
+                assert!(a_key <= b_key);
+            }
+        })
+    }
+
+    #[mz_ore::test]
     fn partial_blob_key_completion() {
         let (shard_id, writer_id, part_id) = (ShardId::new(), WriterId::new(), PartId::new());
-        let partial_key = PartialBatchKey::new(&writer_id, &part_id);
+        let partial_key = PartialBatchKey::new(&WriterKey::Id(writer_id.clone()), &part_id);
         assert_eq!(
             partial_key.complete(&shard_id),
             BlobKey(format!("{}/{}/{}", shard_id, writer_id, part_id))
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn blob_key_parse() -> Result<(), String> {
         let (shard_id, writer_id, part_id) = (ShardId::new(), WriterId::new(), PartId::new());
 
         // can parse full blob key
         assert_eq!(
             BlobKey::parse_ids(&format!("{}/{}/{}", shard_id, writer_id, part_id)),
-            Ok((shard_id, PartialBlobKey::Batch(writer_id, part_id)))
+            Ok((
+                shard_id,
+                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id)
+            ))
         );
 
         // fails on invalid blob key formats

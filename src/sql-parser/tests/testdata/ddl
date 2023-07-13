@@ -134,7 +134,7 @@ CREATE TEMPORARY TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) 
 ----
 CREATE TEMPORARY TABLE foo (id int4, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedItemName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedItemName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("rtrim")])), args: Args { args: [Function(Function { name: Name(UnresolvedItemName([Ident("ltrim")])), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
@@ -386,35 +386,49 @@ CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaw
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false, with_options: [] })
+
+parse-statement
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4')) WITH (VALIDATE = FALSE)
+----
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4')) WITH (VALIDATE = false)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false, with_options: [CreateConnectionOption { name: Validate, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
 CREATE CONNECTION privatelinkconn FOR AWS PRIVATELINK SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false, with_options: [] })
+
+parse-statement
+CREATE CONNECTION privatelinkconn FOR AWS PRIVATELINK SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4') WITH (VALIDATE = TRUE)
+----
+CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4')) WITH (VALIDATE = true)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false, with_options: [CreateConnectionOption { name: Validate, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
 ----
 CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo)
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }] }, if_not_exists: false, with_options: [] })
 
 
 parse-statement
@@ -541,7 +555,7 @@ CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop W
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: UnresolvedItemName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: Name(UnresolvedItemName([Ident("ascii")])), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
@@ -772,14 +786,14 @@ SUBSCRIBE foo.bar AS OF now()
 ----
 SUBSCRIBE foo.bar AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 ----
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
@@ -807,14 +821,14 @@ SUBSCRIBE foo.bar AS OF now() UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar AS OF now() UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a)
@@ -1005,7 +1019,7 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP or DISK, found identifier "property"
+error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
@@ -1023,6 +1037,47 @@ ALTER SOURCE name RESET (SIZE)
 =>
 AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
 
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP TABLE x, y, z
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z
+----
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: true, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE x, y, z CASCADE
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z CASCADE
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+----
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: true, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+----
+ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: true, action: DropSubsources { if_exists: true, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
 
 parse-statement
 ALTER VIEW name SET (property = true)
@@ -1064,7 +1119,7 @@ ALTER INDEX name RENAME TO name2
 ----
 ALTER INDEX name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: Item(UnresolvedItemName([Ident("name")])), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER INDEX i1 misplaced
@@ -1085,14 +1140,14 @@ ALTER VIEW name RENAME TO name2
 ----
 ALTER VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: Item(UnresolvedItemName([Ident("name")])), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER MATERIALIZED VIEW name RENAME TO name2
 ----
 ALTER MATERIALIZED VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("name")])), to_item_name: Ident("name2") })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS ()
@@ -1104,14 +1159,14 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-error: Expected REPLICAS, found WITH
+error: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found WITH
 CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected REPLICAS, found identifier "badopt"
+error: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found identifier "badopt"
 CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
@@ -1144,6 +1199,13 @@ CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZ
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] }])) }] })
 
 parse-statement
+CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE '1', DISK = true))
+----
+CREATE CLUSTER cluster REPLICAS (a (IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', DISK = true))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(true))) }] }])) }] })
+
+parse-statement
 CREATE CLUSTER cluster REPLICAS (a (SIZE '1'))
 ----
 CREATE CLUSTER cluster REPLICAS (a (SIZE = '1'))
@@ -1156,6 +1218,202 @@ CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['123'], STORAGE ADDRES
 CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES = ('123'), STORAGE ADDRESSES = ('124'), COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("123"))])) }, ReplicaOption { name: StorageAddresses, value: Some(Sequence([Value(String("124"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }] })
+
+parse-statement
+CREATE CLUSTER cluster SIZE '1'
+----
+CREATE CLUSTER cluster SIZE '1'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICATION FACTOR 1
+----
+CREATE CLUSTER cluster REPLICATION FACTOR 1
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster AVAILABILITY ZONES ('1')
+----
+CREATE CLUSTER cluster AVAILABILITY ZONES ('1')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1"))])) }] })
+
+parse-statement
+CREATE CLUSTER cluster IDLE ARRANGEMENT MERGE EFFORT 1000
+----
+CREATE CLUSTER cluster IDLE ARRANGEMENT MERGE EFFORT 1000
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1000"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster MANAGED true
+----
+CREATE CLUSTER cluster MANAGED true
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+CREATE CLUSTER cluster MANAGED
+----
+CREATE CLUSTER cluster MANAGED
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }] })
+
+parse-statement
+CREATE CLUSTER cluster MANAGED, DISK = true
+----
+CREATE CLUSTER cluster MANAGED, DISK true
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
+----
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }] })
+
+parse-statement
+CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
+----
+CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+ALTER CLUSTER cluster SET (SIZE '1')
+----
+ALTER CLUSTER cluster SET (SIZE '1')
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Size, value: Some(Value(String("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
+----
+ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
+=>
+AlterCluster(AlterClusterStatement { if_exists: true, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: None }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
+----
+ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
+----
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT 1000)
+----
+ALTER CLUSTER cluster SET (IDLE ARRANGEMENT MERGE EFFORT 1000)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1000"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (MANAGED true)
+----
+ALTER CLUSTER cluster SET (MANAGED true)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (MANAGED)
+----
+ALTER CLUSTER cluster SET (MANAGED)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: None }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
+----
+ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
+----
+ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), IDLE ARRANGEMENT MERGE EFFORT 1, INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
+----
+ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), IDLE ARRANGEMENT MERGE EFFORT 1, INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("a"))])) }, ClusterOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionInterval, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionDebugging, value: Some(Value(Number("1"))) }, ClusterOption { name: Managed, value: None }, ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }, ClusterOption { name: ReplicationFactor, value: Some(Value(Number("0"))) }, ClusterOption { name: Size, value: Some(Value(Number("1"))) }]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (SIZE)
+----
+ALTER CLUSTER cluster RESET (SIZE)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([Size]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (REPLICATION FACTOR)
+----
+ALTER CLUSTER cluster RESET (REPLICATION FACTOR)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([ReplicationFactor]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (REPLICAS)
+----
+ALTER CLUSTER cluster RESET (REPLICAS)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([Replicas]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES)
+----
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([AvailabilityZones]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (IDLE ARRANGEMENT MERGE EFFORT)
+----
+ALTER CLUSTER cluster RESET (IDLE ARRANGEMENT MERGE EFFORT)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([IdleArrangementMergeEffort]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (MANAGED)
+----
+ALTER CLUSTER cluster RESET (MANAGED)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([Managed]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (INTROSPECTION INTERVAL)
+----
+ALTER CLUSTER cluster RESET (INTROSPECTION INTERVAL)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([IntrospectionInterval]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (INTROSPECTION DEBUGGING)
+----
+ALTER CLUSTER cluster RESET (INTROSPECTION DEBUGGING)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([IntrospectionDebugging]) })
+
+parse-statement
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES, IDLE ARRANGEMENT MERGE EFFORT, INTROSPECTION INTERVAL, INTROSPECTION DEBUGGING, MANAGED, REPLICAS, REPLICATION FACTOR, SIZE)
+----
+ALTER CLUSTER cluster RESET (AVAILABILITY ZONES, IDLE ARRANGEMENT MERGE EFFORT, INTROSPECTION INTERVAL, INTROSPECTION DEBUGGING, MANAGED, REPLICAS, REPLICATION FACTOR, SIZE)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([AvailabilityZones, IdleArrangementMergeEffort, IntrospectionInterval, IntrospectionDebugging, Managed, Replicas, ReplicationFactor, Size]) })
 
 parse-statement
 CREATE CLUSTER REPLICA replica
@@ -1177,6 +1435,13 @@ CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 CREATE CLUSTER REPLICA default.replica SIZE = 'small', AVAILABILITY ZONE = 'a'
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a', DISK = false
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', AVAILABILITY ZONE = 'a', DISK = false
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(false))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
@@ -1289,14 +1554,14 @@ CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
 ----
 CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE SECRET IF NOT EXISTS secret AS decode('c2VjcmV0Cg==', 'base64')
 ----
 CREATE SECRET IF NOT EXISTS secret AS decode('c2VjcmV0Cg==', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 DROP SECRET secret
@@ -1324,21 +1589,21 @@ ALTER SECRET secret RENAME TO secret2
 ----
 ALTER SECRET secret RENAME TO secret2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: UnresolvedItemName([Ident("secret")]), to_item_name: Ident("secret2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedItemName([Ident("secret")])), to_item_name: Ident("secret2") })
 
 parse-statement
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 ----
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 =>
-AlterSecret(AlterSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_exists: false, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+AlterSecret(AlterSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_exists: false, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux';
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux');
@@ -1350,21 +1615,21 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materi
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1);
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093));
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1377,7 +1642,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1390,7 +1655,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1413,7 +1678,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092'USING SSH TUNNEL tunn, 'kafka:9093'USING SSH TUNNEL tunn))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: SshTunnel(Name(UnresolvedItemName([Ident("tunn")]))) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: SshTunnel(Name(UnresolvedItemName([Ident("tunn")]))) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: SshTunnel(Name(UnresolvedItemName([Ident("tunn")]))) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: SshTunnel(Name(UnresolvedItemName([Ident("tunn")]))) })])) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 DROP CONNECTION conn1
@@ -1434,7 +1699,7 @@ CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, CsrConnectionOption { name: Username, value: Some(Value(String("user"))) }, CsrConnectionOption { name: Password, value: Some(Value(String("word"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, CsrConnectionOption { name: Username, value: Some(Value(String("user"))) }, CsrConnectionOption { name: Password, value: Some(Value(String("word"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
@@ -1447,14 +1712,14 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL ssh)
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL = ssh)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("ssh")])))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("ssh")])))) }] }, if_not_exists: false, with_options: [] })
 
 
 parse-statement
@@ -1462,7 +1727,7 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080, URL = 'http://localhost:8081')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }] }, if_not_exists: false, with_options: [] })
 
 
 parse-statement
@@ -1506,7 +1771,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP or DISK, found START
+error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP, found START
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
                                                      ^
 
@@ -1522,7 +1787,7 @@ CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, US
 ----
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_ssh_tunnel")]), connection: Ssh { with_options: [SshConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, SshConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, SshConnectionOption { name: User, value: Some(Value(String("blah"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_ssh_tunnel")]), connection: Ssh { options: [SshConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, SshConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, SshConnectionOption { name: User, value: Some(Value(String("blah"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement roundtrip
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST 'ssh-bastion', PORT 1234, USER 'blah')
@@ -1740,589 +2005,57 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedItemName([Ident("foo"), Ident("bar")]))) })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (DISK);
+ALTER CLUSTER foo RENAME TO joe
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (DISK)
+ALTER CLUSTER foo RENAME TO joe
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Disk, value: None }], referenced_subsources: None, progress_subsource: None })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), to_item_name: Ident("joe") })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (DISK = true);
+ALTER CLUSTER IF EXISTS foo RENAME TO joe
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (DISK = true)
+ALTER CLUSTER IF EXISTS foo RENAME TO joe
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Disk, value: Some(Value(Boolean(true))) }], referenced_subsources: None, progress_subsource: None })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), to_item_name: Ident("joe") })
 
 parse-statement
-GRANT admin TO joe
+ALTER CLUSTER REPLICA c.foo RENAME TO joe
 ----
-GRANT admin TO joe
+ALTER CLUSTER REPLICA c.foo RENAME TO joe
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("admin"), member_names: [Ident("joe")] })
+AlterObjectRename(AlterObjectRenameStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), to_item_name: Ident("joe") })
 
 parse-statement
-GRANT scientist TO GROUP joseph
+ALTER CLUSTER REPLICA IF EXISTS c.foo RENAME TO joe
 ----
-GRANT scientist TO joseph
+ALTER CLUSTER REPLICA IF EXISTS c.foo RENAME TO joe
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph")] })
+AlterObjectRename(AlterObjectRenameStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), to_item_name: Ident("joe") })
 
 parse-statement
-GRANT admin TO joe, mike
+DROP OWNED BY joe
 ----
-GRANT admin TO joe, mike
+DROP OWNED BY joe
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("admin"), member_names: [Ident("joe"), Ident("mike")] })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe")], cascade: false })
 
 parse-statement
-GRANT scientist TO GROUP joseph, michael
+DROP OWNED BY joe, mike
 ----
-GRANT scientist TO joseph, michael
+DROP OWNED BY joe, mike
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: false })
 
 parse-statement
-GRANT scientist TO GROUP joseph, GROUP michael
+DROP OWNED BY joe, mike RESTRICT
 ----
-GRANT scientist TO joseph, michael
+DROP OWNED BY joe, mike
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: false })
 
 parse-statement
-GRANT scientist TO joseph, GROUP michael
+DROP OWNED BY joe, mike CASCADE
 ----
-GRANT scientist TO joseph, michael
+DROP OWNED BY joe, mike CASCADE
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
-
-parse-statement
-GRANT scientist TO GROUP joseph, GROUP michael, GROUP yisachar
-----
-GRANT scientist TO joseph, michael, yisachar
-=>
-GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael"), Ident("yisachar")] })
-
-parse-statement
-REVOKE doctor FROM joe
-----
-REVOKE doctor FROM joe
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("doctor"), member_names: [Ident("joe")] })
-
-parse-statement
-REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph
-----
-REVOKE ability_to_practice_law_in_arkansas FROM joseph
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph")] })
-
-parse-statement
-REVOKE doctor FROM joe, mike
-----
-REVOKE doctor FROM joe, mike
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("doctor"), member_names: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, michael
-----
-REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
-
-parse-statement
-REVOKE ability_to_practice_law_in_arkansas FROM joseph, GROUP michael
-----
-REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
-
-parse-statement
-REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, GROUP michael
-----
-REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
-
-parse-statement
-REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, GROUP michael, GROUP yisachar
-----
-REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael, yisachar
-=>
-RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael"), Ident("yisachar")] })
-
-parse-statement
-ALTER CLUSTER foo OWNER TO joe
-----
-ALTER CLUSTER foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
-
-parse-statement
-ALTER CLUSTER IF EXISTS foo OWNER TO joe
-----
-ALTER CLUSTER IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
-
-parse-statement
-ALTER CLUSTER REPLICA c.foo OWNER TO joe
-----
-ALTER CLUSTER REPLICA c.foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
-
-parse-statement
-ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
-----
-ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
-
-parse-statement
-ALTER DATABASE foo OWNER TO joe
-----
-ALTER DATABASE foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Database, if_exists: false, name: Database(UnresolvedDatabaseName(Ident("foo"))), new_owner: Ident("joe") })
-
-parse-statement
-ALTER DATABASE IF EXISTS foo OWNER TO joe
-----
-ALTER DATABASE IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Database, if_exists: true, name: Database(UnresolvedDatabaseName(Ident("foo"))), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SCHEMA foo OWNER TO joe
-----
-ALTER SCHEMA foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SCHEMA IF EXISTS foo OWNER TO joe
-----
-ALTER SCHEMA IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: true, name: Schema(UnresolvedSchemaName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SCHEMA bar.foo OWNER TO joe
-----
-ALTER SCHEMA bar.foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("bar"), Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SCHEMA IF EXISTS bar.foo OWNER TO joe
-----
-ALTER SCHEMA IF EXISTS bar.foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: true, name: Schema(UnresolvedSchemaName([Ident("bar"), Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER TABLE foo OWNER TO joe
-----
-ALTER TABLE foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER TABLE IF EXISTS foo OWNER TO joe
-----
-ALTER TABLE IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SINK foo OWNER TO joe
-----
-ALTER SINK foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SINK IF EXISTS foo OWNER TO joe
-----
-ALTER SINK IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SOURCE foo OWNER TO joe
-----
-ALTER SOURCE foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SOURCE IF EXISTS foo OWNER TO joe
-----
-ALTER SOURCE IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER INDEX foo OWNER TO joe
-----
-ALTER INDEX foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER INDEX IF EXISTS foo OWNER TO joe
-----
-ALTER INDEX IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SECRET foo OWNER TO joe
-----
-ALTER SECRET foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER SECRET IF EXISTS foo OWNER TO joe
-----
-ALTER SECRET IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER CONNECTION foo OWNER TO joe
-----
-ALTER CONNECTION foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER CONNECTION IF EXISTS foo OWNER TO joe
-----
-ALTER CONNECTION IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER VIEW foo OWNER TO joe
-----
-ALTER VIEW foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: View, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER VIEW IF EXISTS foo OWNER TO joe
-----
-ALTER VIEW IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: View, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER MATERIALIZED VIEW foo OWNER TO joe
-----
-ALTER MATERIALIZED VIEW foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
-----
-ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
-=>
-AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
-
-parse-statement
-GRANT USAGE, CREATE ON CLUSTER foo TO joe
-----
-GRANT USAGE, CREATE ON CLUSTER foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
-
-parse-statement
-GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
-----
-error: Unsupported GRANT on CLUSTER REPLICA
-GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
-                               ^
-
-parse-statement
-GRANT CREATE ON DATABASE foo TO joe
-----
-GRANT CREATE ON DATABASE foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
-
-parse-statement
-GRANT USAGE ON SCHEMA foo TO joe
-----
-GRANT USAGE ON SCHEMA foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
-----
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([SELECT, INSERT, UPDATE, DELETE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-GRANT USAGE ON foo TO joe
-----
-GRANT USAGE ON TABLE foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-GRANT USAGE ON SINK foo TO joe
-----
-error: Unsupported GRANT on SINK
-GRANT USAGE ON SINK foo TO joe
-               ^
-
-parse-statement
-GRANT USAGE ON SOURCE foo TO joe
-----
-error: For object type SOURCE, you must specify 'TABLE' or omit the object type
-GRANT USAGE ON SOURCE foo TO joe
-               ^
-
-parse-statement
-GRANT USAGE ON INDEX foo TO joe
-----
-error: Unsupported GRANT on INDEX
-GRANT USAGE ON INDEX foo TO joe
-               ^
-
-parse-statement
-GRANT USAGE ON SECRET foo TO joe
-----
-GRANT USAGE ON SECRET foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-GRANT USAGE ON CONNECTION foo TO joe
-----
-GRANT USAGE ON CONNECTION foo TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-GRANT SELECT ON VIEW foo TO joe
-----
-error: For object type VIEW, you must specify 'TABLE' or omit the object type
-GRANT SELECT ON VIEW foo TO joe
-                ^
-
-parse-statement
-GRANT SELECT ON MATERIALIZED VIEW foo TO joe
-----
-error: For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
-GRANT SELECT ON MATERIALIZED VIEW foo TO joe
-                             ^
-
-parse-statement
-GRANT FAKE ON TABLE t TO joe
-----
-error: Expected TO, found ON
-GRANT FAKE ON TABLE t TO joe
-           ^
-
-parse-statement
-GRANT SELECT, INSERT ON t TO joe, mike
-----
-GRANT SELECT, INSERT ON TABLE t TO joe, mike
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([SELECT, INSERT]), object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-GRANT USAGE ON DATABASE d TO joe, mike
-----
-GRANT USAGE ON DATABASE d TO joe, mike
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-GRANT ALL ON DATABASE d TO joe, mike
-----
-GRANT ALL ON DATABASE d TO joe, mike
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-GRANT ALL PRIVILEGES ON TYPE t TO joe
-----
-GRANT ALL ON TYPE t TO joe
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
-
-parse-statement
-GRANT CREATE ON CLUSTER c TO GROUP joe, GROUP mike
-----
-GRANT CREATE ON CLUSTER c TO joe, mike
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-GRANT CREATE ON CLUSTER c TO joe, GROUP mike
-----
-GRANT CREATE ON CLUSTER c TO joe, mike
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-GRANT CREATE ON CLUSTER c TO joe, GROUP mike, GROUP yisachar
-----
-GRANT CREATE ON CLUSTER c TO joe, mike, yisachar
-=>
-GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })
-
-parse-statement
-REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
-----
-REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE USAGE, CREATE ON CLUSTER REPLICA foo.r FROM joe
-----
-error: Unsupported REVOKE on CLUSTER REPLICA
-REVOKE USAGE, CREATE ON CLUSTER REPLICA foo.r FROM joe
-                                ^
-
-parse-statement
-REVOKE CREATE ON DATABASE foo FROM joe
-----
-REVOKE CREATE ON DATABASE foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE USAGE ON SCHEMA foo FROM joe
-----
-REVOKE USAGE ON SCHEMA foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE foo FROM joe
-----
-REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([SELECT, INSERT, UPDATE, DELETE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE USAGE ON foo FROM joe
-----
-REVOKE USAGE ON TABLE foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE USAGE ON SINK foo FROM joe
-----
-error: Unsupported REVOKE on SINK
-REVOKE USAGE ON SINK foo FROM joe
-                ^
-
-parse-statement
-REVOKE USAGE ON SOURCE foo FROM joe
-----
-error: For object type SOURCE, you must specify 'TABLE' or omit the object type
-REVOKE USAGE ON SOURCE foo FROM joe
-                ^
-
-parse-statement
-REVOKE USAGE ON INDEX foo FROM joe
-----
-error: Unsupported REVOKE on INDEX
-REVOKE USAGE ON INDEX foo FROM joe
-                ^
-
-parse-statement
-REVOKE USAGE ON SECRET foo FROM joe
-----
-REVOKE USAGE ON SECRET foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE USAGE ON CONNECTION foo FROM joe
-----
-REVOKE USAGE ON CONNECTION foo FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE SELECT ON VIEW foo FROM joe
-----
-error: For object type VIEW, you must specify 'TABLE' or omit the object type
-REVOKE SELECT ON VIEW foo FROM joe
-                 ^
-
-parse-statement
-REVOKE SELECT ON MATERIALIZED VIEW foo FROM joe
-----
-error: For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
-REVOKE SELECT ON MATERIALIZED VIEW foo FROM joe
-                              ^
-
-parse-statement
-REVOKE FAKE ON TABLE t FROM joe
-----
-error: Expected FROM, found ON
-REVOKE FAKE ON TABLE t FROM joe
-            ^
-
-parse-statement
-REVOKE SELECT, INSERT ON t FROM joe, mike
-----
-REVOKE SELECT, INSERT ON TABLE t FROM joe, mike
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([SELECT, INSERT]), object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-REVOKE USAGE ON DATABASE d FROM joe, mike
-----
-REVOKE USAGE ON DATABASE d FROM joe, mike
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-REVOKE ALL ON DATABASE d FROM joe, mike
-----
-REVOKE ALL ON DATABASE d FROM joe, mike
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-REVOKE ALL PRIVILEGES ON TYPE t FROM joe
-----
-REVOKE ALL ON TYPE t FROM joe
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
-
-parse-statement
-REVOKE CREATE ON CLUSTER c FROM GROUP joe, GROUP mike
-----
-REVOKE CREATE ON CLUSTER c FROM joe, mike
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike
-----
-REVOKE CREATE ON CLUSTER c FROM joe, mike
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
-
-parse-statement
-REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike, GROUP yisachar
-----
-REVOKE CREATE ON CLUSTER c FROM joe, mike, yisachar
-=>
-RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: true })

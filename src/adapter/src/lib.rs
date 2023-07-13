@@ -115,13 +115,15 @@ mod util;
 pub mod catalog;
 pub mod client;
 pub mod config;
+pub mod flags;
 pub mod metrics;
 pub mod session;
 pub mod telemetry;
 
-pub use crate::client::{Client, ConnClient, Handle, SessionClient};
+pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{
-    Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupMessage, StartupResponse,
+    AppendWebhookResponse, Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture,
+    StartupMessage, StartupResponse,
 };
 pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;
@@ -129,6 +131,8 @@ pub use crate::coord::timeline::TimelineContext;
 pub use crate::coord::timestamp_selection::{
     TimestampContext, TimestampExplanation, TimestampProvider,
 };
+pub use crate::coord::ExecuteContext;
+pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;

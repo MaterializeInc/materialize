@@ -39,8 +39,12 @@ class Generator:
     @classmethod
     def header(cls) -> None:
         print(f"\n#\n# {cls}\n#\n")
-        print("> DROP SCHEMA IF EXISTS public CASCADE;")
-        print(f"> CREATE SCHEMA public /* {cls} */;")
+        print(
+            "$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize"
+        )
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print(f"CREATE SCHEMA public /* {cls} */;")
+        print("GRANT ALL PRIVILEGES ON SCHEMA public TO materialize")
         print(
             "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )
@@ -76,8 +80,9 @@ class Connections(Generator):
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        # two extra connections for mz_system and the default connection
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+2};")
+        # three extra connections for mz_system, default connection, and one
+        # since sqlparse 0.4.4
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+3};")
 
         for i in cls.all():
             print(
@@ -561,8 +566,14 @@ class Columns(Generator):
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
         print("> INSERT INTO t VALUES (" + ", ".join(str(i) for i in cls.all()) + ");")
-        print("> SELECT " + ", ".join(f"f{i}" for i in cls.all()) + " FROM t;")
-        print(" ".join(str(i) for i in cls.all()))
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT "
+            + ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
+            + " FROM t;"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT " + ", ".join(f"f{i} + 1" for i in cls.all()) + " FROM v;")
+        print(" ".join(str(i + 2) for i in cls.all()))
 
 
 class TablesCommaJoinNoCondition(Generator):
@@ -924,6 +935,9 @@ class WhereExpression(Generator):
 
 
 class WhereConditionAnd(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -938,6 +952,9 @@ class WhereConditionAnd(Generator):
 
 
 class WhereConditionAndSameColumn(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -950,6 +967,9 @@ class WhereConditionAndSameColumn(Generator):
 
 
 class WhereConditionOr(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -964,6 +984,9 @@ class WhereConditionOr(Generator):
 
 
 class WhereConditionOrSameColumn(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -1059,9 +1082,14 @@ class GroupBy(Generator):
         value_list = ", ".join("1" for i in cls.all())
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
-        column_list = ", ".join(f"f{i}" for i in cls.all())
-        print(f"> SELECT COUNT(*), {column_list} FROM t1 GROUP BY {column_list};")
-        print("1 " + " ".join("1" for i in cls.all()))
+        column_list_select = ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
+        column_list_group_by = ", ".join(f"f{i} + 1" for i in cls.all())
+        print(
+            f"> CREATE MATERIALIZED VIEW v AS SELECT COUNT(*), {column_list_select} FROM t1 GROUP BY {column_list_group_by};"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("1 " + " ".join("2" for i in cls.all()))
 
 
 class Unions(Generator):
@@ -1099,6 +1127,58 @@ class UnionsNested(Generator):
         )
         print("  SELECT * FROM t1 " + "".join("  )" for i in cls.all()) + ";")
         print("1")
+
+
+class CaseWhen(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print(
+            "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
+        )
+        print("> INSERT INTO t DEFAULT VALUES")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT CASE "
+            + " ".join(f"WHEN f{i} IS NOT NULL THEN f{i}" for i in cls.all())
+            + " ELSE 123 END FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("123")
+
+
+class Coalesce(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print(
+            "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
+        )
+        print("> INSERT INTO t DEFAULT VALUES")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT COALESCE("
+            + ",".join(f"f{i}" for i in cls.all())
+            + ", 123) FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("123")
+
+
+class Concat(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("> CREATE TABLE t (f STRING)")
+        print("> INSERT INTO t VALUES (REPEAT('A', 1024))")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT CONCAT("
+            + ",".join("f" for i in cls.all())
+            + ") AS c FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT LENGTH(c) FROM v")
+        print(f"{cls.COUNT*1024}")
 
 
 #
@@ -1286,6 +1366,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             f"""
             DROP CLUSTER DEFAULT cascade;
             CREATE CLUSTER default REPLICAS (
@@ -1304,7 +1390,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     WORKERS {args.workers}
                 )
             )
-        """
+        """,
+            port=6877,
+            user="mz_system",
         )
 
         c.up("testdrive", persistent=True)
@@ -1437,6 +1525,11 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                         + f"], WORKERS {args.workers})"
                     )
 
+                c.sql(
+                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+                    port=6877,
+                    user="mz_system",
+                )
                 c.sql(
                     f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)

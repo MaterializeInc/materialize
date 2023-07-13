@@ -74,11 +74,10 @@
 // END LINT CONFIG
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use mz_repr::strconv;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-
-use mz_repr::strconv;
 
 fn bench_parse_float32(c: &mut Criterion) {
     for s in &["-3.0", "9.7", "NaN", "inFiNiTy"] {

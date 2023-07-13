@@ -24,33 +24,29 @@
 
 use std::hash::Hash;
 
-use once_cell::sync::Lazy;
-use serde::Serialize;
-
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::namespaces::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA,
+};
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
-    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, ObjectType, RoleAttributes,
+    TypeReference,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
-use mz_sql_parser::ast::ObjectType;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
+use once_cell::sync::Lazy;
+use serde::Serialize;
 
 use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 use crate::rbac;
 
-pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
-pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
-pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
-pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
-pub const INFORMATION_SCHEMA: &str = "information_schema";
-
-pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
+pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_", "external_"]);
 
 #[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
@@ -1369,6 +1365,15 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
+pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_kafka_sources",
+    // `mz_internal` for now, while we work out the desc.
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("group_id_base", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
 pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_postgres_sources",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1424,7 +1429,8 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("nullable", ScalarType::Bool.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("default", ScalarType::String.nullable(true))
-        .with_column("type_oid", ScalarType::Oid.nullable(false)),
+        .with_column("type_oid", ScalarType::Oid.nullable(false))
+        .with_column("type_mod", ScalarType::Int32.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1613,10 +1619,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("inherit", ScalarType::Bool.nullable(false))
-        .with_column("create_role", ScalarType::Bool.nullable(false))
-        .with_column("create_db", ScalarType::Bool.nullable(false))
-        .with_column("create_cluster", ScalarType::Bool.nullable(false)),
+        .with_column("inherit", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1668,6 +1671,15 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("return_type_id", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
 });
+pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aggregates",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("agg_kind", ScalarType::String.nullable(false))
+        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
+    is_retained_metrics_object: false,
+});
 
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
@@ -1679,7 +1691,11 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("managed", ScalarType::Bool.nullable(false))
+        .with_column("size", ScalarType::String.nullable(true))
+        .with_column("replication_factor", ScalarType::UInt32.nullable(true))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: false,
 });
 
@@ -1697,6 +1713,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
+        .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
@@ -1715,7 +1732,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -1893,7 +1911,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("user", ScalarType::String.nullable(false))
+        .with_column("session_id", ScalarType::UInt32.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("created_at", ScalarType::TimestampTz.nullable(false))
         .with_column(
@@ -1917,6 +1935,26 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     is_retained_metrics_object: false,
 });
 
+pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_default_privileges",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("database_id", ScalarType::String.nullable(true))
+        .with_column("schema_id", ScalarType::String.nullable(true))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("grantee", ScalarType::String.nullable(false))
+        .with_column("privileges", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_system_privileges",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1933,7 +1971,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics",
@@ -1946,7 +1984,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2002,16 +2040,15 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
 };
 
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflows_per_worker AS SELECT
-    ops.id,
+    addrs.address[1] AS id,
     ops.worker_id,
-    addrs.address[1] AS local_id,
     ops.name
 FROM
     mz_internal.mz_dataflow_addresses_per_worker addrs,
@@ -2026,7 +2063,7 @@ pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflows AS
-SELECT id, local_id, name
+SELECT id, name
 FROM mz_internal.mz_dataflows_per_worker
 WHERE worker_id = 0",
 };
@@ -2074,7 +2111,7 @@ FROM
 WHERE
     ops.id = addrs.id AND
     ops.worker_id = addrs.worker_id AND
-    dfs.local_id = addrs.address[1] AND
+    dfs.id = addrs.address[1] AND
     dfs.worker_id = addrs.worker_id",
 };
 
@@ -2085,6 +2122,24 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
 SELECT id, name, dataflow_id, dataflow_name
 FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
 WHERE worker_id = 0",
+};
+
+pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
+    name: "mz_object_transitive_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_object_transitive_dependencies AS
+WITH MUTUALLY RECURSIVE
+  base(id text, referenced_object_id text) AS (
+    SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
+  ),
+  reach(id text, referenced_object_id text) AS (
+    SELECT id, referenced_object_id FROM base
+    UNION ALL -- (TODO use UNION once #19817 is fixed)
+    SELECT id, referenced_object_id FROM reach
+    UNION
+    SELECT r1.id, r2.referenced_object_id FROM reach r1 JOIN reach r2 ON r1.referenced_object_id = r2.id
+  )
+SELECT id, referenced_object_id FROM reach;",
 };
 
 pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
@@ -2318,6 +2373,58 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
+pub const PG_DEPEND: BuiltinView = BuiltinView {
+    name: "pg_depend",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_depend AS
+WITH class_objects AS (
+    SELECT
+        CASE
+            WHEN type = 'table' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'source' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'view' THEN 'pg_views'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'materialized-view' THEN 'pg_matviews'::pg_catalog.regclass::pg_catalog.oid
+        END classid,
+        id,
+        oid,
+        schema_id
+    FROM mz_catalog.mz_relations
+    UNION ALL
+    SELECT
+        'pg_index'::pg_catalog.regclass::pg_catalog.oid AS classid,
+        i.id,
+        i.oid,
+        r.schema_id
+    FROM mz_catalog.mz_indexes i
+    JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+),
+
+current_objects AS (
+    SELECT class_objects.*
+    FROM class_objects
+    JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+    LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    -- This filter is tricky, as it filters out not just objects outside the
+    -- database, but *dependencies* on objects outside this database. It's not
+    -- clear that this is the right choice, but because PostgreSQL doesn't
+    -- support cross-database references, it's not clear that the other choice
+    -- is better.
+    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
+)
+
+SELECT
+    objects.classid::pg_catalog.oid,
+    objects.oid::pg_catalog.oid AS objid,
+    0::pg_catalog.int4 AS objsubid,
+    dependents.classid::pg_catalog.oid AS refclassid,
+    dependents.oid::pg_catalog.oid AS refobjid,
+    0::pg_catalog.int4 AS refobjsubid,
+    'n'::pg_catalog.char AS deptype
+FROM mz_internal.mz_object_dependencies
+JOIN current_objects objects ON object_id = objects.id
+JOIN current_objects dependents ON referenced_object_id = dependents.id",
+};
+
 pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
@@ -2468,7 +2575,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
     position::int8::int2 as attnum,
-    -1::pg_catalog.int4 as atttypmod,
+    mz_columns.type_mod as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
@@ -2596,6 +2703,46 @@ FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
 JOIN mz_roles grantor ON membership.grantor = grantor.id",
+};
+
+pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_event_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_event_trigger AS SELECT
+        NULL::pg_catalog.oid AS oid,
+        NULL::pg_catalog.text AS evtname,
+        NULL::pg_catalog.text AS evtevent,
+        NULL::pg_catalog.oid AS evtowner,
+        NULL::pg_catalog.oid AS evtfoid,
+        NULL::pg_catalog.char AS evtenabled,
+        NULL::pg_catalog.text[] AS evttags
+    WHERE false",
+};
+
+pub const PG_LANGUAGE: BuiltinView = BuiltinView {
+    name: "pg_language",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_language AS SELECT
+        NULL::pg_catalog.oid  AS oid,
+        NULL::pg_catalog.text AS lanname,
+        NULL::pg_catalog.oid  AS lanowner,
+        NULL::pg_catalog.bool AS lanispl,
+        NULL::pg_catalog.bool AS lanpltrusted,
+        NULL::pg_catalog.oid  AS lanplcallfoid,
+        NULL::pg_catalog.oid  AS laninline,
+        NULL::pg_catalog.oid  AS lanvalidator,
+        NULL::pg_catalog.text[] AS lanacl
+    WHERE false",
+};
+
+pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
+    name: "pg_shdescription",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_shdescription AS SELECT
+        NULL::pg_catalog.oid AS objoid,
+        NULL::pg_catalog.oid AS classoid,
+        NULL::pg_catalog.text AS description
+    WHERE false",
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -2979,6 +3126,24 @@ LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p')",
 };
 
+pub const PG_TABLESPACE: BuiltinView = BuiltinView {
+    name: "pg_tablespace",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_tablespace AS
+    SELECT oid, spcname, spcowner, spcacl, spcoptions
+    FROM (
+        VALUES (
+            --These are the same defaults CockroachDB uses.
+            0::pg_catalog.oid,
+            'pg_default'::pg_catalog.text,
+            NULL::pg_catalog.oid,
+            NULL::pg_catalog.text[],
+            NULL::pg_catalog.text[]
+        )
+    ) AS _ (oid, spcname, spcowner, spcacl, spcoptions)
+",
+};
+
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
@@ -3005,6 +3170,8 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     '********'::pg_catalog.text AS rolpassword,
     r.rolvaliduntil,
     r.rolbypassrls,
+    --Note: this is NULL because Materialize doesn't support Role-specific config values.
+    NULL::pg_catalog.text[] as rolconfig,
     r.oid AS oid
 FROM pg_catalog.pg_authid r",
 };
@@ -3128,6 +3295,31 @@ AS SELECT
 WHERE false",
 };
 
+pub const PG_LOCKS: BuiltinView = BuiltinView {
+    name: "pg_locks",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_locks
+AS SELECT
+-- While there exist locks in Materialize, we don't expose them, so all of these fields are NULL.
+    NULL::pg_catalog.text AS locktype,
+    NULL::pg_catalog.oid AS database,
+    NULL::pg_catalog.oid AS relation,
+    NULL::pg_catalog.int4 AS page,
+    NULL::pg_catalog.int2 AS tuple,
+    NULL::pg_catalog.text AS virtualxid,
+    NULL::pg_catalog.text AS transactionid,
+    NULL::pg_catalog.oid AS classid,
+    NULL::pg_catalog.oid AS objid,
+    NULL::pg_catalog.int2 AS objsubid,
+    NULL::pg_catalog.text AS virtualtransaction,
+    NULL::pg_catalog.int4 AS pid,
+    NULL::pg_catalog.text AS mode,
+    NULL::pg_catalog.bool AS granted,
+    NULL::pg_catalog.bool AS fastpath,
+    NULL::pg_catalog.timestamptz AS waitstart
+WHERE false",
+};
+
 pub const PG_AUTHID: BuiltinView = BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
@@ -3143,8 +3335,8 @@ AS SELECT
         ELSE NULL::pg_catalog.bool
     END AS rolsuper,
     inherit AS rolinherit,
-    create_role AS rolcreaterole,
-    create_db AS rolcreatedb,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
     -- We determine login status each time a role logs in, so there's no way to accurately depict
     -- this in the catalog. Instead we just hardcode NULL.
     NULL::pg_catalog.bool AS rolcanlogin,
@@ -3159,6 +3351,107 @@ AS SELECT
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
 FROM mz_catalog.mz_roles r",
+};
+
+pub const PG_AGGREGATE: BuiltinView = BuiltinView {
+    name: "pg_aggregate",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_aggregate
+AS SELECT
+    a.oid as aggfnoid,
+    -- Currently Materialize only support 'normal' aggregate functions.
+    a.agg_kind as aggkind,
+    a.agg_num_direct_args as aggnumdirectargs,
+    -- Materialize doesn't support these fields.
+    NULL::pg_catalog.regproc as aggtransfn,
+    '0'::pg_catalog.regproc as aggfinalfn,
+    '0'::pg_catalog.regproc as aggcombinefn,
+    '0'::pg_catalog.regproc as aggserialfn,
+    '0'::pg_catalog.regproc as aggdeserialfn,
+    '0'::pg_catalog.regproc as aggmtransfn,
+    '0'::pg_catalog.regproc as aggminvtransfn,
+    '0'::pg_catalog.regproc as aggmfinalfn,
+    false as aggfinalextra,
+    false as aggmfinalextra,
+    NULL::pg_catalog.\"char\" AS aggfinalmodify,
+    NULL::pg_catalog.\"char\" AS aggmfinalmodify,
+    '0'::pg_catalog.oid as aggsortop,
+    NULL::pg_catalog.oid as aggtranstype,
+    NULL::pg_catalog.int4 as aggtransspace,
+    '0'::pg_catalog.oid as aggmtranstype,
+    NULL::pg_catalog.int4 as aggmtransspace,
+    NULL::pg_catalog.text as agginitval,
+    NULL::pg_catalog.text as aggminitval
+FROM mz_internal.mz_aggregates a",
+};
+
+pub const PG_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_trigger
+AS SELECT
+    -- MZ doesn't support triggers so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.oid AS tgrelid,
+    NULL::pg_catalog.oid AS tgparentid,
+    NULL::pg_catalog.text AS tgname,
+    NULL::pg_catalog.oid AS tgfoid,
+    NULL::pg_catalog.int2 AS tgtype,
+    NULL::pg_catalog.\"char\" AS tgenabled,
+    NULL::pg_catalog.bool AS tgisinternal,
+    NULL::pg_catalog.oid AS tgconstrrelid,
+    NULL::pg_catalog.oid AS tgconstrindid,
+    NULL::pg_catalog.oid AS tgconstraint,
+    NULL::pg_catalog.bool AS tgdeferrable,
+    NULL::pg_catalog.bool AS tginitdeferred,
+    NULL::pg_catalog.int2 AS tgnargs,
+    NULL::pg_catalog.int2vector AS tgattr,
+    NULL::pg_catalog.bytea AS tgargs,
+    -- NOTE: The tgqual column is actually type `pg_node_tree` which we don't support. CockroachDB
+    -- uses text as a placeholder, so we'll follow their lead here.
+    NULL::pg_catalog.text AS tgqual,
+    NULL::pg_catalog.text AS tgoldtable,
+    NULL::pg_catalog.text AS tgnewtable
+WHERE false
+    ",
+};
+
+pub const PG_REWRITE: BuiltinView = BuiltinView {
+    name: "pg_rewrite",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_rewrite
+AS SELECT
+    -- MZ doesn't support rewrite rules so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS rulename,
+    NULL::pg_catalog.oid AS ev_class,
+    NULL::pg_catalog.\"char\" AS ev_type,
+    NULL::pg_catalog.\"char\" AS ev_enabled,
+    NULL::pg_catalog.bool AS is_instead,
+    -- NOTE: The ev_qual and ev_action columns are actually type `pg_node_tree` which we don't
+    -- support. CockroachDB uses text as a placeholder, so we'll follow their lead here.
+    NULL::pg_catalog.text AS ev_qual,
+    NULL::pg_catalog.text AS ev_action
+WHERE false
+    ",
+};
+
+pub const PG_EXTENSION: BuiltinView = BuiltinView {
+    name: "pg_extension",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_extension
+AS SELECT
+    -- MZ doesn't support extensions so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.text AS extname,
+    NULL::pg_catalog.oid AS extowner,
+    NULL::pg_catalog.oid AS extnamespace,
+    NULL::pg_catalog.bool AS extrelocatable,
+    NULL::pg_catalog.text AS extversion,
+    NULL::pg_catalog.oid[] AS extconfig,
+    NULL::pg_catalog.text[] AS extcondition
+WHERE false
+    ",
 };
 
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
@@ -3242,6 +3535,8 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 SELECT
                     details ->> 'logical_size' AS size,
                     details ->> 'replica_id' AS replica_id,
+                    details ->> 'replica_name' AS replica_name,
+                    details ->> 'cluster_name' AS cluster_name,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
@@ -3258,8 +3553,10 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 WHERE object_type = 'cluster-replica' AND event_type = 'drop'
             )
         SELECT
-            creates.replica_id,
+            creates.replica_id AS internal_replica_id,
             creates.size,
+            creates.cluster_name,
+            creates.replica_name,
             creates.occurred_at AS created_at,
             drops.occurred_at AS dropped_at,
             mz_internal.mz_error_if_null(
@@ -3436,6 +3733,24 @@ ON mz_internal.mz_source_status_history (source_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statistics (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_statistics_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_statistics_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_statistics (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3484,10 +3799,14 @@ pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
     name: &*SYSTEM_USER.name,
-    privileges: vec![rbac::owner_privilege(
-        ObjectType::Cluster,
-        MZ_SYSTEM_ROLE_ID,
-    )],
+    privileges: vec![
+        MzAclItem {
+            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+    ],
 });
 
 pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
@@ -3649,6 +3968,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
+        Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
@@ -3671,6 +3991,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
+        Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
@@ -3688,6 +4009,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
+        Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
+        Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
@@ -3701,6 +4024,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
+        Builtin::View(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
@@ -3736,6 +4060,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
+        Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
         Builtin::View(&PG_DESCRIPTION),
@@ -3750,7 +4075,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_AUTH_MEMBERS),
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
+        Builtin::View(&PG_TABLESPACE),
         Builtin::View(&PG_ACCESS_METHODS),
+        Builtin::View(&PG_LOCKS),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_VIEWS),
@@ -3758,6 +4085,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_AGGREGATE),
+        Builtin::View(&PG_TRIGGER),
+        Builtin::View(&PG_REWRITE),
+        Builtin::View(&PG_EXTENSION),
+        Builtin::View(&PG_EVENT_TRIGGER),
+        Builtin::View(&PG_LANGUAGE),
+        Builtin::View(&PG_SHDESCRIPTION),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
@@ -3786,6 +4120,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTERS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
+        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
@@ -3830,6 +4166,13 @@ pub mod BUILTINS {
         })
     }
 
+    pub fn funcs() -> impl Iterator<Item = &'static BuiltinFunc> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::Func(func) => Some(func),
+            _ => None,
+        })
+    }
+
     pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
         BUILTINS_STATIC.iter()
     }
@@ -3839,15 +4182,22 @@ pub mod BUILTINS {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::env;
+    use std::time::{Duration, Instant};
 
-    use tokio_postgres::NoTls;
-
+    use mz_expr::MirScalarExpr;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+    use mz_repr::{Datum, RowArena};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
-    use mz_sql::func::OP_IMPLS;
+    use mz_sql::func::{Func, OP_IMPLS};
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::plan::{
+        CoercibleScalarExpr, ExprContext, HirScalarExpr, PlanContext, QueryContext, QueryLifetime,
+        Scope, StatementContext,
+    };
+    use tokio_postgres::types::Type;
+    use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 
@@ -3855,7 +4205,7 @@ mod tests {
 
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -3971,6 +4321,32 @@ mod tests {
 
             let mut all_oids = BTreeSet::new();
 
+            // A function to determine if two oids are equivalent enough for these tests. We don't
+            // support some types, so map exceptions here.
+            let equivalent_types: BTreeSet<(Option<u32>, Option<u32>)> = BTreeSet::from_iter(
+                [
+                    // We don't support NAME.
+                    (Type::NAME, Type::TEXT),
+                    (Type::NAME_ARRAY, Type::TEXT_ARRAY),
+                    // We don't support time with time zone.
+                    (Type::TIME, Type::TIMETZ),
+                    (Type::TIME_ARRAY, Type::TIMETZ_ARRAY),
+                ]
+                .map(|(a, b)| (Some(a.oid()), Some(b.oid()))),
+            );
+            let ignore_return_types: BTreeSet<u32> = BTreeSet::from([
+                1619, // pg_typeof: TODO: We now have regtype and can correctly implement this.
+            ]);
+            let is_same_type = |fn_oid: u32, a: Option<u32>, b: Option<u32>| -> bool {
+                if ignore_return_types.contains(&fn_oid) {
+                    return true;
+                }
+                if equivalent_types.contains(&(a, b)) || equivalent_types.contains(&(b, a)) {
+                    return true;
+                }
+                a == b
+            };
+
             for builtin in BUILTINS::iter() {
                 match builtin {
                     Builtin::Type(ty) => {
@@ -4046,7 +4422,7 @@ mod tests {
                             .resolve_schema_in_database(
                                 &ResolvedDatabaseSpecifier::Ambient,
                                 ty.schema,
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve schema");
                         let allocated_type = catalog
@@ -4058,7 +4434,7 @@ mod tests {
                                     schema: Some(schema.name().schema.clone()),
                                     item: ty.name.to_string(),
                                 },
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve type");
                         let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
@@ -4126,19 +4502,18 @@ mod tests {
 
                             let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
 
-                            if imp_return_oid != pg_fn.ret_oid {
-                                println!(
+                            assert!(
+                                is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
                             );
-                            }
 
-                            if imp.return_is_set != pg_fn.ret_set {
-                                panic!(
+                            assert_eq!(
+                                imp.return_is_set,
+                                pg_fn.ret_set,
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
-                            }
                         }
                     }
                     _ => (),
@@ -4165,7 +4540,7 @@ mod tests {
                         .map(|item| resolve_type_oid(item))
                         .expect("must have oid");
                     if imp_return_oid != pg_op.oprresult {
-                        println!(
+                        panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
                             imp.oid,
                             op,
@@ -4180,8 +4555,248 @@ mod tests {
         Catalog::with_debug(NOW_ZERO.clone(), inner).await
     }
 
+    // Execute all builtin functions with all combinations of arguments from interesting datums.
+    #[mz_ore::test(tokio::test)]
+    async fn test_smoketest_all_builtins() {
+        fn inner(catalog: Catalog) {
+            let conn_catalog = catalog.for_system_session();
+
+            let resolve_type_oid = |item: &str| {
+                conn_catalog
+                    .resolve_item(&PartialItemName {
+                        database: None,
+                        schema: Some(PG_CATALOG_SCHEMA.into()),
+                        item: item.to_string(),
+                    })
+                    .unwrap_or_else(|_| panic!("unable to resolve type: {item}"))
+                    .oid()
+            };
+            let pcx = PlanContext::zero();
+            let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "smoketest",
+                scope: &Scope::empty(),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let arena = RowArena::new();
+            // Extracted during planning; always panics when executed.
+            let ignore_names = BTreeSet::from([
+                "avg",
+                "bool_and",
+                "bool_or",
+                "mod",
+                "mz_panic",
+                "mz_sleep",
+                "pow",
+                "stddev_pop",
+                "stddev_samp",
+                "stddev",
+                "var_pop",
+                "var_samp",
+                "variance",
+            ]);
+
+            let fns = BUILTINS::funcs()
+                .map(|func| (&func.name, func.inner))
+                .chain(OP_IMPLS.iter());
+
+            for (name, func) in fns {
+                if ignore_names.contains(name) {
+                    continue;
+                }
+                let Func::Scalar(impls) = func else {
+                    continue;
+                };
+
+                'outer: for imp in impls {
+                    let details = imp.details();
+                    let mut styps = Vec::new();
+                    for item in details.arg_typs.iter() {
+                        let oid = resolve_type_oid(item);
+                        let Ok(pgtyp) = mz_pgrepr::Type::from_oid(oid) else {
+                            continue 'outer;
+                        };
+                        styps.push(ScalarType::try_from(&pgtyp).expect("must exist"));
+                    }
+                    let datums = styps
+                        .iter()
+                        .map(|styp| {
+                            let mut datums = vec![Datum::Null];
+                            datums.extend(styp.interesting_datums());
+                            datums
+                        })
+                        .collect::<Vec<_>>();
+                    // Skip nullary fns.
+                    if datums.is_empty() {
+                        continue;
+                    }
+
+                    let return_oid = details
+                        .return_typ
+                        .map(|item| resolve_type_oid(item))
+                        .expect("must exist");
+                    let return_styp = &mz_pgrepr::Type::from_oid(return_oid)
+                        .ok()
+                        .map(|typ| ScalarType::try_from(&typ).expect("must exist"));
+
+                    let mut idxs = vec![0; datums.len()];
+                    let mut args = Vec::with_capacity(idxs.len());
+                    while idxs[0] < datums[0].len() {
+                        args.clear();
+                        for i in 0..(datums.len()) {
+                            args.push(datums[i][idxs[i]]);
+                        }
+
+                        let op = &imp.op;
+                        let scalars = args
+                            .iter()
+                            .enumerate()
+                            .map(|(i, datum)| {
+                                CoercibleScalarExpr::Coerced(HirScalarExpr::literal(
+                                    datum.clone(),
+                                    styps[i].clone(),
+                                ))
+                            })
+                            .collect();
+
+                        let call_name = format!(
+                            "{name}({}) (oid: {})",
+                            args.iter()
+                                .map(|d| d.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            imp.oid
+                        );
+
+                        // Execute the function as much as possible, ensuring no panics occur, but
+                        // otherwise ignoring eval errors. We also do various other checks.
+                        let start = Instant::now();
+                        let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
+                        if let Ok(hir) = res {
+                            if let Ok(mir) = hir.lower_uncorrelated() {
+                                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
+                                    if let Some(return_styp) = return_styp {
+                                        let mir_typ = mir.typ(&[]);
+                                        // MIR type inference should be consistent with the type
+                                        // we get from the catalog.
+                                        assert_eq!(mir_typ.scalar_type, *return_styp);
+                                        // The following will check not just that the scalar type
+                                        // is ok, but also catches if the function returned a null
+                                        // but the MIR type inference said "non-nullable".
+                                        if !eval_result_datum.is_instance_of(&mir_typ) {
+                                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                                        }
+                                        // Check the consistency of `introduces_nulls` and
+                                        // `propagates_nulls` with `MirScalarExpr::typ`.
+                                        if let Some((introduces_nulls, propagates_nulls)) =
+                                            call_introduces_propagates_nulls(&mir)
+                                        {
+                                            if introduces_nulls {
+                                                // If the function introduces_nulls, then the return
+                                                // type should always be nullable, regardless of
+                                                // the nullability of the input types.
+                                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                            } else {
+                                                let any_input_null =
+                                                    args.iter().any(|arg| arg.is_null());
+                                                if !any_input_null {
+                                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                } else {
+                                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                }
+                                            }
+                                        }
+                                        // Check that `MirScalarExpr::reduce` yields the same result
+                                        // as the real evaluation.
+                                        let mut reduced = mir.clone();
+                                        reduced.reduce(&[]);
+                                        match reduced {
+                                            MirScalarExpr::Literal(reduce_result, ctyp) => {
+                                                match reduce_result {
+                                                    Ok(reduce_result_row) => {
+                                                        let reduce_result_datum = reduce_result_row.unpack_first();
+                                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                        // Let's check that the types also match.
+                                                        // (We are not checking nullability here,
+                                                        // because it's ok when we know a more
+                                                        // precise nullability after actually
+                                                        // evaluating a function than before.)
+                                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                    },
+                                                    Err(..) => {}, // It's ok, we might have given invalid args to the function
+                                                }
+                                            },
+                                            _ => unreachable!("all args are literals, so should have reduced to a literal"),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let elapsed = start.elapsed();
+                        if elapsed > Duration::from_millis(250) {
+                            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
+                        }
+
+                        // Advance to the next datum combination.
+                        for i in (0..datums.len()).rev() {
+                            idxs[i] += 1;
+                            if idxs[i] >= datums[i].len() {
+                                if i == 0 {
+                                    break;
+                                }
+                                idxs[i] = 0;
+                                continue;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await
+    }
+
+    /// If the given MirScalarExpr
+    ///  - is a function call, and
+    ///  - all arguments are literals
+    /// then it returns whether the called function (introduces_nulls, propagates_nulls).
+    fn call_introduces_propagates_nulls(mir_func_call: &MirScalarExpr) -> Option<(bool, bool)> {
+        match mir_func_call {
+            MirScalarExpr::CallUnary { func, expr } => {
+                if expr.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                if expr1.is_literal() && expr2.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                if exprs.iter().all(|arg| arg.is_literal()) {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     // Make sure pg views don't use types that only exist in Materialize.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();

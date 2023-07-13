@@ -386,10 +386,17 @@ contains:unknown catalog item 'v'
 
 # Dropping the public schema is okay, but dropping the catalog schemas is not.
 > DROP SCHEMA public
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO false
+
 ! DROP SCHEMA mz_catalog
 contains:cannot drop schema mz_catalog because it is required by the database system
 ! DROP SCHEMA pg_catalog
 contains:cannot drop schema pg_catalog because it is required by the database system
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_rbac_checks TO true
 
 # Schema names that start with "mz_" or "pg_" are reserved for future use by the
 # system.
@@ -468,6 +475,7 @@ mz_cluster_replicas
 mz_columns
 mz_connections
 mz_databases
+mz_default_privileges
 mz_egress_ips
 mz_functions
 mz_index_columns
@@ -486,6 +494,7 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
+mz_system_privileges
 mz_tables
 mz_types
 mz_views
@@ -534,12 +543,14 @@ mz_storage_shards                            source <null>
 > SHOW TABLES FROM mz_internal
 name
 ----
+mz_aggregates
 mz_cluster_links
 mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
+mz_kafka_sources
 mz_postgres_sources
 mz_sessions
 mz_storage_usage_by_shard
@@ -582,6 +593,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_message_counts
 mz_message_counts_per_worker
+mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
 mz_records_per_dataflow
@@ -611,11 +623,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-43
+47
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-79
+81
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -16,6 +16,7 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
 use mz_persist_types::Codec64;
@@ -26,8 +27,6 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
-
-use mz_ore::cast::{CastFrom, ReinterpretCast};
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -41,8 +40,7 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::arb_datum;
-use crate::scalar::DatumKind;
+use crate::scalar::{arb_datum, DatumKind};
 use crate::{Datum, Timestamp};
 
 pub(crate) mod encoding;
@@ -169,8 +167,9 @@ impl Ord for Row {
 #[allow(missing_debug_implementations)]
 mod columnation {
 
-    use super::Row;
     use columnation::{Columnation, Region, StableRegion};
+
+    use crate::Row;
 
     /// Region allocation for `Row` data.
     ///
@@ -1309,7 +1308,7 @@ impl RowPacker<'_> {
         for dim in dims {
             self.row
                 .data
-                .extend_from_slice(&u64::cast_from(dim.lower_bound).to_le_bytes());
+                .extend_from_slice(&i64::cast_from(dim.lower_bound).to_le_bytes());
             self.row
                 .data
                 .extend_from_slice(&u64::cast_from(dim.length).to_le_bytes());
@@ -1892,7 +1891,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_assumptions() {
         assert_eq!(size_of::<Tag>(), 1);
         #[cfg(target_endian = "big")]
@@ -1902,7 +1901,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn miri_test_arena() {
         let arena = RowArena::new();
 
@@ -1928,7 +1927,7 @@ mod tests {
         assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn miri_test_round_trip() {
         fn round_trip(datums: Vec<Datum>) {
             let row = Row::pack(datums.clone());
@@ -1983,7 +1982,7 @@ mod tests {
         ]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array() {
         // Construct an array using `Row::push_array` and verify that it unpacks
         // correctly.
@@ -2010,7 +2009,7 @@ mod tests {
         assert_eq!(arr1, arr2);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multidimensional_array() {
         let datums = vec![
             Datum::Int32(1),
@@ -2048,7 +2047,7 @@ mod tests {
         assert_eq!(array.elements().into_iter().collect::<Vec<_>>(), datums);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array_max_dimensions() {
         let mut row = Row::default();
         let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
@@ -2083,7 +2082,7 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array_wrong_cardinality() {
         let mut row = Row::default();
         let res = row.packer().push_array(
@@ -2109,7 +2108,7 @@ mod tests {
         assert!(row.data.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_nesting() {
         let mut row = Row::default();
         row.packer().push_dict_with(|row| {
@@ -2141,7 +2140,7 @@ mod tests {
         assert_eq!(v, Datum::String("bob"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
         let pack = |ok| {
             let mut row = Row::default();
@@ -2167,7 +2166,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_datum_sizes() {
         let arena = RowArena::new();
@@ -2224,7 +2223,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_range_errors() {
         fn test_range_errors_inner<'a>(
             datums: Vec<Vec<Datum<'a>>>,
@@ -2285,7 +2284,7 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    #[test]
+    #[mz_ore::test]
     fn row_size_is_stable() {
         // nothing depends on this being exactly 32, we just want it to be an active decision if we
         // change it

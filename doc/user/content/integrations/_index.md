@@ -77,20 +77,12 @@ Materialize can efficiently maintain real-time materialized views on top of **Ch
 
 ### PostgreSQL
 
-Postgres is supported as a [**source**](/get-started/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
+PostgreSQL 11+ is supported as a [**source**](/get-started/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
 
 | Service                         | Support level                    | Notes                                                                                                                                                                                                                                                                                         |             |
 | ------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| PostgreSQL _(direct)_           | {{< supportLevel beta >}}        | See the [source documentation](/sql/create-source/postgres/) for more details, and the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                            | [](#notify) |
-| PostgreSQL _(via Debezium)_     | {{< supportLevel production >}}  | See the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-kafka-debezium/) for a step-by-step breakdown of the integration.                                                                                                                                                                  | [](#notify) |
-| Amazon RDS for PostgreSQL       | {{< supportLevel beta >}}        | See the AWS RDS tab in the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                                                                                                                                       | [](#notify) |
-| GCP Cloud SQL for PostgreSQL    | {{< supportLevel beta >}}        | See the Cloud SQL tab in the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                                                                                                                              | [](#notify) |
-| Amazon Aurora                   | {{< supportLevel beta >}}        | See the AWS Aurora tab in the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                                                                                                                                 | [](#notify) |
-| Amazon Aurora Serverless        | {{< supportLevel researching >}} | Aurora serverless v1 does [not support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) logical replication, which is required for PostgreSQL CDC.                                                                         | [](#notify) |
-| Heroku Postgres                 | {{< supportLevel researching >}} | Heroku Postgres does not support logical replication, which is required for PostgreSQL CDC. Heroku provides [Heroku Data Connectors](https://devcenter.heroku.com/articles/heroku-data-connectors) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
-| Azure Database for PostgreSQL   | {{< supportLevel beta >}}        | See the Azure DB tab in the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                                                                                                                            | [](#notify) |
-| DigitalOcean Managed PostgreSQL | {{< supportLevel beta >}}        | Logical replication is enabled by default. See the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                                                                                                                  | [](#notify) |
-| CrunchyBridge Postgres          | {{< supportLevel beta >}}        | Logical replication is enabled by default. See the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) for a step-by-step breakdown of the integration.                                                                                                                | [](#notify) |     |
+| PostgreSQL _(direct)_           | {{< supportLevel production >}}        | See the [source documentation](/sql/create-source/postgres/) for more details, and the relevant integration guide for step-by-step instructions:<p></p><ul><li>[Amazon RDS for PostgreSQL](/ingest-data/postgres-amazon-rds)</li><li>[Amazon Aurora for PostgreSQL](/ingest-data/postgres-amazon-aurora)</li><li>[Azure DB for PostgreSQL](/ingest-data/postgres-azure-db)</li><li>[Google Cloud SQL for PostgreSQL](/ingest-data/postgres-google-cloud-sql)</li><li>[Self-hosted PostgreSQL](/ingest-data/postgres-self-hosted)</li></ul> |
+| PostgreSQL _(via Debezium)_     | {{< supportLevel production >}}  | See the [PostgreSQL guide](/ingest-data/cdc-postgres-kafka-debezium/) for a step-by-step breakdown of the integration. |
 
 ### MySQL
 
@@ -112,7 +104,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 | Service                     | Support level                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                        |             |
 | --------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | MongoDB _(via Debezium)_    | {{< supportLevel researching >}} | Not supported yet {{% gh 7289 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                                                                                                                                                           | [](#notify) |
-| SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with [known limitations](https://materializecommunity.slack.com/archives/C0157GZ7UKF/p1646142131506359) unrelated to Materialize. See the [Debezium documentation](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html) for details on how to configure a SQL Server instance for [CDC](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html#sqlserver-overview). | [](#notify) |
+| SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with known limitations {{% gh 8054 %}}. See the [Debezium documentation](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html) for details on how to configure a SQL Server instance for [CDC](https://debezium.io/documentation/reference/stable/connectors/sqlserver.html#sqlserver-overview). | [](#notify) |
 
 👋 _Is there another database you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
@@ -134,7 +126,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 👋 _Is there another object storage tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
-## Database management tools
+## Database and infrastructure management tools
 
 ### dbt
 
@@ -156,6 +148,21 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 | TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
 
 👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+
+### Terraform
+
+Materialize maintains a
+[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage connections, sources, and other database objects.
+
+Materialize also maintains several [Terraform modules](https://registry.terraform.io/namespaces/MaterializeInc) to help manage your other
+cloud resources. Modules allow you to bypass manually configuring cloud
+resources and are an efficient way of deploying essential infrastructure for
+your organization.
+
+{{< note >}}
+While Materialize offers support for its provider, Materialize does not offer
+support for these modules.
+{{</ note >}}
 
 ## Client libraries and ORMs
 
@@ -195,23 +202,22 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service  | Support level                    | Notes                                                                              |             |
 | -------- | -------------------------------- | ---------------------------------------------------------------------------------- | ----------- |
-| FiveTran | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| Fivetran | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | Stitch   | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Meltano  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Airbyte  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 
 ### Business Intelligence (BI)
 
-| Service            | Support level                    | Notes                                                                                                                                                                                                               |             |
-| ------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Metabase           | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html). See the [Metabase integration page](/integrations/metabase/) for more details. | [](#notify) |
-| Superset           | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://superset.apache.org/docs/databases/postgres/).                                                                                                               | [](#notify) |
-| Preset             | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://superset.apache.org/docs/databases/postgres/).                                                                                                               | [](#notify) |
-| Looker             | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://superset.apache.org/docs/databases/postgres/).                                                                                                               | [](#notify) |
-| Google Data Studio | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://support.google.com/datastudio/answer/7288010?hl#how-to-connect-to-postgresql&zippy=%2Cin-this-article).                                                      | [](#notify) |
-| Tableau            | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                                                                                                                                                  | [](#notify) |
-| Microsoft Power BI | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                                                                                                                                                  | [](#notify) |
-| Mode Analytics     | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                                                                                                                                                  | [](#notify) |
+| Service            | Support level                    | Notes                                                                                                                                                                                                                                                                                               |             |
+| ------------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Metabase           | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.metabase.com/docs/latest/administration-guide/databases/postgresql.html). See the [Metabase integration page](/integrations/metabase/) for more details.                                                                                 | [](#notify) |
+| Superset           | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://superset.apache.org/docs/databases/postgres/).                                                                                                                                                                                               | [](#notify) |
+| Preset             | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://superset.apache.org/docs/databases/postgres/).                                                                                                                                                                                               | [](#notify) |
+| Looker             | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://superset.apache.org/docs/databases/postgres/).                                                                                                                                                                                               | [](#notify) |
+| Google Data Studio | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://support.google.com/datastudio/answer/7288010?hl#how-to-connect-to-postgresql&zippy=%2Cin-this-article).                                                                                                                                      | [](#notify) |
+| Tableau            | {{< supportLevel alpha >}}       | Connect using the [JDBC driver for PostgreSQL](https://help.tableau.com/current/pro/desktop/en-us/examples_postgresql.htm). See the [Tableau integration page](/integrations/tableau/) for more details. | [](#notify) |
+| Microsoft Power BI | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                                                  | [](#notify) |                                                                                                                                                                                                                               | [](#notify) |
 
 ### Headless BI
 

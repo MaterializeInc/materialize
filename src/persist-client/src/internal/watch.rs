@@ -154,14 +154,14 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn state_watch() {
         mz_ore::test::init_logging();
         let metrics = Arc::new(Metrics::new(
             &PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
         ));
-        let cache = StateCache::new(Arc::clone(&metrics));
+        let cache = StateCache::new_no_metrics();
         let shard_id = ShardId::new();
         let state = cache
             .get::<(), (), u64, i64, _, _>(shard_id, || async {
@@ -200,14 +200,14 @@ mod tests {
         assert!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never().is_none());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn state_watch_concurrency() {
         mz_ore::test::init_logging();
         let metrics = Arc::new(Metrics::new(
             &PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
         ));
-        let cache = StateCache::new(Arc::clone(&metrics));
+        let cache = StateCache::new_no_metrics();
         let shard_id = ShardId::new();
         let state = cache
             .get::<(), (), u64, i64, _, _>(shard_id, || async {
@@ -236,7 +236,6 @@ mod tests {
                     let _ = watch.wait_for_seqno_ge(wait_seqno).await;
                     let observed_seqno =
                         state.read_lock(&metrics.locks.applier_read_noncacheable, |x| x.seqno);
-                    tracing::info!("{} vs {}", wait_seqno, observed_seqno);
                     assert!(
                         wait_seqno <= observed_seqno,
                         "{} vs {}",
@@ -253,7 +252,6 @@ mod tests {
                 mz_ore::task::spawn(|| "write", async move {
                     state.write_lock(&metrics.locks.applier_write, |x| {
                         x.seqno = x.seqno.next();
-                        eprintln!("wrote {}", x.seqno);
                     });
                 })
             })
@@ -266,7 +264,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn state_watch_listen_snapshot() {
         mz_ore::test::init_logging();
         let waker = noop_waker();

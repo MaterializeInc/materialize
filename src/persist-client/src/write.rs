@@ -21,12 +21,13 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -41,7 +42,7 @@ use crate::internal::state::{HollowBatch, Upper};
 use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
@@ -100,6 +101,7 @@ impl WriterId {
 )]
 pub struct WriterEnrichedHollowBatch<T> {
     pub(crate) shard_id: ShardId,
+    pub(crate) version: semver::Version,
     pub(crate) batch: HollowBatch<T>,
 }
 
@@ -441,6 +443,15 @@ where
                     handle_shard: self.machine.shard_id(),
                 });
             }
+            if self.cfg.build_version != batch.version {
+                error!(
+                    shard_id =? self.machine.shard_id(),
+                    batch_version =? batch.version,
+                    writer_version =? self.cfg.build_version,
+                    "Appending batch with a version that does not match the current build. \
+                    This may fail in the future."
+                )
+            }
         }
 
         let lower = expected_upper.clone();
@@ -511,6 +522,7 @@ where
         );
         Batch {
             shard_id: self.machine.shard_id(),
+            version: hollow.version,
             batch: hollow.batch,
             _blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
@@ -531,15 +543,16 @@ where
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::from(&self.cfg),
+            BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
             self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
-            self.writer_id.clone(),
+            self.cfg.build_version.clone(),
             Antichain::from_elem(T::minimum()),
             None,
             false,
@@ -766,19 +779,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use differential_dataflow::consolidation::consolidate_updates;
     use serde_json::json;
-    use std::str::FromStr;
 
     use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn empty_batches() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -816,10 +828,8 @@ mod tests {
         assert_eq!(count_after, count_before);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn compare_and_append_batch_multi() {
-        mz_ore::test::init_logging();
-
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -853,7 +863,7 @@ mod tests {
         assert_eq!(actual, all_ok(&expected, 3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -885,10 +895,8 @@ mod tests {
         assert_eq!(container.writer_id, id);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn hollow_batch_roundtrip() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),

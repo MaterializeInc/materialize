@@ -72,6 +72,8 @@ You cannot rename items if:
     ON v1.a = v2.a
     ```
 
+- They are system clusters, such as `mz_system` and `mz_introspection`, or replicas in system clusters.
+
 ### New name limitations
 
 You cannot rename an item to _any_ identifier used in a dependent query,
@@ -117,6 +119,14 @@ SHOW VIEWS;
 -------
  v2
 ```
+
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- Ownership of the object being renamed.
 
 ## See also
 

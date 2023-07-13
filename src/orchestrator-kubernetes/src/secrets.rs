@@ -18,7 +18,6 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::Api;
-
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsController, SecretsReader};
 

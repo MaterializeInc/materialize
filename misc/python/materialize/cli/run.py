@@ -152,6 +152,7 @@ def main() -> int:
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
             mzdata = ROOT / "mzdata"
+            scratch = ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:
@@ -167,6 +168,7 @@ def main() -> int:
                 # the `prometheus` directory.
                 paths = list(mzdata.glob("prometheus/*"))
                 paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
                     if path.is_dir():
@@ -175,6 +177,7 @@ def main() -> int:
                         path.unlink()
 
             mzdata.mkdir(exist_ok=True)
+            scratch.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"
             try:
                 environment_id = environment_file.read_text().rstrip()
@@ -191,6 +194,7 @@ def main() -> int:
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
                 "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
+                f"--orchestrator-process-scratch-directory={scratch}",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",

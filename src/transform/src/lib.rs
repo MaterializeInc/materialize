@@ -88,14 +88,15 @@
 #![warn(missing_debug_implementations)]
 
 use std::error::Error;
-use std::fmt;
-use std::iter;
-use tracing::error;
+use std::rc::Rc;
+use std::{fmt, iter};
 
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
+use tracing::error;
 
 pub mod attribute;
 pub mod canonicalization;
@@ -103,6 +104,7 @@ pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
+pub mod dataflow;
 pub mod demand;
 pub mod fold_constants;
 pub mod fusion;
@@ -122,11 +124,10 @@ pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
+pub mod typecheck;
 pub mod union_cancel;
 
-pub mod dataflow;
 pub use dataflow::optimize_dataflow;
-use mz_ore::stack::RecursionLimitError;
 
 #[macro_use]
 extern crate num_derive;
@@ -146,26 +147,47 @@ macro_rules! any {
 }
 
 /// Arguments that get threaded through all transforms.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TransformArgs<'a> {
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
+    /// The global ID for this query (if it exists),
+    pub global_id: Option<&'a GlobalId>,
+}
+
+impl<'a> TransformArgs<'a> {
+    /// Generates a `TransformArgs` instance for the given `IndexOracle` with no `GlobalId`
+    pub fn anonymous(indexes: &'a dyn IndexOracle) -> Self {
+        Self {
+            indexes,
+            global_id: None,
+        }
+    }
+
+    /// Generates a `TransformArgs` instance for the given `IndexOracle` with a `GlobalId`
+    pub fn with_id(indexes: &'a dyn IndexOracle, global_id: &'a GlobalId) -> Self {
+        Self {
+            indexes,
+            global_id: Some(global_id),
+        }
+    }
+}
+
+impl<'a> Default for TransformArgs<'a> {
+    fn default() -> Self {
+        TransformArgs::anonymous(&EmptyIndexOracle)
+    }
 }
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
-    /// Indicates if the transform can be safely applied to expressions containing
-    /// `LetRec` AST nodes.
-    fn recursion_safe(&self) -> bool {
-        false
-    }
-
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError>;
+
     /// A string describing the transform.
     ///
     /// This is useful mainly when iterating through many `Box<Transform>`
@@ -180,8 +202,6 @@ pub trait Transform: std::fmt::Debug {
 pub enum TransformError {
     /// An unstructured error.
     Internal(String),
-    /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
-    LetRecUnsupported,
     /// A reference to an apparently unbound identifier.
     IdentifierMissing(mz_expr::LocalId),
 }
@@ -190,7 +210,6 @@ impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
-            TransformError::LetRecUnsupported => write!(f, "LetRec AST node not supported"),
             TransformError::IdentifierMissing(i) => {
                 write!(f, "apparently unbound identifier: {:?}", i)
             }
@@ -241,10 +260,6 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -256,8 +271,6 @@ impl Transform for Fixpoint {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
-
         // The number of iterations for a relation to settle depends on the
         // number of nodes in the relation. Instead of picking an arbitrary
         // hard limit on the number of iterations, we use a soft limit and
@@ -279,14 +292,7 @@ impl Transform for Fixpoint {
                 );
                 span.in_scope(|| -> Result<(), TransformError> {
                     for transform in self.transforms.iter() {
-                        if transform.recursion_safe() || !recursive {
-                            transform.transform(
-                                relation,
-                                TransformArgs {
-                                    indexes: args.indexes,
-                                },
-                            )?;
-                        }
+                        transform.transform(relation, args)?;
                     }
                     mz_repr::explain::trace_plan(relation);
                     Ok(())
@@ -304,14 +310,7 @@ impl Transform for Fixpoint {
             }
         }
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(
-                    relation,
-                    TransformArgs {
-                        indexes: args.indexes,
-                    },
-                )?;
-            }
+            transform.transform(relation, args)?;
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped too many times {:#?}; transformed relation: {}",
@@ -369,10 +368,6 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -384,17 +379,8 @@ impl Transform for FuseAndCollapse {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
-
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(
-                    relation,
-                    TransformArgs {
-                        indexes: args.indexes,
-                    },
-                )?;
-            }
+            transform.transform(relation, args)?;
         }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
@@ -435,8 +421,9 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
-    pub fn logical_optimizer() -> Self {
+    pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -475,7 +462,7 @@ impl Optimizer {
                 name: "fixpoint",
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
+                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence::default()),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
@@ -490,6 +477,11 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "logical",
@@ -503,9 +495,14 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn physical_optimizer() -> Self {
+    pub fn physical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -562,6 +559,7 @@ impl Optimizer {
             // identical. Check the `threshold_elision.slt` tests that fail if
             // you remove this transform for examples.
             Box::new(crate::threshold_elision::ThresholdElision),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -571,8 +569,23 @@ impl Optimizer {
 
     /// Contains the logical optimizations that should run after cross-view
     /// transformations run.
-    pub fn logical_cleanup_pass() -> Self {
+    ///
+    /// Set `allow_new_globals` when you will use these as the first passes.
+    /// The first instance of the typechecker in an optimizer pipeline should
+    /// allow new globals (or it will crash when it encounters them).
+    pub fn logical_cleanup_pass(
+        ctx: &crate::typecheck::SharedContext,
+        allow_new_globals: bool,
+    ) -> Self {
+        let mut typechecker =
+            crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences();
+
+        if !allow_new_globals {
+            typechecker = typechecker.disallow_new_globals();
+        }
+
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(typechecker),
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
@@ -597,6 +610,11 @@ impl Optimizer {
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "logical_cleanup",
@@ -618,7 +636,7 @@ impl Optimizer {
         &self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
+        let transform_result = self.transform(&mut relation, TransformArgs::default());
         match transform_result {
             Ok(_) => {
                 mz_repr::explain::trace_plan(&relation);
@@ -642,13 +660,10 @@ impl Optimizer {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        indexes: &dyn IndexOracle,
+        args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(relation, TransformArgs { indexes })?;
-            }
+            transform.transform(relation, args)?;
         }
 
         Ok(())

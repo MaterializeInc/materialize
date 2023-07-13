@@ -18,8 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::mem;
+use std::{fmt, mem};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
@@ -66,7 +65,7 @@ pub enum Expr<T: AstInfo> {
     /// `IS {NULL, TRUE, FALSE, UNKNOWN}` expression
     IsExpr {
         expr: Box<Expr<T>>,
-        construct: IsExprConstruct,
+        construct: IsExprConstruct<T>,
         negated: bool,
     },
     /// `[ NOT ] IN (val1, val2, ...)`
@@ -585,9 +584,9 @@ impl<T: AstInfo> Expr<T> {
         }
     }
 
-    pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
+    pub fn call(name: T::ItemName, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
-            name: UnresolvedItemName(name.into_iter().map(Into::into).collect()),
+            name,
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
@@ -595,11 +594,11 @@ impl<T: AstInfo> Expr<T> {
         })
     }
 
-    pub fn call_nullary(name: Vec<&str>) -> Expr<T> {
+    pub fn call_nullary(name: T::ItemName) -> Expr<T> {
         Expr::call(name, vec![])
     }
 
-    pub fn call_unary(self, name: Vec<&str>) -> Expr<T> {
+    pub fn call_unary(self, name: T::ItemName) -> Expr<T> {
         Expr::call(name, vec![self])
     }
 
@@ -689,15 +688,27 @@ impl<T: AstInfo> AstDisplay for SubscriptPosition<T> {
 impl_display_t!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
+/// Includes potential IGNORE NULLS or RESPECT NULLS from before the OVER clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowSpec<T: AstInfo> {
     pub partition_by: Vec<Expr<T>>,
     pub order_by: Vec<OrderByExpr<T>>,
     pub window_frame: Option<WindowFrame>,
+    // Note that IGNORE NULLS and RESPECT NULLS are mutually exclusive. We validate that not both
+    // are present during HIR planning.
+    pub ignore_nulls: bool,
+    pub respect_nulls: bool,
 }
 
 impl<T: AstInfo> AstDisplay for WindowSpec<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if self.ignore_nulls {
+            f.write_str(" IGNORE NULLS");
+        }
+        if self.respect_nulls {
+            f.write_str(" RESPECT NULLS");
+        }
+        f.write_str(" OVER (");
         let mut delim = "";
         if !self.partition_by.is_empty() {
             delim = " ";
@@ -725,6 +736,7 @@ impl<T: AstInfo> AstDisplay for WindowSpec<T> {
                 f.write_node(&window_frame.start_bound);
             }
         }
+        f.write_str(")");
     }
 }
 impl_display_t!(WindowSpec);
@@ -796,7 +808,7 @@ impl_display!(WindowFrameBound);
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Function<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: T::ItemName,
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,
@@ -820,9 +832,7 @@ impl<T: AstInfo> AstDisplay for Function<T> {
             f.write_str(")");
         }
         if let Some(o) = &self.over {
-            f.write_str(" OVER (");
             f.write_node(o);
-            f.write_str(")");
         }
     }
 }
@@ -865,31 +875,27 @@ impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
 }
 impl_display_t!(FunctionArgs);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum IsExprConstruct {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IsExprConstruct<T: AstInfo> {
     Null,
     True,
     False,
     Unknown,
+    DistinctFrom(Box<Expr<T>>),
 }
 
-impl IsExprConstruct {
-    pub fn requires_boolean_expr(&self) -> bool {
-        match self {
-            IsExprConstruct::Null => false,
-            IsExprConstruct::True | IsExprConstruct::False | IsExprConstruct::Unknown => true,
-        }
-    }
-}
-
-impl AstDisplay for IsExprConstruct {
+impl<T: AstInfo> AstDisplay for IsExprConstruct<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             IsExprConstruct::Null => f.write_str("NULL"),
             IsExprConstruct::True => f.write_str("TRUE"),
             IsExprConstruct::False => f.write_str("FALSE"),
             IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
+            IsExprConstruct::DistinctFrom(e) => {
+                f.write_str("DISTINCT FROM ");
+                e.fmt(f);
+            }
         }
     }
 }
-impl_display!(IsExprConstruct);
+impl_display_t!(IsExprConstruct);

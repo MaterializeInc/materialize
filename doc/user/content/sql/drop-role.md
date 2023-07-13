@@ -1,12 +1,14 @@
 ---
 title: "DROP ROLE"
-description: "`DROP ROLE` removes a role from your Materialize instance."
+description: "`DROP ROLE` removes a role from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP ROLE` removes a role from your Materialize instance.
+`DROP ROLE` removes a role from Materialize.
+
+{{< alpha />}}
 
 ## Syntax
 
@@ -20,6 +22,14 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 ## Details
 
 You cannot drop the current role.
+
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

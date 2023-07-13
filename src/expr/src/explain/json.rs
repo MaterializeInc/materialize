@@ -9,11 +9,9 @@
 
 //! `EXPLAIN AS JSON` support for structures defined in this crate.
 
-use crate::explain::{ExplainSource, PushdownInfo};
-use crate::interpret::Pushdownable;
 use mz_repr::explain::json::DisplayJson;
 
-use super::{ExplainMultiPlan, ExplainSinglePlan};
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo};
 
 impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
 where
@@ -55,18 +53,9 @@ where
                         "op": op,
                     });
 
-                    if let Some(PushdownInfo { trace }) = pushdown_info {
-                        let pushdownable: Vec<_> = trace
-                            .0
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, p)| **p == Pushdownable::Yes)
-                            .map(|(i, _)| i)
-                            .collect();
-
-                        json.as_object_mut()
-                            .unwrap()
-                            .insert("pushdown".to_owned(), serde_json::json!(pushdownable));
+                    if let Some(PushdownInfo { pushdown }) = pushdown_info {
+                        let object = json.as_object_mut().unwrap();
+                        object.insert("pushdown".to_owned(), serde_json::json!(pushdown));
                     }
 
                     json

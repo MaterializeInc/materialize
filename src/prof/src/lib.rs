@@ -73,7 +73,10 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
+use std::collections::BTreeMap;
+use std::ffi::c_void;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 pub mod http;
 #[cfg(feature = "jemalloc")]

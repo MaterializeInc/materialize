@@ -52,10 +52,6 @@ impl CheckedRecursion for RedundantJoin {
 }
 
 impl crate::Transform for RedundantJoin {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -107,7 +103,12 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits: _,
+                    body,
+                } => {
                     // As a first approximation, we naively extend the `lets`
                     // context with the empty vec![] for each id.
                     for id in ids.iter() {

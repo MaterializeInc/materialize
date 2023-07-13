@@ -8,4 +8,3 @@
 // by the Apache License, Version 2.0.
 
 pub mod persist_source;
-pub mod util;

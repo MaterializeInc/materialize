@@ -21,18 +21,20 @@ sys.path.append(os.path.dirname(__file__))
 from scenarios import *  # noqa: F401 F403
 from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
+from scenarios_customer import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
+from scenarios_scale import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
-from materialize.feature_benchmark.benchmark import Benchmark, Report, SingleReport
+from materialize.feature_benchmark.benchmark import Benchmark, Report
 from materialize.feature_benchmark.comparator import (
     Comparator,
     RelativeThresholdComparator,
-    SuccessComparator,
 )
-from materialize.feature_benchmark.executor import Docker, MzCloud
+from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
+from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
@@ -40,17 +42,19 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services import Cockroach
 from materialize.mzcompose.services import Kafka as KafkaService
 from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
     Materialized,
+    Minio,
     Postgres,
     Redpanda,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
 )
-from materialize.util import released_materialize_versions
+from materialize.version_list import VersionsFromDocs
 
 #
 # Global feature benchmark thresholds and termination conditions
@@ -73,12 +77,12 @@ def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCon
     ]
 
 
-def make_aggregation() -> Aggregation:
-    return MinAggregation()
+def make_aggregation_class() -> Type[Aggregation]:
+    return MinAggregation
 
 
-def make_comparator(name: str) -> Comparator:
-    return RelativeThresholdComparator(name, threshold=0.10)
+def make_comparator(name: str, type: MeasurementType) -> Comparator:
+    return RelativeThresholdComparator(name=name, type=type, threshold=0.10)
 
 
 default_timeout = "1800s"
@@ -88,6 +92,8 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
+    Cockroach(setup_materialize=True),
+    Minio(setup_materialize=True),
     Materialized(),
     Testdrive(
         default_timeout=default_timeout,
@@ -100,26 +106,42 @@ SERVICES = [
 
 def run_one_scenario(
     c: Composition, scenario: Type[Scenario], args: argparse.Namespace
-) -> Comparator:
+) -> List[Comparator]:
     name = scenario.__name__
     print(f"--- Now benchmarking {name} ...")
-    comparator = make_comparator(name)
+
+    measurement_types = [MeasurementType.WALLCLOCK]
+    if args.measure_memory:
+        measurement_types.append(MeasurementType.MEMORY)
+    comparators = [make_comparator(name=name, type=t) for t in measurement_types]
+
     common_seed = round(time.time())
 
     for mz_id, instance in enumerate(["this", "other"]):
-        tag, size = (
-            (args.this_tag, args.this_size)
+        tag, size, params = (
+            (args.this_tag, args.this_size, args.this_params)
             if instance == "this"
-            else (args.other_tag, args.other_size)
+            else (args.other_tag, args.other_size, args.other_params)
         )
 
         c.up("testdrive", persistent=True)
+
+        additional_system_parameter_defaults = None
+        if params is not None:
+            additional_system_parameter_defaults = {}
+            for param in params.split(";"):
+                param_name, param_value = param.split("=")
+                additional_system_parameter_defaults[param_name] = param_value
 
         mz = Materialized(
             image=f"materialize/materialized:{tag}" if tag else None,
             default_size=size,
             # Avoid clashes with the Kafka sink progress topic across restarts
             environment_id=f"local-az1-{uuid.uuid4()}-0",
+            soft_assertions=False,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            external_cockroach=True,
+            external_minio=True,
         )
 
         with c.override(mz):
@@ -132,7 +154,7 @@ def run_one_scenario(
                 rm=True,
             )
 
-            c.up("materialized")
+            c.up("cockroach", "materialized")
 
         executor = Docker(composition=c, seed=common_seed, materialized=mz)
 
@@ -143,16 +165,19 @@ def run_one_scenario(
             executor=executor,
             filter=make_filter(args),
             termination_conditions=make_termination_conditions(args),
-            aggregation=make_aggregation(),
+            aggregation_class=make_aggregation_class(),
+            measure_memory=args.measure_memory,
         )
 
-        outcome, iterations = benchmark.run()
-        comparator.append(outcome)
-        c.kill("materialized", "testdrive")
-        c.rm("materialized", "testdrive")
+        aggregations = benchmark.run()
+        for i, comparator in enumerate(comparators):
+            comparator.append(aggregations[i].aggregate())
+
+        c.kill("cockroach", "materialized", "testdrive")
+        c.rm("cockroach", "materialized", "testdrive")
         c.rm_volumes("mzdata")
 
-    return comparator
+    return comparators
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -167,6 +192,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--measure-memory",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Measure memory usage",
+    )
+
+    parser.add_argument(
         "--this-tag",
         metavar="TAG",
         type=str,
@@ -175,11 +207,27 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--this-params",
+        metavar="PARAMS",
+        type=str,
+        default=os.getenv("THIS_PARAMS", None),
+        help="Semicolon-separated list of parameter=value pairs to apply to the 'THIS' Mz instance",
+    )
+
+    parser.add_argument(
         "--other-tag",
         metavar="TAG",
         type=str,
-        default=os.getenv("OTHER_TAG", str(released_materialize_versions()[0])),
+        default=os.getenv("OTHER_TAG", str(VersionsFromDocs().all_versions()[-1])),
         help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
+    )
+
+    parser.add_argument(
+        "--other-params",
+        metavar="PARAMS",
+        type=str,
+        default=os.getenv("OTHER_PARAMS", None),
+        help="Semicolon-separated list of parameter=value pairs to apply to the 'OTHER' Mz instance",
     )
 
     parser.add_argument(
@@ -277,10 +325,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         report = Report()
 
         for scenario in list(scenarios.keys()):
-            comparison = run_one_scenario(c, scenario, args)
-            report.append(comparison)
+            comparators = run_one_scenario(c, scenario, args)
+            report.extend(comparators)
 
-            if not comparison.is_regression():
+            # Do not retry the scenario if no regressions
+            if all([not c.is_regression() for c in comparators]):
                 del scenarios[scenario]
 
             print(f"+++ Benchmark Report for cycle {cycle+1}:")
@@ -294,144 +343,3 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
         )
         sys.exit(1)
-
-
-def workflow_mzcloud(c: Composition, parser: WorkflowArgumentParser) -> None:
-    # Make sure Kafka is externally accessible on a predictable port.
-    assert (
-        c.preserve_ports
-    ), "`--preserve-ports` must be specified (BEFORE the `run` command)"
-
-    parser.add_argument(
-        "--mzcloud-url",
-        type=str,
-        help="The postgres connection url to the mzcloud deployment to benchmark.",
-    )
-
-    parser.add_argument(
-        "--external-addr",
-        type=str,
-        help="Kafka and Schema Registry are started by mzcompose and exposed on the public interface. This is the IP address or hostname that is accessible by the mzcloud instance, usually the public IP of your machine.",
-    )
-
-    parser.add_argument(
-        "--root-scenario",
-        "--scenario",
-        metavar="SCENARIO",
-        type=str,
-        default="Scenario",
-        help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
-    )
-
-    parser.add_argument(
-        "--scale",
-        metavar="+N | -N | N",
-        type=str,
-        default=None,
-        help="Absolute or relative scale to apply.",
-    )
-
-    parser.add_argument(
-        "--max-measurements",
-        metavar="N",
-        type=int,
-        default=99,
-        help="Limit the number of measurements to N.",
-    )
-
-    parser.add_argument(
-        "--max-retries",
-        metavar="N",
-        type=int,
-        default=2,
-        help="Retry any potential performance regressions up to N times.",
-    )
-
-    parser.add_argument(
-        "--test-filter",
-        type=str,
-        help="Filter scenario names by this string (case insensitive).",
-    )
-
-    args = parser.parse_args()
-
-    assert args.mzcloud_url
-    assert args.external_addr
-
-    print(
-        f"""
-mzcloud url: {args.mzcloud_url}
-external addr: {args.external_addr}
-
-root_scenario: {args.root_scenario}"""
-    )
-
-    overrides = [
-        KafkaService(
-            extra_environment=[
-                f"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://{args.external_addr}:9092"
-            ]
-        ),
-    ]
-
-    with c.override(*overrides):
-        c.up("zookeeper", "kafka", "schema-registry")
-        c.up("testdrive", persistent=True)
-
-        # Build the list of scenarios to run
-        root_scenario = globals()[args.root_scenario]
-        initial_scenarios = {}
-
-        if root_scenario.__subclasses__():
-            for scenario in root_scenario.__subclasses__():
-                has_children = False
-                for s in scenario.__subclasses__():
-                    has_children = True
-                    initial_scenarios[s] = 1
-
-                if not has_children:
-                    initial_scenarios[scenario] = 1
-        else:
-            initial_scenarios[root_scenario] = 1
-
-        scenarios = initial_scenarios.copy()
-
-        for cycle in range(0, args.max_retries):
-            print(
-                f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
-            )
-
-            report = SingleReport()
-
-            for scenario in list(scenarios.keys()):
-                name = scenario.__name__
-                if args.test_filter and args.test_filter.lower() not in name.lower():
-                    continue
-                print(f"--- Now benchmarking {name} ...")
-                comparator = SuccessComparator(name, threshold=0)
-                common_seed = round(time.time())
-                executor = MzCloud(
-                    composition=c,
-                    mzcloud_url=args.mzcloud_url,
-                    seed=common_seed,
-                    external_addr=args.external_addr,
-                )
-                executor.Reset()
-                mz_id = 0
-
-                benchmark = Benchmark(
-                    mz_id=mz_id,
-                    scenario=scenario,
-                    scale=args.scale,
-                    executor=executor,
-                    filter=make_filter(args),
-                    termination_conditions=make_termination_conditions(args),
-                    aggregation=make_aggregation(),
-                )
-
-                outcome, iterations = benchmark.run()
-                comparator.append(outcome)
-                report.append(comparator)
-
-                print(f"+++ Benchmark Report for cycle {cycle+1}:")
-                report.dump()

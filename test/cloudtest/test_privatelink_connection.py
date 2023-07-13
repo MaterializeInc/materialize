@@ -12,7 +12,7 @@ from textwrap import dedent
 import pytest
 from pg8000.dbapi import ProgrammingError
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.exists import exists, not_exists
 
 
@@ -62,6 +62,11 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     # its existence.
 
     mz.environmentd.sql(
+        "ALTER SYSTEM SET enable_connection_validation_syntax = true",
+        port="internal",
+        user="mz_system",
+    )
+    mz.environmentd.sql(
         dedent(
             """\
             CREATE CONNECTION kafkaconn TO KAFKA (
@@ -71,7 +76,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                     'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az1', PORT 9093),
                     'customer-hostname-4:9094'
                 )
-            );
+            ) WITH (VALIDATE = false);
             """
         )
     )
@@ -110,7 +115,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                 USER postgres,
                 AWS PRIVATELINK privatelinkconn,
                 SSH TUNNEL sshconn
-            )
+            ) WITH (VALIDATE = false);
             """
             )
         )
@@ -141,7 +146,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                     BROKERS (
                         'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az3', PORT 9093)
                     )
-                );
+                ) WITH (VALIDATE = false);
                 """
             )
         )

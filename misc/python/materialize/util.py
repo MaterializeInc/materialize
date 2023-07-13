@@ -14,9 +14,7 @@ import os
 import random
 import subprocess
 from pathlib import Path
-from typing import List
 
-import frontmatter
 from semver import Version
 
 from materialize.mzcompose import Composition
@@ -42,8 +40,7 @@ class MzVersion(Version):
             if not git_hash[0] == "(" or not git_hash[-1] == ")":
                 raise ValueError(f"Invalid mz version string: {version}")
             # Hash ignored
-        # TODO(def-) Remove type ignores when https://github.com/python-semver/python-semver/pull/396 is merged
-        return cls.parse(version)  # type: ignore
+        return cls.parse(version)
 
     @classmethod
     def parse_sql(cls, c: Composition) -> "MzVersion":
@@ -60,30 +57,13 @@ class MzVersion(Version):
         )
         for package in metadata["packages"]:
             if package["name"] == "mz-environmentd":
-                return cls.parse(package["version"])  # type: ignore
+                return cls.parse(package["version"])
         else:
             raise ValueError("No mz-environmentd version found in cargo metadata")
 
+    @classmethod
+    def from_semver(cls, version: Version) -> "MzVersion":
+        return cls.parse(str(version))
+
     def __str__(self) -> str:
         return "v" + super().__str__()
-
-
-def released_materialize_versions() -> List[MzVersion]:
-    """Returns all released Materialize versions.
-
-    The list is determined from the release notes files in the user
-    documentation. Only versions that declare `released: true` in their
-    frontmatter are considered.
-
-    The list is returned in version order with newest versions first.
-    """
-    files = Path(ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
-    versions = []
-    for f in files:
-        base = f.stem
-        metadata = frontmatter.load(f)
-        if metadata.get("released", False):
-            patch = metadata.get("patch", 0)
-            versions.append(MzVersion.parse_mz(f"{base}.{patch}"))
-    versions.sort(reverse=True)
-    return versions

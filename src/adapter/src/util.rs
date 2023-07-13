@@ -9,15 +9,11 @@
 
 use std::fmt::Debug;
 
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
 use mz_controller::clusters::ClusterId;
-use mz_ore::halt;
-use mz_ore::soft_assert;
+use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
@@ -29,13 +25,15 @@ use mz_sql_parser::ast::{
 use mz_stash::StashError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, Response};
-use crate::coord::Message;
+use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::{ExecuteResponse, PeekResponseUnary};
+use crate::{ExecuteContext, ExecuteResponse, PeekResponseUnary};
 
 /// Handles responding to clients.
 #[derive(Debug)]
@@ -134,34 +132,41 @@ impl Transmittable for () {
 
 /// `ClientTransmitter` with a response to send.
 #[derive(Debug)]
-pub struct CompletedClientTransmitter<T: Transmittable> {
-    client_transmitter: ClientTransmitter<T>,
-    response: Result<T, AdapterError>,
-    session: Session,
+pub struct CompletedClientTransmitter {
+    ctx: ExecuteContext,
+    response: Result<PendingTxnResponse, AdapterError>,
     action: EndTransactionAction,
 }
 
-impl<T: Transmittable> CompletedClientTransmitter<T> {
+impl CompletedClientTransmitter {
     /// Creates a new completed client transmitter.
     pub fn new(
-        client_transmitter: ClientTransmitter<T>,
-        response: Result<T, AdapterError>,
-        session: Session,
+        ctx: ExecuteContext,
+        response: Result<PendingTxnResponse, AdapterError>,
         action: EndTransactionAction,
     ) -> Self {
         CompletedClientTransmitter {
-            client_transmitter,
+            ctx,
             response,
-            session,
             action,
         }
     }
 
-    /// Transmits `result` to the client, returning ownership of the session
-    /// `session` as well.
-    pub fn send(mut self) {
-        self.session.vars_mut().end_transaction(self.action);
-        self.client_transmitter.send(self.response, self.session);
+    /// Returns the execute context to be finalized, and the result to send it.
+    pub fn finalize(mut self) -> (ExecuteContext, Result<ExecuteResponse, AdapterError>) {
+        let changed = self
+            .ctx
+            .session_mut()
+            .vars_mut()
+            .end_transaction(self.action);
+
+        // Append any parameters that changed to the response.
+        let response = self.response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+
+        (self.ctx, response)
     }
 }
 
@@ -313,14 +318,18 @@ impl ShouldHalt for StorageError {
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
-            | StorageError::InvalidUsage(_) => true,
+            | StorageError::InvalidUsage(_)
+            | StorageError::ResourceExhausted(_) => true,
             StorageError::SourceIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
+            | StorageError::IdentifierInvalid(_)
             | StorageError::IngestionInstanceMissing { .. }
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
-            | StorageError::DataflowError(_) => false,
+            | StorageError::DataflowError(_)
+            | StorageError::InvalidAlterSource { .. }
+            | StorageError::ShuttingDown(_) => false,
             StorageError::IOError(e) => e.should_halt(),
         }
     }
@@ -371,9 +380,7 @@ impl ShouldHalt for SubscribeTargetError {
 impl ShouldHalt for TransformError {
     fn should_halt(&self) -> bool {
         match self {
-            TransformError::Internal(_)
-            | TransformError::LetRecUnsupported
-            | TransformError::IdentifierMissing(_) => false,
+            TransformError::Internal(_) | TransformError::IdentifierMissing(_) => false,
         }
     }
 }
@@ -393,6 +400,8 @@ pub(crate) fn viewable_variables<'a>(
         .vars()
         .iter()
         .chain(catalog.system_config().iter())
-        .filter(|v| !v.experimental() && v.visible(session.user()))
-        .filter(|v| v.safe() || catalog.unsafe_mode())
+        .filter(|v| {
+            v.visible(session.user(), Some(catalog.system_config()))
+                .is_ok()
+        })
 }

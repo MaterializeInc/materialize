@@ -41,8 +41,9 @@ pub fn adjust_rlimits() {
 
     #[cfg(target_os = "macos")]
     let hard = {
-        use mz_ore::result::ResultExt;
         use std::cmp;
+
+        use mz_ore::result::ResultExt;
         use sysctl::Sysctl;
 
         // On macOS, getrlimit by default reports that the hard limit is

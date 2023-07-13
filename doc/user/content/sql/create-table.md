@@ -88,6 +88,15 @@ a          true      int4
 b          false     text
 ```
 
+## Privileges
+
+{{< alpha />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the table definition.
+
 ## Related pages
 
 - [`INSERT`](../insert)

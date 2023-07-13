@@ -25,14 +25,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::plan::any_arranged_thin;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-
-use super::AvailableCollections;
+use crate::plan::{any_arranged_thin, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -44,8 +42,6 @@ include!(concat!(
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
-    /// Retractions threshold maintains all negative inputs.
-    Retractions(RetractionsThresholdPlan),
 }
 
 impl RustType<ProtoThresholdPlan> for ThresholdPlan {
@@ -54,7 +50,6 @@ impl RustType<ProtoThresholdPlan> for ThresholdPlan {
         ProtoThresholdPlan {
             kind: Some(match self {
                 ThresholdPlan::Basic(p) => Basic(p.ensure_arrangement.into_proto()),
-                ThresholdPlan::Retractions(p) => Retractions(p.ensure_arrangement.into_proto()),
             }),
         }
     }
@@ -66,9 +61,6 @@ impl RustType<ProtoThresholdPlan> for ThresholdPlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoThresholdPlan::kind"))?;
         Ok(match kind {
             Basic(p) => ThresholdPlan::Basic(BasicThresholdPlan {
-                ensure_arrangement: p.into_rust()?,
-            }),
-            Retractions(p) => ThresholdPlan::Retractions(RetractionsThresholdPlan {
                 ensure_arrangement: p.into_rust()?,
             }),
         })
@@ -121,7 +113,6 @@ impl ThresholdPlan {
             ThresholdPlan::Basic(plan) => {
                 AvailableCollections::new_arranged(vec![plan.ensure_arrangement.clone()])
             }
-            ThresholdPlan::Retractions(_plan) => AvailableCollections::new_raw(),
         }
     }
 }
@@ -144,14 +135,11 @@ pub struct RetractionsThresholdPlan {
 }
 
 impl ThresholdPlan {
-    /// Construct the plan from the number of columns (`arity`). `maintain_retractions` allows to
-    /// switch between an implementation that maintains rows with negative counts (`true`), or
-    /// rows with positive counts (`false`).
+    /// Construct the plan from the number of columns (`arity`).
     ///
     /// Also returns the arrangement and thinning required for the input.
     pub fn create_from(
         arity: usize,
-        maintain_retractions: bool,
     ) -> (
         Self,
         (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
@@ -163,27 +151,22 @@ impl ThresholdPlan {
         }
         let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
         let ensure_arrangement = (all_columns, permutation, thinning);
-        let plan = if maintain_retractions {
-            ThresholdPlan::Retractions(RetractionsThresholdPlan {
-                ensure_arrangement: ensure_arrangement.clone(),
-            })
-        } else {
-            ThresholdPlan::Basic(BasicThresholdPlan {
-                ensure_arrangement: ensure_arrangement.clone(),
-            })
-        };
+        let plan = ThresholdPlan::Basic(BasicThresholdPlan {
+            ensure_arrangement: ensure_arrangement.clone(),
+        });
         (plan, ensure_arrangement)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use super::*;
+
     proptest! {
-       #[test]
+       #[mz_ore::test]
         fn threshold_plan_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoThresholdPlan>(&expect);
             assert!(actual.is_ok());

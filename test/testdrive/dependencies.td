@@ -50,23 +50,23 @@ contains:source "materialize.public.s" already exists
 > CREATE VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view test1: still depended upon by view test2
 
 ! DROP VIEW test2;
-contains:cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
+contains:cannot drop view test2: still depended upon by view test3a
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view test1: still depended upon by view test2
 
 ! DROP VIEW test2;
-contains:cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
+contains:cannot drop view test2: still depended upon by view test3b
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view test1: still depended upon by view test2
 
 > DROP VIEW test2;
 
@@ -317,14 +317,14 @@ contains:unknown catalog item 'j2'
 > CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type int4_list: still depended upon by view v1
 
 > DROP VIEW v1
 
 > CREATE TABLE t1 (custom int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.t1'
+contains:cannot drop type int4_list: still depended upon by table t1
 
 > DROP TABLE t1
 
@@ -333,28 +333,28 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 > CREATE VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type int4_list: still depended upon by view v1
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT CAST(CAST('{2}' AS int4_list) AS text)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type int4_list: still depended upon by view v1
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS VALUES (CAST('{2}' AS int4_list))
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type int4_list: still depended upon by view v1
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT MIN(CAST(CAST('{1}' AS int4_list) AS string))
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type int4_list: still depended upon by view v1
 
 > DROP VIEW v1
 
@@ -365,7 +365,7 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 > CREATE TEMPORARY TABLE t1 (f1 int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'mz_temp.t1'
+contains:cannot drop type int4_list: still depended upon by table t1
 
 > DROP TABLE t1
 
@@ -374,14 +374,14 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 > CREATE INDEX i1 ON t1 (CAST(f1 AS int4_list))
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.i1'
+contains:cannot drop type int4_list: still depended upon by index i1
 
 > DROP TABLE t1
 
 > CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.int4_list_list'
+contains:cannot drop type int4_list: still depended upon by type int4_list_list
 
 > DROP TYPE int4_list_list
 
@@ -407,7 +407,7 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 2
 
 ! CREATE OR REPLACE VIEW v3 AS SELECT 3
-contains:cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
+contains:cannot drop view v3: still depended upon by view v4
 
 > CREATE OR REPLACE VIEW v4 AS SELECT 3
 > SELECT * FROM v4
@@ -427,7 +427,7 @@ contains:cannot drop materialize.public.v3: still depended upon by catalog item 
 > CREATE VIEW test2 AS SELECT * FROM test1;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view test1: still depended upon by view test2
 
 # Succeeds even though it's dependent on.
 > CREATE VIEW IF NOT EXISTS test1 AS SELECT 2 as b;

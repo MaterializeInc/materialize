@@ -9,12 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Deserialize;
-
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_repr::GlobalId;
+use serde::Deserialize;
 
-use crate::{coord::Coordinator, session::Session};
+use crate::coord::Coordinator;
+use crate::session::Session;
 
 /// A bundle of storage and compute collection identifiers.
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -84,7 +84,7 @@ impl Coordinator {
         session: &Session,
         id_bundle: &CollectionIdBundle,
     ) -> Vec<String> {
-        id_bundle
+        let mut names: Vec<_> = id_bundle
             .iter()
             // This could filter out an entry that has been replaced in another transaction.
             .filter_map(|id| self.catalog().try_get_entry(&id))
@@ -93,6 +93,8 @@ impl Coordinator {
                     .resolve_full_name(item.name(), Some(session.conn_id()))
                     .to_string()
             })
-            .collect()
+            .collect();
+        names.sort();
+        names
     }
 }

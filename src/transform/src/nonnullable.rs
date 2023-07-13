@@ -14,21 +14,18 @@
 
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
-use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use mz_repr::{Datum, RelationType, ScalarType};
+
+use crate::{TransformArgs, TransformError};
 
 /// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]
 pub struct NonNullable;
 
 impl crate::Transform for NonNullable {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

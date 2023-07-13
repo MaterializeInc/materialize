@@ -10,6 +10,11 @@
 # Generates a massive cross-join so that Materialize's memory footprint can
 # be measured.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t1 (
   a1 integer PRIMARY KEY,

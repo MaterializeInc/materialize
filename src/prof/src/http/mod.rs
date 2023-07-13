@@ -157,12 +157,12 @@ mod disabled {
     use axum::response::IntoResponse;
     use http::header::HeaderMap;
     use http::StatusCode;
+    use mz_build_info::BuildInfo;
     use serde::Deserialize;
 
-    use mz_build_info::BuildInfo;
+    use crate::ever_symbolicated;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
-    use crate::ever_symbolicated;
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -238,6 +238,8 @@ mod enabled {
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
+    use mz_build_info::BuildInfo;
+    use mz_ore::cast::CastFrom;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
@@ -245,8 +247,6 @@ mod enabled {
     use crate::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
-    use mz_build_info::BuildInfo;
-    use mz_ore::cast::CastFrom;
 
     #[derive(Deserialize)]
     pub struct ProfForm {

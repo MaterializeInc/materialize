@@ -15,6 +15,19 @@ use std::sync::Arc;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::TraceReader;
+use mz_compute_client::logging::LoggingConfig;
+use mz_compute_client::plan::Plan;
+use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, Peek};
+use mz_compute_client::protocol::history::ComputeCommandHistory;
+use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
+use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::UIntGauge;
+use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_persist_client::cache::PersistClientCache;
+use mz_repr::{GlobalId, Row, Timestamp};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -23,23 +36,11 @@ use tokio::sync::mpsc;
 use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
-use mz_compute_client::logging::LoggingConfig;
-use mz_compute_client::plan::Plan;
-use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, Peek};
-use mz_compute_client::protocol::history::ComputeCommandHistory;
-use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_ore::cast::CastFrom;
-use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_timely_util::probe;
-
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
+use crate::render::LinearJoinImpl;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -77,13 +78,17 @@ pub struct ComputeState {
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
     /// History of commands received by this workers and all its peers.
-    pub command_history: ComputeCommandHistory,
+    pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
+    /// Implementation to use for rendering linear joins.
+    pub linear_join_impl: LinearJoinImpl,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
 }
 
 impl ComputeState {
@@ -118,19 +123,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
+
         self.compute_state
             .command_history
             .push(cmd.clone(), &self.compute_state.pending_peeks);
-        self.compute_state.metrics.command_history_size.set(
-            u64::try_from(self.compute_state.command_history.len()).expect(
-                "The compute command history size must be non-negative and fit a 64-bit number",
-            ),
-        );
-        self.compute_state.metrics.dataflow_count_in_history.set(
-            u64::try_from(self.compute_state.command_history.dataflow_count()).expect(
-                "The number of dataflows in the compute history must be non-negative and fit a 64-bit number",
-            ),
-        );
+
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(logging) => self.handle_create_instance(logging),
@@ -156,7 +153,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            enable_mz_join_core,
             persist,
+            tracing,
         } = params;
 
         if let Some(v) = max_result_size {
@@ -165,8 +164,15 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
         }
+        if let Some(v) = enable_mz_join_core {
+            self.compute_state.linear_join_impl = match v {
+                false => LinearJoinImpl::DifferentialDataflow,
+                true => LinearJoinImpl::Materialize,
+            };
+        }
 
-        persist.apply(self.compute_state.persist_clients.cfg())
+        persist.apply(self.compute_state.persist_clients.cfg());
+        tracing.apply(self.compute_state.tracing_handle.as_ref());
     }
 
     fn handle_create_dataflows(

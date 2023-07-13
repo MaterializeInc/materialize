@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
+import json
 import time
 from textwrap import dedent
 from threading import Thread
@@ -63,6 +63,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-17177",
         "test-github-17510",
         "test-github-17509",
+        "test-github-19610",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
@@ -76,6 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
         "test-mv-source-sink",
+        "test-query-without-default-cluster",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -100,8 +102,16 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd1")
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
+
     c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
             STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
@@ -115,6 +125,13 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Add a replica to that cluster and verify that tests still pass.
     c.up("clusterd3")
     c.up("clusterd4")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     c.sql(
         """CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
@@ -145,6 +162,12 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.up("clusterd1")
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
@@ -214,40 +237,69 @@ def workflow_test_github_15531(c: Composition) -> None:
     Test that compute command history does not leak peek commands.
 
     Regression test for https://github.com/MaterializeInc/materialize/issues/15531.
-
-    The test currently only inspects the history on clusterd, and it should be
-    extended in the future to also consider the history size in the compute
-    controller.
     """
 
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.up("clusterd1")
 
-    # helper function to get command history metrics for clusterd
-    def find_clusterd_command_history_metrics(c: Composition) -> Tuple[int, int]:
-        metrics = c.exec(
+    # helper function to get command history metrics
+    def find_command_history_metrics(c: Composition) -> Tuple[int, int, int, int]:
+        controller_metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        replica_metrics = c.exec(
             "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
+        metrics = controller_metrics + replica_metrics
 
-        history_len = None
-        dataflow_count = None
+        controller_command_count, controller_command_count_found = 0, False
+        controller_dataflow_count, controller_dataflow_count_found = 0, False
+        replica_command_count, replica_command_count_found = 0, False
+        replica_dataflow_count, replica_dataflow_count_found = 0, False
         for metric in metrics.splitlines():
-            if metric.startswith("mz_compute_command_history_size"):
-                history_len = int(metric[len("mz_compute_command_history_size") :])
-            elif metric.startswith("mz_compute_dataflow_count_in_history"):
-                dataflow_count = int(
-                    metric[len("mz_compute_dataflow_count_in_history") :]
-                )
+            if (
+                metric.startswith("mz_compute_controller_history_command_count")
+                and 'instance_id="u2"' in metric
+            ):
+                controller_command_count += int(metric.split()[1])
+                controller_command_count_found = True
+            elif (
+                metric.startswith("mz_compute_controller_history_dataflow_count")
+                and 'instance_id="u2"' in metric
+            ):
+                controller_dataflow_count += int(metric.split()[1])
+                controller_dataflow_count_found = True
+            elif metric.startswith("mz_compute_replica_history_command_count"):
+                replica_command_count += int(metric.split()[1])
+                replica_command_count_found = True
+            elif metric.startswith("mz_compute_replica_history_dataflow_count"):
+                replica_dataflow_count += int(metric.split()[1])
+                replica_dataflow_count_found = True
 
         assert (
-            history_len is not None
-        ), "command history length not found in clusterd metrics"
+            controller_command_count_found
+        ), "command count not found in controller metrics"
         assert (
-            dataflow_count is not None
-        ), "dataflow count in history not found in clusterd metrics"
+            controller_dataflow_count_found
+        ), "dataflow count not found in controller metrics"
+        assert replica_command_count_found, "command count not found in replica metrics"
+        assert (
+            replica_dataflow_count_found
+        ), "dataflow count not found in replica metrics"
 
-        return (history_len, dataflow_count)
+        return (
+            controller_command_count,
+            controller_dataflow_count,
+            replica_command_count,
+            replica_dataflow_count,
+        )
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     # Set up a cluster with an indexed table and an unindexed one.
     c.sql(
@@ -272,16 +324,22 @@ def workflow_test_github_15531(c: Composition) -> None:
 
     # obtain initial history size and dataflow count
     (
-        clusterd_history_len,
-        clusterd_dataflow_count,
-    ) = find_clusterd_command_history_metrics(c)
+        controller_command_count,
+        controller_dataflow_count,
+        replica_command_count,
+        replica_dataflow_count,
+    ) = find_command_history_metrics(c)
+    assert controller_command_count > 0, "controller history cannot be empty"
     assert (
-        clusterd_dataflow_count == 1
-    ), "more dataflows than expected in clusterd history"
-    assert clusterd_history_len > 0, "clusterd history cannot be empty"
+        controller_dataflow_count == 1
+    ), "more dataflows than expected in controller history"
+    assert replica_command_count > 0, "replica history cannot be empty"
+    assert (
+        replica_dataflow_count == 1
+    ), "more dataflows than expected in replica history"
 
     # execute 400 fast- and slow-path peeks
-    for i in range(20):
+    for _ in range(20):
         c.sql(
             """
             SELECT * FROM t;
@@ -310,15 +368,21 @@ def workflow_test_github_15531(c: Composition) -> None:
     # check that dataflow count is the same and
     # that history size is well-behaved
     (
-        clusterd_history_len,
-        clusterd_dataflow_count,
-    ) = find_clusterd_command_history_metrics(c)
+        controller_command_count,
+        controller_dataflow_count,
+        replica_command_count,
+        replica_dataflow_count,
+    ) = find_command_history_metrics(c)
     assert (
-        clusterd_dataflow_count == 1
-    ), "more dataflows than expected in clusterd history"
+        controller_command_count < 100
+    ), "controller history grew more than expected after peeks"
     assert (
-        clusterd_history_len < 100
-    ), "clusterd history grew more than expected after peeks"
+        controller_dataflow_count < 5
+    ), "more dataflows than expected in controller history"
+    assert (
+        replica_command_count < 100
+    ), "replica history grew more than expected after peeks"
+    assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 
 def workflow_test_github_15535(c: Composition) -> None:
@@ -331,6 +395,12 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.up("clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     # Set up a dataflow on clusterd.
     c.sql(
@@ -357,25 +427,16 @@ def workflow_test_github_15535(c: Composition) -> None:
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
 
-    def extract_frontiers(output: str) -> Tuple[str, str]:
-        since_re = re.compile("^\s+since:\[(?P<frontier>.*)\]")
-        upper_re = re.compile("^\s+upper:\[(?P<frontier>.*)\]")
-        since = None
-        upper = None
-        for line in output.splitlines():
-            if match := since_re.match(line):
-                since = match.group("frontier").strip()
-            elif match := upper_re.match(line):
-                upper = match.group("frontier").strip()
-
-        assert since is not None, "since not found in EXPLAIN TIMESTAMP output"
-        assert upper is not None, "upper not found in EXPLAIN TIMESTAMP output"
-        return (since, upper)
+    def extract_frontiers(output: str) -> Tuple[int, int]:
+        j = json.loads(output)
+        (upper,) = j["determination"]["upper"]["elements"]
+        (since,) = j["determination"]["since"]["elements"]
+        return (upper, since)
 
     # Verify that there are no empty frontiers.
-    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM mv")
+    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
     mv_since, mv_upper = extract_frontiers(output[0][0])
-    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM t")
+    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
     t_since, t_upper = extract_frontiers(output[0][0])
 
     assert mv_since, "mv has empty since frontier"
@@ -396,6 +457,12 @@ def workflow_test_github_15799(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
     c.up("clusterd2")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     c.sql(
         """
@@ -444,6 +511,12 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         c.sql(
             """
@@ -543,6 +616,18 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd_nopanic")
 
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
+
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -604,6 +689,12 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd1")
 
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -618,9 +709,13 @@ def workflow_test_github_17177(c: Composition) -> None:
             );
             """
         )
+
         c.testdrive(
             dedent(
                 """
+            $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_repeat_row  = true;
+
             # Set data for test up
             > SET cluster = cluster1;
 
@@ -672,6 +767,18 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -834,6 +941,18 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd_nopanic")
 
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
+
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -889,6 +1008,118 @@ def workflow_test_github_17509(c: Composition) -> None:
         c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
         assert "Non-positive accumulation in MinsMaxesHierarchical" in c1.stdout
         assert "Negative accumulation in ReduceMinsMaxes" not in c1.stdout
+
+
+def workflow_test_github_19610(c: Composition) -> None:
+    """
+    Test that a monotonic one-shot SELECT will perform consolidation without error on valid data.
+    We introduce data that results in a multiset and compute min/max. In a monotonic one-shot
+    evaluation strategy, we must consolidate and subsequently assert monotonicity.
+
+    This is a regression test for https://github.com/MaterializeInc/materialize/issues/19610, where
+    we observed a performance regression caused by a correctness issue. Here, we validate that the
+    underlying correctness issue has been fixed.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_PERSIST_COMPACTION_DISABLED=true",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 4
+                )
+            );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 6);
+            INSERT INTO base VALUES (1, -3), (1, -2);
+            INSERT INTO base VALUES (2, 3), (2, 2);
+            INSERT INTO base VALUES (2, -1), (2, -1);
+            INSERT INTO base VALUES (3, 3), (3, 2);
+            INSERT INTO base VALUES (3, -3), (3, -2);
+            INSERT INTO base VALUES (4, 1), (4, 2);
+            INSERT INTO base VALUES (4, -1), (4, -2);
+            INSERT INTO base VALUES (5, 5), (5, 6);
+            INSERT INTO base VALUES (5, -5), (5, -6);
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            # Computing min/max with a monotonic one-shot SELECT requires
+            # consolidation. We test here that consolidation works correctly,
+            # since we assert monotonicity right after consolidating.
+            # Note that we employ a cursor to avoid testdrive retries.
+            # Hash functions used for exchanges in consolidation may be
+            # nondeterministic and produce the correct output by chance.
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            # To reduce the chance of a (un)lucky strike of the hash function,
+            # let's do the same a few times.
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            > BEGIN
+            > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+            """
+            )
+        )
 
 
 def workflow_test_upsert(c: Composition) -> None:
@@ -956,8 +1187,12 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    c.sql("DROP CLUSTER default CASCADE")
-    c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
+    c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
+    c.sql(
+        "CREATE CLUSTER default REPLICAS (default (SIZE '1'))",
+        user="mz_system",
+        port=6877,
+    )
 
 
 def workflow_test_resource_limits(c: Composition) -> None:
@@ -1007,6 +1242,32 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
 
 
+def workflow_sink_failure(c: Composition) -> None:
+    """Test specific sink failure scenarios"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="storage",
+            environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
+        ),
+    ):
+        c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
+
+        c.run("testdrive", "sink-failure/01-configure-sinks.td")
+        c.run("testdrive", "sink-failure/02-ensure-sink-down.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="storage")
+        ):
+            c.up("storage")
+            c.run("testdrive", "sink-failure/03-verify-data.td")
+
+
 def workflow_test_bootstrap_vars(c: Composition) -> None:
     """Test default system vars values passed with a CLI option."""
 
@@ -1050,7 +1311,10 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-        > CREATE DEFAULT INDEX ON mz_views;
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        SET CLUSTER TO DEFAULT;
+        CREATE DEFAULT INDEX ON mz_views;
+
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u1
     """
@@ -1084,6 +1348,12 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
     c.up("clusterd2")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     c.sql(
         """
@@ -1202,6 +1472,12 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     # Helper function to get reconciliation metrics for clusterd.
     def fetch_reconciliation_metrics() -> Tuple[int, int]:
         metrics = c.exec(
@@ -1285,6 +1561,12 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
         """
@@ -1364,6 +1646,12 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     c.up("materialized", "clusterd1")
 
     c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (r (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -1405,8 +1693,10 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """
         output = c.sql_query(
             """
-            SELECT s.user, c.name, t.name
+            SELECT r.name, c.name, t.name
             FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
+              JOIN mz_roles r ON (r.id = e.role_id)
               JOIN mz_clusters c ON (c.id = s.cluster_id)
               JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
             ORDER BY s.created_at
@@ -1454,6 +1744,12 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     # Set up a dataflow on clusterd.
     c.sql(
         """
@@ -1465,24 +1761,42 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
             WORKERS 2
         ));
         SET cluster = cluster1;
-        CREATE TABLE t (a int);
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
         """
     )
 
     def extract_since_ts(output: str) -> int:
-        since_re = re.compile("^\s+since:\[(?P<ts>[0-9]*) \(.*\)\]")
-        for line in output.splitlines():
-            if match := since_re.match(line):
-                return int(match.group("ts"))
-        assert False, f"No since timestamp found in {output}"
+        j = json.loads(output)
+        (since,) = j["determination"]["since"]["elements"]
+        return int(since)
 
+    cursor = c.sql_cursor()
+    cursor.execute("CREATE TABLE t (a int)")
     # Verify that there are no empty frontiers.
-    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM t")
-    t_since = extract_since_ts(output[0][0])
-    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM mv")
-    mv_since = extract_since_ts(output[0][0])
+    cursor.execute("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
+    t_since = extract_since_ts(cursor.fetchall()[0][0])
+
+    cursor.execute("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t")
+    cursor.execute("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
+    mv_since = extract_since_ts(cursor.fetchall()[0][0])
 
     assert (
         mv_since >= t_since
     ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
+
+
+def workflow_test_query_without_default_cluster(c: Composition) -> None:
+    """Test queries without a default cluster in Materialize."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Postgres(),
+        Materialized(),
+    ):
+        c.up("materialized", "postgres")
+
+        c.run(
+            "testdrive",
+            "query-without-default-cluster/query-without-default-cluster.td",
+        )

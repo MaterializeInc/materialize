@@ -14,6 +14,9 @@
 # sources. This also serves to verify that logging is correctly cleaned up under
 # active dataflow cancellation.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+
 > CREATE VIEW divergent AS
   WITH MUTUALLY RECURSIVE
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)

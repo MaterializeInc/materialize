@@ -7,13 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+import subprocess
 from textwrap import dedent
 from typing import Tuple
 
 from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
@@ -92,7 +94,12 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd` || true")
+    try:
+        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
+
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 
     validate(mz, 1)
@@ -137,6 +144,15 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     populate(mz, 3)
+    mz.testdrive.run(
+        input=dedent(
+            """
+            $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unstable_dependencies = true;
+            """
+        ),
+        no_reset=True,
+    )
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
     mz.environmentd.sql(
         "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_internal.mz_panic(f1) FROM crash_table"

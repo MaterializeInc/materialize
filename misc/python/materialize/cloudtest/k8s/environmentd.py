@@ -38,6 +38,7 @@ from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
 class EnvironmentdService(K8sService):
     def __init__(self) -> None:
         service_port = V1ServicePort(name="sql", port=6875)
+        http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
         self.service = V1Service(
             api_version="v1",
@@ -45,7 +46,7 @@ class EnvironmentdService(K8sService):
             metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
             spec=V1ServiceSpec(
                 type="NodePort",
-                ports=[service_port, internal_port],
+                ports=[service_port, internal_port, http_port],
                 selector={"app": "environmentd"},
             ),
         )
@@ -103,6 +104,15 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
             ),
+            # TODO: these should be the same as in mzcompose
+            V1EnvVar(
+                name="MZ_SYSTEM_PARAMETER_DEFAULT",
+                value="enable_envelope_upsert_in_subscribe=true",
+            ),
+            V1EnvVar(
+                name="MZ_SYSTEM_PARAMETER_DEFAULT",
+                value="enable_disk_cluster_replicas=true",
+            ),
         ]
 
         if self.coverage_mode:
@@ -133,9 +143,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
 
         args = [
-            "--availability-zone=cloudtest-worker",
-            "--availability-zone=cloudtest-worker2",
-            "--availability-zone=cloudtest-worker3",
+            "--availability-zone=1",
+            "--availability-zone=2",
+            "--availability-zone=3",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             "--announce-egress-ip=1.2.3.4",
@@ -155,7 +165,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             # version-gated argument below, using `self._meets_minimum_version`.
         ]
         if self.log_filter:
-            args += [f"--log-filter={self.log_filter}"]
+            args += [f"--system-parameter-default=log_filter={self.log_filter}"]
         if self._meets_minimum_version("0.38.0"):
             args += [
                 "--clusterd-image",
@@ -184,6 +194,16 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args += [
                 "--bootstrap-role",
                 "materialize",
+            ]
+        if self._meets_minimum_version("0.54.0"):
+            args += [
+                "--internal-persist-pubsub-listen-addr=0.0.0.0:6879",
+                "--persist-pubsub-url=http://persist-pubsub",
+            ]
+        if self._meets_minimum_version("0.60.0-dev"):
+            args += [
+                # Kind sets up a basic local-file storage class based on Rancher, named `standard`
+                "--orchestrator-kubernetes-ephemeral-volume-class=standard"
             ]
         container = V1Container(
             name="environmentd",

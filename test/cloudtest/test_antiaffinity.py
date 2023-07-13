@@ -9,7 +9,7 @@
 
 import pytest
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
@@ -82,9 +82,9 @@ def test_create_cluster_replica_zone_specified(mz: MaterializeApplication) -> No
     mz.environmentd.sql(
         """
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE '1' , AVAILABILITY ZONE 'cloudtest-worker3';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE '1' , AVAILABILITY ZONE 'cloudtest-worker3';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE '1' , AVAILABILITY ZONE 'cloudtest-worker3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE '1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE '1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE '1' , AVAILABILITY ZONE '3';
         """
     )
 

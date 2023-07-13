@@ -18,17 +18,12 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
-use mz_repr::adt::system::Oid;
-use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
-use protobuf_native::MessageLite;
-use tracing::info;
-use uuid::Uuid;
-
-use mz_ccsr::Schema as CcsrSchema;
-use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
+use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_kafka_util::client::MzClientContext;
+use mz_ore::error::ErrorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
+use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -39,6 +34,11 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
+use prost::Message;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
+use tracing::info;
+use uuid::Uuid;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
@@ -46,13 +46,12 @@ use crate::ast::{
     Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
-use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::{Aug, RawDatabaseSpecifier};
-use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
+use crate::{kafka_util, normalize};
 
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
@@ -206,7 +205,10 @@ pub async fn purify_create_source(
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
-                    _ => sql_bail!("{} is not a kafka connection", item.name()),
+                    _ => sql_bail!(
+                        "{} is not a kafka connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
                 }
             };
 
@@ -224,9 +226,16 @@ pub async fn purify_create_source(
                 .topic
                 .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
-            let consumer = kafka_util::create_consumer(&connection_context, &connection, &topic)
+            let consumer = connection
+                .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
                 .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+                .map_err(|e| {
+                    anyhow!(
+                        "Failed to create and connect Kafka consumer: {}",
+                        e.display_with_causes()
+                    )
+                })?;
+            let consumer = Arc::new(consumer);
 
             if let Some(offset_type) = offset_type {
                 // Translate `START TIMESTAMP` to a start offset
@@ -276,7 +285,10 @@ pub async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
-                    _ => sql_bail!("{} is not a postgres connection", item.name()),
+                    _ => sql_bail!(
+                        "{} is not a postgres connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
                 }
             };
             let crate::plan::statement::PgConfigOptionExtracted {
@@ -401,10 +413,29 @@ pub async fn purify_create_source(
 
                 upstream_references.sort();
 
-                return Err(PlanError::DuplicateSubsourceReference {
+                return Err(PlanError::SubsourceNameConflict {
                     name,
                     upstream_references,
                 });
+            }
+
+            // We technically could allow multiple subsources to ingest the same upstream table, but
+            // it is almost certainly an error on the user's end.
+            if let Some(name) = validated_requested_subsources
+                .iter()
+                .map(|(referenced_name, _, _)| referenced_name)
+                .duplicates()
+                .next()
+                .cloned()
+            {
+                let mut target_names: Vec<_> = validated_requested_subsources
+                    .into_iter()
+                    .filter_map(|(u, t, _)| if u == name { Some(t) } else { None })
+                    .collect();
+
+                target_names.sort();
+
+                return Err(PlanError::SubsourceDuplicateReference { name, target_names });
             }
 
             // Ensure that we have select permissions on all tables; we have to do this before we
@@ -599,6 +630,8 @@ pub async fn purify_create_source(
                     cols: unsupported_cols,
                 });
             }
+
+            targeted_subsources.sort();
 
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
 

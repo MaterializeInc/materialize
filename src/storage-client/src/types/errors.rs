@@ -11,13 +11,12 @@ use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
-use prost::Message;
-use serde::{Deserialize, Serialize};
-use tracing::warn;
-
 use mz_expr::{EvalError, PartitionId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use prost::Message;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -443,7 +442,15 @@ impl Display for DataflowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DataflowError::DecodeError(e) => write!(f, "Decode error: {}", e),
-            DataflowError::EvalError(e) => write!(f, "Evaluation error: {}", e),
+            DataflowError::EvalError(e) => write!(
+                f,
+                "{}{}",
+                match **e {
+                    EvalError::IfNullError(_) => "",
+                    _ => "Evaluation error: ",
+                },
+                e
+            ),
             DataflowError::SourceError(e) => write!(f, "Source error: {}", e),
             DataflowError::EnvelopeError(e) => write!(f, "Envelope error: {}", e),
         }
@@ -480,7 +487,7 @@ mod tests {
 
     use super::DecodeError;
 
-    #[test]
+    #[mz_ore::test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
             kind: DecodeErrorKind::Text("ciao".to_string()),

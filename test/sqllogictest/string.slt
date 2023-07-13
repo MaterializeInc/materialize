@@ -388,17 +388,17 @@ su
 
 # testing large numbers
 query T
-SELECT substr('abcdef', 2, 2147483648);
+SELECT substr('abcdef', 2, 2147483647);
 ----
 bcdef
 
 query T
-SELECT substr('abcdef', 2147483648, 2);
+SELECT substr('abcdef', 2147483647, 2);
 ----
 (empty)
 
 query T
-SELECT substr('abcdef', 2147483648, 2147483648);
+SELECT substr('abcdef', 2147483647, 2147483647);
 ----
 (empty)
 
@@ -450,22 +450,22 @@ SELECT substring('abcdef' from -1);
 abcdef
 
 query T
-SELECT substring('abcdef' from 2 for 2147483648);
+SELECT substring('abcdef' from 2 for 2147483647);
 ----
 bcdef
 
 query T
-SELECT substring('abcdef' from 2147483648 for 2);
+SELECT substring('abcdef' from 2147483647 for 2);
 ----
 (empty)
 
 query T
-SELECT substring('abcdef' from 2147483648 for 2147483648);
+SELECT substring('abcdef' from 2147483647 for 2147483647);
 ----
 (empty)
 
 query T
-SELECT substring('abcdef' for 2147483648);
+SELECT substring('abcdef' for 2147483647);
 ----
 abcdef
 
@@ -725,6 +725,54 @@ SELECT '你' || '好'
 query error db error: ERROR: operator does not exist: boolean \|\| boolean
 SELECT true || false
 
+# concat_ws
+
+query error db error: ERROR: function concat_ws\(\) does not exist
+SELECT concat_ws();
+
+query error db error: ERROR: function concat_ws\(unknown\) does not exist
+SELECT concat_ws('a');
+
+query T
+SELECT concat_ws('', 'a', 'b') AS word;
+----
+ab
+
+query T
+SELECT concat_ws(E'\t', 'S', 'M', 'T');
+----
+S	M	T
+
+query T
+SELECT concat_ws(', ', interval '1d', 1.23::numeric, 4.56::float);
+----
+1 day, 1.23, 4.56
+
+query T
+SELECT concat_ws(', ', interval '1d', null, 1.23::numeric, null, 4.57::float);
+----
+1 day, 1.23, 4.57
+
+query T
+SELECT concat_ws(', ', interval '1d', null, 1.23::numeric, null, 4.57::float, null);
+----
+1 day, 1.23, 4.57
+
+query T
+SELECT concat_ws(null, interval '1d', null, 1.23::numeric, null, 4.57::float, null);
+----
+NULL
+
+query T
+SELECT concat_ws(null, null);
+----
+NULL
+
+query T
+SELECT concat_ws('x', null);
+----
+(empty)
+
 query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', 2)
 ----
@@ -855,6 +903,9 @@ query T
 SELECT lpad('str', 5, 'đẹp')
 ----
 đẹstr
+
+query error requested length too large
+SELECT lpad('', 2147483647)
 
 
 ### ilike ###
@@ -1308,6 +1359,9 @@ query T
 SELECT repeat('a', -1)
 ----
 (empty)
+
+query error requested length too large
+SELECT repeat('a', 2147483647)
 
 # Check for char cmp validity, which ignores white space
 # ...at datum level

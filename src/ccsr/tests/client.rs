@@ -76,14 +76,11 @@
 use std::env;
 
 use hyper::server::conn::AddrIncoming;
-use hyper::service;
-use hyper::Server;
-use hyper::StatusCode;
-use hyper::{Body, Response};
-use mz_ccsr::SchemaReference;
+use hyper::{service, Body, Response, Server, StatusCode};
+use mz_ccsr::{
+    Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaReference, SchemaType,
+};
 use once_cell::sync::Lazy;
-
-use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 
 pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
     Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {
@@ -91,7 +88,7 @@ pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
         _ => "http://localhost:8081".parse().unwrap(),
     });
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18900
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client() -> Result<(), anyhow::Error> {
@@ -199,7 +196,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
@@ -305,7 +302,7 @@ async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client_errors() -> Result<(), anyhow::Error> {
     let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
@@ -349,7 +346,7 @@ async fn test_client_errors() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_server_errors() -> Result<(), anyhow::Error> {
     // When the schema registry gracefully reports an error by including a

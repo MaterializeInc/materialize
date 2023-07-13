@@ -75,12 +75,13 @@
 
 //! Generated protobuf code and companion impls.
 
-use proptest::prelude::Strategy;
+use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::{char::CharTryFromError, num::TryFromIntError};
-use uuid::Uuid;
+use std::num::{NonZeroU64, TryFromIntError};
 
 use mz_ore::cast::CastFrom;
+use proptest::prelude::Strategy;
+use uuid::Uuid;
 
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
@@ -125,6 +126,8 @@ pub enum TryFromProtoError {
     GlobError(globset::Error),
     /// Failed to parse a serialized URL
     InvalidUrl(url::ParseError),
+    /// Failed to parse bitflags.
+    InvalidBitFlags(String),
 }
 
 impl TryFromProtoError {
@@ -213,6 +216,7 @@ impl std::fmt::Display for TryFromProtoError {
             InvalidUri(error) => error.fmt(f),
             GlobError(error) => error.fmt(f),
             InvalidUrl(error) => error.fmt(f),
+            InvalidBitFlags(error) => error.fmt(f),
         }
     }
 }
@@ -244,6 +248,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidUri(error) => Some(error),
             GlobError(error) => Some(error),
             InvalidUrl(error) => Some(error),
+            InvalidBitFlags(_) => None,
         }
     }
 }
@@ -311,6 +316,19 @@ macro_rules! rust_type_id(
 );
 
 rust_type_id![bool, f32, f64, i32, i64, String, u32, u64, Vec<u8>];
+
+impl RustType<u64> for Option<NonZeroU64> {
+    fn into_proto(&self) -> u64 {
+        match self {
+            Some(d) => d.get(),
+            None => 0,
+        }
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
+        Ok(NonZeroU64::new(proto)) // 0 is correctly mapped to None
+    }
+}
 
 /// Blanket implementation for `BTreeMap<K, V>` where there exists `T` such
 /// that `T` implements `ProtoMapEntry<K, V>`.
@@ -390,6 +408,23 @@ where
 
     fn from_proto(proto: Box<P>) -> Result<Self, TryFromProtoError> {
         (*proto).into_rust().map(Box::new)
+    }
+}
+
+impl<R1, R2, P1, P2> RustType<(P1, P2)> for (R1, R2)
+where
+    R1: RustType<P1>,
+    R2: RustType<P2>,
+{
+    fn into_proto(&self) -> (P1, P2) {
+        (self.0.into_proto(), self.1.into_proto())
+    }
+
+    fn from_proto(proto: (P1, P2)) -> Result<Self, TryFromProtoError> {
+        let first = proto.0.into_rust()?;
+        let second = proto.1.into_rust()?;
+
+        Ok((first, second))
     }
 }
 
@@ -605,7 +640,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn duration_protobuf_roundtrip(expect in any_duration() ) {
             let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);

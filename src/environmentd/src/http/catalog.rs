@@ -16,8 +16,8 @@ use http::StatusCode;
 
 use crate::http::AuthedClient;
 
-pub async fn handle_internal_catalog(AuthedClient(mut client): AuthedClient) -> impl IntoResponse {
-    match client.dump_catalog().await {
+pub async fn handle_internal_catalog(mut client: AuthedClient) -> impl IntoResponse {
+    match client.client.dump_catalog().await.map(|c| c.into_string()) {
         Ok(res) => Ok((TypedHeader(ContentType::json()), res)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }

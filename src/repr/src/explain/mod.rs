@@ -33,8 +33,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_ore::{stack::RecursionLimitError, str::Indent};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
 
+use crate::explain::dot::{dot_string, DisplayDot};
+use crate::explain::json::{json_string, DisplayJson};
+use crate::explain::text::{text_string, DisplayText};
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
@@ -43,11 +47,8 @@ pub mod text;
 #[cfg(feature = "tracing_")]
 pub mod tracing;
 
-use self::dot::{dot_string, DisplayDot};
-use self::json::{json_string, DisplayJson};
-use self::text::{text_string, DisplayText};
 #[cfg(feature = "tracing_")]
-pub use self::tracing::trace_plan;
+pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -171,7 +172,7 @@ pub struct ExplainConfig {
     /// Show the `type` attribute in the explanation.
     pub types: bool,
     /// Show MFP pushdown information.
-    pub mfp_pushdown: bool,
+    pub filter_pushdown: bool,
 }
 
 impl Default for ExplainConfig {
@@ -188,7 +189,7 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
-            mfp_pushdown: false,
+            filter_pushdown: false,
         }
     }
 }
@@ -220,7 +221,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
-            mfp_pushdown: flags.remove("mfp_pushdown"),
+            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -619,7 +620,7 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
-            mfp_pushdown: false,
+            filter_pushdown: false,
         };
         let context = ExplainContext {
             env,
@@ -630,7 +631,7 @@ mod tests {
         expr.explain(&format, &context)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mutable_context() {
         let mut env = Environment::default();
         let frontiers = Frontiers::<u64>::new(3, 7);

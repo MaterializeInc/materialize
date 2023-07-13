@@ -11,10 +11,9 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{Context, Ok, Result};
-use reqwest::Client;
-
 use mz::api::{get_provider_region_environment, CloudProviderRegion, Environment};
 use mz::configuration::ValidProfile;
+use reqwest::Client;
 
 /// The [application_name](https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
 /// which gets reported to the Postgres server we're connecting to.

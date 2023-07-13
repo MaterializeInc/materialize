@@ -84,17 +84,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        # Used to test some behavior in `system-param-defaults.td`.
-        additional_system_parameter_defaults=[
-            "enable_envelope_upsert_in_subscribe=true",
-        ],
     )
 
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
         if args.replicas > 1:
-            c.sql("DROP CLUSTER default CASCADE")
+            c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
             # Make sure a replica named 'r1' always exists
             replica_names = [
                 "r1" if replica_id == 0 else f"replica{replica_id}"
@@ -104,7 +100,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"{replica_name} (SIZE '{materialized.default_replica_size}')"
                 for replica_name in replica_names
             )
-            c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
+            c.sql(
+                f"CREATE CLUSTER default REPLICAS ({replica_string})",
+                user="mz_system",
+                port=6877,
+            )
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)

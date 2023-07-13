@@ -94,7 +94,8 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use chrono::NaiveDateTime;
-use mz_avro::{types::DecimalValue, types::Value, Schema};
+use mz_avro::types::{DecimalValue, Value};
+use mz_avro::Schema;
 use once_cell::sync::Lazy;
 
 static UNPARSEABLE_SCHEMAS: Lazy<Vec<&'static str>> = Lazy::new(|| {
@@ -535,7 +536,7 @@ static IGNORED_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
     ]
 });
 
-#[test]
+#[mz_ore::test]
 fn test_unparseable_schemas() {
     for raw_schema in UNPARSEABLE_SCHEMAS.iter() {
         assert!(
@@ -546,7 +547,7 @@ fn test_unparseable_schemas() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_unparseable_logical_types() {
     for raw_schema in UNPARSEABLE_LOGICAL_TYPES.iter() {
         assert!(
@@ -557,7 +558,7 @@ fn test_unparseable_logical_types() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_valid_schemas() {
     for (raw_schema, value) in VALID_SCHEMAS.iter() {
         let schema = Schema::from_str(raw_schema).unwrap();
@@ -570,7 +571,7 @@ fn test_valid_schemas() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_valid_logical_types() {
     for (raw_schema, value) in VALID_LOGICAL_TYPES.iter() {
         let schema = Schema::from_str(raw_schema).unwrap();
@@ -583,7 +584,7 @@ fn test_valid_logical_types() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_ignored_logical_types() {
     for (raw_schema, value) in IGNORED_LOGICAL_TYPES.iter() {
         let schema = Schema::from_str(raw_schema).unwrap();
@@ -596,7 +597,7 @@ fn test_ignored_logical_types() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_namespace_serialization() {
     let input = r#"
 {

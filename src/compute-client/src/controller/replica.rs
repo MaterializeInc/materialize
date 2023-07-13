@@ -13,24 +13,22 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Timestamp;
-use tokio::select;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
+use timely::progress::Timestamp;
+use tokio::select;
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
-
-use super::ReplicaId;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -57,6 +55,8 @@ pub(super) struct Replica<T> {
     _task: AbortOnDropHandle<()>,
     /// Configuration specific to this replica.
     pub config: ReplicaConfig,
+    /// Replica metrics.
+    metrics: ReplicaMetrics,
 }
 
 impl<T> Replica<T>
@@ -86,7 +86,7 @@ where
                 command_rx,
                 response_tx,
                 epoch,
-                metrics,
+                metrics: metrics.clone(),
             }
             .run(),
         );
@@ -96,6 +96,7 @@ where
             response_rx,
             _task: task.abort_on_drop(),
             config,
+            metrics,
         }
     }
 
@@ -104,14 +105,20 @@ where
         &self,
         command: ComputeCommand<T>,
     ) -> Result<(), SendError<ComputeCommand<T>>> {
-        self.command_tx.send(command)
+        self.command_tx.send(command).map(|r| {
+            self.metrics.inner.command_queue_size.inc();
+            r
+        })
     }
 
     /// Receives the next response from this replica.
     ///
     /// This method is cancellation safe.
     pub(super) async fn recv(&mut self) -> Option<ComputeResponse<T>> {
-        self.response_rx.recv().await
+        self.response_rx.recv().await.map(|r| {
+            self.metrics.inner.response_queue_size.dec();
+            r
+        })
     }
 }
 
@@ -240,22 +247,25 @@ where
     loop {
         select! {
             // Command from controller to forward to replica.
-            command = command_rx.recv() => match command {
-                None => {
+            command = command_rx.recv() => {
+                let Some(mut command) = command else {
                     // Controller is no longer interested in this replica. Shut down.
                     break;
-                }
-                Some(mut command) => {
-                    cmd_spec.specialize_command(&mut command);
-                    client.send(command).await?;
-                }
+                };
+
+                metrics.inner.command_queue_size.dec();
+                cmd_spec.specialize_command(&mut command);
+                client.send(command).await?;
             },
             // Response from replica to forward to controller.
             response = client.recv() => {
                 let Some(response) = response? else {
                     bail!("replica unexpectedly gracefully terminated connection");
                 };
-                if response_tx.send(response).is_err() {
+
+                if response_tx.send(response).is_ok() {
+                    metrics.inner.response_queue_size.inc();
+                } else {
                     // Controller is no longer interested in this replica. Shut down.
                     break;
                 }

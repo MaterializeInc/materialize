@@ -25,7 +25,7 @@ use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::normalize_lets::normalize_lets;
 
-use super::Explainable;
+use crate::explain::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
     type Context = ExplainContext<'a>;

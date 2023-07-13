@@ -10,53 +10,88 @@
 use std::collections::BTreeMap;
 
 use itertools::max;
-
 use mz_controller::clusters::ClusterId;
 use mz_ore::now::EpochMillis;
+use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::RoleAttributes;
-use mz_sql::names::{DatabaseId, SchemaId, PUBLIC_ROLE_NAME};
-use mz_stash::objects::proto;
+use mz_sql::catalog::{RoleAttributes, SystemObjectType};
+use mz_sql::names::{
+    DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
+};
+use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
+use mz_storage_client::types::sources::Timeline;
 
-use super::objects::StashType;
 use crate::catalog::builtin::{MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE};
-use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::object_type_to_audit_object_type;
+use crate::catalog::storage::{
+    BootstrapArgs, DefaultPrivilegesKey, DefaultPrivilegesValue, RoleMembership,
+    SystemPrivilegesKey, SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY,
+    MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID, REPLICA_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
+};
 use crate::rbac;
 
 /// The key used within the "config" collection where we store the Stash version.
-const USER_VERSION: &str = "user_version";
+pub(crate) const USER_VERSION: &str = "user_version";
 
-const ROLES_COLLECTION: TypedCollection<proto::RoleKey, proto::RoleValue> =
+/// The key used within the "config" collection where we store the deploy generation.
+pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
+
+pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
+    TypedCollection::new("setting");
+pub const SYSTEM_GID_MAPPING_COLLECTION: TypedCollection<
+    proto::GidMappingKey,
+    proto::GidMappingValue,
+> = TypedCollection::new("system_gid_mapping");
+pub const CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION: TypedCollection<
+    proto::ClusterIntrospectionSourceIndexKey,
+    proto::ClusterIntrospectionSourceIndexValue,
+> = TypedCollection::new("compute_introspection_source_index"); // historical name
+pub const ROLES_COLLECTION: TypedCollection<proto::RoleKey, proto::RoleValue> =
     TypedCollection::new("role");
-const DATABASES_COLLECTION: TypedCollection<proto::DatabaseKey, proto::DatabaseValue> =
+pub const DATABASES_COLLECTION: TypedCollection<proto::DatabaseKey, proto::DatabaseValue> =
     TypedCollection::new("database");
-const SCHEMAS_COLLECTION: TypedCollection<proto::SchemaKey, proto::SchemaValue> =
+pub const SCHEMAS_COLLECTION: TypedCollection<proto::SchemaKey, proto::SchemaValue> =
     TypedCollection::new("schema");
-const CLUSTER_COLLECTION: TypedCollection<proto::ClusterKey, proto::ClusterValue> =
+pub const ITEM_COLLECTION: TypedCollection<proto::ItemKey, proto::ItemValue> =
+    TypedCollection::new("item");
+pub const TIMESTAMP_COLLECTION: TypedCollection<proto::TimestampKey, proto::TimestampValue> =
+    TypedCollection::new("timestamp");
+pub const SYSTEM_CONFIGURATION_COLLECTION: TypedCollection<
+    proto::ServerConfigurationKey,
+    proto::ServerConfigurationValue,
+> = TypedCollection::new("system_configuration");
+pub const CLUSTER_COLLECTION: TypedCollection<proto::ClusterKey, proto::ClusterValue> =
     TypedCollection::new("compute_instance");
-const CLUSTER_REPLICA_COLLECTION: TypedCollection<
+pub const CLUSTER_REPLICA_COLLECTION: TypedCollection<
     proto::ClusterReplicaKey,
     proto::ClusterReplicaValue,
 > = TypedCollection::new("compute_replicas");
-const AUDIT_LOG_COLLECTION: TypedCollection<proto::AuditLogKey, ()> =
+pub const AUDIT_LOG_COLLECTION: TypedCollection<proto::AuditLogKey, ()> =
     TypedCollection::new("audit_log");
-const CONFIG_COLLETION: TypedCollection<proto::ConfigKey, proto::ConfigValue> =
+pub const CONFIG_COLLECTION: TypedCollection<proto::ConfigKey, proto::ConfigValue> =
     TypedCollection::new("config");
-const ID_ALLOCATOR_COLLECTION: TypedCollection<proto::IdAllocKey, proto::IdAllocValue> =
+pub const ID_ALLOCATOR_COLLECTION: TypedCollection<proto::IdAllocKey, proto::IdAllocValue> =
     TypedCollection::new("id_alloc");
+pub const STORAGE_USAGE_COLLECTION: TypedCollection<proto::StorageUsageKey, ()> =
+    TypedCollection::new("storage_usage");
+pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::DefaultPrivilegesKey,
+    proto::DefaultPrivilegesValue,
+> = TypedCollection::new("default_privileges");
+pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::SystemPrivilegesKey,
+    proto::SystemPrivilegesValue,
+> = TypedCollection::new("system_privileges");
+// If you add a new collection, then don't forget to write a migration that initializes the
+// collection either with some initial values or as empty. See
+// [`mz_stash::upgrade::v17_to_v18`] as an example.
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
-const DATABASE_ID_ALLOC_KEY: &str = "database";
-const SCHEMA_ID_ALLOC_KEY: &str = "schema";
-const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
-const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
-const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
-const REPLICA_ID_ALLOC_KEY: &str = "replica";
-const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
-const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
 const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
 const DEFAULT_USER_CLUSTER_NAME: &str = "default";
@@ -65,7 +100,7 @@ const DEFAULT_REPLICA_ID: u64 = 1;
 const DEFAULT_REPLICA_NAME: &str = "r1";
 
 const MATERIALIZE_DATABASE_ID_VAL: u64 = 1;
-const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::System(MATERIALIZE_DATABASE_ID_VAL);
+const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::User(MATERIALIZE_DATABASE_ID_VAL);
 
 const MZ_CATALOG_SCHEMA_ID: u64 = 1;
 const PG_CATALOG_SCHEMA_ID: u64 = 2;
@@ -73,36 +108,16 @@ const PUBLIC_SCHEMA_ID: u64 = 3;
 const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
 const INFORMATION_SCHEMA_ID: u64 = 5;
 
-#[derive(Debug, Clone)]
-pub struct InitializeOptions {
-    default_cluster_replica_size: String,
-    default_availability_zone: String,
-    bootstrap_role: Option<String>,
-}
-
-impl InitializeOptions {
-    pub fn new(size: String, zone: String) -> Self {
-        InitializeOptions {
-            default_cluster_replica_size: size,
-            default_availability_zone: zone,
-            bootstrap_role: None,
-        }
-    }
-
-    pub fn with_role(mut self, bootstrap_role: String) -> Self {
-        self.bootstrap_role = Some(bootstrap_role);
-        self
-    }
-}
-
 /// Initializes the Stash with some default objects.
 ///
 /// Note: We should only use the latest types here from the `super::objects` module, we should
 /// __not__ use any versioned protos, e.g. `objects_v15`.
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize(
     tx: &mut Transaction<'_>,
-    options: InitializeOptions,
+    options: &BootstrapArgs,
     now: EpochMillis,
+    deploy_generation: Option<u64>,
 ) -> Result<(), StashError> {
     // During initialization we need to allocate IDs for certain things. We'll track what IDs we've
     // allocated, persisting the "next ids" at the end.
@@ -111,21 +126,30 @@ pub async fn initialize(
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
 
-    // If provided, generate a new Id and attributes for the bootstrap role.
+    // First thing we need to do is persist the timestamp we're booting with.
+    TIMESTAMP_COLLECTION
+        .initialize(
+            tx,
+            vec![(
+                proto::TimestampKey {
+                    id: Timeline::EpochMilliseconds.to_string(),
+                },
+                proto::TimestampValue {
+                    ts: Some(proto::Timestamp { internal: now }),
+                },
+            )],
+        )
+        .await?;
+
+    // If provided, generate a new Id for the bootstrap role.
     //
     // Note: Make sure we do this _after_ initializing the ID_ALLOCATOR_COLLECTION.
     let bootstrap_role = if let Some(role) = &options.bootstrap_role {
-        let user_id = id_allocator.allocate(USER_ID_ALLOC_KEY.to_string());
-        let role_id = RoleId::User(user_id);
+        let role_id = RoleId::User(id_allocator.allocate(USER_ROLE_ID_ALLOC_KEY.to_string()));
         let role_val = proto::RoleValue {
             name: role.to_string(),
-            attributes: Some(
-                RoleAttributes::new()
-                    .with_create_db()
-                    .with_create_cluster()
-                    .into_stash(),
-            ),
-            membership: Some(proto::RoleMembership::default()),
+            attributes: Some(RoleAttributes::new().into_proto()),
+            membership: Some(RoleMembership::new().into_proto()),
         };
 
         audit_events.push((
@@ -137,7 +161,8 @@ pub async fn initialize(
             }),
         ));
 
-        Some((role_id.into_stash(), role_val))
+        let proto_role_id: proto::RoleId = role_id.into_proto();
+        Some((proto_role_id, role_val))
     } else {
         None
     };
@@ -148,32 +173,32 @@ pub async fn initialize(
             [
                 (
                     proto::RoleKey {
-                        id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                        id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     },
                     proto::RoleValue {
                         name: MZ_SYSTEM_ROLE.name.to_string(),
-                        attributes: Some(MZ_SYSTEM_ROLE.attributes.clone().into_stash()),
-                        membership: Some(proto::RoleMembership::default()),
+                        attributes: Some(MZ_SYSTEM_ROLE.attributes.clone().into_proto()),
+                        membership: Some(RoleMembership::new().into_proto()),
                     },
                 ),
                 (
                     proto::RoleKey {
-                        id: Some(MZ_INTROSPECTION_ROLE_ID.into_stash()),
+                        id: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
                     },
                     proto::RoleValue {
                         name: MZ_INTROSPECTION_ROLE.name.to_string(),
-                        attributes: Some(MZ_INTROSPECTION_ROLE.attributes.clone().into_stash()),
-                        membership: Some(proto::RoleMembership::default()),
+                        attributes: Some(MZ_INTROSPECTION_ROLE.attributes.clone().into_proto()),
+                        membership: Some(RoleMembership::new().into_proto()),
                     },
                 ),
                 (
                     proto::RoleKey {
-                        id: Some(RoleId::Public.into_stash()),
+                        id: Some(RoleId::Public.into_proto()),
                     },
                     proto::RoleValue {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(proto::RoleAttributes::default()),
-                        membership: Some(proto::RoleMembership::default()),
+                        attributes: Some(RoleAttributes::new().into_proto()),
+                        membership: Some(RoleMembership::new().into_proto()),
                     },
                 ),
             ]
@@ -188,21 +213,84 @@ pub async fn initialize(
         )
         .await?;
 
+    let default_privileges = vec![
+        // mz_introspection needs USAGE privileges on all clusters for the
+        // prometheus-exporter.
+        (
+            DefaultPrivilegesKey {
+                role_id: RoleId::Public,
+                database_id: None,
+                schema_id: None,
+                object_type: mz_sql::catalog::ObjectType::Cluster,
+                grantee: MZ_INTROSPECTION_ROLE_ID,
+            },
+            DefaultPrivilegesValue {
+                privileges: AclMode::USAGE,
+            },
+        ),
+        (
+            DefaultPrivilegesKey {
+                role_id: RoleId::Public,
+                database_id: None,
+                schema_id: None,
+                object_type: mz_sql::catalog::ObjectType::Type,
+                grantee: RoleId::Public,
+            },
+            DefaultPrivilegesValue {
+                privileges: AclMode::USAGE,
+            },
+        ),
+    ];
+    DEFAULT_PRIVILEGES_COLLECTION
+        .initialize(
+            tx,
+            default_privileges
+                .iter()
+                .map(|(privilege_key, privilege_value)| {
+                    (privilege_key.into_proto(), privilege_value.into_proto())
+                }),
+        )
+        .await?;
+    for (default_privilege_key, default_privilege_value) in &default_privileges {
+        audit_events.push((
+            proto::audit_log_event_v1::EventType::Grant,
+            object_type_to_audit_object_type(default_privilege_key.object_type).into_proto(),
+            proto::audit_log_event_v1::Details::AlterDefaultPrivilegeV1(
+                proto::audit_log_event_v1::AlterDefaultPrivilegeV1 {
+                    role_id: default_privilege_key.role_id.to_string(),
+                    database_id: default_privilege_key
+                        .database_id
+                        .map(|id| id.to_string().into()),
+                    schema_id: default_privilege_key
+                        .schema_id
+                        .map(|id| id.to_string().into()),
+                    grantee_id: default_privilege_key.grantee.to_string(),
+                    privileges: default_privilege_value.privileges.to_string(),
+                },
+            ),
+        ));
+    }
+
     let mut db_privileges = vec![
         proto::MzAclItem {
-            grantee: Some(RoleId::Public.into_stash()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::USAGE.into_stash()),
+            grantee: Some(RoleId::Public.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
-            .into_stash(),
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
+            .into_proto(),
     ];
     // Optionally add a privilege for the bootstrap role.
     if let Some((role_id, _)) = &bootstrap_role {
         db_privileges.push(proto::MzAclItem {
             grantee: Some(role_id.clone()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::CREATE.into_stash()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(
+                rbac::all_object_privileges(SystemObjectType::Object(
+                    mz_sql::catalog::ObjectType::Database,
+                ))
+                .into_proto(),
+            ),
         })
     };
 
@@ -211,98 +299,133 @@ pub async fn initialize(
             tx,
             [(
                 proto::DatabaseKey {
-                    id: Some(MATERIALIZE_DATABASE_ID.into_stash()),
+                    id: Some(MATERIALIZE_DATABASE_ID.into_proto()),
                 },
                 proto::DatabaseValue {
                     name: "materialize".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: db_privileges,
                 },
             )],
         )
         .await?;
-    audit_events.push((
-        proto::audit_log_event_v1::EventType::Create,
-        proto::audit_log_event_v1::ObjectType::Database,
-        proto::audit_log_event_v1::Details::IdNameV1(proto::audit_log_event_v1::IdNameV1 {
-            id: MATERIALIZE_DATABASE_ID.to_string(),
-            name: "materialize".to_string(),
-        }),
-    ));
+    audit_events.extend([
+        (
+            proto::audit_log_event_v1::EventType::Create,
+            proto::audit_log_event_v1::ObjectType::Database,
+            proto::audit_log_event_v1::Details::IdNameV1(proto::audit_log_event_v1::IdNameV1 {
+                id: MATERIALIZE_DATABASE_ID.to_string(),
+                name: "materialize".to_string(),
+            }),
+        ),
+        (
+            proto::audit_log_event_v1::EventType::Grant,
+            proto::audit_log_event_v1::ObjectType::Database,
+            proto::audit_log_event_v1::Details::UpdatePrivilegeV1(
+                proto::audit_log_event_v1::UpdatePrivilegeV1 {
+                    object_id: ObjectId::Database(MATERIALIZE_DATABASE_ID).to_string(),
+                    grantee_id: RoleId::Public.to_string(),
+                    grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
+                    privileges: AclMode::USAGE.to_string(),
+                },
+            ),
+        ),
+    ]);
+    // Optionally add a privilege for the bootstrap role.
+    if let Some((role_id, _)) = &bootstrap_role {
+        let role_id: RoleId = role_id.clone().into_rust().expect("known to be valid");
+        audit_events.push((
+            proto::audit_log_event_v1::EventType::Grant,
+            proto::audit_log_event_v1::ObjectType::Database,
+            proto::audit_log_event_v1::Details::UpdatePrivilegeV1(
+                proto::audit_log_event_v1::UpdatePrivilegeV1 {
+                    object_id: ObjectId::Database(MATERIALIZE_DATABASE_ID).to_string(),
+                    grantee_id: role_id.to_string(),
+                    grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
+                    privileges: rbac::all_object_privileges(SystemObjectType::Object(
+                        mz_sql::catalog::ObjectType::Database,
+                    ))
+                    .to_string(),
+                },
+            ),
+        ));
+    }
 
     let schema_privileges = vec![
-        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema).into_stash(),
-        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
-            .into_stash(),
+        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
     let mz_catalog_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(MZ_CATALOG_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(MZ_CATALOG_SCHEMA_ID).into_proto()),
     };
     let mz_catalog_schema = proto::SchemaValue {
         database_id: None,
         name: "mz_catalog".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let pg_catalog_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(PG_CATALOG_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(PG_CATALOG_SCHEMA_ID).into_proto()),
     };
     let pg_catalog_schema = proto::SchemaValue {
         database_id: None,
         name: "pg_catalog".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let mz_internal_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(MZ_INTERNAL_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(MZ_INTERNAL_SCHEMA_ID).into_proto()),
     };
     let mz_internal_schema = proto::SchemaValue {
         database_id: None,
         name: "mz_internal".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let information_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(INFORMATION_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(INFORMATION_SCHEMA_ID).into_proto()),
     };
     let information_schema = proto::SchemaValue {
         database_id: None,
         name: "information_schema".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let public_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(PUBLIC_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::User(PUBLIC_SCHEMA_ID).into_proto()),
     };
     let public_schema = proto::SchemaValue {
-        database_id: Some(MATERIALIZE_DATABASE_ID.into_stash()),
+        database_id: Some(MATERIALIZE_DATABASE_ID.into_proto()),
         name: "public".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: vec![
             proto::MzAclItem {
-                grantee: Some(RoleId::Public.into_stash()),
-                grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-                acl_mode: Some(AclMode::USAGE.into_stash()),
+                grantee: Some(RoleId::Public.into_proto()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(AclMode::USAGE.into_proto()),
             },
-            rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
-                .into_stash(),
+            rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
+                .into_proto(),
         ]
         .into_iter()
         // Optionally add the bootstrap role to the public schema.
-        .chain(
-            bootstrap_role
-                .as_ref()
-                .map(|(role_id, _)| proto::MzAclItem {
-                    grantee: Some(role_id.clone()),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-                    acl_mode: Some(AclMode::CREATE.into_stash()),
-                }),
-        )
+        .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
+            proto::MzAclItem {
+                grantee: Some(role_id.clone()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(
+                    rbac::all_object_privileges(SystemObjectType::Object(
+                        mz_sql::catalog::ObjectType::Schema,
+                    ))
+                    .into_proto(),
+                ),
+            }
+        }))
         .collect(),
     };
 
@@ -324,26 +447,57 @@ pub async fn initialize(
         proto::audit_log_event_v1::Details::SchemaV2(proto::audit_log_event_v1::SchemaV2 {
             id: PUBLIC_SCHEMA_ID.to_string(),
             name: "public".to_string(),
-            database_name: "materialize".to_string(),
+            database_name: Some("materialize".to_string().into()),
         }),
     ));
+    if let Some((role_id, _)) = &bootstrap_role {
+        let role_id: RoleId = role_id.clone().into_rust().expect("known to be valid");
+        audit_events.push((
+            proto::audit_log_event_v1::EventType::Grant,
+            proto::audit_log_event_v1::ObjectType::Schema,
+            proto::audit_log_event_v1::Details::UpdatePrivilegeV1(
+                proto::audit_log_event_v1::UpdatePrivilegeV1 {
+                    object_id: ObjectId::Schema((
+                        ResolvedDatabaseSpecifier::Id(MATERIALIZE_DATABASE_ID),
+                        SchemaSpecifier::Id(SchemaId::User(PUBLIC_SCHEMA_ID)),
+                    ))
+                    .to_string(),
+                    grantee_id: role_id.to_string(),
+                    grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
+                    privileges: rbac::all_object_privileges(SystemObjectType::Object(
+                        mz_sql::catalog::ObjectType::Schema,
+                    ))
+                    .to_string(),
+                },
+            ),
+        ));
+    }
 
     let mut cluster_privileges = vec![
         proto::MzAclItem {
-            grantee: Some(RoleId::Public.into_stash()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::USAGE.into_stash()),
+            grantee: Some(RoleId::Public.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID)
-            .into_stash(),
+        proto::MzAclItem {
+            grantee: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
+        },
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID).into_proto(),
     ];
 
     // Optionally add a privilege for the bootstrap role.
     if let Some((role_id, _)) = &bootstrap_role {
         cluster_privileges.push(proto::MzAclItem {
             grantee: Some(role_id.clone()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::CREATE.into_stash()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(
+                rbac::all_object_privileges(SystemObjectType::Object(
+                    mz_sql::catalog::ObjectType::Cluster,
+                ))
+                .into_proto(),
+            ),
         });
     };
 
@@ -352,13 +506,14 @@ pub async fn initialize(
             tx,
             [(
                 proto::ClusterKey {
-                    id: Some(DEFAULT_USER_CLUSTER_ID.into_stash()),
+                    id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                 },
                 proto::ClusterValue {
                     name: DEFAULT_USER_CLUSTER_NAME.to_string(),
                     linked_object_id: None,
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: cluster_privileges,
+                    config: Some(default_cluster_config(options)),
                 },
             )],
         )
@@ -371,6 +526,37 @@ pub async fn initialize(
             name: DEFAULT_USER_CLUSTER_NAME.to_string(),
         }),
     ));
+    audit_events.push((
+        proto::audit_log_event_v1::EventType::Grant,
+        proto::audit_log_event_v1::ObjectType::Cluster,
+        proto::audit_log_event_v1::Details::UpdatePrivilegeV1(
+            proto::audit_log_event_v1::UpdatePrivilegeV1 {
+                object_id: ObjectId::Cluster(DEFAULT_USER_CLUSTER_ID).to_string(),
+                grantee_id: RoleId::Public.to_string(),
+                grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
+                privileges: AclMode::USAGE.to_string(),
+            },
+        ),
+    ));
+    // Optionally add a privilege for the bootstrap role.
+    if let Some((role_id, _)) = &bootstrap_role {
+        let role_id: RoleId = role_id.clone().into_rust().expect("known to be valid");
+        audit_events.push((
+            proto::audit_log_event_v1::EventType::Grant,
+            proto::audit_log_event_v1::ObjectType::Cluster,
+            proto::audit_log_event_v1::Details::UpdatePrivilegeV1(
+                proto::audit_log_event_v1::UpdatePrivilegeV1 {
+                    object_id: ObjectId::Cluster(DEFAULT_USER_CLUSTER_ID).to_string(),
+                    grantee_id: role_id.to_string(),
+                    grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
+                    privileges: rbac::all_object_privileges(SystemObjectType::Object(
+                        mz_sql::catalog::ObjectType::Cluster,
+                    ))
+                    .to_string(),
+                },
+            ),
+        ));
+    }
 
     CLUSTER_REPLICA_COLLECTION
         .initialize(
@@ -382,40 +568,74 @@ pub async fn initialize(
                     }),
                 },
                 proto::ClusterReplicaValue {
-                    cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_stash()),
+                    cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                     name: DEFAULT_REPLICA_NAME.to_string(),
-                    config: Some(proto::ReplicaConfig {
-                        location: Some(proto::replica_config::Location::Managed(
-                            proto::replica_config::ManagedLocation {
-                                size: options.default_cluster_replica_size.clone(),
-                                availability_zone: options.default_availability_zone,
-                                az_user_specified: false,
-                            },
-                        )),
-                        logging: Some(proto::replica_config::Logging {
-                            log_logging: false,
-                            interval: Some(proto::Duration::from_secs(1)),
-                        }),
-                        idle_arrangement_merge_effort: None,
-                    }),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                    config: Some(default_replica_config(options)),
+                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 },
             )],
         )
         .await?;
     audit_events.push((
         proto::audit_log_event_v1::EventType::Create,
-        proto::audit_log_event_v1::ObjectType::Clusterreplica,
+        proto::audit_log_event_v1::ObjectType::ClusterReplica,
         proto::audit_log_event_v1::Details::CreateClusterReplicaV1(
             proto::audit_log_event_v1::CreateClusterReplicaV1 {
                 cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
-                cluser_name: "default".to_string(),
-                replica_name: "default".to_string(),
-                replica_id: DEFAULT_REPLICA_ID.to_string(),
-                logical_size: options.default_cluster_replica_size,
+                cluser_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
+                replica_name: DEFAULT_REPLICA_NAME.to_string(),
+                replica_id: Some(DEFAULT_REPLICA_ID.to_string().into()),
+                logical_size: options.default_cluster_replica_size.to_string(),
+                disk: false,
             },
         ),
     ));
+
+    let system_privileges: Vec<_> = vec![(
+        SystemPrivilegesKey {
+            grantee: MZ_SYSTEM_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+        },
+        SystemPrivilegesValue {
+            acl_mode: rbac::all_object_privileges(SystemObjectType::System),
+        },
+    )]
+    .into_iter()
+    // Optionally add system privileges for the bootstrap role.
+    .chain(bootstrap_role.as_ref().map(|(role_id, _)| {
+        (
+            SystemPrivilegesKey {
+                grantee: role_id.clone().into_rust().expect("known to be valid"),
+                grantor: MZ_SYSTEM_ROLE_ID,
+            },
+            SystemPrivilegesValue {
+                acl_mode: rbac::all_object_privileges(SystemObjectType::System),
+            },
+        )
+    }))
+    .collect();
+    SYSTEM_PRIVILEGES_COLLECTION
+        .initialize(
+            tx,
+            system_privileges
+                .iter()
+                .map(|privilege| privilege.into_proto()),
+        )
+        .await?;
+    for (system_privilege_key, system_privilege_value) in &system_privileges {
+        audit_events.push((
+            proto::audit_log_event_v1::EventType::Grant,
+            proto::audit_log_event_v1::ObjectType::System,
+            proto::audit_log_event_v1::Details::UpdatePrivilegeV1(
+                proto::audit_log_event_v1::UpdatePrivilegeV1 {
+                    object_id: "SYSTEM".to_string(),
+                    grantee_id: system_privilege_key.grantee.to_string(),
+                    grantor_id: system_privilege_key.grantor.to_string(),
+                    privileges: system_privilege_value.acl_mode.to_string(),
+                },
+            ),
+        ));
+    }
 
     // Allocate an ID for each audit log event.
     let mut audit_events_with_id = Vec::with_capacity(audit_events.len());
@@ -436,7 +656,7 @@ pub async fn initialize(
                         event_type: ty.into(),
                         object_type: obj.into(),
                         user: None,
-                        occurred_at: Some(now.into_stash()),
+                        occurred_at: Some(now.into_proto()),
                         details: Some(details),
                     });
                     (proto::AuditLogKey { event: Some(event) }, ())
@@ -444,6 +664,7 @@ pub async fn initialize(
         )
         .await?;
 
+    // Record all of our used ids.
     ID_ALLOCATOR_COLLECTION
         .initialize(
             tx,
@@ -540,22 +761,84 @@ pub async fn initialize(
         )
         .await?;
 
+    // Initialize all other collections to be empty.
+    SETTING_COLLECTION.initialize(tx, vec![]).await?;
+    SYSTEM_GID_MAPPING_COLLECTION.initialize(tx, vec![]).await?;
+    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
+        .initialize(tx, vec![])
+        .await?;
+    ITEM_COLLECTION.initialize(tx, vec![]).await?;
+    SYSTEM_CONFIGURATION_COLLECTION
+        .initialize(tx, vec![])
+        .await?;
+    STORAGE_USAGE_COLLECTION.initialize(tx, vec![]).await?;
+
     // Set our initial version.
-    CONFIG_COLLETION
+    CONFIG_COLLECTION
         .initialize(
             tx,
-            [(
-                proto::ConfigKey {
-                    key: USER_VERSION.to_string(),
-                },
-                proto::ConfigValue {
-                    value: STASH_VERSION,
-                },
-            )],
+            [
+                (
+                    proto::ConfigKey {
+                        key: USER_VERSION.to_string(),
+                    },
+                    proto::ConfigValue {
+                        value: STASH_VERSION,
+                    },
+                ),
+                (
+                    proto::ConfigKey {
+                        key: DEPLOY_GENERATION.to_string(),
+                    },
+                    proto::ConfigValue {
+                        value: deploy_generation.unwrap_or(0),
+                    },
+                ),
+            ],
         )
         .await?;
 
     Ok(())
+}
+
+pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, StashError> {
+    let config = CONFIG_COLLECTION.from_tx(tx).await?;
+    let value = tx
+        .peek_key_one(
+            config,
+            &proto::ConfigKey {
+                key: DEPLOY_GENERATION.into(),
+            },
+        )
+        .await?;
+    Ok(value.map(|v| v.value))
+}
+
+/// Defines the default config for a Cluster.
+pub fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
+    // TODO: Use managed clusters by default.
+    proto::ClusterConfig {
+        variant: Some(proto::cluster_config::Variant::Unmanaged(proto::Empty {})),
+    }
+}
+
+/// Defines the default config for a Cluster Replica.
+pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
+    proto::ReplicaConfig {
+        location: Some(proto::replica_config::Location::Managed(
+            proto::replica_config::ManagedLocation {
+                size: args.default_cluster_replica_size.to_string(),
+                availability_zone: args.default_availability_zone.to_string(),
+                az_user_specified: false,
+                disk: false,
+            },
+        )),
+        logging: Some(proto::ReplicaLogging {
+            log_logging: false,
+            interval: Some(proto::Duration::from_secs(1)),
+        }),
+        idle_arrangement_merge_effort: None,
+    }
 }
 
 /// A small struct which keeps track of what Ids we've used during initialization.
@@ -593,7 +876,7 @@ impl IdAllocator {
 mod test {
     use super::IdAllocator;
 
-    #[test]
+    #[mz_ore::test]
     fn smoke_test_id_allocator() {
         let mut allocator = IdAllocator::new();
 

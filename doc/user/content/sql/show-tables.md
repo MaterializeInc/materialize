@@ -1,12 +1,12 @@
 ---
 title: "SHOW TABLES"
-description: "`SHOW TABLES` returns a list of all tables available to your Materialize instances."
+description: "`SHOW TABLES` returns a list of all tables available in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW TABLES` returns a list of all tables available to your Materialize instances.
+`SHOW TABLES` returns a list of all tables available in Materialize.
 
 ## Syntax
 

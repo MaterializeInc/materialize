@@ -19,14 +19,13 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 use uuid::Uuid;
-
-use mz_repr::{Diff, GlobalId, Row};
-use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};

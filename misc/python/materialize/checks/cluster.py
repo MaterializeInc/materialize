@@ -10,18 +10,31 @@ from textwrap import dedent
 from typing import List
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import CheckDisabled
+from materialize.checks.checks import Check
 
 
-class CreateCluster(CheckDisabled):
+class CreateCluster(Check):
     def manipulate(self) -> List[Testdrive]:
+        # This list MUST be of length 2.
         return [
             Testdrive(dedent(s))
             for s in [
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATECLUSTER
+
                 > CREATE CLUSTER create_cluster1 REPLICAS (replica1 (SIZE '2-2'));
                 """,
                 """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATECLUSTER
+
                 > CREATE CLUSTER create_cluster2 REPLICAS (replica1 (SIZE '2-2'));
                 """,
             ]
@@ -62,8 +75,7 @@ class CreateCluster(CheckDisabled):
         )
 
 
-# https://github.com/MaterializeInc/materialize/issues/13235
-class DropCluster(CheckDisabled):
+class DropCluster(Check):
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -101,21 +113,21 @@ class DropCluster(CheckDisabled):
                 """
                 > SET cluster=drop_cluster1
 
-                > SET cluster=create_cluster2
+                > SET cluster=drop_cluster2
 
                 > SET cluster=default
 
                 > SELECT * FROM drop_cluster1_table;
                 123
 
-                > SELECT * FROM drop_cluster1_view;
-                123
+                ! SELECT * FROM drop_cluster1_view;
+                contains: unknown catalog item 'drop_cluster1_view'
 
                 > SELECT * FROM drop_cluster2_table;
                 234
 
-                > SELECT * FROM drop_cluster2_view;
-                234
+                ! SELECT * FROM drop_cluster2_view;
+                contains: unknown catalog item 'drop_cluster2_view'
            """
             )
         )

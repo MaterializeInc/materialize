@@ -78,14 +78,13 @@
 //! These test utilities are relied by crates other than `repr`.
 
 use chrono::NaiveDateTime;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use proc_macro2::TokenTree;
-
 use mz_lowertest::deserialize_optional_generic;
 use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::parse_jsonb;
 use mz_repr::{Datum, Row, RowArena, ScalarType};
+use proc_macro2::TokenTree;
 
 /* #endregion */
 

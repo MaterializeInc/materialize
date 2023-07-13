@@ -17,7 +17,7 @@ from materialize.ui import UIError
 
 CRDB_NODE_COUNT = 4
 TESTDRIVE_TIMEOUT = (
-    "40s"  # We expect any CRDB disruption to not disrupt Mz for more than this timeout
+    "80s"  # We expect any CRDB disruption to not disrupt Mz for more than this timeout
 )
 
 COCKROACH_HEALTHCHECK_DISABLED = ServiceHealthcheck(

@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
 
 statement ok
 CREATE TABLE t (
@@ -160,7 +164,7 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 VIEW ov
 ----
 materialize.public.ov:
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     Get materialize.public.t
 
 Used Indexes:
@@ -305,7 +309,7 @@ Explained Query:
                 Get l1
   With
     cte l4 =
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Project (#0, #1)
           Filter (#0) IS NOT NULL
             Join on=(#0 = #2) type=differential
@@ -314,7 +318,7 @@ Explained Query:
                 Filter (#1) IS NOT NULL
                   Get materialize.public.mv
     cte l3 =
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Project (#0, #1)
           Filter (#0) IS NOT NULL
             Join on=(#0 = #2) type=differential
@@ -763,8 +767,23 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM bar;
 
 # Regression test for #19148: support mz_now() on select from indexed table
+# ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
-DROP TABLE IF EXISTS t CASCADE;
+DROP SCHEMA IF EXISTS public CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA public;
 
 statement ok
 CREATE TABLE t(a TIMESTAMP);
@@ -776,3 +795,53 @@ CREATE DEFAULT INDEX ON t;
 # assert that the query doesn't fail.
 statement ok
 EXPLAIN SELECT * FROM t WHERE a < mz_now();
+
+# Regression test for #19177
+# ---
+
+statement ok
+DROP SCHEMA IF EXISTS public CASCADE;
+
+statement ok
+CREATE SCHEMA public;
+
+statement ok
+CREATE TABLE t1(x text);
+
+statement ok
+CREATE TABLE t2(x text);
+
+statement ok
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+
+# Regression test for the join visitation part of #19177
+statement ok
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
+
+query T multiline
+EXPLAIN
+SELECT lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x)
+FROM t1;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0, 3, "default")), (#0 || #0)))]
+          Get materialize.public.t1
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT first_value(x) OVER (ORDER BY x || x ROWS BETWEEN 5 preceding AND CURRENT ROW)
+FROM t1;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Reduce aggregates=[first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0), (#0 || #0)))]
+          Get materialize.public.t1
+
+EOF

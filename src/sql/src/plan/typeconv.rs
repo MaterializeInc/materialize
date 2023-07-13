@@ -10,21 +10,19 @@
 //! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
-use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
+use mz_expr::{func, VariadicFunc};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
 
-use mz_expr::func;
-use mz_expr::VariadicFunc;
-use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
-
-use super::error::PlanError;
-use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
-use super::query::{ExprContext, QueryContext};
-use super::scope::Scope;
 use crate::catalog::TypeCategory;
+use crate::plan::error::PlanError;
+use crate::plan::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use crate::plan::query::{ExprContext, QueryContext};
+use crate::plan::scope::Scope;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
@@ -289,9 +287,9 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
-        (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
-        (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
-        (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
+        (Oid, RegClass) => Implicit: CastOidToRegClass(func::CastOidToRegClass),
+        (Oid, RegProc) => Implicit: CastOidToRegProc(func::CastOidToRegProc),
+        (Oid, RegType) => Implicit: CastOidToRegType(func::CastOidToRegType),
 
         // REGCLASS
         (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
@@ -401,6 +399,8 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         // so use mz_error_if_null to coerce that into an error. This is hacky and
         // incomplete in a few ways, but gets us close enough to making drivers happy.
         // TODO: Support the correct error code for does not exist (42883).
+        // TODO: Support qualified names.
+        // TODO: This should take into account the search path when looking for an object.
         (String, RegClass) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
@@ -909,6 +909,7 @@ pub fn plan_hypothetical_cast(
         relation_type: &relation_type,
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_parameters: true,
         allow_windows: false,
     };
 

@@ -18,9 +18,9 @@ import "google/protobuf/empty.proto";
 package mz_compute_client.plan.reduce;
 
 message ProtoReducePlan {
+    reserved 2; // distinct_negated
     oneof kind {
         google.protobuf.Empty distinct = 1;
-        google.protobuf.Empty distinct_negated = 2;
         ProtoAccumulablePlan accumulable = 3;
         ProtoHierarchicalPlan hierarchical = 4;
         ProtoBasicPlan basic = 5;

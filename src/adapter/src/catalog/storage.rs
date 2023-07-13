@@ -13,55 +13,53 @@ use std::iter::once;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::future::BoxFuture;
-use itertools::{max, Itertools};
-use serde::{Deserialize, Serialize};
-
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use itertools::Itertools;
+use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::NowFn;
+use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
-    CatalogSchema, RoleAttributes,
+    CatalogSchema, ObjectType, RoleAttributes,
 };
 use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
-    SchemaSpecifier, PUBLIC_ROLE_NAME,
+    SchemaSpecifier,
 };
-use mz_sql_parser::ast::Statement;
-use mz_stash::{AppendBatch, Id, Stash, StashError, TableTransaction, TypedCollection};
+use mz_sql_parser::ast::QualifiedReplica;
+use mz_stash::objects::proto;
+use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
+use proptest_derive::Arbitrary;
 
 use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
-use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
+use crate::catalog::storage::stash::{DEPLOY_GENERATION, USER_VERSION};
+use crate::catalog::{
+    self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
+    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
+};
 use crate::coord::timeline;
-use crate::{catalog, rbac};
-
-use super::{SerializedCatalogItem, SerializedReplicaLocation, SerializedReplicaLogging};
 
 pub mod objects;
 pub mod stash;
 
-const USER_VERSION: &str = "user_version";
+pub use stash::{
+    AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
+    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
+    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
+    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
+    TIMESTAMP_COLLECTION,
+};
 
-const MATERIALIZE_DATABASE_ID: u64 = 1;
-const MZ_CATALOG_SCHEMA_ID: u64 = 1;
-const PG_CATALOG_SCHEMA_ID: u64 = 2;
-const PUBLIC_SCHEMA_ID: u64 = 3;
-const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
-const INFORMATION_SCHEMA_ID: u64 = 5;
-const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
-const DEFAULT_REPLICA_ID: u64 = 1;
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
 pub const MZ_INTROSPECTION_ROLE_ID: RoleId = RoleId::System(2);
 
@@ -73,793 +71,6 @@ const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
-
-async fn migrate(
-    stash: &mut Stash,
-    version: u64,
-    now: EpochMillis,
-    bootstrap_args: &BootstrapArgs,
-) -> Result<(), catalog::error::Error> {
-    // Initial state.
-    let migrations: &[for<'a> fn(
-        &mut Transaction<'a>,
-        EpochMillis,
-        &'a BootstrapArgs,
-    ) -> Result<(), catalog::error::Error>] = &[
-        |txn: &mut Transaction<'_>, now, bootstrap_args| {
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: "user".into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: "system".into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: DATABASE_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue {
-                    next_id: MATERIALIZE_DATABASE_ID + 1,
-                },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: SCHEMA_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue {
-                    next_id: max(&[
-                        MZ_CATALOG_SCHEMA_ID,
-                        PG_CATALOG_SCHEMA_ID,
-                        PUBLIC_SCHEMA_ID,
-                        MZ_INTERNAL_SCHEMA_ID,
-                        INFORMATION_SCHEMA_ID,
-                    ])
-                    .expect("known to be non-empty")
-                        + 1,
-                },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: USER_ROLE_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: USER_CLUSTER_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue {
-                    next_id: DEFAULT_USER_CLUSTER_ID.inner_id() + 1,
-                },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: SYSTEM_CLUSTER_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: REPLICA_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue {
-                    next_id: DEFAULT_REPLICA_ID + 1,
-                },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: AUDIT_LOG_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: STORAGE_USAGE_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue { next_id: 1 },
-            )?;
-            txn.roles.insert(
-                RoleKey {
-                    id: MZ_SYSTEM_ROLE_ID,
-                },
-                RoleValue {
-                    role: (&*MZ_SYSTEM_ROLE).into(),
-                },
-            )?;
-            txn.roles.insert(
-                RoleKey {
-                    id: MZ_INTROSPECTION_ROLE_ID,
-                },
-                RoleValue {
-                    role: (&*MZ_INTROSPECTION_ROLE).into(),
-                },
-            )?;
-            txn.roles.insert(
-                RoleKey { id: RoleId::Public },
-                RoleValue {
-                    role: SerializedRole {
-                        name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(RoleAttributes::new()),
-                        membership: Some(RoleMembership::new()),
-                    },
-                },
-            )?;
-            txn.databases.insert(
-                DatabaseKey {
-                    id: MATERIALIZE_DATABASE_ID,
-                    ns: None,
-                },
-                DatabaseValue {
-                    name: "materialize".into(),
-                    owner_id: MZ_SYSTEM_ROLE_ID,
-                    privileges: Some(vec![
-                        MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE,
-                        },
-                        rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Database,
-                            MZ_SYSTEM_ROLE_ID,
-                        ),
-                    ]),
-                },
-            )?;
-            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-            txn.audit_log_updates.push((
-                AuditLogKey {
-                    event: VersionedEvent::new(
-                        id,
-                        EventType::Create,
-                        ObjectType::Database,
-                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: MATERIALIZE_DATABASE_ID.to_string(),
-                            name: "materialize".into(),
-                        }),
-                        None,
-                        now,
-                    ),
-                },
-                (),
-                1,
-            ));
-            txn.schemas.insert(
-                SchemaKey {
-                    id: MZ_CATALOG_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::System),
-                },
-                SchemaValue {
-                    database_id: None,
-                    database_ns: None,
-                    name: "mz_catalog".into(),
-                    owner_id: MZ_SYSTEM_ROLE_ID,
-                    privileges: Some(vec![
-                        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
-                        rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            MZ_SYSTEM_ROLE_ID,
-                        ),
-                    ]),
-                },
-            )?;
-            txn.schemas.insert(
-                SchemaKey {
-                    id: PG_CATALOG_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::System),
-                },
-                SchemaValue {
-                    database_id: None,
-                    database_ns: None,
-                    name: "pg_catalog".into(),
-                    owner_id: MZ_SYSTEM_ROLE_ID,
-                    privileges: Some(vec![
-                        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
-                        rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            MZ_SYSTEM_ROLE_ID,
-                        ),
-                    ]),
-                },
-            )?;
-            txn.schemas.insert(
-                SchemaKey {
-                    id: PUBLIC_SCHEMA_ID,
-                    ns: None,
-                },
-                SchemaValue {
-                    database_id: Some(MATERIALIZE_DATABASE_ID),
-                    database_ns: None,
-                    name: "public".into(),
-                    owner_id: MZ_SYSTEM_ROLE_ID,
-                    privileges: Some(vec![
-                        MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE,
-                        },
-                        rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            MZ_SYSTEM_ROLE_ID,
-                        ),
-                    ]),
-                },
-            )?;
-            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-            txn.audit_log_updates.push((
-                AuditLogKey {
-                    event: VersionedEvent::new(
-                        id,
-                        EventType::Create,
-                        ObjectType::Schema,
-                        EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
-                            id: PUBLIC_SCHEMA_ID.to_string(),
-                            name: "public".into(),
-                            database_name: Some("materialize".into()),
-                        }),
-                        None,
-                        now,
-                    ),
-                },
-                (),
-                1,
-            ));
-            txn.schemas.insert(
-                SchemaKey {
-                    id: MZ_INTERNAL_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::System),
-                },
-                SchemaValue {
-                    database_id: None,
-                    database_ns: None,
-                    name: "mz_internal".into(),
-                    owner_id: MZ_SYSTEM_ROLE_ID,
-                    privileges: Some(vec![
-                        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
-                        rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            MZ_SYSTEM_ROLE_ID,
-                        ),
-                    ]),
-                },
-            )?;
-            txn.schemas.insert(
-                SchemaKey {
-                    id: INFORMATION_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::System),
-                },
-                SchemaValue {
-                    database_id: None,
-                    database_ns: None,
-                    name: "information_schema".into(),
-                    owner_id: MZ_SYSTEM_ROLE_ID,
-                    privileges: Some(vec![
-                        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
-                        rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            MZ_SYSTEM_ROLE_ID,
-                        ),
-                    ]),
-                },
-            )?;
-            let default_cluster = ClusterValue {
-                name: "default".into(),
-                linked_object_id: None,
-                owner_id: MZ_SYSTEM_ROLE_ID,
-                privileges: Some(vec![
-                    MzAclItem {
-                        grantee: RoleId::Public,
-                        grantor: MZ_SYSTEM_ROLE_ID,
-                        acl_mode: AclMode::USAGE,
-                    },
-                    rbac::owner_privilege(
-                        mz_sql_parser::ast::ObjectType::Cluster,
-                        MZ_SYSTEM_ROLE_ID,
-                    ),
-                ]),
-            };
-            let default_replica = ClusterReplicaValue {
-                cluster_id: DEFAULT_USER_CLUSTER_ID,
-                name: DEFAULT_CLUSTER_REPLICA_NAME.into(),
-                config: default_cluster_replica_config(bootstrap_args),
-                owner_id: MZ_SYSTEM_ROLE_ID,
-            };
-            txn.clusters.insert(
-                ClusterKey {
-                    id: DEFAULT_USER_CLUSTER_ID,
-                },
-                default_cluster.clone(),
-            )?;
-            txn.cluster_replicas.insert(
-                ClusterReplicaKey {
-                    id: DEFAULT_REPLICA_ID,
-                },
-                default_replica.clone(),
-            )?;
-            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-            txn.audit_log_updates.push((
-                AuditLogKey {
-                    event: VersionedEvent::new(
-                        id,
-                        EventType::Create,
-                        ObjectType::Cluster,
-                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: DEFAULT_USER_CLUSTER_ID.to_string(),
-                            name: default_cluster.name.clone(),
-                        }),
-                        None,
-                        now,
-                    ),
-                },
-                (),
-                1,
-            ));
-            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-            txn.audit_log_updates.push((
-                AuditLogKey {
-                    event: VersionedEvent::new(
-                        id,
-                        EventType::Create,
-                        ObjectType::ClusterReplica,
-                        EventDetails::CreateClusterReplicaV1(
-                            mz_audit_log::CreateClusterReplicaV1 {
-                                cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
-                                cluster_name: default_cluster.name,
-                                replica_name: default_replica.name,
-                                replica_id: Some(DEFAULT_REPLICA_ID.to_string()),
-                                logical_size: bootstrap_args.default_cluster_replica_size.clone(),
-                            },
-                        ),
-                        None,
-                        now,
-                    ),
-                },
-                (),
-                1,
-            ));
-            txn.configs
-                .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
-
-            if let Some(bootstrap_role) = &bootstrap_args.bootstrap_role {
-                let role_id =
-                    RoleId::User(txn.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?);
-                txn.roles.insert(
-                    RoleKey { id: role_id },
-                    RoleValue {
-                        role: SerializedRole {
-                            name: bootstrap_role.clone(),
-                            attributes: Some(
-                                RoleAttributes::new().with_create_db().with_create_cluster(),
-                            ),
-                            membership: Some(RoleMembership::new()),
-                        },
-                    },
-                )?;
-                let audit_log_id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-                txn.audit_log_updates.push((
-                    AuditLogKey {
-                        event: VersionedEvent::new(
-                            audit_log_id,
-                            EventType::Create,
-                            ObjectType::Role,
-                            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                id: role_id.to_string(),
-                                name: bootstrap_role.clone(),
-                            }),
-                            None,
-                            now,
-                        ),
-                    },
-                    (),
-                    1,
-                ));
-                txn.databases.update(|key, value| {
-                    if key.id == MATERIALIZE_DATABASE_ID {
-                        let mut value = value.clone();
-                        value
-                            .privileges
-                            .as_mut()
-                            .expect("privileges not migrated")
-                            .push(MzAclItem {
-                                grantee: role_id,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
-                            });
-                        Some(value)
-                    } else {
-                        None
-                    }
-                })?;
-                txn.schemas.update(|key, value| {
-                    if key.id == PUBLIC_SCHEMA_ID {
-                        let mut value = value.clone();
-                        value
-                            .privileges
-                            .as_mut()
-                            .expect("privileges not migrated")
-                            .push(MzAclItem {
-                                grantee: role_id,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
-                            });
-                        Some(value)
-                    } else {
-                        None
-                    }
-                })?;
-                txn.clusters.update(|key, value| {
-                    if key.id == DEFAULT_USER_CLUSTER_ID {
-                        let mut value = value.clone();
-                        value
-                            .privileges
-                            .as_mut()
-                            .expect("privileges not migrated")
-                            .push(MzAclItem {
-                                grantee: role_id,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
-                            });
-                        Some(value)
-                    } else {
-                        None
-                    }
-                })?;
-            }
-            Ok(())
-        },
-        // These migrations were removed, but we need to keep empty migrations because the
-        // user version depends on the length of this array. New migrations should still go after
-        // these empty migrations.
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        |_, _, _| Ok(()),
-        // Namespacing database ids and schema ids by User or System. Currently
-        // everything exists in the "User" schema.
-        //
-        // Introduced in v0.51.0
-        //
-        // TODO(parkertimmerman): Once we support more complex migrations, we
-        // should make DatabaseKey and SchemaKey more idomatic enums.
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            // Migrate all of our DatabaseKeys.
-            txn.databases.migrate(|key, value| {
-                match key.ns {
-                    // Set all keys without a namespace to the User namespace.
-                    None => {
-                        let new_key = DatabaseKey {
-                            id: key.id,
-                            ns: Some(DatabaseNamespace::User),
-                        };
-
-                        Some((new_key, value.clone()))
-                    }
-                    // If a namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                }
-            })?;
-
-            // Migrate all of our SchemaKeys and SchemaValues
-            txn.schemas.migrate(|key, value| {
-                let new_key = match key.ns {
-                    // Set all keys without a namespace to the User namespace.
-                    None => {
-                        let new_key = SchemaKey {
-                            id: key.id,
-                            ns: Some(SchemaNamespace::User),
-                        };
-                        Some(new_key)
-                    }
-                    // If a namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                };
-                let new_value = match value.database_ns {
-                    // Set all values without a database namespace to the User namespace.
-                    None => {
-                        let new_value = SchemaValue {
-                            database_id: value.database_id,
-                            database_ns: Some(DatabaseNamespace::User),
-                            name: value.name.clone(),
-                            owner_id: value.owner_id,
-                            privileges: value.privileges.clone(),
-                        };
-                        Some(new_value)
-                    }
-                    // If a namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                };
-
-                match (new_key, new_value) {
-                    (Some(n_k), None) => Some((n_k, value.clone())),
-                    (None, Some(n_v)) => Some((key.clone(), n_v)),
-                    (Some(n_k), Some(n_v)) => Some((n_k, n_v)),
-                    (None, None) => None,
-                }
-            })?;
-
-            // Migrate all of our existing items, to set the Schema Namespace
-            txn.items.update(|_key, value| {
-                match value.schema_ns {
-                    // Set all schema namespaces to User.
-                    None => {
-                        let mut new_value = value.clone();
-                        let prev = new_value.schema_ns.replace(SchemaNamespace::User);
-                        assert!(prev.is_none(), "Logic changed, should be None");
-
-                        Some(new_value)
-                    }
-                    // If a schema namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                }
-            })?;
-
-            Ok(())
-        },
-        // Object privileges were added to object definitions.
-        //
-        // Introduced in v0.51.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.54.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            txn.databases.update(|database_key, database_value| {
-                let mut database_value = database_value.clone();
-                if database_value.privileges.is_none() {
-                    if database_key.id == MATERIALIZE_DATABASE_ID {
-                        database_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE,
-                        }]);
-                    } else {
-                        database_value.privileges = Some(Vec::new());
-                    }
-                    database_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Database,
-                            database_value.owner_id.clone(),
-                        ));
-                }
-                Some(database_value)
-            })?;
-
-            txn.schemas.update(|schema_key, schema_value| {
-                let mut schema_value = schema_value.clone();
-                if schema_value.privileges.is_none() {
-                    if [
-                        MZ_CATALOG_SCHEMA_ID,
-                        PG_CATALOG_SCHEMA_ID,
-                        MZ_INTERNAL_SCHEMA_ID,
-                        INFORMATION_SCHEMA_ID,
-                    ]
-                    .into_iter()
-                    .any(|schema_id| schema_id == schema_key.id)
-                    {
-                        schema_value.privileges = Some(vec![rbac::default_catalog_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                        )]);
-                    } else if schema_key.id == PUBLIC_SCHEMA_ID {
-                        schema_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE,
-                        }]);
-                    } else {
-                        schema_value.privileges = Some(Vec::new());
-                    }
-                    schema_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            schema_value.owner_id.clone(),
-                        ));
-                }
-                Some(schema_value)
-            })?;
-
-            txn.items.update(|_item_key, item_value| {
-                let mut item_value = item_value.clone();
-                let create_sql = match &item_value.definition {
-                    SerializedCatalogItem::V1 { create_sql } => create_sql,
-                };
-                let stmt = mz_sql::parse::parse(create_sql)
-                    .expect("invalid create sql persisted")
-                    .into_element();
-                let object_type = match stmt {
-                    Statement::CreateConnection(_) => mz_sql_parser::ast::ObjectType::Connection,
-                    Statement::CreateSource(_) => mz_sql_parser::ast::ObjectType::Source,
-                    Statement::CreateSubsource(_) => mz_sql_parser::ast::ObjectType::Source,
-                    Statement::CreateSink(_) => mz_sql_parser::ast::ObjectType::Sink,
-                    Statement::CreateView(_) => mz_sql_parser::ast::ObjectType::View,
-                    Statement::CreateMaterializedView(_) => {
-                        mz_sql_parser::ast::ObjectType::MaterializedView
-                    }
-                    Statement::CreateTable(_) => mz_sql_parser::ast::ObjectType::Table,
-                    Statement::CreateIndex(_) => mz_sql_parser::ast::ObjectType::Index,
-                    Statement::CreateType(_) => mz_sql_parser::ast::ObjectType::Type,
-                    Statement::CreateSecret(_) => mz_sql_parser::ast::ObjectType::Secret,
-                    _ => panic!("invalid create SQL for item: {create_sql}"),
-                };
-                if item_value.privileges.is_none() {
-                    if [
-                        MZ_CATALOG_SCHEMA_ID,
-                        PG_CATALOG_SCHEMA_ID,
-                        MZ_INTERNAL_SCHEMA_ID,
-                        INFORMATION_SCHEMA_ID,
-                    ]
-                    .into_iter()
-                    .any(|schema_id| schema_id == item_value.schema_id)
-                    {
-                        item_value.privileges =
-                            Some(vec![rbac::default_catalog_privilege(object_type)]);
-                    } else if object_type == mz_sql_parser::ast::ObjectType::Type {
-                        // All types default to PUBLIC usage privileges.
-                        item_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: item_value.owner_id.clone(),
-                            acl_mode: AclMode::USAGE,
-                        }]);
-                    } else {
-                        item_value.privileges = Some(Vec::new());
-                    }
-                    item_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            object_type,
-                            item_value.owner_id.clone(),
-                        ))
-                }
-                Some(item_value)
-            })?;
-
-            txn.clusters.update(|cluster_key, cluster_value| {
-                let mut cluster_value = cluster_value.clone();
-                if cluster_value.privileges.is_none() {
-                    if cluster_key.id == DEFAULT_USER_CLUSTER_ID {
-                        cluster_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
-                        }]);
-                    } else if cluster_value.name == MZ_INTROSPECTION_CLUSTER.name {
-                        cluster_value.privileges = Some(vec![
-                            MzAclItem {
-                                grantee: RoleId::Public,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::USAGE,
-                            },
-                            MzAclItem {
-                                grantee: MZ_INTROSPECTION_ROLE_ID,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::USAGE,
-                            },
-                        ]);
-                    } else {
-                        cluster_value.privileges = Some(Vec::new());
-                    }
-                    cluster_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Cluster,
-                            cluster_value.owner_id.clone(),
-                        ));
-                }
-                Some(cluster_value)
-            })?;
-            Ok(())
-        },
-        // Modify the grantor of all role membership to be mz_system.
-        // See plan_grant_role for more details.
-        //
-        // Introduced in v0.52.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.55.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            // This might create a bunch of invalid audit-log updates, but it isn't possible to
-            // modify old audit events. It's also probably unlikely that anyone has been using
-            // role membership.
-            txn.roles.update(|_role_key, role_value| {
-                let mut role_value = role_value.clone();
-                for grantor in role_value
-                    .role
-                    .membership
-                    .as_mut()
-                    .expect("role membership not migrated")
-                    .map
-                    .values_mut()
-                {
-                    *grantor = MZ_SYSTEM_ROLE_ID;
-                }
-                Some(role_value)
-            })?;
-            Ok(())
-        },
-        // Update system schemas so they have system IDs.
-        //
-        // Introduced in v0.52.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.55.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            let system_schema_names: BTreeSet<_> = [
-                MZ_CATALOG_SCHEMA_ID,
-                PG_CATALOG_SCHEMA_ID,
-                MZ_INTERNAL_SCHEMA_ID,
-                INFORMATION_SCHEMA_ID,
-            ]
-            .into_iter()
-            .collect();
-            txn.schemas.migrate(|schema_key, schema_value| {
-                if system_schema_names.contains(&schema_key.id) {
-                    if let SchemaNamespace::User = &schema_key
-                        .ns
-                        .as_ref()
-                        .expect("schema namespace not migrated")
-                    {
-                        let new_key = SchemaKey {
-                            id: schema_key.id,
-                            ns: Some(SchemaNamespace::System),
-                        };
-                        Some((new_key, schema_value.clone()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })?;
-            Ok(())
-        },
-        // Add new migrations above.
-        //
-        // Migrations should be preceded with a comment of the following form:
-        //
-        //     > Short summary of migration's purpose.
-        //     >
-        //     > Introduced in <VERSION>.
-        //     >
-        //     > Optional additional commentary about safety or approach.
-        //
-        // Please include @mjibson and @jkosh44 on any code reviews that add or
-        // edit migrations.
-        // Migrations must preserve backwards compatibility with all past releases
-        // of Materialize. Migrations can be edited up until they ship in a
-        // release, after which they must never be removed, only patched by future
-        // migrations. Migrations must be transactional or idempotent (in case of
-        // midway failure).
-    ];
-
-    let mut txn = transaction(stash).await?;
-    for (i, migration) in migrations
-        .iter()
-        .enumerate()
-        .skip(usize::cast_from(version))
-    {
-        (migration)(&mut txn, now, bootstrap_args)?;
-        txn.update_user_version(u64::cast_from(i))?;
-    }
-    add_new_builtin_clusters_migration(&mut txn)?;
-    add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-    txn.commit_fix_migration_retractions().await?;
-
-    Ok(())
-}
 
 fn add_new_builtin_clusters_migration(
     txn: &mut Transaction<'_>,
@@ -885,6 +96,10 @@ fn add_new_builtin_clusters_migration(
                 builtin_cluster.name,
                 &vec![],
                 builtin_cluster.privileges.clone(),
+                ClusterConfig {
+                    // TODO: Should builtin clusters be managed or unmanaged?
+                    variant: ClusterVariant::Unmanaged,
+                },
             )?;
         }
     }
@@ -936,24 +151,13 @@ fn add_new_builtin_cluster_replicas_migration(
     Ok(())
 }
 
-fn default_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedReplicaConfig {
-    SerializedReplicaConfig {
-        location: SerializedReplicaLocation::Managed {
-            size: bootstrap_args.default_cluster_replica_size.clone(),
-            availability_zone: bootstrap_args.default_availability_zone.clone(),
-            az_user_specified: false,
-        },
-        logging: default_logging_config(),
-        idle_arrangement_merge_effort: None,
-    }
-}
-
 fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedReplicaConfig {
     SerializedReplicaConfig {
         location: SerializedReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: bootstrap_args.default_availability_zone.clone(),
             az_user_specified: false,
+            disk: false,
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
@@ -967,6 +171,7 @@ fn default_logging_config() -> SerializedReplicaLogging {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
@@ -986,43 +191,63 @@ impl Connection {
         mut stash: Stash,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
-        // The `user_version` field stores the index of the last migration that
-        // was run. If the upper is min, the config collection is empty.
-        let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG).await? {
-            0
+        // Initialize the Stash if it hasn't been already
+        let mut conn = if !stash.is_initialized().await? {
+            // Get the current timestamp so we can record when we booted.
+            let previous_now = mz_repr::Timestamp::MIN;
+            let boot_ts = timeline::monotonic_now(now, previous_now);
+
+            // Initialize the Stash
+            let args = bootstrap_args.clone();
+            stash
+                .with_transaction(move |mut tx| {
+                    Box::pin(async move {
+                        stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
+                    })
+                })
+                .await?;
+
+            Connection { stash, boot_ts }
         } else {
-            // An advanced collection must have had its user version set, so the unwrap
-            // must succeed.
-            COLLECTION_CONFIG
-                .peek_key_one(&mut stash, USER_VERSION.to_string())
+            // Before we do anything with the Stash, we need to run any pending upgrades and
+            // initialize new collections.
+            if !stash.is_readonly() {
+                stash.upgrade().await?;
+            }
+
+            // Choose a time at which to boot. This is the time at which we will run
+            // internal migrations, and is also exposed upwards in case higher
+            // layers want to run their own migrations at the same timestamp.
+            //
+            // This time is usually the current system time, but with protection
+            // against backwards time jumps, even across restarts.
+            let previous = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
                 .await?
-                .expect("user_version must exist")
-                .value
-                + 1
+                .unwrap_or(mz_repr::Timestamp::MIN);
+            let boot_ts = timeline::monotonic_now(now, previous);
+
+            let mut conn = Connection { stash, boot_ts };
+
+            if !conn.stash.is_readonly() {
+                // IMPORTANT: we durably record the new timestamp before using it.
+                conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .await?;
+                if let Some(deploy_generation) = deploy_generation {
+                    conn.persist_deploy_generation(deploy_generation).await?;
+                }
+            }
+
+            conn
         };
 
-        // Initialize connection.
-        initialize_stash(&mut stash).await?;
-
-        // Choose a time at which to boot. This is the time at which we will run
-        // internal migrations, and is also exposed upwards in case higher
-        // layers want to run their own migrations at the same timestamp.
-        //
-        // This time is usually the current system time, but with protection
-        // against backwards time jumps, even across restarts.
-        let previous_now_ts = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
-            .await?
-            .unwrap_or(mz_repr::Timestamp::MIN);
-        let boot_ts = timeline::monotonic_now(now, previous_now_ts);
-
-        let mut conn = Connection { stash, boot_ts };
-
+        // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            // IMPORTANT: we durably record the new timestamp before using it.
-            conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                .await?;
-            migrate(&mut conn.stash, skip, boot_ts.into(), bootstrap_args).await?;
+            let mut txn = transaction(&mut conn.stash).await?;
+            add_new_builtin_clusters_migration(&mut txn)?;
+            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
+            txn.commit().await?;
         }
 
         Ok(conn)
@@ -1056,10 +281,10 @@ impl Connection {
     }
 
     async fn get_setting_stash(stash: &mut Stash, key: &str) -> Result<Option<String>, Error> {
-        let v = COLLECTION_SETTING
+        let v = SETTING_COLLECTION
             .peek_key_one(
                 stash,
-                SettingKey {
+                proto::SettingKey {
                     name: key.to_string(),
                 },
             )
@@ -1072,13 +297,13 @@ impl Connection {
         key: &str,
         value: V,
     ) -> Result<(), Error> {
-        let key = SettingKey {
+        let key = proto::SettingKey {
             name: key.to_string(),
         };
-        let value = SettingValue {
+        let value = proto::SettingValue {
             value: value.into(),
         };
-        COLLECTION_SETTING
+        SETTING_COLLECTION
             .upsert(stash, once((key, value)))
             .await
             .map_err(|e| e.into())
@@ -1095,89 +320,105 @@ impl Connection {
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_databases(&mut self) -> Result<Vec<Database>, Error> {
-        Ok(COLLECTION_DATABASE
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = DATABASES_COLLECTION.peek_one(&mut self.stash).await?;
+        let databases = entries
             .into_iter()
-            .map(|(k, v)| Database {
-                id: DatabaseId::from(k),
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (DatabaseKey, DatabaseValue)| Database {
+                id: k.id,
                 name: v.name,
                 owner_id: v.owner_id,
-                privileges: v.privileges.expect("privileges not migrated"),
+                privileges: v.privileges,
             })
-            .collect())
+            .collect::<Result<_, _>>()?;
+
+        Ok(databases)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_schemas(&mut self) -> Result<Vec<Schema>, Error> {
-        Ok(COLLECTION_SCHEMA
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = SCHEMAS_COLLECTION.peek_one(&mut self.stash).await?;
+        let schemas = entries
             .into_iter()
-            .map(|(k, v)| Schema {
-                id: SchemaId::from(k),
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (SchemaKey, SchemaValue)| Schema {
+                id: k.id,
                 name: v.name,
-                database_id: v.database_id.map(DatabaseId::User),
+                database_id: v.database_id,
                 owner_id: v.owner_id,
-                privileges: v.privileges.expect("privileges not migrated"),
+                privileges: v.privileges,
             })
-            .collect())
+            .collect::<Result<_, _>>()?;
+
+        Ok(schemas)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_roles(&mut self) -> Result<Vec<Role>, Error> {
-        Ok(COLLECTION_ROLE
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = ROLES_COLLECTION.peek_one(&mut self.stash).await?;
+        let roles = entries
             .into_iter()
-            .map(|(k, v)| Role {
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (RoleKey, RoleValue)| Role {
                 id: k.id,
                 name: v.role.name,
-                attributes: v.role.attributes.expect("attributes not migrated"),
-                membership: v.role.membership.expect("membership not migrated"),
+                attributes: v.role.attributes,
+                membership: v.role.membership,
             })
-            .collect())
+            .collect::<Result<_, _>>()?;
+
+        Ok(roles)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
-        Ok(COLLECTION_CLUSTERS
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = CLUSTER_COLLECTION.peek_one(&mut self.stash).await?;
+        let clusters = entries
             .into_iter()
-            .map(|(k, v)| Cluster {
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (ClusterKey, ClusterValue)| Cluster {
                 id: k.id,
                 name: v.name,
                 linked_object_id: v.linked_object_id,
                 owner_id: v.owner_id,
-                privileges: v.privileges.expect("privileges not migrated"),
+                privileges: v.privileges,
+                config: v.config,
             })
-            .collect())
+            .collect::<Result<_, _>>()?;
+
+        Ok(clusters)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
-        Ok(COLLECTION_CLUSTER_REPLICAS
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = CLUSTER_REPLICA_COLLECTION.peek_one(&mut self.stash).await?;
+        let replicas = entries
             .into_iter()
-            .map(|(k, v)| ClusterReplica {
-                cluster_id: v.cluster_id,
-                replica_id: k.id,
-                name: v.name,
-                serialized_config: v.config,
-                owner_id: v.owner_id,
-            })
-            .collect())
+            .map(RustType::from_proto)
+            .map_ok(
+                |(k, v): (ClusterReplicaKey, ClusterReplicaValue)| ClusterReplica {
+                    cluster_id: v.cluster_id,
+                    replica_id: k.id,
+                    name: v.name,
+                    serialized_config: v.config,
+                    owner_id: v.owner_id,
+                },
+            )
+            .collect::<Result<_, _>>()?;
+
+        Ok(replicas)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
-        Ok(COLLECTION_AUDIT_LOG
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
+        let logs: Vec<_> = entries
             .into_keys()
-            .map(|ev| ev.event))
+            .map(AuditLogKey::from_proto)
+            .map_ok(|e| e.event)
+            .collect::<Result<_, _>>()?;
+
+        Ok(logs.into_iter())
     }
 
     /// Loads storage usage events and permanently deletes from the stash those
@@ -1197,13 +438,14 @@ impl Connection {
             .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
-                    let collection = COLLECTION_STORAGE_USAGE.from_tx(&tx).await?;
+                    let collection = STORAGE_USAGE_COLLECTION.from_tx(&tx).await?;
                     let rows = tx.peek_one(collection).await?;
                     let mut events = Vec::with_capacity(rows.len());
                     let mut batch = collection.make_batch_tx(&tx).await?;
                     for ev in rows.into_keys() {
-                        if u128::from(ev.metric.timestamp()) >= cutoff_ts {
-                            events.push(ev.metric);
+                        let event: StorageUsageKey = ev.clone().into_rust()?;
+                        if u128::from(event.metric.timestamp()) >= cutoff_ts {
+                            events.push(event.metric);
                         } else if retention_period.is_some() {
                             collection.append_to_batch(&mut batch, &ev, &(), -1);
                         }
@@ -1225,17 +467,21 @@ impl Connection {
     pub async fn load_system_gids(
         &mut self,
     ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error> {
-        Ok(COLLECTION_SYSTEM_GID_MAPPING
+        let entries = SYSTEM_GID_MAPPING_COLLECTION
             .peek_one(&mut self.stash)
-            .await?
+            .await?;
+        let system_gid_mappings = entries
             .into_iter()
-            .map(|(k, v)| {
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (GidMappingKey, GidMappingValue)| {
                 (
                     (k.schema_name, k.object_type, k.object_name),
                     (GlobalId::System(v.id), v.fingerprint),
                 )
             })
-            .collect())
+            .collect::<Result<_, _>>()?;
+
+        Ok(system_gid_mappings)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -1243,24 +489,75 @@ impl Connection {
         &mut self,
         cluster_id: ClusterId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
-        Ok(COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX
+        let entries = CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?;
+        let sources = entries
+            .into_iter()
+            .map(RustType::from_proto)
+            .filter_map_ok(
+                |(k, v): (
+                    ClusterIntrospectionSourceIndexKey,
+                    ClusterIntrospectionSourceIndexValue,
+                )| {
+                    if k.cluster_id == cluster_id {
+                        Some((k.name, GlobalId::System(v.index_id)))
+                    } else {
+                        None
+                    }
+                },
+            )
+            .collect::<Result<_, _>>()?;
+
+        Ok(sources)
+    }
+
+    /// Load the persisted default privileges.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_default_privileges(
+        &mut self,
+    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+        Ok(DEFAULT_PRIVILEGES_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .filter_map(|(k, v)| {
-                if k.cluster_id == cluster_id {
-                    Some((k.name, GlobalId::System(v.index_id)))
-                } else {
-                    None
-                }
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| {
+                (
+                    DefaultPrivilegeObject::new(
+                        k.role_id,
+                        k.database_id,
+                        k.schema_id,
+                        k.object_type,
+                    ),
+                    DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
+                )
             })
-            .collect())
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// Load the persisted system privileges.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+        Ok(SYSTEM_PRIVILEGES_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(
+                |(k, v): (SystemPrivilegesKey, SystemPrivilegesValue)| MzAclItem {
+                    grantee: k.grantee,
+                    grantor: k.grantor,
+                    acl_mode: v.acl_mode,
+                },
+            )
+            .collect::<Result<_, _>>()?)
     }
 
     /// Load the persisted server configurations.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
-        COLLECTION_SYSTEM_CONFIGURATION
+        SYSTEM_CONFIGURATION_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
@@ -1279,30 +576,28 @@ impl Connection {
             return Ok(());
         }
 
-        let mappings = mappings.into_iter().map(
-            |SystemObjectMapping {
-                 schema_name,
-                 object_type,
-                 object_name,
-                 id,
-                 fingerprint,
-             }| {
-                let id = if let GlobalId::System(id) = id {
+        let mappings = mappings
+            .into_iter()
+            .map(|mapping| {
+                let id = if let GlobalId::System(id) = mapping.id {
                     id
                 } else {
                     panic!("non-system id provided")
                 };
                 (
                     GidMappingKey {
-                        schema_name,
-                        object_type,
-                        object_name,
+                        schema_name: mapping.schema_name,
+                        object_type: mapping.object_type,
+                        object_name: mapping.object_name,
                     },
-                    GidMappingValue { id, fingerprint },
+                    GidMappingValue {
+                        id,
+                        fingerprint: mapping.fingerprint,
+                    },
                 )
-            },
-        );
-        COLLECTION_SYSTEM_GID_MAPPING
+            })
+            .map(|e| RustType::into_proto(&e));
+        SYSTEM_GID_MAPPING_COLLECTION
             .upsert(&mut self.stash, mappings)
             .await
             .map_err(|e| e.into())
@@ -1317,21 +612,24 @@ impl Connection {
             return Ok(());
         }
 
-        let mappings = mappings.into_iter().map(|(cluster_id, name, index_id)| {
-            let index_id = if let GlobalId::System(id) = index_id {
-                id
-            } else {
-                panic!("non-system id provided")
-            };
-            (
-                ClusterIntrospectionSourceIndexKey {
-                    cluster_id,
-                    name: name.to_string(),
-                },
-                ClusterIntrospectionSourceIndexValue { index_id },
-            )
-        });
-        COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX
+        let mappings = mappings
+            .into_iter()
+            .map(|(cluster_id, name, index_id)| {
+                let index_id = if let GlobalId::System(id) = index_id {
+                    id
+                } else {
+                    panic!("non-system id provided")
+                };
+                (
+                    ClusterIntrospectionSourceIndexKey {
+                        cluster_id,
+                        name: name.to_string(),
+                    },
+                    ClusterIntrospectionSourceIndexValue { index_id },
+                )
+            })
+            .map(|e| RustType::into_proto(&e));
+        CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
             .upsert(&mut self.stash, mappings)
             .await
             .map_err(|e| e.into())
@@ -1347,14 +645,15 @@ impl Connection {
         config: &ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
-        let key = ClusterReplicaKey { id: replica_id };
+        let key = ClusterReplicaKey { id: replica_id }.into_proto();
         let val = ClusterReplicaValue {
             cluster_id,
             name,
             config: config.clone().into(),
             owner_id,
-        };
-        COLLECTION_CLUSTER_REPLICAS
+        }
+        .into_proto();
+        CLUSTER_REPLICA_COLLECTION
             .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
             .await??;
         Ok(())
@@ -1400,12 +699,13 @@ impl Connection {
     }
 
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
-        COLLECTION_ID_ALLOC
+        ID_ALLOCATOR_COLLECTION
             .peek_key_one(
                 &mut self.stash,
                 IdAllocKey {
                     name: id_type.to_string(),
-                },
+                }
+                .into_proto(),
             )
             .await
             .map(|x| x.expect("must exist").next_id)
@@ -1419,12 +719,13 @@ impl Connection {
         }
         let key = IdAllocKey {
             name: id_type.to_string(),
-        };
-        let (prev, next) = COLLECTION_ID_ALLOC
+        }
+        .into_proto();
+        let (prev, next) = ID_ALLOCATOR_COLLECTION
             .upsert_key(&mut self.stash, key, move |prev| {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
-                    Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }),
+                    Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }.into_proto()),
                     None => Err(Error::new(ErrorKind::IdExhaustion)),
                 }
             })
@@ -1437,12 +738,16 @@ impl Connection {
     pub async fn get_all_persisted_timestamps(
         &mut self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        Ok(COLLECTION_TIMESTAMP
-            .peek_one(&mut self.stash)
-            .await?
+        let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
+        let timestamps = entries
             .into_iter()
-            .map(|(k, v)| (k.id.parse().expect("invalid timeline persisted"), v.ts))
-            .collect())
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (TimestampKey, TimestampValue)| {
+                (k.id.parse().expect("invalid timeline persisted"), v.ts)
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(timestamps)
     }
 
     /// Persist new global timestamp for a timeline to disk.
@@ -1452,17 +757,34 @@ impl Connection {
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
     ) -> Result<(), Error> {
-        let key = TimestampKey {
+        let key = proto::TimestampKey {
             id: timeline.to_string(),
         };
-        let (prev, next) = COLLECTION_TIMESTAMP
+        let (prev, next) = TIMESTAMP_COLLECTION
             .upsert_key(&mut self.stash, key, move |_| {
-                Ok::<_, Error>(TimestampValue { ts: timestamp })
+                Ok::<_, Error>(TimestampValue { ts: timestamp }.into_proto())
             })
             .await??;
         if let Some(prev) = prev {
             assert!(next >= prev, "global timestamp must always go up");
         }
+        Ok(())
+    }
+
+    pub async fn persist_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
+        CONFIG_COLLECTION
+            .upsert_key(
+                &mut self.stash,
+                proto::ConfigKey {
+                    key: DEPLOY_GENERATION.into(),
+                },
+                move |_| {
+                    Ok::<_, Error>(proto::ConfigValue {
+                        value: deploy_generation,
+                    })
+                },
+            )
+            .await??;
         Ok(())
     }
 
@@ -1488,13 +810,16 @@ async fn try_get_persisted_timestamp(
 ) -> Result<Option<mz_repr::Timestamp>, Error>
 where
 {
-    let key = TimestampKey {
+    let key = proto::TimestampKey {
         id: timeline.to_string(),
     };
-    Ok(COLLECTION_TIMESTAMP
+    let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
         .peek_key_one(stash, key)
         .await?
-        .map(|v| v.ts))
+        .map(RustType::from_proto)
+        .transpose()?;
+
+    Ok(val.map(|v| v.ts))
 }
 
 #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
@@ -1513,30 +838,34 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         timestamps,
         system_gid_mapping,
         system_configurations,
+        default_privileges,
+        system_privileges,
     ) = stash
         .with_transaction(|tx| {
             Box::pin(async move {
                 // Peek the catalog collections in any order and a single transaction.
                 futures::try_join!(
-                    tx.peek_one(tx.collection(COLLECTION_DATABASE.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_SCHEMA.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_ROLE.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_ITEM.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_CLUSTERS.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_CLUSTER_REPLICAS.name()).await?),
+                    tx.peek_one(tx.collection(DATABASES_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
                     tx.peek_one(
-                        tx.collection(COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX.name())
+                        tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
                             .await?,
                     ),
-                    tx.peek_one(tx.collection(COLLECTION_ID_ALLOC.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_CONFIG.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_SETTING.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_TIMESTAMP.name()).await?),
-                    tx.peek_one(tx.collection(COLLECTION_SYSTEM_GID_MAPPING.name()).await?),
+                    tx.peek_one(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(CONFIG_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(SETTING_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
                     tx.peek_one(
-                        tx.collection(COLLECTION_SYSTEM_CONFIGURATION.name())
-                            .await?,
-                    )
+                        tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
+                            .await?
+                    ),
+                    tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
                 )
             })
         })
@@ -1544,23 +873,27 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
 
     Ok(Transaction {
         stash,
-        databases: TableTransaction::new(databases, |a, b| a.name == b.name),
-        schemas: TableTransaction::new(schemas, |a, b| {
+        databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
+        schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
             a.database_id == b.database_id && a.name == b.name
-        }),
-        items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
-        roles: TableTransaction::new(roles, |a, b| a.role.name == b.role.name),
-        clusters: TableTransaction::new(clusters, |a, b| a.name == b.name),
-        cluster_replicas: TableTransaction::new(cluster_replicas, |a, b| {
+        })?,
+        items: TableTransaction::new(items, |a: &ItemValue, b| {
+            a.schema_id == b.schema_id && a.name == b.name
+        })?,
+        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.role.name == b.role.name)?,
+        clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
+        cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
-        }),
-        introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
-        id_allocator: TableTransaction::new(id_allocator, |_a, _b| false),
-        configs: TableTransaction::new(configs, |_a, _b| false),
-        settings: TableTransaction::new(settings, |_a, _b| false),
-        timestamps: TableTransaction::new(timestamps, |_a, _b| false),
-        system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false),
-        system_configurations: TableTransaction::new(system_configurations, |_a, _b| false),
+        })?,
+        introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
+        id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
+        configs: TableTransaction::new(configs, |_a, _b| false)?,
+        settings: TableTransaction::new(settings, |_a, _b| false)?,
+        timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
+        system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
+        system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
+        default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
+        system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
         audit_log_updates: Vec::new(),
         storage_usage_updates: Vec::new(),
     })
@@ -1577,15 +910,17 @@ pub struct Transaction<'a> {
     introspection_sources:
         TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
-    configs: TableTransaction<String, ConfigValue>,
+    configs: TableTransaction<ConfigKey, ConfigValue>,
     settings: TableTransaction<SettingKey, SettingValue>,
     timestamps: TableTransaction<TimestampKey, TimestampValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
+    default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
+    system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
-    audit_log_updates: Vec<(AuditLogKey, (), i64)>,
-    storage_usage_updates: Vec<(StorageUsageKey, (), i64)>,
+    audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
+    storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
 }
 
 impl<'a> Transaction<'a> {
@@ -1594,10 +929,7 @@ impl<'a> Transaction<'a> {
         let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema_key = SchemaKey {
-                id: v.schema_id,
-                ns: v.schema_ns,
-            };
+            let schema_key = SchemaKey { id: v.schema_id };
             let schema = match schemas.get(&schema_key) {
                 Some(schema) => schema,
                 None => panic!(
@@ -1608,33 +940,29 @@ impl<'a> Transaction<'a> {
             };
             let database_spec = match schema.database_id {
                 Some(id) => {
-                    let key = DatabaseKey {
-                        id,
-                        ns: schema.database_ns,
-                    };
+                    let key = DatabaseKey { id };
                     if databases.get(&key).is_none() {
                         panic!(
                             "corrupt stash! unknown database id {key:?}, for item with key \
                         {k:?} and value {v:?}"
                         );
                     }
-                    ResolvedDatabaseSpecifier::from(DatabaseId::from(key))
+                    ResolvedDatabaseSpecifier::from(id)
                 }
                 None => ResolvedDatabaseSpecifier::Ambient,
             };
-            let schema_id = SchemaId::from(schema_key);
             items.push(Item {
                 id: k.gid,
                 name: QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec,
-                        schema_spec: SchemaSpecifier::from(schema_id),
+                        schema_spec: SchemaSpecifier::from(v.schema_id),
                     },
                     item: v.name.clone(),
                 },
                 definition: v.definition.clone(),
                 owner_id: v.owner_id,
-                privileges: v.privileges.clone().expect("privileges not migrated"),
+                privileges: v.privileges.clone(),
             });
         });
         items.sort_by_key(|Item { id, .. }| *id);
@@ -1642,12 +970,13 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
-        self.audit_log_updates.push((AuditLogKey { event }, (), 1));
+        self.audit_log_updates
+            .push((AuditLogKey { event }.into_proto(), (), 1));
     }
 
     pub fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
         self.storage_usage_updates
-            .push((StorageUsageKey { metric }, (), 1));
+            .push((StorageUsageKey { metric }.into_proto(), (), 1));
     }
 
     pub fn insert_user_database(
@@ -1659,14 +988,13 @@ impl<'a> Transaction<'a> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
         match self.databases.insert(
             DatabaseKey {
-                id,
                 // TODO(parkertimmerman): Support creating databases in the System namespace.
-                ns: Some(DatabaseNamespace::User),
+                id: DatabaseId::User(id),
             },
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             // TODO(parkertimmerman): Support creating databases in the System namespace.
@@ -1685,19 +1013,16 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<SchemaId, Error> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
-        let db = DatabaseKey::from(database_id);
         match self.schemas.insert(
             SchemaKey {
-                id,
                 // TODO(parkertimmerman): Support creating schemas in the System namespace.
-                ns: Some(SchemaNamespace::User),
+                id: SchemaId::User(id),
             },
             SchemaValue {
-                database_id: Some(db.id),
-                database_ns: db.ns,
+                database_id: Some(database_id),
                 name: schema_name.to_string(),
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             // TODO(parkertimmerman): Support creating schemas in the System namespace.
@@ -1727,6 +1052,7 @@ impl<'a> Transaction<'a> {
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        config: ClusterConfig,
     ) -> Result<(), Error> {
         self.insert_cluster(
             cluster_id,
@@ -1735,6 +1061,7 @@ impl<'a> Transaction<'a> {
             introspection_source_indexes,
             owner_id,
             privileges,
+            config,
         )
     }
 
@@ -1745,6 +1072,7 @@ impl<'a> Transaction<'a> {
         cluster_name: &str,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
+        config: ClusterConfig,
     ) -> Result<(), Error> {
         self.insert_cluster(
             cluster_id,
@@ -1753,6 +1081,7 @@ impl<'a> Transaction<'a> {
             introspection_source_indexes,
             MZ_SYSTEM_ROLE_ID,
             privileges,
+            config,
         )
     }
 
@@ -1764,6 +1093,7 @@ impl<'a> Transaction<'a> {
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        config: ClusterConfig,
     ) -> Result<(), Error> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
@@ -1771,7 +1101,8 @@ impl<'a> Transaction<'a> {
                 name: cluster_name.to_string(),
                 linked_object_id,
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
+                config,
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -1797,6 +1128,56 @@ impl<'a> Transaction<'a> {
         }
 
         Ok(())
+    }
+
+    pub fn rename_cluster(
+        &mut self,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        cluster_to_name: &str,
+    ) -> Result<(), Error> {
+        let key = ClusterKey { id: cluster_id };
+
+        match self.clusters.update(|k, v| {
+            if *k == key {
+                let mut value = v.clone();
+                value.name = cluster_to_name.to_string();
+                Some(value)
+            } else {
+                None
+            }
+        })? {
+            0 => Err(SqlCatalogError::UnknownCluster(cluster_name.to_string()).into()),
+            1 => Ok(()),
+            n => panic!(
+                "Expected to update single cluster {cluster_name} ({cluster_id}), updated {n}"
+            ),
+        }
+    }
+
+    pub fn rename_cluster_replica(
+        &mut self,
+        replica_id: ReplicaId,
+        replica_name: &QualifiedReplica,
+        replica_to_name: &str,
+    ) -> Result<(), Error> {
+        let key = ClusterReplicaKey { id: replica_id };
+
+        match self.cluster_replicas.update(|k, v| {
+            if *k == key {
+                let mut value = v.clone();
+                value.name = replica_to_name.to_string();
+                Some(value)
+            } else {
+                None
+            }
+        })? {
+            0 => Err(SqlCatalogError::UnknownClusterReplica(replica_name.to_string()).into()),
+            1 => Ok(()),
+            n => panic!(
+                "Expected to update single cluster replica {replica_name} ({replica_id}), updated {n}"
+            ),
+        }
     }
 
     pub fn insert_cluster_replica(
@@ -1866,16 +1247,14 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<(), Error> {
-        let schema_key = SchemaKey::from(schema_id);
         match self.items.insert(
             ItemKey { gid: id },
             ItemValue {
-                schema_id: schema_key.id,
-                schema_ns: schema_key.ns,
+                schema_id,
                 name: item_name.to_string(),
                 definition: item,
                 owner_id,
-                privileges: Some(privileges),
+                privileges,
             },
         ) {
             Ok(_) => Ok(()),
@@ -1904,7 +1283,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
-        let prev = self.databases.set(DatabaseKey::from(*id), None)?;
+        let prev = self.databases.set(DatabaseKey { id: *id }, None)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1917,7 +1296,7 @@ impl<'a> Transaction<'a> {
         database_id: &Option<DatabaseId>,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
-        let prev = self.schemas.set(SchemaKey::from(*schema_id), None)?;
+        let prev = self.schemas.set(SchemaKey { id: *schema_id }, None)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -2020,7 +1399,6 @@ impl<'a> Transaction<'a> {
             if k.gid == id {
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    schema_ns: v.schema_ns,
                     name: item_name.to_string(),
                     definition: item.clone(),
                     owner_id: v.owner_id,
@@ -2053,7 +1431,6 @@ impl<'a> Transaction<'a> {
             if let Some((item_name, item)) = items.get(&k.gid) {
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    schema_ns: v.schema_ns,
                     name: item_name.clone(),
                     definition: item.clone(),
                     owner_id: v.owner_id,
@@ -2099,7 +1476,9 @@ impl<'a> Transaction<'a> {
 
     pub fn update_user_version(&mut self, version: u64) -> Result<(), Error> {
         let prev = self.configs.set(
-            USER_VERSION.to_string(),
+            ConfigKey {
+                key: USER_VERSION.to_string(),
+            },
             Some(ConfigValue { value: version }),
         )?;
         assert!(prev.is_some());
@@ -2157,7 +1536,8 @@ impl<'a> Transaction<'a> {
                     name: cluster.name().to_string(),
                     linked_object_id: cluster.linked_object_id(),
                     owner_id: cluster.owner_id,
-                    privileges: Some(MzAclItem::flatten(cluster.privileges())),
+                    privileges: cluster.privileges().all_values_owned().collect(),
+                    config: cluster.config.clone(),
                 })
             } else {
                 None
@@ -2215,11 +1595,11 @@ impl<'a> Transaction<'a> {
         database: &catalog::Database,
     ) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
-            if id == DatabaseId::from(*k) {
+            if id == k.id {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
                     owner_id: database.owner_id,
-                    privileges: Some(MzAclItem::flatten(database.privileges())),
+                    privileges: database.privileges().all_values_owned().collect(),
                 })
             } else {
                 None
@@ -2246,18 +1626,12 @@ impl<'a> Transaction<'a> {
         schema: &catalog::Schema,
     ) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
-            let (db_id, db_ns) = match database_id {
-                None => (None, None),
-                Some(DatabaseId::System(id)) => (Some(id), Some(DatabaseNamespace::System)),
-                Some(DatabaseId::User(id)) => (Some(id), Some(DatabaseNamespace::User)),
-            };
-            if schema_id == SchemaId::from(*k) {
+            if schema_id == k.id {
                 Some(SchemaValue {
-                    database_id: db_id,
-                    database_ns: db_ns,
+                    database_id,
                     name: schema.name().schema.clone(),
                     owner_id: schema.owner_id,
-                    privileges: Some(MzAclItem::flatten(schema.privileges())),
+                    privileges: schema.privileges().all_values_owned().collect(),
                 })
             } else {
                 None
@@ -2269,6 +1643,43 @@ impl<'a> Transaction<'a> {
         } else {
             Err(SqlCatalogError::UnknownSchema(schema_id.to_string()).into())
         }
+    }
+
+    /// Set persisted default privilege.
+    pub fn set_default_privilege(
+        &mut self,
+        role_id: RoleId,
+        database_id: Option<DatabaseId>,
+        schema_id: Option<SchemaId>,
+        object_type: ObjectType,
+        grantee: RoleId,
+        privileges: Option<AclMode>,
+    ) -> Result<(), Error> {
+        self.default_privileges.set(
+            DefaultPrivilegesKey {
+                role_id,
+                database_id,
+                schema_id,
+                object_type,
+                grantee,
+            },
+            privileges.map(|privileges| DefaultPrivilegesValue { privileges }),
+        )?;
+        Ok(())
+    }
+
+    /// Set persisted system privilege.
+    pub fn set_system_privilege(
+        &mut self,
+        grantee: RoleId,
+        grantor: RoleId,
+        acl_mode: Option<AclMode>,
+    ) -> Result<(), Error> {
+        self.system_privileges.set(
+            SystemPrivilegesKey { grantee, grantor },
+            acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
+        )?;
+        Ok(())
     }
 
     /// Upserts persisted system configuration `name` to `value`.
@@ -2311,24 +1722,17 @@ impl<'a> Transaction<'a> {
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
-        self.commit_inner(false).await
-    }
-
-    /// Like `commit`, but fixes retractions during migration.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit_fix_migration_retractions(self) -> Result<(), Error> {
-        self.commit_inner(true).await
+        self.commit_inner().await
     }
 
     /// If `fix_migration_retractions` is true, additionally fix collections that have retracted
     /// non-existent JSON rows, but whose Rust consolidations are the same (i.e., an Option field
     /// was added, so we no longer know how to retract the None variant).
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit_inner(self, fix_migration_retractions: bool) -> Result<(), Error> {
+    pub async fn commit_inner(self) -> Result<(), Error> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
-            migration_retractions: &mut Vec<BoxFuture<'tx, Result<Option<Id>, StashError>>>,
             typed: &'tx TypedCollection<K, V>,
             changes: &[(K, V, mz_stash::Diff)],
         ) -> Result<(), StashError>
@@ -2342,20 +1746,10 @@ impl<'a> Transaction<'a> {
             let collection = typed.from_tx(tx).await?;
             let upper = tx.upper(collection.id).await?;
             let mut batch = collection.make_batch_lower(upper)?;
-            let mut has_negative_diff = false;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, k, v, *diff);
-                if *diff < 0 {
-                    has_negative_diff = true;
-                }
             }
             batches.push(batch);
-            if has_negative_diff {
-                migration_retractions.push(Box::pin(async move {
-                    let fixed = tx.collection_fix_unconsolidated_rows(collection).await?;
-                    Ok(fixed.then_some(collection.id))
-                }));
-            }
             Ok(())
         }
 
@@ -2378,157 +1772,81 @@ impl<'a> Transaction<'a> {
         let timestamps = Arc::new(self.timestamps.pending());
         let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
         let system_configurations = Arc::new(self.system_configurations.pending());
+        let default_privileges = Arc::new(self.default_privileges.pending());
+        let system_privileges = Arc::new(self.system_privileges.pending());
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
-        let consolidate_ids = self
-            .stash
+        self.stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let mut batches = Vec::new();
-                    let mut migration_retractions = Vec::new();
-                    let mut consolidate_ids = Vec::new();
 
+                    add_batch(&tx, &mut batches, &DATABASES_COLLECTION, &databases).await?;
+                    add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &schemas).await?;
+                    add_batch(&tx, &mut batches, &ITEM_COLLECTION, &items).await?;
+                    add_batch(&tx, &mut batches, &ROLES_COLLECTION, &roles).await?;
+                    add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &clusters).await?;
                     add_batch(
                         &tx,
                         &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_DATABASE,
-                        &databases,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_SCHEMA,
-                        &schemas,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_ITEM,
-                        &items,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_ROLE,
-                        &roles,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_CLUSTERS,
-                        &clusters,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_CLUSTER_REPLICAS,
+                        &CLUSTER_REPLICA_COLLECTION,
                         &cluster_replicas,
                     )
                     .await?;
                     add_batch(
                         &tx,
                         &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX,
+                        &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
                         &introspection_sources,
                     )
                     .await?;
+                    add_batch(&tx, &mut batches, &ID_ALLOCATOR_COLLECTION, &id_allocator).await?;
+                    add_batch(&tx, &mut batches, &CONFIG_COLLECTION, &configs).await?;
+                    add_batch(&tx, &mut batches, &SETTING_COLLECTION, &settings).await?;
+                    add_batch(&tx, &mut batches, &TIMESTAMP_COLLECTION, &timestamps).await?;
                     add_batch(
                         &tx,
                         &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_ID_ALLOC,
-                        &id_allocator,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_CONFIG,
-                        &configs,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_SETTING,
-                        &settings,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_TIMESTAMP,
-                        &timestamps,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_SYSTEM_GID_MAPPING,
+                        &SYSTEM_GID_MAPPING_COLLECTION,
                         &system_gid_mapping,
                     )
                     .await?;
                     add_batch(
                         &tx,
                         &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_SYSTEM_CONFIGURATION,
+                        &SYSTEM_CONFIGURATION_COLLECTION,
                         &system_configurations,
                     )
                     .await?;
                     add_batch(
                         &tx,
                         &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_AUDIT_LOG,
-                        &audit_log_updates,
+                        &DEFAULT_PRIVILEGES_COLLECTION,
+                        &default_privileges,
                     )
                     .await?;
                     add_batch(
                         &tx,
                         &mut batches,
-                        &mut migration_retractions,
-                        &COLLECTION_STORAGE_USAGE,
+                        &SYSTEM_PRIVILEGES_COLLECTION,
+                        &system_privileges,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &STORAGE_USAGE_COLLECTION,
                         &storage_usage_updates,
                     )
                     .await?;
                     tx.append(batches).await?;
 
-                    if fix_migration_retractions {
-                        // Run the unconsolidated rows cleanup fns.
-                        for fut in migration_retractions {
-                            // Wait for consolidations of fixed collections so that we're guaranteed
-                            // any future envd boot will not observe old raw rows so that we can
-                            // always use new structs.
-                            consolidate_ids.extend(fut.await?);
-                        }
-                    }
-
-                    Ok(consolidate_ids)
+                    Ok(())
                 })
             })
             .await?;
-
-        for id in consolidate_ids {
-            self.stash.consolidate_now(id).await?;
-        }
 
         Ok(())
     }
@@ -2544,92 +1862,6 @@ where
     V: mz_stash::Data,
 {
     Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
-}
-
-/// Inserts empty values into all new collections, so the collections are readable.
-#[tracing::instrument(level = "info", skip_all)]
-pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
-    async fn add_batch<'tx, K, V>(
-        tx: &'tx mz_stash::Transaction<'tx>,
-        typed: &TypedCollection<K, V>,
-    ) -> Result<Option<AppendBatch>, StashError>
-    where
-        K: mz_stash::Data,
-        V: mz_stash::Data,
-    {
-        let collection = tx.collection::<K, V>(typed.name()).await?;
-        let upper = tx.upper(collection.id).await?;
-        if upper.elements() == [mz_stash::Timestamp::MIN] {
-            Ok(Some(collection.make_batch_lower(upper)?))
-        } else {
-            Ok(None)
-        }
-    }
-
-    stash
-        .with_transaction(move |tx| {
-            Box::pin(async move {
-                // Query all collections in parallel. Makes for triplicated
-                // names, but runs quick.
-                let (
-                    config,
-                    setting,
-                    id_alloc,
-                    system_gid_mapping,
-                    clusters,
-                    cluster_introspection,
-                    cluster_replicas,
-                    database,
-                    schema,
-                    item,
-                    role,
-                    timestamp,
-                    system_configuration,
-                    audit_log,
-                    storage_usage,
-                ) = futures::try_join!(
-                    add_batch(&tx, &COLLECTION_CONFIG),
-                    add_batch(&tx, &COLLECTION_SETTING),
-                    add_batch(&tx, &COLLECTION_ID_ALLOC),
-                    add_batch(&tx, &COLLECTION_SYSTEM_GID_MAPPING),
-                    add_batch(&tx, &COLLECTION_CLUSTERS),
-                    add_batch(&tx, &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX),
-                    add_batch(&tx, &COLLECTION_CLUSTER_REPLICAS),
-                    add_batch(&tx, &COLLECTION_DATABASE),
-                    add_batch(&tx, &COLLECTION_SCHEMA),
-                    add_batch(&tx, &COLLECTION_ITEM),
-                    add_batch(&tx, &COLLECTION_ROLE),
-                    add_batch(&tx, &COLLECTION_TIMESTAMP),
-                    add_batch(&tx, &COLLECTION_SYSTEM_CONFIGURATION),
-                    add_batch(&tx, &COLLECTION_AUDIT_LOG),
-                    add_batch(&tx, &COLLECTION_STORAGE_USAGE),
-                )?;
-                let batches: Vec<AppendBatch> = [
-                    config,
-                    setting,
-                    id_alloc,
-                    system_gid_mapping,
-                    clusters,
-                    cluster_introspection,
-                    cluster_replicas,
-                    database,
-                    schema,
-                    item,
-                    role,
-                    timestamp,
-                    system_configuration,
-                    audit_log,
-                    storage_usage,
-                ]
-                .into_iter()
-                .filter_map(|b| b)
-                .collect();
-                tx.append(batches).await?;
-                Ok(())
-            })
-        })
-        .await
-        .map_err(|err| err.into())
 }
 
 // Structs used to pass information to outside modules.
@@ -2662,6 +1894,7 @@ pub struct Cluster {
     pub linked_object_id: Option<GlobalId>,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    pub config: ClusterConfig,
 }
 
 pub struct ClusterReplica {
@@ -2672,6 +1905,7 @@ pub struct ClusterReplica {
     pub owner_id: RoleId,
 }
 
+#[derive(Debug)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
@@ -2682,329 +1916,266 @@ pub struct Item {
 
 // Structs used internally to represent on disk-state.
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SettingValue {
     value: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct IdAllocKey {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct IdAllocValue {
     next_id: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct GidMappingKey {
     schema_name: String,
     object_type: CatalogItemType,
     object_name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
     id: u64,
     fingerprint: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterKey {
     id: ClusterId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterValue {
     name: String,
     linked_object_id: Option<GlobalId>,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
+    config: ClusterConfig,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterIntrospectionSourceIndexKey {
-    #[serde(rename = "compute_id")] // historical name
     cluster_id: ClusterId,
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
     index_id: u64,
 }
 
-#[derive(
-    Default, Debug, Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash,
-)]
-pub enum DatabaseNamespace {
-    #[default]
-    User,
-    System,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct DatabaseKey {
-    id: u64,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ns: Option<DatabaseNamespace>,
-}
-
-impl From<DatabaseKey> for DatabaseId {
-    fn from(value: DatabaseKey) -> Self {
-        match value.ns {
-            None | Some(DatabaseNamespace::User) => DatabaseId::User(value.id),
-            Some(DatabaseNamespace::System) => DatabaseId::System(value.id),
-        }
-    }
-}
-
-impl From<DatabaseId> for DatabaseKey {
-    fn from(value: DatabaseId) -> Self {
-        match value {
-            DatabaseId::User(id) => DatabaseKey {
-                id,
-                ns: Some(DatabaseNamespace::User),
-            },
-            DatabaseId::System(id) => DatabaseKey {
-                id,
-                ns: Some(DatabaseNamespace::System),
-            },
-        }
-    }
-}
-
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
     id: ReplicaId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplicaValue {
-    #[serde(rename = "compute_instance_id")] // historical name
     cluster_id: ClusterId,
     name: String,
     config: SerializedReplicaConfig,
     owner_id: RoleId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct DatabaseKey {
+    id: DatabaseId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
 pub struct DatabaseValue {
     name: String,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
-#[derive(
-    Default, Debug, Copy, Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash,
-)]
-pub enum SchemaNamespace {
-    #[default]
-    User,
-    System,
-}
-
-#[derive(Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SchemaKey {
-    id: u64,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ns: Option<SchemaNamespace>,
+    id: SchemaId,
 }
 
-impl From<SchemaKey> for SchemaId {
-    fn from(value: SchemaKey) -> Self {
-        match value.ns {
-            None | Some(SchemaNamespace::User) => SchemaId::User(value.id),
-            Some(SchemaNamespace::System) => SchemaId::System(value.id),
-        }
-    }
-}
-
-impl From<SchemaId> for SchemaKey {
-    fn from(value: SchemaId) -> Self {
-        match value {
-            SchemaId::User(id) => SchemaKey {
-                id,
-                ns: Some(SchemaNamespace::User),
-            },
-            SchemaId::System(id) => SchemaKey {
-                id,
-                ns: Some(SchemaNamespace::System),
-            },
-        }
-    }
-}
-
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
 pub struct SchemaValue {
-    database_id: Option<u64>,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
-    database_ns: Option<DatabaseNamespace>,
+    database_id: Option<DatabaseId>,
     name: String,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
 pub struct ItemKey {
     gid: GlobalId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
 pub struct ItemValue {
-    schema_id: u64,
-    // TODO(parkertimmerman) Remove option in v0.53.0
-    #[serde(skip_serializing_if = "Option::is_none")]
-    schema_ns: Option<SchemaNamespace>,
+    schema_id: SchemaId,
     name: String,
     definition: SerializedCatalogItem,
     owner_id: RoleId,
-    // TODO(jkosh44) Remove option in v0.54.0
-    privileges: Option<Vec<MzAclItem>>,
+    privileges: Vec<MzAclItem>,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct RoleKey {
     id: RoleId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
     // flatten needed for backwards compatibility.
-    #[serde(flatten)]
     role: SerializedRole,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ConfigKey {
+    key: String,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ConfigValue {
     value: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct AuditLogKey {
     event: VersionedEvent,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     metric: VersionedStorageUsage,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct TimestampKey {
     id: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TimestampValue {
     ts: mz_repr::Timestamp,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ServerConfigurationKey {
     name: String,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ServerConfigurationValue {
     value: String,
 }
 
-pub static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
-pub static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
-    TypedCollection::new("setting");
-pub static COLLECTION_ID_ALLOC: TypedCollection<IdAllocKey, IdAllocValue> =
-    TypedCollection::new("id_alloc");
-pub static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
-    TypedCollection::new("system_gid_mapping");
-pub static COLLECTION_CLUSTERS: TypedCollection<ClusterKey, ClusterValue> =
-    TypedCollection::new("compute_instance"); // historical name
-pub static COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX: TypedCollection<
-    ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue,
-> = TypedCollection::new("compute_introspection_source_index"); // historical name
-pub static COLLECTION_CLUSTER_REPLICAS: TypedCollection<ClusterReplicaKey, ClusterReplicaValue> =
-    TypedCollection::new("compute_replicas"); // historical name
-pub static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
-    TypedCollection::new("database");
-pub static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> =
-    TypedCollection::new("schema");
-pub static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
-pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
-pub static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
-    TypedCollection::new("timestamp");
-pub static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<
-    ServerConfigurationKey,
-    ServerConfigurationValue,
-> = TypedCollection::new("system_configuration");
-pub static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> =
-    TypedCollection::new("audit_log");
-pub static COLLECTION_STORAGE_USAGE: TypedCollection<StorageUsageKey, ()> =
-    TypedCollection::new("storage_usage");
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct DefaultPrivilegesKey {
+    role_id: RoleId,
+    database_id: Option<DatabaseId>,
+    schema_id: Option<SchemaId>,
+    object_type: ObjectType,
+    grantee: RoleId,
+}
 
-pub static ALL_COLLECTIONS: &[&str] = &[
-    COLLECTION_CONFIG.name(),
-    COLLECTION_SETTING.name(),
-    COLLECTION_ID_ALLOC.name(),
-    COLLECTION_SYSTEM_GID_MAPPING.name(),
-    COLLECTION_CLUSTERS.name(),
-    COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX.name(),
-    COLLECTION_CLUSTER_REPLICAS.name(),
-    COLLECTION_DATABASE.name(),
-    COLLECTION_SCHEMA.name(),
-    COLLECTION_ITEM.name(),
-    COLLECTION_ROLE.name(),
-    COLLECTION_TIMESTAMP.name(),
-    COLLECTION_SYSTEM_CONFIGURATION.name(),
-    COLLECTION_AUDIT_LOG.name(),
-    COLLECTION_STORAGE_USAGE.name(),
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct DefaultPrivilegesValue {
+    privileges: AclMode,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SystemPrivilegesKey {
+    grantee: RoleId,
+    grantor: RoleId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SystemPrivilegesValue {
+    acl_mode: AclMode,
+}
+
+pub const ALL_COLLECTIONS: &[&str] = &[
+    AUDIT_LOG_COLLECTION.name(),
+    CLUSTER_COLLECTION.name(),
+    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name(),
+    CLUSTER_REPLICA_COLLECTION.name(),
+    CONFIG_COLLECTION.name(),
+    DATABASES_COLLECTION.name(),
+    DEFAULT_PRIVILEGES_COLLECTION.name(),
+    ID_ALLOCATOR_COLLECTION.name(),
+    ITEM_COLLECTION.name(),
+    ROLES_COLLECTION.name(),
+    SCHEMAS_COLLECTION.name(),
+    SETTING_COLLECTION.name(),
+    STORAGE_USAGE_COLLECTION.name(),
+    SYSTEM_CONFIGURATION_COLLECTION.name(),
+    SYSTEM_GID_MAPPING_COLLECTION.name(),
+    SYSTEM_PRIVILEGES_COLLECTION.name(),
+    TIMESTAMP_COLLECTION.name(),
 ];
 
 #[cfg(test)]
 mod test {
-    use super::{DatabaseKey, DatabaseNamespace};
+    use mz_proto::{ProtoType, RustType};
+    use proptest::prelude::*;
 
-    #[test]
-    fn test_database_key_roundtrips() {
-        let k_none = DatabaseKey { id: 42, ns: None };
-        let k_user = DatabaseKey {
-            id: 24,
-            ns: Some(DatabaseNamespace::User),
-        };
-        let k_sys = DatabaseKey {
-            id: 0,
-            ns: Some(DatabaseNamespace::System),
-        };
+    use super::{DatabaseKey, DatabaseValue, ItemKey, ItemValue, SchemaKey, SchemaValue};
 
-        for key in [k_none, k_user, k_sys] {
-            let og_json = serde_json::to_string(&key).expect("valid key");
+    proptest! {
+        #[mz_ore::test]
+        fn proptest_database_key_roundtrip(key: DatabaseKey) {
+            let proto = key.into_proto();
+            let round = proto.into_rust().expect("to roundtrip");
 
-            // Make sure our type roundtrips.
-            let after: DatabaseKey = serde_json::from_str(&og_json).expect("valid json");
-            assert_eq!(after, key);
-
-            // Our JSON should roundtrip too.
-            let af_json = serde_json::to_string(&after).expect("valid key");
-            assert_eq!(og_json, af_json);
+            prop_assert_eq!(key, round);
         }
 
-        let json_none = serde_json::json!({ "id": 42 }).to_string();
+        #[mz_ore::test]
+        fn proptest_database_value_roundtrip(value: DatabaseValue) {
+            let proto = value.into_proto();
+            let round = proto.into_rust().expect("to roundtrip");
 
-        let key: DatabaseKey = serde_json::from_str(&json_none).expect("valid json");
-        let json_after = serde_json::to_string(&key).expect("valid key");
+            prop_assert_eq!(value, round);
+        }
 
-        assert_eq!(json_none, json_after);
+        #[mz_ore::test]
+        fn proptest_schema_key_roundtrip(key: SchemaKey) {
+            let proto = key.into_proto();
+            let round = proto.into_rust().expect("to roundtrip");
+
+            prop_assert_eq!(key, round);
+        }
+
+        #[mz_ore::test]
+        fn proptest_schema_value_roundtrip(value: SchemaValue) {
+            let proto = value.into_proto();
+            let round = proto.into_rust().expect("to roundtrip");
+
+            prop_assert_eq!(value, round);
+        }
+
+        #[mz_ore::test]
+        fn proptest_item_key_roundtrip(key: ItemKey) {
+            let proto = key.into_proto();
+            let round = proto.into_rust().expect("to roundtrip");
+
+            prop_assert_eq!(key, round);
+        }
+
+        #[mz_ore::test]
+        fn proptest_item_value_roundtrip(value: ItemValue) {
+            let proto = value.into_proto();
+            let round = proto.into_rust().expect("to roundtrip");
+
+            prop_assert_eq!(value, round);
+        }
     }
 }

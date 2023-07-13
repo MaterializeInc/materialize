@@ -20,17 +20,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::Collection;
-use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
-use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
+use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
 use crate::render::sources::OutputIndex;
 use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
@@ -218,7 +217,7 @@ pub struct DecodeResult {
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
@@ -242,17 +241,13 @@ pub struct SourcePersistSinkMetrics {
     pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-
-    // TODO(guswynn): consider if this metric (and others) should be put into `StorageState`...
-    pub(crate) enable_multi_worker_storage_persist_sink:
-        DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 }
 
 impl SourcePersistSinkMetrics {
     /// Initialises source metrics used in the `persist_sink`.
     pub fn new(
         base: &SourceBaseMetrics,
-        source_id: GlobalId,
+        _source_id: GlobalId,
         parent_source_id: GlobalId,
         worker_id: usize,
         shard_id: &mz_persist_client::ShardId,
@@ -260,15 +255,6 @@ impl SourcePersistSinkMetrics {
     ) -> SourcePersistSinkMetrics {
         let shard = shard_id.to_string();
         SourcePersistSinkMetrics {
-            enable_multi_worker_storage_persist_sink: base
-                .source_specific
-                .enable_multi_worker_storage_persist_sink
-                .get_delete_on_drop_gauge(vec![
-                    source_id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    output_index.to_string(),
-                ]),
             progress: base.source_specific.progress.get_delete_on_drop_gauge(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
@@ -500,6 +486,7 @@ impl OffsetCommitMetrics {
 pub struct UpsertMetrics {
     pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
     pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb: Arc<mz_rocksdb::RocksDBMetrics>,
 }
@@ -515,6 +502,9 @@ impl UpsertMetrics {
                 .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
             rehydration_total: base
                 .rehydration_total
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            rehydration_updates: base
+                .rehydration_updates
                 .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
             shared: base.shared(&source_id),
             rocksdb: base.rocksdb(&source_id),

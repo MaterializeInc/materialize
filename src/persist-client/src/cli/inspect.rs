@@ -19,16 +19,15 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::Description;
-use mz_persist_types::codec_impls::TodoSchema;
-use prost::Message;
-
 use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
+use prost::Message;
 use serde_json::json;
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -38,14 +37,18 @@ use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::{
-    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
+    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
 use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
+use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
 
+// BuildInfo with a larger version than any version we expect to see in prod,
+// to ensure that any data read is from a smaller version and does not trigger
+// alerts.
 const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "10000000.0.0+test",
+    version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
     time: "",
 };
@@ -578,8 +581,15 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     }
 
     let mut unreferenced_blobs = UnreferencedBlobs::default();
+    // In the future, this is likely to include a "grace period" so recent but non-current
+    // versions are also considered live
+    let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
-        if !known_writers.contains(&writer) && !known_parts.contains(&part) {
+        let is_unreferenced = match writer {
+            WriterKey::Id(writer) => !known_writers.contains(&writer),
+            version @ WriterKey::Version(_) => version < minimum_version,
+        };
+        if is_unreferenced && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
     }
@@ -606,7 +616,11 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let state_cache = Arc::new(StateCache::new(Arc::clone(&metrics)));
+    let state_cache = Arc::new(StateCache::new(
+        &cfg,
+        Arc::clone(&metrics),
+        Arc::new(NoopPubSubSender),
+    ));
     let usage = StorageUsageClient::open(PersistClient::new(
         cfg,
         blob,
@@ -614,13 +628,14 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         metrics,
         cpu_heavy_runtime,
         state_cache,
+        Arc::new(NoopPubSubSender),
     )?);
 
     if let Some(shard_id) = shard_id {
-        let usage = usage.shard_usage(shard_id).await;
+        let usage = usage.shard_usage_audit(shard_id).await;
         println!("{}\n{}", shard_id, usage);
     } else {
-        let usage = usage.shards_usage().await;
+        let usage = usage.shards_usage_audit().await;
         let mut by_shard = usage.by_shard.iter().collect::<Vec<_>>();
         by_shard.sort_by_key(|(_, x)| x.total_bytes());
         by_shard.reverse();

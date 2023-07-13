@@ -11,19 +11,16 @@
 
 // TODO(frank): evaluate for redundancy with projection hoisting.
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]
 pub struct Project;
 
 impl crate::Transform for Project {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

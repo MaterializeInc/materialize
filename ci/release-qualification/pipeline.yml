@@ -33,6 +33,12 @@ steps:
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
+    # Don't build for "trigger_job" source, which indicates that this release
+    # qualification pipeline was triggered automatically by the tests pipeline
+    # because there is a new tag on a v* branch. In this case we want to make
+    # sure we use the exact same version for testing here as was tagged and
+    # will be released, and don't build our own version just for the tests.
+    if: build.source == "ui" || build.source == "schedule"
 
   - wait: ~
 

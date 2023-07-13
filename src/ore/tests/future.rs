@@ -81,16 +81,15 @@
 
 use std::panic;
 
-use scopeguard::defer;
-
 use mz_ore::future::OreFutureExt;
 use mz_ore::panic::set_abort_on_panic;
+use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
 // removes panic hooks and can interfere with any concurrently running test.
 // Therefore, it needs to be run in isolation.
 
-#[tokio::test]
+#[tokio::test] // allow(test-attribute)
 async fn catch_panic_async() {
     let old_hook = panic::take_hook();
     defer! {

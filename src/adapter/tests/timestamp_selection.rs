@@ -88,18 +88,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-
-use mz_adapter::{
-    catalog::CatalogState, session::Session, CollectionIdBundle, TimelineContext, TimestampProvider,
-};
+use mz_adapter::catalog::CatalogState;
+use mz_adapter::session::Session;
+use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
+use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
@@ -261,7 +260,7 @@ fn parse_query_when(s: &str) -> QueryWhen {
 /// Transaction isolation can also be set. The `determine` directive runs determine_timestamp and
 /// returns the chosen timestamp. Append `full` as an argument to it to see the entire
 /// TimestampDetermination.
-#[test]
+#[mz_ore::test]
 fn test_timestamp_selection() {
     datadriven::walk("tests/testdata/timestamp_selection", |tf| {
         let mut f = Frontiers {
@@ -302,9 +301,13 @@ fn test_timestamp_selection() {
                 }
                 "determine" => {
                     let det: Determine = serde_json::from_str(&tc.input).unwrap();
-                    let session = Session::dummy()
-                        .start_transaction(mz_ore::now::to_datetime(0), None, Some(isolation))
-                        .0;
+                    let mut session = Session::dummy();
+                    let _ = session.start_transaction(
+                        mz_ore::now::to_datetime(0),
+                        None,
+                        Some(isolation),
+                    );
+
                     let ts = f
                         .determine_timestamp_for(
                             &catalog,

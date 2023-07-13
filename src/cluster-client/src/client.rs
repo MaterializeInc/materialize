@@ -13,12 +13,11 @@
 
 use std::num::NonZeroI64;
 
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
 
@@ -191,17 +190,16 @@ pub struct ClusterReplicaLocation {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
         fn timely_config_protobuf_roundtrip(expect in any::<TimelyConfig>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTimelyConfig>(&expect);
@@ -209,7 +207,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         fn cluster_startup_epoch_protobuf_roundtrip(expect in any::<ClusterStartupEpoch>() ) {
             let actual = protobuf_roundtrip::<_, ProtoClusterStartupEpoch>(&expect);
             assert!(actual.is_ok());

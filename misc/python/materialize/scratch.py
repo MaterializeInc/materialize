@@ -165,8 +165,8 @@ def launch(
             GroupId=security_group_id,
             CidrIp="0.0.0.0/0",
             IpProtocol="tcp",
-            FromPort=1,
-            ToPort=28000,
+            FromPort=22,
+            ToPort=22,
         )
 
     network_interface: InstanceNetworkInterfaceSpecificationTypeDef = {

@@ -33,8 +33,9 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     inputs:
       - "*"
-    timeout_in_minutes: 60
     priority: 1
+    timeout_in_minutes: 60
+    branches: "main v*.*"
     agents:
       queue: builder-linux-aarch64
     coverage: skip
@@ -143,7 +144,7 @@ steps:
       - "**/*.proto"
       - "**/testdata/**"
     env:
-      AWS_DEFAULT_REGION: "us-east-2"
+      AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
       BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
     plugins:
@@ -154,9 +155,10 @@ steps:
       queue: builder-linux-x86_64
 
   - id: miri-test
-    label: Miri test
+    label: Miri test %n
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     inputs: [src]
+    parallelism: 2
     timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
@@ -174,7 +176,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2]
+          args: [--aws-region=us-east-1]
     agents:
       queue: linux-x86_64
 
@@ -275,9 +277,10 @@ steps:
       queue: linux-x86_64
 
   - id: sqllogictest-fast
-    label: Fast SQL logic tests
+    label: Fast SQL logic tests %n
     depends_on: build-x86_64
     timeout_in_minutes: 30
+    parallelism: 3
     inputs: [test/sqllogictest]
     artifact_paths: junit_*.xml
     plugins:
@@ -493,19 +496,6 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: checks-restart-entire-mz
-    label: "Checks + restart of the entire Mz"
-    depends_on: build-x86_64
-    inputs: [misc/python/materialize/checks]
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
-
   - id: checks-restart-environmentd-clusterd-storage
     label: "Checks + restart of environmentd & storage clusterd"
     depends_on: build-x86_64
@@ -546,7 +536,7 @@ steps:
           args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres, --check=PgCdc]
 
   - id: cloudtest
-    label: Cloudtest
+    label: Cloudtest %n
     depends_on: build-x86_64
     parallelism: 3
     timeout_in_minutes: 30
@@ -555,7 +545,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
+          args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
@@ -578,6 +568,18 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
+
+  - id: tracing
+    label: "Tracing Fast Path"
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/tracing]
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: tracing
+    agents:
+      queue: linux-x86_64
 
   - id: lang-csharp
     label: ":csharp: tests"
@@ -638,6 +640,54 @@ steps:
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
 
+  - id: sqlancer-pqs
+    label: "SQLancer PQS"
+    depends_on: build-x86_64
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=PQS, --no-qpg]
+
+  - id: sqlancer-norec
+    label: "SQLancer NoREC"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=NOREC]
+
+  - id: sqlancer-query-partitioning
+    label: "SQLancer QueryPartitioning"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=QUERY_PARTITIONING]
+
+  - id: sqlancer-having
+    label: "SQLancer Having"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=HAVING]
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
@@ -651,6 +701,19 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
 
+  - id: release-qualification
+    label: Release qualification
+    depends_on: devel-docker-tags
+    trigger: release-qualification
+    async: true
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    if: build.tag != "" && build.branch =~ /^v/
+    coverage: skip
+
   - wait: ~
     continue_on_failure: true
 
@@ -660,7 +723,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     coverage: only
 
   - wait: ~

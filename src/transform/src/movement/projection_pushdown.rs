@@ -43,10 +43,6 @@ use crate::{TransformArgs, TransformError};
 pub struct ProjectionPushdown;
 
 impl crate::Transform for ProjectionPushdown {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     // This method is only used during unit testing.
     #[tracing::instrument(
         target = "optimizer"
@@ -127,7 +123,12 @@ impl ProjectionPushdown {
                 )?;
                 desired_projection.clone()
             }
-            MirRelationExpr::LetRec { ids, values, body } => {
+            MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits: _,
+                body,
+            } => {
                 // Determine the recursive IDs in this LetRec binding.
                 let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
 

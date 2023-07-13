@@ -17,6 +17,10 @@ filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
 
+[[profile.default.overrides]]
+filter = "package(mz-stash) and test(proptest_stash_migrate_json_to_proto)"
+slow-timeout = { period = "120s", terminate-after = 2 }
+
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false

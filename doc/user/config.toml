@@ -23,38 +23,38 @@ weight= 5
 #
 
 [[menu.main]]
-identifier = "connect-sources"
-name = "Connect sources"
+identifier = "ingest-data"
+name = "Ingest data"
 weight= 11
 
 [[menu.main]]
 name = "PostgreSQL"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'postgresql'
 weight = 5
 
 [[menu.main]]
 name = "MySQL"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'mysql'
 weight = 10
 
 [[menu.main]]
 name = "Kafka"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'kafka'
 weight = 15
 
 [[menu.main]]
 name = "Redpanda"
-parent = 'connect-sources'
+parent = 'ingest-data'
 identifier = 'redpanda'
 weight = 20
 
 [[menu.main]]
 identifier = "network-security"
 name = "Network security"
-parent = 'connect-sources'
+parent = 'ingest-data'
 weight= 30
 
 #
@@ -100,22 +100,28 @@ name = "Serve results"
 weight= 13
 
 [[menu.main]]
-name = "Query for results (`SELECT`)"
+name = "Query using `SELECT`"
 parent = "serve"
 url = "/sql/select/"
 weight= 5
 
 [[menu.main]]
+name = "Query using BI tools"
+identifier = "bi-tools"
+parent = "serve"
+weight= 10
+
+[[menu.main]]
 name = "Subscribe to results (`SUBSCRIBE`)"
 parent = "serve"
 url = "/sql/subscribe/"
-weight= 10
+weight= 15
 
 [[menu.main]]
 name = "Sink results to Kafka"
 parent = "serve"
 url = "/sql/create-sink"
-weight= 15
+weight= 20
 
 #
 # Manage Materialize
@@ -125,6 +131,7 @@ weight= 15
 identifier = "manage"
 name = "Manage Materialize"
 weight= 14
+
 
 #
 # Reference

@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 use std::future::Future;
-use std::ops::{ControlFlow, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -19,18 +19,17 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use mz_ore::error::ErrorExt;
+#[allow(unused_imports)] // False positive.
+use mz_ore::fmt::FormatBuffer;
 use mz_ore::task::spawn;
+use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
+use mz_persist::retry::Retry;
+use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
-
-use mz_ore::error::ErrorExt;
-#[allow(unused_imports)] // False positive.
-use mz_ore::fmt::FormatBuffer;
-use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
-use mz_persist::retry::Retry;
-use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
@@ -50,6 +49,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
+use crate::rpc::PubSubSender;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -79,9 +79,18 @@ where
         shard_id: ShardId,
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
-        shared_states: &StateCache,
+        shared_states: Arc<StateCache>,
+        pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let applier = Applier::new(cfg, shard_id, metrics, state_versions, shared_states).await?;
+        let applier = Applier::new(
+            cfg,
+            shard_id,
+            metrics,
+            state_versions,
+            shared_states,
+            pubsub_sender,
+        )
+        .await?;
         Ok(Machine { applier })
     }
 
@@ -95,9 +104,7 @@ where
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
         let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
-        let (applied, maintenance) = self
-            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
-            .await;
+        let (applied, maintenance) = self.add_rollup((rollup.seqno, &rollup.to_hollow())).await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
             // get added. Delete it.
@@ -109,18 +116,17 @@ where
         maintenance
     }
 
-    pub async fn add_and_remove_rollups(
+    pub async fn add_rollup(
         &mut self,
         add_rollup: (SeqNo, &HollowRollup),
-        remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> (bool, RoutineMaintenance) {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
         let mut applied_ever_true = false;
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, _applied, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
-                let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_rollup, |_, _, state| {
+                let ret = state.add_rollup(add_rollup);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
                 }
@@ -128,6 +134,19 @@ where
             })
             .await;
         (applied_ever_true, maintenance)
+    }
+
+    pub async fn remove_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> (Vec<SeqNo>, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, removed_rollup_seqnos, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, _, state| {
+                state.remove_rollups(remove_rollups)
+            })
+            .await;
+        (removed_rollup_seqnos, maintenance)
     }
 
     pub async fn register_leased_reader(
@@ -382,7 +401,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                            inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
                         };
                         compact_reqs.push(req);
                     }
@@ -672,20 +691,6 @@ where
         as_of: &Antichain<T>,
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let start = Instant::now();
-        let seqno = match self.applier.snapshot(as_of) {
-            Ok(x) => return Ok(x),
-            Err(SnapshotErr::AsOfNotYetAvailable(seqno, _upper)) => seqno,
-            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                return Err(Since(since))
-            }
-        };
-
-        // Our state might just be out of date. Fetch the newest state
-        // immediately and try again.
-        //
-        // TODO: Once we have state pubsub, we probably want to remove this
-        // optimization and jump straight to watch+sleep.
-        self.applier.fetch_and_update_state(Some(seqno)).await;
         let (mut seqno, mut upper) = match self.applier.snapshot(as_of) {
             Ok(x) => return Ok(x),
             Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => (seqno, upper),
@@ -1059,6 +1064,7 @@ where
 #[cfg(test)]
 pub mod datadriven {
     use std::collections::BTreeMap;
+    use std::marker::PhantomData;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1075,7 +1081,9 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
+    use crate::internal::state::TypedState;
     use crate::read::{Listen, ListenEvent};
+    use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistClient};
 
@@ -1115,7 +1123,8 @@ pub mod datadriven {
                 shard_id,
                 Arc::clone(&client.metrics),
                 Arc::clone(&state_versions),
-                &client.shared_states,
+                Arc::clone(&client.shared_states),
+                Arc::new(NoopPubSubSender),
             )
             .await
             .expect("codecs should match");
@@ -1154,6 +1163,12 @@ pub mod datadriven {
                 continue;
             }
             let mut batches = vec![];
+            let rollups: Vec<_> = x
+                .collections
+                .rollups
+                .keys()
+                .map(|seqno| seqno.to_string())
+                .collect();
             x.collections.trace.map_batches(|b| {
                 if b.parts.is_empty() {
                     return;
@@ -1165,9 +1180,29 @@ pub mod datadriven {
                     }
                 }
             });
-            write!(s, "seqno={} batches={}\n", x.seqno, batches.join(","));
+            write!(
+                s,
+                "seqno={} batches={} rollups={}\n",
+                x.seqno,
+                batches.join(","),
+                rollups.join(","),
+            );
         }
         Ok(s)
+    }
+
+    pub async fn consensus_truncate(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let to = args.expect("to_seqno");
+        let removed = datadriven
+            .client
+            .consensus
+            .truncate(&datadriven.shard_id.to_string(), to)
+            .await
+            .expect("valid truncation");
+        Ok(format!("{}\n", removed))
     }
 
     pub async fn blob_scan_batches(
@@ -1207,12 +1242,13 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let since = args.expect_antichain("since");
+        let seqno = args.optional("seqno");
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
             .downgrade_since(
                 &reader_id,
-                None,
+                seqno,
                 &since,
                 (datadriven.machine.applier.cfg.now)(),
             )
@@ -1249,6 +1285,59 @@ pub mod datadriven {
         ))
     }
 
+    pub async fn write_rollup(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let seqno: SeqNo = args.expect("seqno");
+
+        let mut all_live_states = datadriven
+            .machine
+            .applier
+            .state_versions
+            .fetch_all_live_states::<u64>(datadriven.shard_id)
+            .await
+            .expect("shard initialized")
+            .check_ts_codec()
+            .expect("codec matches");
+
+        while let Some(state) = all_live_states.next(|_| {}) {
+            if state.seqno == seqno {
+                break;
+            }
+        }
+
+        let state = all_live_states.state();
+        if state.seqno != seqno {
+            return Err(anyhow!(
+                "seqno {} cannot be reached while writing rollup",
+                seqno
+            ));
+        }
+
+        let typed_state = TypedState::<String, (), u64, i64> {
+            state: state.clone(),
+            _phantom: PhantomData::default(),
+        };
+        let rollup = datadriven.state_versions.encode_rollup_blob(
+            datadriven.machine.applier.shard_metrics.as_ref(),
+            &typed_state,
+            PartialRollupKey::new(state.seqno, &RollupId::new()),
+        );
+        let () = datadriven.state_versions.write_rollup_blob(&rollup).await;
+        let (applied, maintenance) = datadriven
+            .machine
+            .add_rollup((rollup.seqno, &rollup.to_hollow()))
+            .await;
+
+        if !applied {
+            return Err(anyhow!("failed to apply rollup for: {}", rollup.seqno));
+        }
+
+        datadriven.routine.push(maintenance);
+        Ok(format!("{}\n", datadriven.machine.seqno()))
+    }
+
     pub async fn write_batch(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1264,7 +1353,7 @@ pub mod datadriven {
         let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
-        let mut cfg = BatchBuilderConfig::from(&datadriven.client.cfg);
+        let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1275,13 +1364,14 @@ pub mod datadriven {
         let builder = BatchBuilderInternal::new(
             cfg,
             Arc::clone(&datadriven.client.metrics),
+            Arc::clone(&datadriven.machine.applier.shard_metrics),
             schemas.clone(),
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
-            WriterId::new(),
+            datadriven.client.cfg.build_version.clone(),
             since,
             Some(upper.clone()),
             consolidate,
@@ -1335,6 +1425,7 @@ pub mod datadriven {
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
+                datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
                 &part.key,
                 &batch.desc,
@@ -1439,12 +1530,12 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::from(&cfg),
+            CompactConfig::new(&cfg, &writer_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
+            Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             req,
-            writer_id,
             schemas,
         )
         .await?;
@@ -1469,10 +1560,28 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             new_seqno_since,
         };
-        let maintenance = GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        let (maintenance, stats) =
+            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
         datadriven.routine.push(maintenance);
 
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+        Ok(format!(
+            "{} batch_parts={} rollups={} truncated={} state_rollups={}\n",
+            datadriven.machine.seqno(),
+            stats.batch_parts_deleted_from_blob,
+            stats.rollups_deleted_from_blob,
+            stats
+                .truncated_consensus_to
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            stats
+                .rollups_removed_from_state
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        ))
     }
 
     pub async fn snapshot(
@@ -1493,6 +1602,7 @@ pub mod datadriven {
                     &datadriven.shard_id,
                     datadriven.client.blob.as_ref(),
                     datadriven.client.metrics.as_ref(),
+                    datadriven.machine.applier.shard_metrics.as_ref(),
                     &datadriven.client.metrics.read.batch_fetcher,
                     &part.key,
                     &batch.desc,
@@ -1769,13 +1879,15 @@ pub mod tests {
     use crate::tests::new_test_client;
     use crate::ShardId;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
-        let (mut write, _) = new_test_client()
-            .await
+        let client = new_test_client().await;
+        // set a low rollup threshold so GC/truncation is more aggressive
+        client.cfg.dynamic.set_rollup_threshold(5);
+        let (mut write, _) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
 
@@ -1823,7 +1935,7 @@ pub mod tests {
     // A regression test for #14719, where a bug in gc led to an incremental
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_gc_skipped_req_and_interrupted() {
         let mut client = new_test_client().await;
@@ -1838,7 +1950,7 @@ pub mod tests {
 
         // Create a new SeqNo
         read.downgrade_since(&Antichain::from_elem(1)).await;
-        let new_seqno_since = read.machine.seqno();
+        let new_seqno_since = read.machine.applier.seqno_since();
 
         // Start a GC in the background for some SeqNo range that is not
         // contiguous compared to the last gc req (in this case, n/a) and then

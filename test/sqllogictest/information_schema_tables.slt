@@ -81,6 +81,10 @@ mz_databases
 BASE TABLE
 materialize
 mz_catalog
+mz_default_privileges
+BASE TABLE
+materialize
+mz_catalog
 mz_egress_ips
 BASE TABLE
 materialize
@@ -165,6 +169,10 @@ mz_storage_usage
 VIEW
 materialize
 mz_catalog
+mz_system_privileges
+BASE TABLE
+materialize
+mz_catalog
 mz_tables
 BASE TABLE
 materialize
@@ -183,6 +191,10 @@ materialize
 mz_internal
 mz_active_peeks_per_worker
 SOURCE
+materialize
+mz_internal
+mz_aggregates
+BASE TABLE
 materialize
 mz_internal
 mz_arrangement_batches_raw
@@ -373,6 +385,10 @@ mz_dataflows_per_worker
 VIEW
 materialize
 mz_internal
+mz_kafka_sources
+BASE TABLE
+materialize
+mz_internal
 mz_message_counts
 VIEW
 materialize
@@ -391,6 +407,10 @@ materialize
 mz_internal
 mz_object_dependencies
 BASE TABLE
+materialize
+mz_internal
+mz_object_transitive_dependencies
+VIEW
 materialize
 mz_internal
 mz_peek_durations_histogram
@@ -509,6 +529,10 @@ mz_view_keys
 BASE TABLE
 materialize
 pg_catalog
+pg_aggregate
+VIEW
+materialize
+pg_catalog
 pg_am
 VIEW
 materialize
@@ -545,6 +569,10 @@ pg_database
 VIEW
 materialize
 pg_catalog
+pg_depend
+VIEW
+materialize
+pg_catalog
 pg_description
 VIEW
 materialize
@@ -553,11 +581,27 @@ pg_enum
 VIEW
 materialize
 pg_catalog
+pg_event_trigger
+VIEW
+materialize
+pg_catalog
+pg_extension
+VIEW
+materialize
+pg_catalog
 pg_index
 VIEW
 materialize
 pg_catalog
 pg_inherits
+VIEW
+materialize
+pg_catalog
+pg_language
+VIEW
+materialize
+pg_catalog
+pg_locks
 VIEW
 materialize
 pg_catalog
@@ -585,6 +629,10 @@ pg_range
 VIEW
 materialize
 pg_catalog
+pg_rewrite
+VIEW
+materialize
+pg_catalog
 pg_roles
 VIEW
 materialize
@@ -593,7 +641,19 @@ pg_settings
 VIEW
 materialize
 pg_catalog
+pg_shdescription
+VIEW
+materialize
+pg_catalog
 pg_tables
+VIEW
+materialize
+pg_catalog
+pg_tablespace
+VIEW
+materialize
+pg_catalog
+pg_trigger
 VIEW
 materialize
 pg_catalog

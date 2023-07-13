@@ -9,10 +9,11 @@
 
 //! Detects an input being unioned with its negation and cancels them out
 
-use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::{TransformArgs, TransformError};
 
 /// Detects an input being unioned with its negation and cancels them out
 ///
@@ -28,10 +29,6 @@ use mz_expr::MirRelationExpr;
 pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

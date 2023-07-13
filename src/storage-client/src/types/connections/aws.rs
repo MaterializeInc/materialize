@@ -9,15 +9,15 @@
 
 //! AWS configuration for sources and sinks.
 
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
+use anyhow::anyhow;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
-use super::StringOrSecret;
+use crate::types::connections::{ConnectionContext, StringOrSecret};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -179,5 +179,17 @@ impl AwsConfig {
             loader = loader.endpoint_url(endpoint);
         }
         loader.load().await
+    }
+
+    #[allow(clippy::unused_async)]
+    pub(crate) async fn validate(
+        &self,
+        _connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
+        Err(anyhow!("Validating SSH connections is not supported yet"))
+    }
+
+    pub(crate) fn validate_by_default(&self) -> bool {
+        false
     }
 }

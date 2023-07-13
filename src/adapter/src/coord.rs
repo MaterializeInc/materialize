@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -78,12 +78,6 @@ use derivative::Derivative;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
-use tokio::runtime::Handle as TokioHandle;
-use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Instrument, Level};
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -99,23 +93,30 @@ use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{stack, task};
-use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
+use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::names::Aug;
-use mz_sql::plan::{CopyFormat, Params, QueryWhen};
+use mz_sql::names::{Aug, ResolvedIds};
+use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
+use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
+use tokio::runtime::Handle as TokioHandle;
+use tokio::select;
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tracing::{info, span, warn, Instrument, Level};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
@@ -136,7 +137,7 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::AdapterNotice;
+use crate::{flags, AdapterNotice};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -183,6 +184,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
     ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
+    CreateConnectionValidationReady(CreateConnectionValidationReady),
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
@@ -192,7 +194,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         /// Timestamp of the writes in the group commit.
         T,
         /// Clients waiting on responses from the group commit.
-        Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
     ),
@@ -203,38 +205,51 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
-    StorageUsageUpdate(ShardsUsage),
+    StorageUsageUpdate(ShardsUsageReferenced),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         real_time_recency_ts: Timestamp,
-        validity: PeekValidity,
+        validity: PlanValidity,
+    },
+
+    // Like Command::Execute, but its context has already been allocated.
+    Execute {
+        portal_name: String,
+        ctx: ExecuteContext,
+        span: tracing::Span,
+    },
+
+    /// Performs any cleanup and logging actions necessary for
+    /// finalizing a statement execution.
+    RetireExecute {
+        data: ExecuteContextExtra,
     },
 }
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CreateSourceStatementReady {
-    pub session: Session,
+pub struct BackgroundWorkResult<T> {
     #[derivative(Debug = "ignore")]
-    pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<
-        (
-            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-            CreateSourceStatement<Aug>,
-        ),
-        AdapterError,
-    >,
+    pub ctx: ExecuteContext,
+    pub result: Result<T, AdapterError>,
     pub params: Params,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub original_stmt: Statement<Raw>,
     pub otel_ctx: OpenTelemetryContext,
 }
+
+pub type CreateSourceStatementReady = BackgroundWorkResult<(
+    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+    CreateSourceStatement<Aug>,
+)>;
+
+pub type CreateConnectionValidationReady = BackgroundWorkResult<CreateConnectionPlan>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SinkConnectionReady {
     #[derivative(Debug = "ignore")]
-    pub session_and_tx: Option<(Session, ClientTransmitter<ExecuteResponse>)>,
+    pub ctx: Option<ExecuteContext>,
     pub id: GlobalId,
     pub oid: u32,
     pub create_export_token: CreateExportToken,
@@ -244,19 +259,17 @@ pub struct SinkConnectionReady {
 #[derive(Debug)]
 pub enum RealTimeRecencyContext {
     ExplainTimestamp {
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        ctx: ExecuteContext,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
     },
     Peek {
-        tx: ClientTransmitter<ExecuteResponse>,
+        ctx: ExecuteContext,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
         dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        session: Session,
         cluster_id: ClusterId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
@@ -271,10 +284,10 @@ pub enum RealTimeRecencyContext {
 }
 
 impl RealTimeRecencyContext {
-    pub(crate) fn take_tx_and_session(self) -> (ClientTransmitter<ExecuteResponse>, Session) {
+    pub(crate) fn take_context(self) -> ExecuteContext {
         match self {
-            RealTimeRecencyContext::ExplainTimestamp { tx, session, .. }
-            | RealTimeRecencyContext::Peek { tx, session, .. } => (tx, session),
+            RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
+            | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
         }
     }
 }
@@ -288,7 +301,7 @@ pub enum PeekStage {
 }
 
 impl PeekStage {
-    fn validity(&mut self) -> Option<&mut PeekValidity> {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Optimize(PeekStageOptimize { validity, .. })
@@ -300,13 +313,13 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    pub plan: mz_sql::plan::PeekPlan,
+    pub plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
 }
 
 #[derive(Debug)]
 pub struct PeekStageOptimize {
-    validity: PeekValidity,
+    validity: PlanValidity,
     source: MirRelationExpr,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -322,7 +335,7 @@ pub struct PeekStageOptimize {
 
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
-    validity: PeekValidity,
+    validity: PlanValidity,
     dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -340,7 +353,7 @@ pub struct PeekStageTimestamp {
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
-    validity: PeekValidity,
+    validity: PlanValidity,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
     pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
@@ -368,19 +381,19 @@ pub enum TargetCluster {
     Active,
 }
 
-/// A struct to hold information about the validity of peeks and if they should be abandoned after
+/// A struct to hold information about the validity of plans and if they should be abandoned after
 /// doing work off of the Coordinator thread.
 #[derive(Debug)]
-pub struct PeekValidity {
-    /// The most recent revision at which this peek was verified as valid.
+pub struct PlanValidity {
+    /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
-    /// Objects on which the peek depends.
+    /// Objects on which the plan depends.
     source_ids: BTreeSet<GlobalId>,
-    cluster_id: ComputeInstanceId,
+    cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
 }
 
-impl PeekValidity {
+impl PlanValidity {
     /// Returns an error if the current catalog no longer has all dependencies.
     fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
@@ -388,12 +401,15 @@ impl PeekValidity {
         }
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
-        let Some(cluster) = catalog.try_get_cluster(self.cluster_id) else {
-            return Err(AdapterError::ChangedPlan);
-        };
-        if let Some(replica_id) = self.replica_id {
-            if !cluster.replicas_by_id.contains_key(&replica_id) {
+        if let Some(cluster_id) = self.cluster_id {
+            let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
                 return Err(AdapterError::ChangedPlan);
+            };
+
+            if let Some(replica_id) = self.replica_id {
+                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                    return Err(AdapterError::ChangedPlan);
+                }
             }
         }
         // It is sufficient to check that all the source_ids still exist because we assume:
@@ -415,6 +431,7 @@ pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection,
     pub unsafe_mode: bool,
+    pub all_features: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
@@ -434,6 +451,8 @@ pub struct Config {
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub tracing_handle: TracingHandle,
 }
 
 /// Soft-state metadata about a compute replica
@@ -449,7 +468,7 @@ pub struct ReplicaMetadata {
 
 /// Metadata about an active connection.
 #[derive(Debug)]
-struct ConnMeta {
+pub struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
     /// `Canceled::Canceled` whenever it receives a cancellation request that
@@ -469,19 +488,57 @@ struct ConnMeta {
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+
+    /// The authenticated role of the session, set once at session connection.
+    pub(crate) authenticated_role: RoleId,
 }
 
 #[derive(Debug)]
 /// A pending transaction waiting to be committed.
 pub struct PendingTxn {
-    /// Transmitter used to send a response back to the client.
-    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Context used to send a response back to the client.
+    ctx: ExecuteContext,
     /// Client response for transaction.
-    response: Result<ExecuteResponse, AdapterError>,
-    /// Session of the client who initiated the transaction.
-    session: Session,
+    response: Result<PendingTxnResponse, AdapterError>,
     /// The action to take at the end of the transaction.
     action: EndTransactionAction,
+}
+
+#[derive(Debug)]
+/// The response we'll send for a [`PendingTxn`].
+pub enum PendingTxnResponse {
+    /// The transaction will be committed.
+    Committed {
+        /// Parameters that will change, and their values, once this transaction is complete.
+        params: BTreeMap<&'static str, String>,
+    },
+    /// The transaction will be rolled back.
+    Rolledback {
+        /// Parameters that will change, and their values, once this transaction is complete.
+        params: BTreeMap<&'static str, String>,
+    },
+}
+
+impl PendingTxnResponse {
+    pub fn extend_params(&mut self, p: impl IntoIterator<Item = (&'static str, String)>) {
+        match self {
+            PendingTxnResponse::Committed { params }
+            | PendingTxnResponse::Rolledback { params } => params.extend(p),
+        }
+    }
+}
+
+impl From<PendingTxnResponse> for ExecuteResponse {
+    fn from(value: PendingTxnResponse) -> Self {
+        match value {
+            PendingTxnResponse::Committed { params } => {
+                ExecuteResponse::TransactionCommitted { params }
+            }
+            PendingTxnResponse::Rolledback { params } => {
+                ExecuteResponse::TransactionRolledBack { params }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -516,25 +573,135 @@ impl PendingReadTxn {
     }
 
     /// Alert the client that the read has been linearized.
-    pub fn finish(self) {
+    ///
+    /// If it is necessary to finalize an execute, return the state necessary to do so
+    /// (execution context and result)
+    pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
             PendingReadTxn::Read {
                 txn:
                     PendingTxn {
-                        client_transmitter,
+                        mut ctx,
                         response,
-                        mut session,
                         action,
                     },
                 ..
             } => {
-                session.vars_mut().end_transaction(action);
-                client_transmitter.send(response, session);
+                let changed = ctx.session_mut().vars_mut().end_transaction(action);
+                // Append any parameters that changed to the response.
+                let response = response.map(|mut r| {
+                    r.extend_params(changed);
+                    ExecuteResponse::from(r)
+                });
+
+                Some((ctx, response))
             }
             PendingReadTxn::ReadThenWrite { tx, .. } => {
                 // Ignore errors if the caller has hung up.
                 let _ = tx.send(());
+                None
             }
+        }
+    }
+}
+
+/// State that the coordinator must process as part of retiring
+/// command execution.  `ExecuteContextExtra::Default` is guaranteed
+/// to produce a value that will cause the coordinator to do nothing, and
+/// is intended for use by code that invokes the execution processing flow
+/// (i.e., `sequence_plan`) without actually being a statement execution.
+// Currently nothing; planned to be data related to statement logging
+// at some point in the future.
+#[derive(Debug, Default)]
+pub struct ExecuteContextExtra;
+
+/// Bundle of state related to statement execution.
+///
+/// This struct collects a bundle of state that needs to be threaded
+/// through various functions as part of statement execution.
+/// Currently, it is only used to finalize execution, by calling one
+/// of the methods `retire` or `retire_aysnc`. Finalizing execution
+/// involves sending the session back to the pgwire layer so that it
+/// may be used to process further commands. In the future, it will
+/// also involve performing some work on the main coordinator thread
+/// (e.g., recording the time at which the statement finished
+/// executing) the state necessary to perform this work is bundled in
+/// the `ExecuteContextExtra` object (today, it is simply empty).
+#[derive(Debug)]
+pub struct ExecuteContext {
+    tx: ClientTransmitter<ExecuteResponse>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    session: Session,
+    extra: ExecuteContextExtra,
+}
+
+impl ExecuteContext {
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    pub fn tx(&self) -> &ClientTransmitter<ExecuteResponse> {
+        &self.tx
+    }
+
+    pub fn tx_mut(&mut self) -> &mut ClientTransmitter<ExecuteResponse> {
+        &mut self.tx
+    }
+
+    pub fn from_parts(
+        tx: ClientTransmitter<ExecuteResponse>,
+        internal_cmd_tx: mpsc::UnboundedSender<Message>,
+        session: Session,
+        extra: ExecuteContextExtra,
+    ) -> Self {
+        Self {
+            tx,
+            session,
+            extra,
+            internal_cmd_tx,
+        }
+    }
+
+    /// By calling this function, the caller takes responsibility for
+    /// dealing with the instance of `ExecuteContextExtra`. This is
+    /// intended to support protocols (like `COPY FROM`) that involve
+    /// multiple passes of sending the session back and forth between
+    /// the coordinator and the pgwire layer. As part of any such
+    /// protocol, we must ensure that the `ExecuteContextExtra`
+    /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
+    /// eventual retirement.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ClientTransmitter<ExecuteResponse>,
+        mpsc::UnboundedSender<Message>,
+        Session,
+        ExecuteContextExtra,
+    ) {
+        let Self {
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+        } = self;
+        (tx, internal_cmd_tx, session, extra)
+    }
+
+    /// Retire the execution, by sending a message to the coordinator.
+    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+        let Self {
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+        } = self;
+        tx.send(result, session);
+        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
+            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
         }
     }
 }
@@ -657,6 +824,9 @@ pub struct Coordinator {
 
     /// Coordinator metrics.
     metrics: Metrics,
+
+    /// Tracing handle.
+    tracing_handle: TracingHandle,
 }
 
 impl Coordinator {
@@ -672,9 +842,9 @@ impl Coordinator {
         info!("coordinator init: beginning bootstrap");
 
         // Inform the controllers about their initial configuration.
-        let compute_config = self.catalog().compute_config();
+        let compute_config = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
-        let storage_config = self.catalog().storage_config();
+        let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
@@ -750,7 +920,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().to_vec();
+                let remaining_deps = entry.uses().0.iter().copied().collect::<Vec<_>>();
                 (entry, remaining_deps)
             })
             .collect();
@@ -788,12 +958,9 @@ impl Coordinator {
                     if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
                     {
                         mz_ore::soft_assert! {{
-                            let mut subsources =  entry.subsources();
-                            subsources.sort();
-                            let mut w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
-                            w.sort();
-
-                            subsources == w
+                            let subsources =  entry.subsources();
+                            let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
+                            w.iter().all(|w| subsources.contains(w))
                         }, "expect that items are exactly source's subsources"}
 
                         // Re-enqueue objects and continue.
@@ -848,48 +1015,18 @@ impl Coordinator {
         let mut collections_to_create = Vec::new();
 
         fn source_desc<T>(
-            id: GlobalId,
             source_status_collection_id: Option<GlobalId>,
             source: &Source,
         ) -> CollectionDescription<T> {
             let (data_source, status_collection_id) = match &source.data_source {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => {
-                    let mut source_imports = BTreeMap::new();
-                    for source_import in &ingestion.source_imports {
-                        source_imports.insert(*source_import, ());
-                    }
-
-                    let mut source_exports = BTreeMap::new();
-                    // By convention the first output corresponds to the main source object
-                    let main_export = SourceExport {
-                        output_index: 0,
-                        storage_metadata: (),
-                    };
-                    source_exports.insert(id, main_export);
-                    for (subsource, output_index) in ingestion.subsource_exports.clone() {
-                        let export = SourceExport {
-                            output_index,
-                            storage_metadata: (),
-                        };
-                        source_exports.insert(subsource, export);
-                    }
-                    (
-                        DataSource::Ingestion(IngestionDescription {
-                            desc: ingestion.desc.clone(),
-                            ingestion_metadata: (),
-                            source_imports,
-                            source_exports,
-                            instance_id: ingestion.cluster_id,
-                            remap_collection_id: ingestion.remap_collection_id.expect(
-                                "ingestion-based collection must name remap collection before going to storage",
-                            ),
-                        }),
-                        source_status_collection_id,
-                    )
-                }
+                DataSourceDesc::Ingestion(ingestion) => (
+                    DataSource::Ingestion(ingestion.clone()),
+                    source_status_collection_id,
+                ),
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                DataSourceDesc::Webhook => (DataSource::Webhook, source_status_collection_id),
                 DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Introspection(introspection) => {
                     (DataSource::Introspection(*introspection), None)
@@ -909,10 +1046,9 @@ impl Coordinator {
                 entries
                     .iter()
                     .filter_map(|entry| match entry.item() {
-                        CatalogItem::Source(source) => Some((
-                            entry.id(),
-                            source_desc(entry.id(), source_status_collection_id, source),
-                        )),
+                        CatalogItem::Source(source) => {
+                            Some((entry.id(), source_desc(source_status_collection_id, source)))
+                        }
                         CatalogItem::Table(table) => {
                             let collection_desc = table.desc.clone().into();
                             Some((entry.id(), collection_desc))
@@ -941,10 +1077,8 @@ impl Coordinator {
                 // User sources can have dependencies, so do avoid them in the
                 // batch.
                 CatalogItem::Source(source) if entry.id().is_system() => {
-                    collections_to_create.push((
-                        entry.id(),
-                        source_desc(entry.id(), source_status_collection_id, source),
-                    ));
+                    collections_to_create
+                        .push((entry.id(), source_desc(source_status_collection_id, source)));
                 }
                 _ => {
                     // No collections to create.
@@ -985,8 +1119,7 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // System sources were created above, add others here.
                     if !entry.id().is_system() {
-                        let source_desc =
-                            source_desc(entry.id(), source_status_collection_id, source);
+                        let source_desc = source_desc(source_status_collection_id, source);
                         self.controller
                             .storage
                             .create_collections(vec![(entry.id(), source_desc)])
@@ -1101,7 +1234,7 @@ impl Coordinator {
                             // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
                             let result = internal_cmd_tx.send(Message::SinkConnectionReady(
                                 SinkConnectionReady {
-                                    session_and_tx: None,
+                                    ctx: None,
                                     id,
                                     oid,
                                     create_export_token,
@@ -1334,6 +1467,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1383,12 +1517,11 @@ impl Coordinator {
                 }
             };
 
-            // All message processing functions trace. Start a parent span for them to make
-            // it easy to find slow messages.
-            let span = span!(Level::DEBUG, "coordinator message processing");
-            let _enter = span.enter();
-
-            self.handle_message(msg).await;
+            self.handle_message(msg)
+                // All message processing functions trace. Start a parent span for them to make
+                // it easy to find slow messages.
+                .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .await;
         }
     }
 
@@ -1428,6 +1561,10 @@ impl Coordinator {
             let _ = meta.notice_tx.send(notice.clone());
         }
     }
+
+    pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
+        &self.active_conns
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -1446,6 +1583,7 @@ pub async fn serve(
         dataflow_client,
         storage,
         unsafe_mode,
+        all_features,
         build_info,
         environment_id,
         metrics_registry,
@@ -1465,6 +1603,8 @@ pub async fn serve(
         aws_account_id,
         aws_privatelink_availability_zones,
         system_parameter_frontend,
+        active_connection_count,
+        tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1506,8 +1646,9 @@ pub async fn serve(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            all_features,
             build_info,
-            environment_id,
+            environment_id: environment_id.clone(),
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -1522,6 +1663,7 @@ pub async fn serve(
             system_parameter_frontend,
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
+            active_connection_count,
         })
         .await?;
     let session_id = catalog.config().session_id;
@@ -1536,6 +1678,7 @@ pub async fn serve(
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
+    let segment_client_clone = segment_client.clone();
     let span = tracing::Span::current();
     let coord_now = now.clone();
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
@@ -1559,7 +1702,9 @@ pub async fn serve(
 
             let mut coord = Coordinator {
                 controller: dataflow_client,
-                view_optimizer: Optimizer::logical_optimizer(),
+                view_optimizer: Optimizer::logical_optimizer(
+                    &mz_transform::typecheck::empty_context(),
+                ),
                 catalog: Arc::new(catalog),
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
@@ -1585,6 +1730,7 @@ pub async fn serve(
                 storage_usage_collection_interval,
                 segment_client,
                 metrics,
+                tracing_handle,
             };
             let bootstrap = handle.block_on(async {
                 coord
@@ -1618,7 +1764,14 @@ pub async fn serve(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone, now);
+            let client = Client::new(
+                build_info,
+                cmd_tx.clone(),
+                metrics_clone,
+                now,
+                environment_id,
+                segment_client_clone,
+            );
             Ok((handle, client))
         }
         Err(e) => Err(e),

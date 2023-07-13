@@ -11,7 +11,7 @@
 
 use mz_expr::MirRelationExpr;
 
-use super::{Attribute, DerivedAttributes, RequiredAttributes};
+use crate::attribute::{Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the number of MirRelationExpr in each subtree in a bottom-up manner.
 #[derive(Default)]

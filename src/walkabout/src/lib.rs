@@ -107,9 +107,7 @@ mod parse;
 
 pub mod ir;
 
-pub use gen::gen_fold;
-pub use gen::gen_visit;
-pub use gen::gen_visit_mut;
+pub use gen::{gen_fold, gen_visit, gen_visit_mut};
 
 /// Loads type definitions from the specified module.
 ///

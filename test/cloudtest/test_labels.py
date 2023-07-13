@@ -9,7 +9,7 @@
 
 import json
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 # NOTE [btv] - Quick and dirty hack: assume s1 is always mz_system and

@@ -88,15 +88,17 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use itertools::Itertools;
-use rocksdb::{
-    DBCompressionType, Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB,
-};
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::sync::{mpsc, oneshot};
-
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
+use mz_ore::retry::{Retry, RetryResult};
+use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use tokio::sync::{mpsc, oneshot};
+
+pub mod config;
+pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
@@ -119,25 +121,50 @@ pub enum Error {
     TokioPanic(#[from] tokio::task::JoinError),
 }
 
-/// Options to configure a [`RocksDBInstance`].
-pub struct Options {
+/// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
+/// see the `config` modules for tuning. These are generally fixed within the binary.
+pub struct InstanceOptions {
     /// Whether or not to clear state at the instance
     /// path before starting.
     pub cleanup_on_new: bool,
 
-    /// Whether or not to clear state at the instance
-    /// after the client is dropped.
-    pub cleanup_on_drop: bool,
-
     /// Whether or not to write writes
-    /// to the wal.
+    /// to the wal. This is not in `RocksDBTuningParameters` because it
+    /// applies to `WriteOptions` when creating `WriteBatch`es.
     pub use_wal: bool,
-
-    /// Compression type for blocks and blobs.
-    pub compression_type: DBCompressionType,
 
     /// A possibly shared RocksDB `Env`.
     pub env: Env,
+}
+
+impl InstanceOptions {
+    /// A new `Options` object with reasonable defaults.
+    pub fn defaults_with_env(env: rocksdb::Env) -> Self {
+        InstanceOptions {
+            cleanup_on_new: true,
+            use_wal: false,
+            env,
+        }
+    }
+
+    fn as_rocksdb_options(&self, tuning_config: &RocksDBConfig) -> RocksDBOptions {
+        // Defaults + `create_if_missing`
+        let mut options = rocksdb::Options::default();
+        options.create_if_missing(true);
+
+        // Set the env first so tuning applies to the shared `Env`.
+        options.set_env(&self.env);
+
+        config::apply_to_options(tuning_config, &mut options);
+
+        options
+    }
+
+    fn as_rocksdb_write_options(&self) -> WriteOptions {
+        let mut wo = rocksdb::WriteOptions::new();
+        wo.disable_wal(!self.use_wal);
+        wo
+    }
 }
 
 /// Metrics about an instances usage of RocksDB. User-provided
@@ -153,40 +180,31 @@ pub struct RocksDBMetrics {
     pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
 }
 
-impl Options {
-    /// A new `Options` object with reasonable defaults.
-    pub fn new_with_defaults() -> Result<Self, RocksDBError> {
-        Ok(Options {
-            cleanup_on_new: true,
-            cleanup_on_drop: true,
-            use_wal: false,
-            compression_type: DBCompressionType::Snappy,
-            env: rocksdb::Env::new()?,
-        })
-    }
+/// The result type for `multi_get`.
+#[derive(Default, Debug)]
+pub struct MultiGetResult {
+    /// The number of keys we fetched.
+    pub processed_gets: u64,
+}
 
-    fn as_rocksdb_options(&self) -> RocksDBOptions {
-        let mut options = rocksdb::Options::default();
-        options.create_if_missing(true);
+/// The result type for individual gets.
+#[derive(Debug, Default, Clone)]
+pub struct GetResult<V> {
+    /// The previous value, if there was one.
+    pub value: V,
+    /// The size of `value` as persisted, if there was one.
+    /// Useful for users keeping track of statistics.
+    pub size: u64,
+}
 
-        /*
-        // Dumped every 600 seconds.
-        rocks_options.enable_statistics();
-        rocks_options.set_report_bg_io_stats(true);
-        */
-
-        options.set_compression_type(self.compression_type);
-        options.set_blob_compression_type(self.compression_type);
-
-        options.set_env(&self.env);
-        options
-    }
-
-    fn as_rocksdb_write_options(&self) -> WriteOptions {
-        let mut wo = rocksdb::WriteOptions::new();
-        wo.disable_wal(!self.use_wal);
-        wo
-    }
+/// The result type for `multi_put`.
+#[derive(Default, Debug)]
+pub struct MultiPutResult {
+    /// The number of keys we put or deleted.
+    pub processed_puts: u64,
+    /// The total size of values we put into the database.
+    /// Does not contain any information about deletes.
+    pub size_written: u64,
 }
 
 #[derive(Debug)]
@@ -194,13 +212,14 @@ enum Command<K, V> {
     MultiGet {
         batch: Vec<K>,
         // Scratch vector to return results in.
-        results_scratch: Vec<Option<V>>,
+        results_scratch: Vec<Option<GetResult<V>>>,
         response_sender: oneshot::Sender<
             Result<
                 (
+                    MultiGetResult,
                     // The batch scratch vector being given back.
                     Vec<K>,
-                    Vec<Option<V>>,
+                    Vec<Option<GetResult<V>>>,
                 ),
                 Error,
             >,
@@ -209,7 +228,7 @@ enum Command<K, V> {
     MultiPut {
         batch: Vec<(K, Option<V>)>,
         // Scratch vector to return results in.
-        response_sender: oneshot::Sender<Result<Vec<(K, Option<V>)>, Error>>,
+        response_sender: oneshot::Sender<Result<(MultiPutResult, Vec<(K, Option<V>)>), Error>>,
     },
     Shutdown {
         done_sender: oneshot::Sender<()>,
@@ -217,7 +236,6 @@ enum Command<K, V> {
 }
 
 /// An async wrapper around RocksDB.
-#[derive(Clone)]
 pub struct RocksDBInstance<K, V> {
     tx: mpsc::Sender<Command<K, V>>,
 
@@ -227,11 +245,14 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to return results from the RocksDB thread
     // during `MultiGet`.
-    multi_get_results_scratch: Vec<Option<V>>,
+    multi_get_results_scratch: Vec<Option<GetResult<V>>>,
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiPut`.
     multi_put_scratch: Vec<(K, Option<V>)>,
+
+    // Configuration that can change dynamically.
+    dynamic_config: config::RocksDBDynamicConfig,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -239,12 +260,25 @@ where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    /// Start a new RocksDB instance at the path.
-    pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
+    /// Start a new RocksDB instance at the path, using
+    /// the `Options` and `RocksDBTuningParameters` to
+    /// configure the instance.
+    ///
+    /// `metrics` is a set of metric types that this type will keep
+    /// up to date. `enc_opts` is the `bincode` options used to
+    /// serialize and deserialize the keys and values.
+    pub async fn new<M, O>(
         instance_path: &Path,
-        options: Options,
+        options: InstanceOptions,
+        tuning_config: RocksDBConfig,
         metrics: M,
-    ) -> Result<Self, Error> {
+        enc_opts: O,
+    ) -> Result<Self, Error>
+    where
+        O: bincode::Options + Copy + Send + Sync + 'static,
+        M: Deref<Target = RocksDBMetrics> + Send + 'static,
+    {
+        let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
@@ -268,7 +302,15 @@ where
 
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
-            rocksdb_core_loop(options, instance_path, rx, metrics, creation_error_tx)
+            rocksdb_core_loop(
+                options,
+                tuning_config,
+                instance_path,
+                rx,
+                metrics,
+                creation_error_tx,
+                enc_opts,
+            )
         });
 
         if let Ok(creation_error) = creation_error_rx.await {
@@ -280,16 +322,53 @@ where
             multi_get_scratch: Vec::new(),
             multi_get_results_scratch: Vec::new(),
             multi_put_scratch: Vec::new(),
+            dynamic_config,
         })
     }
 
     /// For each _unique_ key in `gets`, place the stored value (if any) in `results_out`.
     ///
     /// Panics if `gets` and `results_out` are not the same length.
-    pub async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, Error>
+    pub async fn multi_get<'r, G, R, Ret, Placement>(
+        &mut self,
+        gets: G,
+        results_out: R,
+        placement: Placement,
+    ) -> Result<MultiGetResult, Error>
     where
         G: IntoIterator<Item = K>,
-        R: IntoIterator<Item = &'r mut Option<V>>,
+        R: IntoIterator<Item = &'r mut Ret>,
+        Ret: 'r,
+        Placement: Fn(Option<GetResult<V>>) -> Ret,
+    {
+        let batch_size = self.dynamic_config.batch_size();
+        let mut stats = MultiGetResult::default();
+
+        let mut gets = gets.into_iter().peekable();
+        if gets.peek().is_some() {
+            let gets = gets.chunks(batch_size);
+            let results_out = results_out.into_iter().chunks(batch_size);
+
+            for (gets, results_out) in gets.into_iter().zip_eq(results_out.into_iter()) {
+                let ret = self.multi_get_inner(gets, results_out, &placement).await?;
+                stats.processed_gets += ret.processed_gets;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    async fn multi_get_inner<'r, G, R, Ret, Placement>(
+        &mut self,
+        gets: G,
+        results_out: R,
+        placement: &Placement,
+    ) -> Result<MultiGetResult, Error>
+    where
+        G: IntoIterator<Item = K>,
+        R: IntoIterator<Item = &'r mut Ret>,
+        Ret: 'r,
+        Placement: Fn(Option<GetResult<V>>) -> Ret,
     {
         let mut multi_get_vec = std::mem::take(&mut self.multi_get_scratch);
         let mut results_vec = std::mem::take(&mut self.multi_get_results_scratch);
@@ -300,7 +379,7 @@ where
         if multi_get_vec.is_empty() {
             self.multi_get_scratch = multi_get_vec;
             self.multi_get_results_scratch = results_vec;
-            return Ok(0);
+            return Ok(MultiGetResult { processed_gets: 0 });
         }
 
         let (tx, rx) = oneshot::channel();
@@ -315,15 +394,13 @@ where
 
         // We also unwrap all rocksdb errors here.
         match rx.await.map_err(|_| Error::RocksDBThreadGoneAway)? {
-            Ok(mut results) => {
-                let size = u64::cast_from(results.1.len());
-
-                for (place, get) in results_out.into_iter().zip_eq(results.1.drain(..)) {
-                    *place = get;
+            Ok((ret, get_scratch, mut results_scratch)) => {
+                for (place, get) in results_out.into_iter().zip_eq(results_scratch.drain(..)) {
+                    *place = placement(get);
                 }
-                self.multi_get_scratch = results.0;
-                self.multi_get_results_scratch = results.1;
-                Ok(size)
+                self.multi_get_scratch = get_scratch;
+                self.multi_get_results_scratch = results_scratch;
+                Ok(ret)
             }
             Err(e) => {
                 // Note we don't attempt to preserve the scratch allocations here.
@@ -335,7 +412,28 @@ where
     /// For each key in puts, store the given value, or delete it if
     /// the value is `None`. If the same `key` appears multiple times,
     /// the last value for the key wins.
-    pub async fn multi_put<P>(&mut self, puts: P) -> Result<u64, Error>
+    pub async fn multi_put<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
+    where
+        P: IntoIterator<Item = (K, Option<V>)>,
+    {
+        let batch_size = self.dynamic_config.batch_size();
+        let mut stats = MultiPutResult::default();
+
+        let mut puts = puts.into_iter().peekable();
+        if puts.peek().is_some() {
+            let puts = puts.chunks(batch_size);
+
+            for puts in puts.into_iter() {
+                let ret = self.multi_put_inner(puts).await?;
+                stats.processed_puts += ret.processed_puts;
+                stats.size_written += ret.size_written;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    async fn multi_put_inner<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
     where
         P: IntoIterator<Item = (K, Option<V>)>,
     {
@@ -345,10 +443,11 @@ where
         multi_put_vec.extend(puts);
         if multi_put_vec.is_empty() {
             self.multi_put_scratch = multi_put_vec;
-            return Ok(0);
+            return Ok(MultiPutResult {
+                processed_puts: 0,
+                size_written: 0,
+            });
         }
-
-        let size = u64::cast_from(multi_put_vec.len());
 
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -361,9 +460,9 @@ where
 
         // We also unwrap all rocksdb errors here.
         match rx.await.map_err(|_| Error::RocksDBThreadGoneAway)? {
-            Ok(scratch) => {
+            Ok((ret, scratch)) => {
                 self.multi_put_scratch = scratch;
-                Ok(size)
+                Ok(ret)
             }
             Err(e) => {
                 // Note we don't attempt to preserve the allocation here.
@@ -387,29 +486,48 @@ where
     }
 }
 
-// TODO(guswynn): retry retryable rocksdb errors.
-fn rocksdb_core_loop<K, V, M>(
-    options: Options,
+fn rocksdb_core_loop<K, V, M, O>(
+    options: InstanceOptions,
+    tuning_config: RocksDBConfig,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,
     creation_error_tx: oneshot::Sender<Error>,
+    enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
+    O: bincode::Options + Copy + Send + Sync + 'static,
 {
-    let db: DB = match DB::open(&options.as_rocksdb_options(), &instance_path) {
+    let retry_max_duration = tuning_config.retry_max_duration;
+    let rocksdb_options = options.as_rocksdb_options(&tuning_config);
+
+    let retry_result = Retry::default()
+        .max_duration(retry_max_duration)
+        .retry(|_| match DB::open(&rocksdb_options, &instance_path) {
+            Ok(db) => RetryResult::Ok(db),
+            Err(e) => match e.kind() {
+                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+            },
+        });
+
+    let db: DB = match retry_result {
         Ok(db) => {
             drop(creation_error_tx);
             db
         }
         Err(e) => {
             // Communicate the error back to `new`.
-            let _ = creation_error_tx.send(Error::RocksDB(e));
+            let _ = creation_error_tx.send(e);
             return;
         }
     };
+
+    let mut encoded_batch_buffers: Vec<Option<Vec<u8>>> = Vec::new();
+    let mut encoded_batch: Vec<(K, Option<Vec<u8>>)> = Vec::new();
+
     let wo = options.as_rocksdb_write_options();
 
     while let Some(cmd) = cmd_rx.blocking_recv() {
@@ -429,34 +547,55 @@ fn rocksdb_core_loop<K, V, M>(
 
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                let gets = db.multi_get(batch.drain(..));
-                let latency = now.elapsed();
+                let retry_result = Retry::default()
+                    .max_duration(retry_max_duration)
+                    .retry(|_| {
+                        let gets = db.multi_get(batch.iter());
+                        let latency = now.elapsed();
 
-                let gets: Result<Vec<_>, _> = gets.into_iter().collect();
-                match gets {
-                    Ok(gets) => {
-                        metrics.multi_get_latency.observe(latency.as_secs_f64());
-                        metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
-                        for previous_value in gets {
-                            let previous_value = match previous_value
-                                .map(|v| bincode::deserialize(&v))
-                                .transpose()
-                            {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    let _ = response_sender.send(Err(Error::DecodeError(e)));
-                                    return;
-                                }
-                            };
-                            results_scratch.push(previous_value);
+                        let gets: Result<Vec<_>, _> = gets.into_iter().collect();
+                        match gets {
+                            Ok(gets) => {
+                                metrics.multi_get_latency.observe(latency.as_secs_f64());
+                                metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                                let result = MultiGetResult {
+                                    processed_gets: gets.len().try_into().unwrap(),
+                                };
+
+                                RetryResult::Ok((result, gets))
+                            }
+                            Err(e) => match e.kind() {
+                                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                            },
                         }
+                    });
 
-                        let _ = response_sender.send(Ok((batch, results_scratch)));
+                let _ = match retry_result {
+                    Ok((result, gets)) => {
+                        for previous_value in gets {
+                            let get_result = match previous_value {
+                                Some(previous_value) => {
+                                    match enc_opts.deserialize(&previous_value) {
+                                        Ok(value) => Some(GetResult {
+                                            value,
+                                            size: u64::cast_from(previous_value.len()),
+                                        }),
+                                        Err(e) => {
+                                            let _ =
+                                                response_sender.send(Err(Error::DecodeError(e)));
+                                            return;
+                                        }
+                                    }
+                                }
+                                None => None,
+                            };
+                            results_scratch.push(get_result);
+                        }
+                        batch.clear();
+                        response_sender.send(Ok((result, batch, results_scratch)))
                     }
-                    Err(e) => {
-                        let _ = response_sender.send(Err(Error::RocksDB(e)));
-                        return;
-                    }
+                    Err(e) => response_sender.send(Err(e)),
                 };
             }
             Command::MultiPut {
@@ -464,43 +603,86 @@ fn rocksdb_core_loop<K, V, M>(
                 response_sender,
             } => {
                 let batch_size = batch.len();
-                let mut writes = rocksdb::WriteBatch::default();
-                let mut encode_buf = Vec::new();
+
+                let mut ret = MultiPutResult {
+                    processed_puts: 0,
+                    size_written: 0,
+                };
+
+                // initialize and push values into the buffer to match the batch size
+                let buf_size = encoded_batch_buffers.len();
+                for _ in buf_size..batch_size {
+                    encoded_batch_buffers.push(Some(Vec::new()));
+                }
+                assert!(encoded_batch_buffers.len() >= batch_size);
 
                 // TODO(guswynn): sort by key before writing.
-                for (key, value) in batch.drain(..) {
+                for ((key, value), encode_buf) in
+                    batch.drain(..).zip(encoded_batch_buffers.iter_mut())
+                {
+                    ret.processed_puts += 1;
+
                     match value {
                         Some(update) => {
+                            let mut encode_buf =
+                                encode_buf.take().expect("encode_buf should not be empty");
                             encode_buf.clear();
-                            match bincode::serialize_into::<&mut Vec<u8>, _>(
-                                &mut encode_buf,
-                                &update,
-                            ) {
-                                Ok(()) => {}
+                            match enc_opts
+                                .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, &update)
+                            {
+                                Ok(()) => ret.size_written += u64::cast_from(encode_buf.len()),
                                 Err(e) => {
                                     let _ = response_sender.send(Err(Error::DecodeError(e)));
                                     return;
                                 }
                             };
-                            writes.put(&key, encode_buf.as_slice());
+                            encoded_batch.push((key, Some(encode_buf)));
                         }
-                        None => writes.delete(&key),
+                        None => encoded_batch.push((key, None)),
                     }
                 }
-                // Perform the multi_get and record metrics, if there wasn't an error.
+                // Perform the multi_put and record metrics, if there wasn't an error.
                 let now = Instant::now();
-                match db.write_opt(writes, &wo) {
-                    Ok(()) => {
-                        let latency = now.elapsed();
-                        metrics.multi_put_latency.observe(latency.as_secs_f64());
-                        metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
-                        let _ = response_sender.send(Ok(batch));
-                    }
-                    Err(e) => {
-                        let _ = response_sender.send(Err(Error::RocksDB(e)));
-                        return;
+                let retry_result = Retry::default()
+                    .max_duration(retry_max_duration)
+                    .retry(|_| {
+                        let mut writes = rocksdb::WriteBatch::default();
+
+                        for (key, value) in encoded_batch.iter() {
+                            match value {
+                                Some(update) => writes.put(key, update),
+                                None => writes.delete(key),
+                            }
+                        }
+
+                        match db.write_opt(writes, &wo) {
+                            Ok(()) => {
+                                let latency = now.elapsed();
+                                metrics.multi_put_latency.observe(latency.as_secs_f64());
+                                metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
+                                RetryResult::Ok(())
+                            }
+                            Err(e) => match e.kind() {
+                                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                            },
+                        }
+                    });
+
+                // put back the values in the buffer so we don't lose allocation
+                for (i, (_, encoded_buffer)) in encoded_batch.drain(..).enumerate() {
+                    if let Some(encoded_buffer) = encoded_buffer {
+                        encoded_batch_buffers[i] = Some(encoded_buffer);
                     }
                 }
+
+                let _ = match retry_result {
+                    Ok(()) => {
+                        batch.clear();
+                        response_sender.send(Ok((ret, batch)))
+                    }
+                    Err(e) => response_sender.send(Err(e)),
+                };
             }
         }
     }

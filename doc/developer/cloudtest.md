@@ -84,6 +84,13 @@ build in debug mode by passing the `--dev` flag:
 ./pytest --dev [-k TEST]
 ```
 
+⚠️ By default, cloudtest only runs short tests. To include long tests you can include the `-m=long`
+flag:
+
+```
+./pytest -m=long
+```
+
 To check the cluster status:
 
 ```
@@ -129,7 +136,7 @@ See the examples in `test/clustertest/test_smoke.py`.
 The tests folow pytest conventions:
 
 ```python
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 def test_something(mz: MaterializeApplication) -> None:
     assert ...

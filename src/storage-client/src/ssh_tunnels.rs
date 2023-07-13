@@ -23,14 +23,13 @@ use std::collections::{btree_map, BTreeMap};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use scopeguard::ScopeGuard;
-use tokio::sync::watch;
-use tracing::info;
-
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::{SshTunnelConfig, SshTunnelHandle};
+use scopeguard::ScopeGuard;
+use tokio::sync::watch;
+use tracing::info;
 
 use crate::types::connections::SshTunnel;
 

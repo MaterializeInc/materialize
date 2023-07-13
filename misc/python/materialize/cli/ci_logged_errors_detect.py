@@ -14,7 +14,7 @@ import argparse
 import os
 import re
 import sys
-from typing import Any, List, Optional, Set
+from typing import Any, List, Optional, Set, Tuple
 
 import requests
 
@@ -25,11 +25,13 @@ CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 ERROR_RE = re.compile(
     r"""
     ( panicked\ at
+    | segfault\ at
     | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
+    | fatal runtime error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
     # From src/testdrive/src/action/sql.rs
@@ -42,6 +44,10 @@ ERROR_RE = re.compile(
     | expected\ .*,\ got\ .*
     | expected\ .*,\ but\ found\ none
     | unsupported\ SQL\ type\ in\ testdrive:
+    | environmentd:\ fatal: # startup failure
+    | clusterd:\ fatal: # startup failure
+    | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
+    | unrecognized\ configuration\ parameter
     )
     # Emitted by tests employing explicit mz_panic()
     (?!.*forced\ panic)
@@ -122,12 +128,11 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    known_issues = get_known_issues_from_github()
+    (known_issues, unknown_errors) = get_known_issues_from_github()
 
     artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
-    unknown_errors: List[str] = []
     known_errors: List[str] = []
 
     # Keep track of known errors so we log each only once
@@ -200,7 +205,7 @@ def get_error_logs(log_files: List[str]) -> List[ErrorLog]:
     return error_logs
 
 
-def get_known_issues_from_github() -> list[KnownIssue]:
+def get_known_issues_from_github_page(page: int = 1) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -210,7 +215,7 @@ def get_known_issues_from_github() -> list[KnownIssue]:
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
-        'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"',
+        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
         headers=headers,
     )
 
@@ -219,20 +224,42 @@ def get_known_issues_from_github() -> list[KnownIssue]:
 
     issues_json = response.json()
     assert issues_json["incomplete_results"] == False
+    return issues_json
 
+
+def get_known_issues_from_github() -> Tuple[List[KnownIssue], List[str]]:
+    page = 1
+    issues_json = get_known_issues_from_github_page(page)
+    while issues_json["total_count"] > len(issues_json["items"]):
+        page += 1
+        next_page_json = get_known_issues_from_github_page(page)
+        if not next_page_json["items"]:
+            break
+        issues_json["items"].extend(next_page_json["items"])
+
+    unknown_errors = []
     known_issues = []
+
     for issue in issues_json["items"]:
         matches = CI_RE.findall(issue["body"])
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
         for match in matches:
             if matches_apply_to:
                 for match_apply_to in matches_apply_to:
-                    known_issues.append(
-                        KnownIssue(match.strip(), match_apply_to.strip().lower(), issue)
-                    )
+                    try:
+                        known_issues.append(
+                            KnownIssue(
+                                match.strip(), match_apply_to.strip().lower(), issue
+                            )
+                        )
+                    except:
+                        unknown_errors.append(
+                            "[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"
+                        )
             else:
                 known_issues.append(KnownIssue(match.strip(), None, issue))
-    return known_issues
+
+    return (known_issues, unknown_errors)
 
 
 if __name__ == "__main__":

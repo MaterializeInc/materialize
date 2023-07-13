@@ -467,10 +467,11 @@ impl Value {
 mod tests {
     use std::str::FromStr;
 
-    use super::*;
     use crate::Schema;
 
-    #[test]
+    use super::*;
+
+    #[mz_ore::test]
     fn validate() {
         let value_schema_valid = vec![
             (Value::Int(42), "\"int\"", true),
@@ -540,7 +541,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_fixed() {
         let schema =
             Schema::from_str(r#"{"type": "fixed", "size": 4, "name": "some_fixed"}"#).unwrap();
@@ -549,7 +550,7 @@ mod tests {
         assert!(!Value::Fixed(5, vec![0, 0, 0, 0, 0]).validate(schema.top_node()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_enum() {
         let schema = Schema::from_str(r#"{"type": "enum", "name": "some_enum", "symbols": ["spades", "hearts", "diamonds", "clubs"]}"#).unwrap();
 
@@ -564,7 +565,7 @@ mod tests {
         assert!(!Value::Enum(0, "spades".to_string()).validate(other_schema.top_node()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_record() {
         let schema = Schema::from_str(
             r#"{
@@ -610,7 +611,7 @@ mod tests {
         .validate(schema.top_node()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_decimal() {
         assert!(Value::Decimal(DecimalValue {
             unscaled: vec![7],

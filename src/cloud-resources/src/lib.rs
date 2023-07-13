@@ -80,9 +80,8 @@ use std::collections::BTreeSet;
 use std::fmt::{self, Debug};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-
 use mz_repr::GlobalId;
+use serde::{Deserialize, Serialize};
 
 pub mod crd;
 

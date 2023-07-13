@@ -10,15 +10,22 @@
 version: v1
 breaking:
   use:
-    - FILE
+    - WIRE
+  ignore:
+    # does currently not require backward-compatibility
+    - cluster-client
+    # does currently not require backward-compatibility
+    - compute-client
+    # does currently not require backward-compatibility
+    - storage-client
+    # does not currently require backward-compatibility
+    - stash
+    # still under active development
+    - persist-types
 lint:
   use:
     - DEFAULT
 build:
   excludes:
-    # does currently not require backward-compatibility
-    - compute-client
-    # does currently not require backward-compatibility
-    - storage-client
-    # test
-    - testdrive
+    # external code
+    - testdrive/ci/protobuf-install

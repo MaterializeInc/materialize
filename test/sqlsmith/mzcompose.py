@@ -36,6 +36,8 @@ SERVICES = [
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
+        # TODO(def-): Remove this when #19496 is fixed
+        additional_system_parameter_defaults={"persist_stats_filter_enabled": "false"},
     )
     for mz_server in MZ_SERVERS
 ] + [
@@ -58,11 +60,12 @@ known_errors = [
     "value too long for type",
     "list_agg on char not yet supported",
     "does not allow subqueries",
-    "range constructor flags argument must not be null",  # expected after https://github.com/MaterializeInc/materialize/issues/18036 has been fixed
-    "function pg_catalog.array_remove(",
-    "function pg_catalog.array_cat(",
-    "function mz_catalog.list_append(",
-    "function mz_catalog.list_prepend(",
+    "function array_remove(",  # insufficient type system, parameter types have to match
+    "function array_cat(",  # insufficient type system, parameter types have to match
+    "function array_position(",  # insufficient type system, parameter types have to match
+    "function list_append(",  # insufficient type system, parameter types have to match
+    "function list_prepend(",  # insufficient type system, parameter types have to match
+    "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
     "range lower bound must be less than or equal to range upper bound",
@@ -71,6 +74,7 @@ known_errors = [
     "zero raised to a negative power is undefined",
     "operator does not exist",  # For list types
     "couldn't parse role id",
+    "mz_aclitem grantor cannot be PUBLIC role",
     "unrecognized privilege type:",
     "cannot return complex numbers",
     "statement batch size cannot exceed",
@@ -104,6 +108,8 @@ known_errors = [
     "null character not permitted",
     "is defined for numbers between",
     "field position must be greater than zero",
+    "array_fill on ",  # Not yet supported
+    "must not be null",  # Expected with array_fill, array_position
     "' not recognized",  # Expected, see https://github.com/MaterializeInc/materialize/issues/17981
     "must appear in the GROUP BY clause or be used in an aggregate function",
     "Expected joined table, found",  # Should fix for multi table join
@@ -118,6 +124,23 @@ known_errors = [
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
+    "string is not a valid identifier:",  # Expected in parse_ident
+    "invalid datepart",
+    "pg_cancel_backend in this position not yet supported",
+    "unrecognized configuration parameter",
+    "numeric field overflow",
+    "bigint out of range",
+    "smallint out of range",
+    "uint8 out of range",
+    "uint4 out of range",
+    "uint2 out of range",
+    "interval out of range",
+    "timezone interval must not contain months or years",
+    "not supported for type time",
+    "coalesce types text and text list cannot be matched",  # Bad typing for ||
+    "coalesce types text list and text cannot be matched",  # Bad typing for ||
+    "is out of range for type numeric: exceeds maximum precision",
+    "CAST does not support casting from integer to ",  # TODO: Improve type system
 ]
 
 
@@ -177,9 +200,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
               FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.0001)
               WITH (SIZE = '1');
 
-            CREATE TABLE t (a int, b int);
-            INSERT INTO t VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16);
-            CREATE MATERIALIZED VIEW mv AS SELECT a + b FROM t;
+            CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
+            INSERT INTO t VALUES (1, 2, 3, 4, 5, 6, '7'), (3, 4, 5, 6, 7, 8, '9'), (5, 6, 7, 8, 9, 10, '11'), (7, 8, 9, 10, 11, 12, '13'), (9, 10, 11, 12, 13, 14, '15'), (11, 12, 13, 14, 15, 16, '17'), (13, 14, 15, 16, 17, 18, '19'), (15, 16, 17, 18, 19, 20, '21');
+            CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t;
             CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
             CREATE DEFAULT INDEX ON mv;
             """,
@@ -228,6 +251,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 new_errors[frozen_key] = []
             new_errors[frozen_key].append({x: error[x] for x in ["timestamp", "query"]})
 
+    assert aggregate["queries"] > 0, "No queries were executed"
+
     print(
         f"SQLsmith: {aggregate['version']} seed: {seed} queries: {aggregate['queries']}"
     )
@@ -246,5 +271,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             print(f"From {from_time} until {to_time}")
 
-        shortest_query = min([error["query"] for error in errors], key=len)
-        print(f"Query: {shortest_query}")
+        # The error message indicates a panic, if we happen to get multiple
+        # distinct panics we want to have all the responsible queries instead
+        # of just one:
+        if "server closed the connection unexpectedly" in key["message"]:
+            for i, error in enumerate(errors, start=1):
+                print(f"Query {i}: {error['query']}")
+        else:
+            shortest_query = min([error["query"] for error in errors], key=len)
+            print(f"Query: {shortest_query}")

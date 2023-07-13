@@ -25,8 +25,9 @@
 //! * [`Error::CloudProviderRegionParseError`]: indicates an error trying to parse
 //!   a cloud provider region. Always make sure the string is correctly formatted.
 
-use reqwest::StatusCode;
 use std::fmt;
+
+use reqwest::StatusCode;
 use thiserror::Error;
 use url::ParseError;
 
@@ -89,4 +90,7 @@ pub enum Error {
     /// Indicates the URL is cannot-be-a-base.
     #[error("Error while manipulating URL. The URL is cannot-be-a-base.")]
     UrlBaseError,
+    /// Indicates that a timeout has been reached.
+    #[error("Timeout reached.")]
+    TimeoutError,
 }

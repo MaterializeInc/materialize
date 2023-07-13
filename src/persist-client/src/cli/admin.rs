@@ -37,6 +37,7 @@ use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
 
@@ -199,7 +200,7 @@ pub async fn force_compaction(
             let req = CompactReq {
                 shard_id,
                 desc: req.desc,
-                inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
             };
             let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
             let bytes = req
@@ -229,12 +230,12 @@ pub async fn force_compaction(
             };
             let res =
                 Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    CompactConfig::from(&cfg),
+                    CompactConfig::new(&cfg, &writer_id),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
+                    Arc::clone(&machine.applier.shard_metrics),
                     Arc::new(CpuHeavyRuntime::new()),
                     req,
-                    writer_id.clone(),
                     schemas,
                 )
                 .await?;
@@ -435,7 +436,8 @@ async fn make_machine(
         shard_id,
         Arc::clone(&metrics),
         state_versions,
-        &StateCache::new(metrics),
+        Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
+        Arc::new(NoopPubSubSender),
     )
     .await?;
 
@@ -458,7 +460,7 @@ async fn force_gc(
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),
     };
-    let maintenance = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }

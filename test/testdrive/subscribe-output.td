@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true;
+ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true;
+ALTER SYSTEM SET enable_envelope_debezium_in_subscribe = true;
+
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -134,11 +139,10 @@ UPDATE t0 SET value = 4 WHERE key = 1
 > DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS, SNAPSHOT) WITHIN TIMESTAMP ORDER BY c, b, a
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null> <null>
-> FETCH 4 c
+> FETCH 3 c
 <TIMESTAMP> false 1 2 5 -6
 <TIMESTAMP> false 1 4 0 -4
 <TIMESTAMP> false 1 1 2 3
-<TIMESTAMP> true <null> <null> <null> <null>
 > COMMIT
 
 

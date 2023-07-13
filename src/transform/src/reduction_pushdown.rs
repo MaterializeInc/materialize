@@ -50,19 +50,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+
+use crate::TransformArgs;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

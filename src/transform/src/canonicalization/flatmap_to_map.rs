@@ -10,19 +10,16 @@
 //! Turns `FlatMap` into `Map` if only one row is produced by flatmap.
 //!
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, TableFunc};
+
+use crate::TransformArgs;
 
 /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
 #[derive(Debug)]
 pub struct FlatMapToMap;
 
 impl crate::Transform for FlatMapToMap {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

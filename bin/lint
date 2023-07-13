@@ -54,7 +54,7 @@ copyright_files=$(grep -vE \
     -e '^\.config/nextest\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
-    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so)$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so|uxf)$' \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
@@ -79,9 +79,12 @@ newline_files=$(grep -vE '\.(png|jpe?g|pb|avro|ico|so)$' <<< "$files")
 
 shell_files=$(sort -u <(git_files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.*'))
 
+rust_files=$(sort -u <(git_files '*.rs'))
+
 try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
 try xargs misc/lint/trailing-newline.sh <<< "$newline_files"
 try xargs git --no-pager diff --check "$(git_empty_tree)" <<< "$newline_files"
+try xargs misc/lint/test-attribute.sh <<< "$rust_files"
 
 if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
     try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
@@ -94,10 +97,11 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "lint: $(red error:) python formatting discrepancies found"
         echo "hint: run bin/pyfmt" >&2
     fi
-    try bin/lint-cargo
-    try bin/gen-completion check
-    try bin/gen-lints
-    try git diff --exit-code
 fi
+
+try bin/lint-cargo
+try bin/gen-completion check
+try bin/gen-lints
+try git diff --compact-summary --exit-code
 
 try_finish

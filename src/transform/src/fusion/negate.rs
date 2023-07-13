@@ -9,19 +9,16 @@
 
 //! Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Fuses a sequence of `Negate` operators in to one or zero `Negate` operators.
 #[derive(Debug)]
 pub struct Negate;
 
 impl crate::Transform for Negate {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

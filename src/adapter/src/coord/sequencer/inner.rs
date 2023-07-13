@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
@@ -16,21 +17,12 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
-use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{event, warn, Level};
-
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
-use mz_controller::clusters::{
-    ClusterConfig, ClusterId, CreateReplicaConfig, ReplicaAllocation, ReplicaConfig, ReplicaId,
-    ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
-};
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -38,44 +30,58 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_ore::vec::VecExt;
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
-use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
+use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails, SessionCatalog,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
+    ErrorMessageObjectDescription, ObjectType, SessionCatalog,
 };
-use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
-use mz_sql::names::{ObjectId, QualifiedItemName};
+use mz_sql::names::{
+    ObjectId, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, SchemaSpecifier,
+    SystemObjectId,
+};
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
+    AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourceAction, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan, GrantRolePlan,
-    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
-    QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
-    SubscribePlan, VariableValue, View,
+    CreateViewPlan, CreateWebhookSourcePlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan,
+    ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption, InsertPlan, InspectShardPlan,
+    MaterializedView, MutationKind, OptimizerConfig, Params, Plan, QueryWhen, ReadThenWritePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SelectPlan,
+    SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue,
 };
-use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
+};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{
+    CreateSourceConnection, PgConfigOptionName, TransactionMode, WithOptionValue,
+};
+use mz_sql_parser::ast::{
+    CreateSourceSubsource, DeferredItemName, ReferencedSubsources, Statement,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
-    StorageSinkConnectionState, UpdatePrivilegeVariant, LINKED_CLUSTER_REPLICA_NAME,
+    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc, Op,
+    StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
@@ -88,39 +94,47 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
-    peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    peek, Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    PlanValidity, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
+    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
+use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{
     send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
 };
-use crate::{guard_write_critical_section, rbac, PeekResponseUnary, TimestampExplanation};
+use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {
-    ($expr:expr, $tx:expr, $session:expr) => {
+    ($expr:expr, $ctx:expr) => {
         match $expr {
             Ok(v) => v,
-            Err(e) => return $tx.send(Err(e.into()), $session),
+            Err(e) => return $ctx.retire(Err(e.into())),
         }
     };
 }
 
 pub(super) use return_if_err;
 
+struct DropOps {
+    ops: Vec<catalog::Op>,
+    dropped_active_db: bool,
+    dropped_active_cluster: bool,
+}
+
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        plans: Vec<(GlobalId, CreateSourcePlan, Vec<GlobalId>)>,
+        plans: Vec<(GlobalId, CreateSourcePlan, ResolvedIds)>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let mut sources = vec![];
@@ -137,61 +151,28 @@ impl Coordinator {
             .collect::<BTreeMap<_, _>>();
 
         for (source_id, plan, depends_on) in plans {
+            let name = plan.name.clone();
             let source_oid = self.catalog_mut().allocate_oid()?;
-            let source = catalog::Source {
-                create_sql: plan.source.create_sql,
-                data_source: match plan.source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        let cluster_id = self
-                            .create_linked_cluster_ops(
-                                source_id,
-                                &plan.name,
-                                &plan.cluster_config,
-                                &mut ops,
-                                session,
-                            )
-                            .await?;
-                        DataSourceDesc::Ingestion(catalog::Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            cluster_id,
-                            remap_collection_id: ingestion.progress_subsource,
-                        })
-                    }
-                    mz_sql::plan::DataSourceDesc::Progress => {
-                        assert!(
-                            matches!(
-                                plan.cluster_config,
-                                mz_sql::plan::SourceSinkClusterConfig::Undefined
-                            ),
-                            "subsources must not have a host config defined"
-                        );
-                        DataSourceDesc::Progress
-                    }
-                    mz_sql::plan::DataSourceDesc::Source => {
-                        assert!(
-                            matches!(
-                                plan.cluster_config,
-                                mz_sql::plan::SourceSinkClusterConfig::Undefined
-                            ),
-                            "subsources must not have a host config defined"
-                        );
-                        DataSourceDesc::Source
-                    }
-                },
-                desc: plan.source.desc,
-                timeline: plan.timeline,
-                depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+            let cluster_id = match plan.source.data_source {
+                mz_sql::plan::DataSourceDesc::Ingestion(_) => Some(
+                    self.create_linked_cluster_ops(
+                        source_id,
+                        &plan.name,
+                        &plan.cluster_config,
+                        &mut ops,
+                        session,
+                    )
+                    .await?,
+                ),
+                _ => None,
             };
+            let source = catalog::Source::new(source_id, plan, cluster_id, depends_on, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
-                name: plan.name.clone(),
+                name,
                 item: CatalogItem::Source(source.clone()),
-                owner_id: *session.role_id(),
+                owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
         }
@@ -205,43 +186,20 @@ impl Coordinator {
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            let mut source_imports = BTreeMap::new();
-                            for source_import in ingestion.source_imports {
-                                source_imports.insert(source_import, ());
-                            }
-
-                            let mut source_exports = BTreeMap::new();
-                            // By convention the first output corresponds to the main source object
-                            let main_export = SourceExport {
-                                output_index: 0,
-                                storage_metadata: (),
-                            };
-                            source_exports.insert(source_id, main_export);
-                            for (subsource, output_index) in ingestion.subsource_exports {
-                                let export = SourceExport {
-                                    output_index,
-                                    storage_metadata: (),
-                                };
-                                source_exports.insert(subsource, export);
-                            }
-                            (
-                                DataSource::Ingestion(IngestionDescription {
-                                    desc: ingestion.desc,
-                                    ingestion_metadata: (),
-                                    source_imports,
-                                    source_exports,
-                                    instance_id: ingestion.cluster_id,
-                                    remap_collection_id: ingestion.remap_collection_id.expect(
-                                        "ingestion-based collection must name remap collection before going to storage",
-                                    ),
-                                }),
-                                source_status_collection_id,
-                            )
-                        }
+                        DataSourceDesc::Ingestion(ingestion) => (
+                            DataSource::Ingestion(ingestion),
+                            source_status_collection_id,
+                        ),
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
+                        DataSourceDesc::Webhook => {
+                            // TODO(parkmycar): Eventually webhook sources should take this path,
+                            // definitely once they get installed on clusterd.
+                            //
+                            // See <https://github.com/MaterializeInc/materialize/issues/19951>.
+                            unreachable!("Webhook sources take different path")
+                        }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
@@ -288,12 +246,87 @@ impl Coordinator {
         }
     }
 
+    /// TODO(parkmycar): once we install webhook sources on clusterd, this method should be
+    /// deleted/merged in favor of the `sequence_create_source` method.
+    ///
+    /// See <https://github.com/MaterializeInc/materialize/issues/19951>.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(super) async fn sequence_create_webhook_source(
+        &mut self,
+        session: &mut Session,
+        plan: CreateWebhookSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let CreateWebhookSourcePlan {
+            name,
+            if_not_exists,
+            create_sql,
+            desc,
+            timeline,
+        } = plan;
+
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let source = catalog::Source {
+            create_sql,
+            data_source: DataSourceDesc::Webhook,
+            desc: desc.clone(),
+            timeline,
+            resolved_ids: ResolvedIds(BTreeSet::new()),
+            custom_logical_compaction_window: None,
+            is_retained_metrics_object: false,
+        };
+
+        let source_oid = self.catalog_mut().allocate_oid()?;
+        let ops = vec![catalog::Op::CreateItem {
+            id: source_id,
+            oid: source_oid,
+            name: name.clone(),
+            item: CatalogItem::Source(source.clone()),
+            owner_id: *session.current_role_id(),
+        }];
+
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => {
+                // Create the underlying collection.
+                let collection_desc = CollectionDescription {
+                    desc,
+                    data_source: DataSource::Webhook,
+                    since: None,
+                    status_collection_id: None,
+                };
+                self.controller
+                    .storage
+                    .create_collections(vec![(source_id, collection_desc)])
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections");
+
+                self.initialize_storage_read_policies(
+                    vec![source_id],
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                )
+                .await;
+
+                Ok(ExecuteResponse::CreatedWebhookSource)
+            }
+            Err(AdapterError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
+                ..
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "source",
+                });
+                Ok(ExecuteResponse::CreatedWebhookSource)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_connection(
         &mut self,
         session: &mut Session,
         plan: CreateConnectionPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog_mut().allocate_oid()?;
         let connection_gid = self.catalog_mut().allocate_user_id().await?;
@@ -317,9 +350,9 @@ impl Coordinator {
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
                 connection: connection.clone(),
-                depends_on,
+                resolved_ids,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -386,7 +419,7 @@ impl Coordinator {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
@@ -412,7 +445,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             oid,
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -446,330 +479,12 @@ impl Coordinator {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    // Utility function used by both `sequence_create_cluster` and
-    // `sequence_create_cluster_replica`. Chooses the availability zone for a
-    // replica arbitrarily based on some state (currently: the number of
-    // replicas of the given cluster per AZ).
-    //
-    // I put this in the `Coordinator`'s impl block in case we ever want to
-    // change the logic and make it depend on some other state, but for now it's
-    // a pure function of the `n_replicas_per_az` state.
-    fn choose_az<'a>(n_replicas_per_az: &'a BTreeMap<String, usize>) -> String {
-        let min = *n_replicas_per_az
-            .values()
-            .min()
-            .expect("Must have at least one availability zone");
-        let argmins = n_replicas_per_az
-            .iter()
-            .filter_map(|(k, v)| (*v == min).then_some(k))
-            .collect::<Vec<_>>();
-        let arbitrary_argmin = argmins
-            .choose(&mut rand::thread_rng())
-            .expect("Must have at least one value corresponding to `min`");
-
-        (*arbitrary_argmin).clone()
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn sequence_create_cluster(
-        &mut self,
-        session: &Session,
-        CreateClusterPlan { name, replicas }: CreateClusterPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        tracing::debug!("sequence_create_cluster");
-
-        let id = self.catalog_mut().allocate_user_cluster_id().await?;
-        // The catalog items for the introspection sources are shared between all replicas
-        // of a compute instance, so we create them unconditionally during instance creation.
-        // Whether a replica actually maintains introspection arrangements is determined by the
-        // per-replica introspection configuration.
-        let introspection_sources = self.catalog_mut().allocate_introspection_sources().await;
-        let mut ops = vec![catalog::Op::CreateCluster {
-            id,
-            name: name.clone(),
-            linked_object_id: None,
-            introspection_sources,
-            owner_id: *session.role_id(),
-        }];
-
-        let azs = self.catalog().state().availability_zones();
-        let mut n_replicas_per_az = azs
-            .iter()
-            .map(|s| (s.clone(), 0))
-            .collect::<BTreeMap<_, _>>();
-        for (_name, r) in replicas.iter() {
-            if let mz_sql::plan::ReplicaConfig::Managed {
-                availability_zone: Some(az),
-                ..
-            } = r
-            {
-                let ct: &mut usize = n_replicas_per_az.get_mut(az).ok_or_else(|| {
-                    AdapterError::InvalidClusterReplicaAz {
-                        az: az.to_string(),
-                        expected: azs.to_vec(),
-                    }
-                })?;
-                *ct += 1
-            }
-        }
-
-        for (replica_name, replica_config) in replicas {
-            // If the AZ was not specified, choose one, round-robin, from the ones with
-            // the lowest number of configured replicas for this cluster.
-            let (compute, location) = match replica_config {
-                mz_sql::plan::ReplicaConfig::Unmanaged {
-                    storagectl_addrs,
-                    storage_addrs,
-                    computectl_addrs,
-                    compute_addrs,
-                    workers,
-                    compute,
-                } => {
-                    let location = SerializedReplicaLocation::Unmanaged {
-                        storagectl_addrs,
-                        storage_addrs,
-                        computectl_addrs,
-                        compute_addrs,
-                        workers,
-                    };
-                    (compute, location)
-                }
-                mz_sql::plan::ReplicaConfig::Managed {
-                    size,
-                    availability_zone,
-                    compute,
-                } => {
-                    let (availability_zone, user_specified) =
-                        availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
-                            let az = Self::choose_az(&n_replicas_per_az);
-                            *n_replicas_per_az
-                                .get_mut(&az)
-                                .expect("availability zone does not exist") += 1;
-                            (az, false)
-                        });
-                    let location = SerializedReplicaLocation::Managed {
-                        size: size.clone(),
-                        availability_zone,
-                        az_user_specified: user_specified,
-                    };
-                    (compute, location)
-                }
-            };
-
-            let logging = if let Some(config) = compute.introspection {
-                ReplicaLogging {
-                    log_logging: config.debugging,
-                    interval: Some(config.interval),
-                }
-            } else {
-                ReplicaLogging::default()
-            };
-
-            let config = ReplicaConfig {
-                location: self.catalog().concretize_replica_location(
-                    location,
-                    &self
-                        .catalog()
-                        .system_config()
-                        .allowed_cluster_replica_sizes(),
-                )?,
-                compute: ComputeReplicaConfig {
-                    logging,
-                    idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-                },
-            };
-
-            ops.push(catalog::Op::CreateClusterReplica {
-                cluster_id: id,
-                id: self.catalog_mut().allocate_replica_id().await?,
-                name: replica_name.clone(),
-                config,
-                owner_id: *session.role_id(),
-            });
-        }
-
-        self.catalog_transact(Some(session), ops).await?;
-
-        self.create_cluster(id).await;
-
-        Ok(ExecuteResponse::CreatedCluster)
-    }
-
-    async fn create_cluster(&mut self, cluster_id: ClusterId) {
-        let (catalog, controller) = self.catalog_and_controller_mut();
-        let cluster = catalog.get_cluster(cluster_id);
-        let cluster_id = cluster.id;
-        let introspection_source_ids: Vec<_> =
-            cluster.log_indexes.iter().map(|(_, id)| *id).collect();
-
-        controller
-            .create_cluster(
-                cluster_id,
-                ClusterConfig {
-                    arranged_logs: cluster.log_indexes.clone(),
-                },
-            )
-            .expect("creating cluster must not fail");
-
-        let replicas: Vec<_> = cluster
-            .replicas_by_id
-            .keys()
-            .copied()
-            .map(|r| (cluster_id, r))
-            .collect();
-        self.create_cluster_replicas(&replicas).await;
-
-        if !introspection_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                introspection_source_ids,
-                cluster_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-            )
-            .await;
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn sequence_create_cluster_replica(
-        &mut self,
-        session: &Session,
-        CreateClusterReplicaPlan {
-            name,
-            cluster_id,
-            config,
-        }: CreateClusterReplicaPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // Choose default AZ if necessary
-        let (compute, location) = match config {
-            mz_sql::plan::ReplicaConfig::Unmanaged {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-                compute,
-            } => {
-                let location = SerializedReplicaLocation::Unmanaged {
-                    storagectl_addrs,
-                    storage_addrs,
-                    computectl_addrs,
-                    compute_addrs,
-                    workers,
-                };
-                (compute, location)
-            }
-            mz_sql::plan::ReplicaConfig::Managed {
-                size,
-                availability_zone,
-                compute,
-            } => {
-                let (availability_zone, user_specified) = match availability_zone {
-                    Some(az) => {
-                        let azs = self.catalog().state().availability_zones();
-                        if !azs.contains(&az) {
-                            return Err(AdapterError::InvalidClusterReplicaAz {
-                                az,
-                                expected: azs.to_vec(),
-                            });
-                        }
-                        (az, true)
-                    }
-                    None => {
-                        // Choose the least popular AZ among all replicas of this cluster as the default
-                        // if none was specified. If there is a tie for "least popular", pick the first one.
-                        // That is globally unbiased (for Materialize, not necessarily for this customer)
-                        // because we shuffle the AZs on boot in `crate::serve`.
-                        let cluster = self.catalog().get_cluster(cluster_id);
-                        let azs = self.catalog().state().availability_zones();
-                        let mut n_replicas_per_az = azs
-                            .iter()
-                            .map(|s| (s.clone(), 0))
-                            .collect::<BTreeMap<_, _>>();
-                        for r in cluster.replicas_by_id.values() {
-                            if let Some(az) = r.config.location.availability_zone() {
-                                *n_replicas_per_az.get_mut(az).expect("unknown AZ") += 1;
-                            }
-                        }
-                        let az = Self::choose_az(&n_replicas_per_az);
-                        (az, false)
-                    }
-                };
-                let location = SerializedReplicaLocation::Managed {
-                    size,
-                    availability_zone,
-                    az_user_specified: user_specified,
-                };
-                (compute, location)
-            }
-        };
-
-        let logging = if let Some(config) = compute.introspection {
-            ReplicaLogging {
-                log_logging: config.debugging,
-                interval: Some(config.interval),
-            }
-        } else {
-            ReplicaLogging::default()
-        };
-
-        let config = ReplicaConfig {
-            location: self.catalog().concretize_replica_location(
-                location,
-                &self
-                    .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
-            )?,
-            compute: ComputeReplicaConfig {
-                logging,
-                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
-            },
-        };
-
-        let id = self.catalog_mut().allocate_replica_id().await?;
-        let op = catalog::Op::CreateClusterReplica {
-            cluster_id,
-            id,
-            name: name.clone(),
-            config,
-            owner_id: *session.role_id(),
-        };
-
-        self.catalog_transact(Some(session), vec![op]).await?;
-
-        self.create_cluster_replicas(&[(cluster_id, id)]).await;
-
-        Ok(ExecuteResponse::CreatedClusterReplica)
-    }
-
-    async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
-        let mut replicas_to_start = Vec::new();
-
-        for (cluster_id, replica_id) in replicas.iter().copied() {
-            let cluster = self.catalog().get_cluster(cluster_id);
-            let role = cluster.role();
-            let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
-
-            replicas_to_start.push(CreateReplicaConfig {
-                cluster_id,
-                replica_id,
-                role,
-                config: replica_config,
-            });
-        }
-
-        self.controller
-            .create_replicas(replicas_to_start)
-            .await
-            .expect("creating replicas must not fail");
-    }
-
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_table(
         &mut self,
         session: &mut Session,
         plan: CreateTablePlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateTablePlan {
             name,
@@ -787,8 +502,8 @@ impl Coordinator {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
-            conn_id,
-            depends_on,
+            conn_id: conn_id.cloned(),
+            resolved_ids,
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
         };
@@ -798,7 +513,7 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
@@ -877,7 +592,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -904,13 +619,12 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     pub(super) async fn sequence_create_sink(
         &mut self,
-        session: Session,
+        ctx: ExecuteContext,
         plan: CreateSinkPlan,
-        depends_on: Vec<GlobalId>,
-        tx: ClientTransmitter<ExecuteResponse>,
+        resolved_ids: ResolvedIds,
     ) {
         let CreateSinkPlan {
             name,
@@ -921,15 +635,20 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, tx, session);
-        let oid = return_if_err!(self.catalog_mut().allocate_oid(), tx, session);
+        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let oid = return_if_err!(self.catalog_mut().allocate_oid(), ctx);
 
         let mut ops = vec![];
         let cluster_id = return_if_err!(
-            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops, &session)
-                .await,
-            tx,
-            session
+            self.create_linked_cluster_ops(
+                id,
+                &name,
+                &plan_cluster_config,
+                &mut ops,
+                ctx.session()
+            )
+            .await,
+            ctx
         );
 
         // Knowing that we're only handling kafka sinks here helps us simplify.
@@ -951,7 +670,7 @@ impl Coordinator {
             )),
             envelope: sink.envelope,
             with_snapshot,
-            depends_on,
+            resolved_ids,
             cluster_id,
         };
 
@@ -960,14 +679,14 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
-            owner_id: *session.role_id(),
+            owner_id: *ctx.session().current_role_id(),
         });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
         let result = self
-            .catalog_transact_with(Some(&session), ops, move |txn| {
+            .catalog_transact_with(Some(ctx.session()), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
                     .storage
@@ -988,15 +707,16 @@ impl Coordinator {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "sink",
-                });
-                tx.send(Ok(ExecuteResponse::CreatedSink), session);
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "sink",
+                    });
+                ctx.retire(Ok(ExecuteResponse::CreatedSink));
                 return;
             }
             Err(e) => {
-                tx.send(Err(e), session);
+                ctx.retire(Err(e));
                 return;
             }
         }
@@ -1007,8 +727,7 @@ impl Coordinator {
             self.controller
                 .storage
                 .prepare_export(id, catalog_sink.from),
-            tx,
-            session
+            ctx
         );
 
         // Now we're ready to create the sink connection. Arrange to notify the
@@ -1022,7 +741,7 @@ impl Coordinator {
                 // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
                 let result =
                     internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
-                        session_and_tx: Some((session, tx)),
+                        ctx: Some(ctx),
                         id,
                         oid,
                         create_export_token,
@@ -1065,7 +784,7 @@ impl Coordinator {
     fn validate_system_column_references(
         &self,
         uses_ambiguous_columns: bool,
-        depends_on: &Vec<GlobalId>,
+        depends_on: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         if uses_ambiguous_columns
             && depends_on
@@ -1083,20 +802,10 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateViewPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.validate_system_column_references(plan.ambiguous_columns, &depends_on)?;
-
         let if_not_exists = plan.if_not_exists;
-        let ops = self
-            .generate_view_ops(
-                session,
-                plan.name.clone(),
-                plan.view.clone(),
-                plan.drop_ids,
-                depends_on,
-            )
-            .await?;
+        let ops = self.generate_view_ops(session, &plan, resolved_ids).await?;
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
@@ -1116,41 +825,51 @@ impl Coordinator {
     async fn generate_view_ops(
         &mut self,
         session: &Session,
-        name: QualifiedItemName,
-        view: View,
-        replace: Vec<GlobalId>,
-        depends_on: Vec<GlobalId>,
+        CreateViewPlan {
+            name,
+            view,
+            drop_ids,
+            ambiguous_columns,
+            ..
+        }: &CreateViewPlan,
+        resolved_ids: ResolvedIds,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
-        self.validate_timeline_context(view.expr.depends_on())?;
+        // Validate any references in the view's expression. We do this on the
+        // unoptimized plan to better reflect what the user typed. We want to
+        // reject queries that depend on a relation in the wrong timeline, for
+        // example, even if we can *technically* optimize that reference away.
+        let depends_on = view.expr.depends_on();
+        self.validate_timeline_context(depends_on.iter().copied())?;
+        self.validate_system_column_references(*ambiguous_columns, &depends_on)?;
 
         let mut ops = vec![];
 
         ops.extend(
-            replace
-                .into_iter()
-                .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
+            drop_ids
+                .iter()
+                .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
         );
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
-        let optimized_expr = self.view_optimizer.optimize(view.expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+        let optimized_expr = self.view_optimizer.optimize(view.expr.clone())?;
+        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
-            create_sql: view.create_sql,
+            create_sql: view.create_sql.clone(),
             optimized_expr,
             desc,
             conn_id: if view.temporary {
-                Some(session.conn_id())
+                Some(session.conn_id().clone())
             } else {
                 None
             },
-            depends_on,
+            resolved_ids,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
             oid: view_oid,
             name: name.clone(),
             item: CatalogItem::View(view),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         Ok(ops)
@@ -1161,7 +880,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateMaterializedViewPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateMaterializedViewPlan {
             name,
@@ -1188,15 +907,18 @@ impl Coordinator {
             return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
-        self.validate_timeline_context(depends_on.clone())?;
-
-        self.validate_system_column_references(ambiguous_columns, &depends_on)?;
-
+        // Validate any references in the materialized view's expression. We do
+        // this on the unoptimized plan to better reflect what the user typed.
+        // We want to reject queries that depend on log sources, for example,
+        // even if we can *technically* optimize that reference away.
+        let expr_depends_on = view_expr.depends_on();
+        self.validate_timeline_context(expr_depends_on.iter().cloned())?;
+        self.validate_system_column_references(ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
         // TODO(teskje): Remove this check once arrangement-based log sources
         // are replaced with persist-based ones.
-        let log_names = depends_on
+        let log_names = expr_depends_on
             .iter()
             .flat_map(|id| self.catalog().introspection_dependencies(*id))
             .map(|id| self.catalog().get_entry(&id).name().item.clone())
@@ -1223,7 +945,7 @@ impl Coordinator {
         // amount of historical detail.
         let id_bundle = self
             .index_oracle(cluster_id)
-            .sufficient_collections(&depends_on);
+            .sufficient_collections(&expr_depends_on);
         let as_of = self.least_valid_read(&id_bundle);
 
         let mut ops = Vec::new();
@@ -1240,10 +962,10 @@ impl Coordinator {
                 create_sql,
                 optimized_expr,
                 desc: desc.clone(),
-                depends_on,
+                resolved_ids,
                 cluster_id,
             }),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         });
 
         match self
@@ -1303,7 +1025,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: CreateIndexPlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateIndexPlan {
             name,
@@ -1331,7 +1053,7 @@ impl Coordinator {
             keys: index.keys,
             on: index.on,
             conn_id: None,
-            depends_on,
+            resolved_ids,
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
@@ -1379,7 +1101,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan: CreateTypePlan,
-        depends_on: Vec<GlobalId>,
+        resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
@@ -1387,7 +1109,7 @@ impl Coordinator {
                 array_id: None,
                 typ: plan.typ.inner,
             },
-            depends_on,
+            resolved_ids,
         };
         let id = self.catalog_mut().allocate_user_id().await?;
         let oid = self.catalog_mut().allocate_oid()?;
@@ -1396,7 +1118,7 @@ impl Coordinator {
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
-            owner_id: *session.role_id(),
+            owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -1407,14 +1129,284 @@ impl Coordinator {
     pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &mut Session,
-        plan: DropObjectsPlan,
+        DropObjectsPlan {
+            drop_ids,
+            object_type,
+            referenced_ids: _,
+        }: DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::new();
+        let DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = self.sequence_drop_common(session, drop_ids)?;
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        fail::fail_point!("after_sequencer_drop_replica");
+
+        if dropped_active_db {
+            session.add_notice(AdapterNotice::DroppedActiveDatabase {
+                name: session.vars().database().to_string(),
+            });
+        }
+        if dropped_active_cluster {
+            session.add_notice(AdapterNotice::DroppedActiveCluster {
+                name: session.vars().cluster().to_string(),
+            });
+        }
+        Ok(ExecuteResponse::DroppedObject(object_type))
+    }
+
+    fn validate_dropped_role_ownership(
+        &self,
+        session: &Session,
+        dropped_roles: &BTreeMap<RoleId, &str>,
+    ) -> Result<(), AdapterError> {
+        fn privilege_check(
+            privileges: &PrivilegeMap,
+            dropped_roles: &BTreeMap<RoleId, &str>,
+            dependent_objects: &mut BTreeMap<String, Vec<String>>,
+            object_id: &SystemObjectId,
+            catalog: &ConnCatalog,
+        ) {
+            for privilege in privileges.all_values() {
+                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                    let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(object_id, catalog);
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "privileges on {object_description} granted by {grantor_name}",
+                        ));
+                }
+                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                    let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(object_id, catalog);
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "privileges granted on {object_description} to {grantee_name}"
+                        ));
+                }
+            }
+        }
+
+        let catalog = self.catalog().for_session(session);
+        let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for entry in self.catalog.entries() {
+            let id = SystemObjectId::Object(entry.id().into());
+            if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
+                let object_description = ErrorMessageObjectDescription::from_id(&id, &catalog);
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("owner of {object_description}"));
+            }
+            privilege_check(
+                entry.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                &id,
+                &catalog,
+            );
+        }
+        for database in self.catalog.databases() {
+            let database_id = SystemObjectId::Object(database.id().into());
+            if let Some(role_name) = dropped_roles.get(&database.owner_id) {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&database_id, &catalog);
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("owner of {object_description}"));
+            }
+            privilege_check(
+                &database.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                &database_id,
+                &catalog,
+            );
+            for schema in database.schemas_by_id.values() {
+                let schema_id = SystemObjectId::Object(
+                    (ResolvedDatabaseSpecifier::Id(database.id()), *schema.id()).into(),
+                );
+                if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&schema_id, &catalog);
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("owner of {object_description}"));
+                }
+                privilege_check(
+                    &schema.privileges,
+                    dropped_roles,
+                    &mut dependent_objects,
+                    &schema_id,
+                    &catalog,
+                );
+            }
+        }
+        for cluster in self.catalog.clusters() {
+            let cluster_id = SystemObjectId::Object(cluster.id().into());
+            if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&cluster_id, &catalog);
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("owner of {object_description}"));
+            }
+            privilege_check(
+                &cluster.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                &cluster_id,
+                &catalog,
+            );
+            for replica in cluster.replicas_by_id.values() {
+                if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
+                    let replica_id =
+                        SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&replica_id, &catalog);
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("owner of {object_description}"));
+                }
+            }
+        }
+        privilege_check(
+            self.catalog().system_privileges(),
+            dropped_roles,
+            &mut dependent_objects,
+            &SystemObjectId::System,
+            &catalog,
+        );
+        for (default_privilege_object, default_privilege_acl_items) in
+            self.catalog.default_privileges()
+        {
+            if let Some(role_name) = dropped_roles.get(&default_privilege_object.role_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!(
+                        "default privileges on {}S created by {}",
+                        default_privilege_object.object_type, role_name
+                    ));
+            }
+            for default_privilege_acl_item in default_privilege_acl_items {
+                if let Some(role_name) = dropped_roles.get(&default_privilege_acl_item.grantee) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "default privileges on {}S granted to {}",
+                            default_privilege_object.object_type, role_name
+                        ));
+                }
+            }
+        }
+
+        if !dependent_objects.is_empty() {
+            Err(AdapterError::DependentObject(dependent_objects))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) async fn sequence_drop_owned(
+        &mut self,
+        session: &mut Session,
+        plan: DropOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        for role_id in &plan.role_ids {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+
+        let mut privilege_revokes = plan.privilege_revokes;
+
+        // Make sure this stays in sync with the beginning of `rbac::check_plan`.
+        let session_catalog = self.catalog().for_session(session);
+        if is_rbac_enabled_for_session(session_catalog.system_vars(), session)
+            && !session.is_superuser()
+        {
+            // Obtain all roles that the current session is a member of.
+            let role_membership =
+                session_catalog.collect_role_membership(session.current_role_id());
+            let invalid_revokes: BTreeSet<_> = privilege_revokes
+                .drain_filter_swapping(|(_, privilege)| {
+                    !role_membership.contains(&privilege.grantor)
+                })
+                .map(|(object_id, _)| object_id)
+                .collect();
+            for invalid_revoke in invalid_revokes {
+                let object_description =
+                    ErrorMessageObjectDescription::from_id(&invalid_revoke, &session_catalog);
+                session.add_notice(AdapterNotice::CannotRevoke { object_description });
+            }
+        }
+
+        let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
+            catalog::Op::UpdatePrivilege {
+                target_id: object_id,
+                privilege,
+                variant: UpdatePrivilegeVariant::Revoke,
+            }
+        });
+        let default_privilege_revoke_ops = plan.default_privilege_revokes.into_iter().map(
+            |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
+                privilege_object,
+                privilege_acl_item,
+                variant: UpdatePrivilegeVariant::Revoke,
+            },
+        );
+        let DropOps {
+            ops: drop_ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
+
+        let ops = privilege_revoke_ops
+            .chain(default_privilege_revoke_ops)
+            .chain(drop_ops.into_iter())
+            .collect();
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        if dropped_active_db {
+            session.add_notice(AdapterNotice::DroppedActiveDatabase {
+                name: session.vars().database().to_string(),
+            });
+        }
+        if dropped_active_cluster {
+            session.add_notice(AdapterNotice::DroppedActiveCluster {
+                name: session.vars().cluster().to_string(),
+            });
+        }
+        Ok(ExecuteResponse::DroppedOwned)
+    }
+
+    fn sequence_drop_common(
+        &self,
+        session: &mut Session,
+        ids: Vec<ObjectId>,
+    ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
+        // Dropping either the group role or the member role of a role membership will trigger a
+        // revoke role. We use a Set for the revokes to avoid trying to attempt to revoke the same
+        // role membership twice.
+        let mut revokes = BTreeSet::new();
 
-        let mut dropped_roles: BTreeMap<_, _> = plan
-            .drop_ids
+        let mut dropped_roles: BTreeMap<_, _> = ids
             .iter()
             .filter_map(|id| match id {
                 ObjectId::Role(role_id) => Some(role_id),
@@ -1428,26 +1420,26 @@ impl Coordinator {
         for role_id in dropped_roles.keys() {
             self.catalog().ensure_not_reserved_role(role_id)?;
         }
-        self.validate_dropped_role_ownership(&dropped_roles)?;
+        self.validate_dropped_role_ownership(session, &dropped_roles)?;
         // If any role is a member of a dropped role, then we must revoke that membership.
         let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
         for role in self.catalog().user_roles() {
             for dropped_role_id in
                 dropped_role_ids.intersection(&role.membership.map.keys().collect())
             {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id: **dropped_role_id,
-                    member_id: role.id(),
-                    grantor_id: *role
+                revokes.insert((
+                    **dropped_role_id,
+                    role.id(),
+                    *role
                         .membership
                         .map
                         .get(*dropped_role_id)
                         .expect("included in keys above"),
-                })
+                ));
             }
         }
 
-        for id in &plan.drop_ids {
+        for id in &ids {
             match id {
                 ObjectId::Database(id) => {
                     let name = self.catalog().get_database(id).name();
@@ -1473,155 +1465,28 @@ impl Coordinator {
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
-                        ops.push(catalog::Op::RevokeRole {
-                            role_id: *group_id,
-                            member_id: *id,
-                            grantor_id: *grantor_id,
-                        });
+                        revokes.insert((*group_id, *id, *grantor_id));
                     }
                 }
                 _ => {}
             }
         }
 
-        ops.extend(plan.drop_ids.into_iter().map(catalog::Op::DropObject));
-        self.catalog_transact(Some(session), ops).await?;
+        let ops = revokes
+            .into_iter()
+            .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
+                role_id,
+                member_id,
+                grantor_id,
+            })
+            .chain(ids.into_iter().map(catalog::Op::DropObject))
+            .collect();
 
-        fail::fail_point!("after_sequencer_drop_replica");
-
-        if dropped_active_db {
-            session.add_notice(AdapterNotice::DroppedActiveDatabase {
-                name: session.vars().database().to_string(),
-            });
-        }
-        if dropped_active_cluster {
-            session.add_notice(AdapterNotice::DroppedActiveCluster {
-                name: session.vars().cluster().to_string(),
-            });
-        }
-        Ok(ExecuteResponse::DroppedObject(plan.object_type))
-    }
-
-    fn validate_dropped_role_ownership(
-        &self,
-        dropped_roles: &BTreeMap<RoleId, &str>,
-    ) -> Result<(), AdapterError> {
-        fn privilege_check(
-            privileges: &BTreeMap<RoleId, Vec<MzAclItem>>,
-            dropped_roles: &BTreeMap<RoleId, &str>,
-            dependent_objects: &mut BTreeMap<String, Vec<String>>,
-            object_type: ObjectType,
-            object_name: &str,
-            catalog: &Catalog,
-        ) {
-            let object_type = object_type.to_string().to_lowercase();
-            for (_, privileges) in privileges {
-                for privilege in privileges {
-                    if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                        let grantor_name = catalog.get_role(&privilege.grantor).name();
-                        dependent_objects
-                            .entry(role_name.to_string())
-                            .or_default()
-                            .push(format!(
-                            "privileges on {object_type} {object_name} granted by {grantor_name}",
-                        ));
-                    }
-                    if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                        let grantee_name = catalog.get_role(&privilege.grantee).name();
-                        dependent_objects
-                            .entry(role_name.to_string())
-                            .or_default()
-                            .push(format!(
-                            "privileges granted on {object_type} {object_name} to {grantee_name}"
-                        ));
-                    }
-                }
-            }
-        }
-
-        let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for entry in self.catalog.entries() {
-            if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!(
-                        "owner of {} {}",
-                        entry.item().typ(),
-                        entry.name().item
-                    ));
-            }
-            privilege_check(
-                entry.privileges(),
-                dropped_roles,
-                &mut dependent_objects,
-                entry.item().typ().into(),
-                &entry.name().item,
-                self.catalog(),
-            );
-        }
-        for database in self.catalog.databases() {
-            if let Some(role_name) = dropped_roles.get(&database.owner_id) {
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!("owner of database {}", database.name()));
-            }
-            privilege_check(
-                &database.privileges,
-                dropped_roles,
-                &mut dependent_objects,
-                ObjectType::Database,
-                database.name(),
-                self.catalog(),
-            );
-            for schema in database.schemas_by_id.values() {
-                if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!("owner of schema {}", schema.name().schema));
-                }
-                privilege_check(
-                    &schema.privileges,
-                    dropped_roles,
-                    &mut dependent_objects,
-                    ObjectType::Schema,
-                    &schema.name().schema,
-                    self.catalog(),
-                );
-            }
-        }
-        for cluster in self.catalog.clusters() {
-            if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!("owner of cluster {}", cluster.name()));
-            }
-            privilege_check(
-                &cluster.privileges,
-                dropped_roles,
-                &mut dependent_objects,
-                ObjectType::Cluster,
-                cluster.name(),
-                self.catalog(),
-            );
-            for replica in cluster.replicas_by_id.values() {
-                if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!("owner of cluster replica {}", replica.name));
-                }
-            }
-        }
-
-        if !dependent_objects.is_empty() {
-            Err(AdapterError::DependentObject(dependent_objects))
-        } else {
-            Ok(())
-        }
+        Ok(DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        })
     }
 
     pub(super) fn sequence_show_all_variables(
@@ -1646,19 +1511,84 @@ impl Coordinator {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if &plan.name == SCHEMA_ALIAS {
+            let schemas = self.catalog.resolve_search_path(session);
+            let schema = schemas.first();
+            return match schema {
+                Some((database_spec, schema_spec)) => {
+                    let schema_name = &self
+                        .catalog
+                        .get_schema(database_spec, schema_spec, session.conn_id())
+                        .name()
+                        .schema;
+                    let row = Row::pack_slice(&[Datum::String(schema_name)]);
+                    Ok(send_immediate_rows(vec![row]))
+                }
+                None => {
+                    session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
+                        search_path: session
+                            .vars()
+                            .search_path()
+                            .into_iter()
+                            .map(|schema| schema.to_string())
+                            .collect(),
+                    });
+                    Ok(send_immediate_rows(vec![Row::pack_slice(&[Datum::Null])]))
+                }
+            };
+        }
+
         let variable = session
             .vars()
-            .get(&plan.name)
+            .get(Some(self.catalog().system_config()), &plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
-        if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
-            let row = Row::pack_slice(&[Datum::String(&variable.value())]);
-            Ok(send_immediate_rows(vec![row]))
-        } else {
-            Err(AdapterError::VarError(VarError::UnknownParameter(
-                plan.name,
-            )))
+        // In lieu of plumbing the user to all system config functions, just check that the var is
+        // visible.
+        variable.visible(session.user(), Some(self.catalog().system_config()))?;
+
+        let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+        if variable.name() == DATABASE_VAR_NAME
+            && matches!(
+                self.catalog().resolve_database(&variable.value()),
+                Err(CatalogError::UnknownDatabase(_))
+            )
+        {
+            let name = variable.value();
+            session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+        } else if variable.name() == CLUSTER_VAR_NAME
+            && matches!(
+                self.catalog().resolve_cluster(&variable.value()),
+                Err(CatalogError::UnknownCluster(_))
+            )
+        {
+            let name = variable.value();
+            session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
+        Ok(send_immediate_rows(vec![row]))
+    }
+
+    pub(super) async fn sequence_inspect_shard(
+        &self,
+        session: &Session,
+        plan: InspectShardPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO: Not thrilled about this rbac special case here, but probably
+        // sufficient for now.
+        if !session.user().is_internal() {
+            return Err(AdapterError::Unauthorized(
+                rbac::UnauthorizedError::MzSystem {
+                    action: "inspect".into(),
+                },
+            ));
+        }
+        let state = self
+            .controller
+            .storage
+            .inspect_persist_state(plan.id)
+            .await?;
+        let jsonb = Jsonb::from_serde_json(state)?;
+        Ok(send_immediate_rows(vec![jsonb.into_row()]))
     }
 
     pub(super) fn sequence_set_variable(
@@ -1666,21 +1596,25 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
+        }
+
+        let vars = session.vars_mut();
         let values = match plan.value {
             VariableValue::Default => None,
             VariableValue::Values(values) => Some(values),
         };
 
-        let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
-
         match values {
             Some(values) => {
-                vars.set(&name, VarInput::SqlSet(&values), local)?;
+                vars.set(
+                    Some(self.catalog().system_config()),
+                    &name,
+                    VarInput::SqlSet(&values),
+                    local,
+                )?;
 
                 // Database or cluster value does not correspond to a catalog item.
                 if name.as_str() == DATABASE_VAR_NAME
@@ -1711,7 +1645,7 @@ impl Coordinator {
                     }
                 }
             }
-            None => vars.reset(&name, local)?,
+            None => vars.reset(Some(self.catalog().system_config()), &name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -1722,34 +1656,74 @@ impl Coordinator {
         session: &mut Session,
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let name = plan.name;
-        let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
+        if &name == TRANSACTION_ISOLATION_VAR_NAME {
+            self.validate_set_isolation_level(session)?;
         }
-        session.vars_mut().reset(&name, false)?;
+        session
+            .vars_mut()
+            .reset(Some(self.catalog().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
+    }
+
+    pub(super) fn sequence_set_transaction(
+        &self,
+        session: &mut Session,
+        plan: SetTransactionPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // TODO(jkosh44) Only supports isolation levels for now.
+        for mode in plan.modes {
+            match mode {
+                TransactionMode::AccessMode(_) => {
+                    return Err(AdapterError::Unsupported("SET TRANSACTION <access-mode>"))
+                }
+                TransactionMode::IsolationLevel(isolation_level) => {
+                    self.validate_set_isolation_level(session)?;
+
+                    session.vars_mut().set(
+                        Some(self.catalog().system_config()),
+                        TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                        VarInput::Flat(&isolation_level.to_ast_string_stable()),
+                        plan.local,
+                    )?
+                }
+            }
+        }
+        Ok(ExecuteResponse::SetVariable {
+            name: TRANSACTION_ISOLATION_VAR_NAME.to_string(),
+            reset: false,
+        })
+    }
+
+    fn validate_set_isolation_level(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetIsolationLevel)
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn sequence_end_transaction(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         mut action: EndTransactionAction,
     ) {
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
-            (&action, session.transaction())
+            (&action, ctx.session().transaction())
         {
             action = EndTransactionAction::Rollback;
         }
         let response = match action {
-            EndTransactionAction::Commit => Ok(ExecuteResponse::TransactionCommitted),
-            EndTransactionAction::Rollback => Ok(ExecuteResponse::TransactionRolledBack),
+            EndTransactionAction::Commit => Ok(PendingTxnResponse::Committed {
+                params: BTreeMap::new(),
+            }),
+            EndTransactionAction::Rollback => Ok(PendingTxnResponse::Rolledback {
+                params: BTreeMap::new(),
+            }),
         };
 
-        let result = self.sequence_end_transaction_inner(&mut session, action);
+        let result = self.sequence_end_transaction_inner(ctx.session_mut(), action);
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -1760,27 +1734,25 @@ impl Coordinator {
                     writes,
                     write_lock_guard,
                     pending_txn: PendingTxn {
-                        client_transmitter: tx,
+                        ctx,
                         response,
-                        session,
                         action,
                     },
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(timestamp_context)), _))
-                if session.vars().transaction_isolation()
+            Ok((Some(TransactionOps::Peeks(determination)), _))
+                if ctx.session().vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
                     .send(PendingReadTxn::Read {
                         txn: PendingTxn {
-                            client_transmitter: tx,
+                            ctx,
                             response,
-                            session,
                             action,
                         },
-                        timestamp_context,
+                        timestamp_context: determination.timestamp_context,
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
@@ -1788,8 +1760,14 @@ impl Coordinator {
             Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
-        session.vars_mut().end_transaction(action);
-        tx.send(response, session);
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
+        // Append any parameters that changed to the response.
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+
+        ctx.retire(response);
     }
 
     fn sequence_end_transaction_inner(
@@ -1825,6 +1803,26 @@ impl Coordinator {
         Ok((None, None))
     }
 
+    pub(super) fn sequence_side_effecting_func(
+        &mut self,
+        plan: SideEffectingFunc,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match plan {
+            SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let res = if let Some((id_handle, _conn_meta)) =
+                    self.active_conns.get_key_value(&connection_id)
+                {
+                    // check_plan already verified role membership.
+                    self.handle_privileged_cancel(id_handle.clone());
+                    Datum::True
+                } else {
+                    Datum::False
+                };
+                Ok(send_immediate_rows(vec![Row::pack_slice(&[res])]))
+            }
+        }
+    }
+
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
     ///
     /// Peeks are sequenced by assigning a timestamp for evaluation, and then determining and
@@ -1832,18 +1830,16 @@ impl Coordinator {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_peek(
+    pub(super) async fn sequence_peek(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        plan: PeekPlan,
+        ctx: ExecuteContext,
+        plan: SelectPlan,
         target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
         self.sequence_peek_stage(
-            tx,
-            session,
+            ctx,
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
@@ -1855,8 +1851,7 @@ impl Coordinator {
     /// Processes as many peek stages as possible.
     pub(crate) async fn sequence_peek_stage(
         &mut self,
-        mut tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         mut stage: PeekStage,
     ) {
         // Process the current stage and allow for processing the next.
@@ -1867,31 +1862,29 @@ impl Coordinator {
             // if we move any stages off thread.
             if let Some(validity) = stage.validity() {
                 if let Err(err) = validity.check(self.catalog()) {
-                    tx.send(Err(err), session);
+                    ctx.retire(Err(err));
                     return;
                 }
             }
 
-            (tx, session, stage) = match stage {
+            (ctx, stage) = match stage {
                 PeekStage::Validate(stage) => {
                     let next =
-                        return_if_err!(self.peek_stage_validate(&mut session, stage), tx, session);
-                    (tx, session, PeekStage::Optimize(next))
+                        return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
+                    (ctx, PeekStage::Optimize(next))
                 }
                 PeekStage::Optimize(stage) => {
                     let next =
-                        return_if_err!(self.peek_stage_optimize(&session, stage), tx, session);
-                    (tx, session, PeekStage::Timestamp(next))
+                        return_if_err!(self.peek_stage_optimize(ctx.session_mut(), stage), ctx);
+                    (ctx, PeekStage::Timestamp(next))
                 }
-                PeekStage::Timestamp(stage) => {
-                    match self.peek_stage_timestamp(tx, session, stage) {
-                        Some((tx, session, next)) => (tx, session, PeekStage::Finish(next)),
-                        None => return,
-                    }
-                }
+                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
+                    Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                    None => return,
+                },
                 PeekStage::Finish(stage) => {
-                    let res = self.peek_stage_finish(&mut session, stage).await;
-                    tx.send(res, session);
+                    let res = self.peek_stage_finish(ctx.session_mut(), stage).await;
+                    ctx.retire(res);
                     return;
                 }
             }
@@ -1907,7 +1900,7 @@ impl Coordinator {
             target_cluster,
         }: PeekStageValidate,
     ) -> Result<PeekStageOptimize, AdapterError> {
-        let PeekPlan {
+        let SelectPlan {
             source,
             when,
             finishing,
@@ -1955,10 +1948,10 @@ impl Coordinator {
 
         check_no_invalid_log_reads(catalog, cluster, &source_ids, &mut target_replica)?;
 
-        let validity = PeekValidity {
+        let validity = PlanValidity {
             transient_revision: catalog.transient_revision(),
             source_ids: source_ids.clone(),
-            cluster_id: cluster.id(),
+            cluster_id: Some(cluster.id()),
             replica_id: target_replica,
         };
 
@@ -2057,8 +2050,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_timestamp(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        ctx: ExecuteContext,
         PeekStageTimestamp {
             validity,
             dataflow,
@@ -2075,19 +2067,18 @@ impl Coordinator {
             key,
             typ,
         }: PeekStageTimestamp,
-    ) -> Option<(ClientTransmitter<ExecuteResponse>, Session, PeekStageFinish)> {
-        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+    ) -> Option<(ExecuteContext, PeekStageFinish)> {
+        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = ctx.session().conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
+                    conn_id.clone(),
                     RealTimeRecencyContext::Peek {
-                        tx,
+                        ctx,
                         finishing,
                         copy_to,
                         dataflow,
-                        session,
                         cluster_id,
                         when,
                         target_replica,
@@ -2104,7 +2095,7 @@ impl Coordinator {
                     let real_time_recency_ts = fut.await;
                     // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id,
+                        conn_id: conn_id.clone(),
                         real_time_recency_ts,
                         validity,
                     });
@@ -2115,8 +2106,7 @@ impl Coordinator {
                 None
             }
             None => Some((
-                tx,
-                session,
+                ctx,
                 PeekStageFinish {
                     validity,
                     finishing,
@@ -2173,13 +2163,13 @@ impl Coordinator {
             index_id,
             timeline_context,
             source_ids,
-            id_bundle,
+            &id_bundle,
             real_time_recency_ts,
             key,
             typ,
         )?;
 
-        let timestamp = peek_plan.timestamp_context.timestamp().cloned();
+        let determination = peek_plan.determination.clone();
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -2187,9 +2177,9 @@ impl Coordinator {
             .await?;
 
         if session.vars().emit_timestamp_notice() {
-            if let Some(timestamp) = timestamp {
-                session.add_notice(AdapterNotice::QueryTimestamp { timestamp });
-            }
+            let explanation =
+                self.explain_timestamp(session, cluster_id, &id_bundle, determination);
+            session.add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
 
         match copy_to {
@@ -2209,66 +2199,108 @@ impl Coordinator {
         when: &QueryWhen,
         cluster_id: ClusterId,
         timeline_context: TimelineContext,
-        id_bundle: &CollectionIdBundle,
+        source_bundle: &CollectionIdBundle,
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<TimestampDetermination<Timestamp>, AdapterError> {
-        let determination = self.determine_timestamp(
-            session,
-            id_bundle,
-            when,
-            cluster_id,
-            timeline_context.clone(),
-            real_time_recency_ts,
-        )?;
+        let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when);
+        let timedomain_bundle;
 
-        // We only track the peeks in the session if the query doesn't use AS
-        // OF or we're inside an explicit transaction. The latter case is
-        // necessary to support PG's `BEGIN` semantics, whose behavior can
-        // depend on whether or not reads have occurred in the txn.
-        if when.is_transactional() {
-            session.add_transaction_ops(TransactionOps::Peeks(
-                determination.timestamp_context.clone(),
-            ))?;
-        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
-            // If the query uses AS OF, then ignore the timestamp.
-            session.add_transaction_ops(TransactionOps::Peeks(TimestampContext::NoTimestamp))?;
-        }
+        // Fetch or generate a timestamp for this query and what the read holds would be if we need to set
+        // them.
+        let (determination, potential_read_holds) =
+            match session.get_transaction_timestamp_determination() {
+                // Use the transaction's timestamp if it exists and this isn't an AS OF query.
+                Some(
+                    determination @ TimestampDetermination {
+                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        ..
+                    },
+                ) if in_immediate_multi_stmt_txn => (determination, None),
+                _ => {
+                    let determine_bundle = if in_immediate_multi_stmt_txn {
+                        // In a transaction, determine a timestamp that will be valid for anything in
+                        // any schema referenced by the first query.
+                        timedomain_bundle = self.timedomain_for(
+                            source_ids,
+                            &timeline_context,
+                            session.conn_id(),
+                            cluster_id,
+                        )?;
+                        &timedomain_bundle
+                    } else {
+                        // If not in a transaction, use the source.
+                        source_bundle
+                    };
+                    let determination = self.determine_timestamp(
+                        session,
+                        determine_bundle,
+                        when,
+                        cluster_id,
+                        timeline_context,
+                        real_time_recency_ts,
+                    )?;
+                    // We only need read holds if the read depends on a timestamp. We don't set the
+                    // read holds here because it makes the code a bit more clear to handle the two
+                    // cases for "is this the first statement in a transaction?" in an if/else block
+                    // below.
+                    let read_holds = determination
+                        .timestamp_context
+                        .timestamp()
+                        .map(|timestamp| (timestamp.clone(), determine_bundle));
+                    (determination, read_holds)
+                }
+            };
 
-        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
-            && when == &QueryWhen::Immediately;
-
-        // If we are in a single statement transaction, there is no need to
-        // acquire read holds to prevent compaction as they will be released
-        // immediately following the completion of the transaction.
-        //
         // If we're in a multi-statement transaction and the query does not use `AS OF`,
         // acquire read holds on any sources in the current time-domain if they have not
         // already been acquired. If the query does use `AS OF`, it is not necessary to
         // acquire read holds.
         if in_immediate_multi_stmt_txn {
-            self.check_txn_timedomain_conflicts(
-                session,
-                &determination.timestamp_context,
-                id_bundle,
-            )?;
-
-            // If we've already acquired read holds for the txn, we can skip doing so again
-            if !self.txn_reads.contains_key(&session.conn_id()) {
-                if let Some(timestamp) = determination.timestamp_context.timestamp() {
-                    let timedomain_id_bundle = self.timedomain_for(
-                        source_ids,
-                        &timeline_context,
-                        session.conn_id(),
-                        cluster_id,
-                    )?;
-
-                    let read_holds =
-                        self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
-                    self.txn_reads.insert(session.conn_id(), read_holds);
+            // Either set the valid read ids for this transaction (if it's the first statement in a
+            // transaction) otherwise verify the ids referenced in this query are in the timedomain.
+            if let Some(txn_reads) = self.txn_reads.get(session.conn_id()) {
+                // Find referenced ids not in the read hold. A reference could be caused by a
+                // user specifying an object in a different schema than the first query. An
+                // index could be caused by a CREATE INDEX after the transaction started.
+                let allowed_id_bundle = txn_reads.id_bundle();
+                let outside = source_bundle.difference(&allowed_id_bundle);
+                // Queries without a timestamp and timeline can belong to any existing timedomain.
+                if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
+                    let valid_names =
+                        self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
+                    let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
+                    return Err(AdapterError::RelationOutsideTimeDomain {
+                        relations: invalid_names,
+                        names: valid_names,
+                    });
+                }
+            } else {
+                if let Some((timestamp, bundle)) = potential_read_holds {
+                    let read_holds = self.acquire_read_holds(timestamp, bundle);
+                    self.txn_reads.insert(session.conn_id().clone(), read_holds);
                 }
             }
         }
+
+        // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
+        // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
+        // set the transaction ops. Decide and document what our policy should be on AS OF queries.
+        // Maybe they shouldn't be allowed in transactions at all because it's hard to explain
+        // what's going on there. This should probably get a small design document.
+
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        let mut transaction_determination = determination.clone();
+        if when.is_transactional() {
+            session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
+        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+            // If the query uses AS OF, then ignore the timestamp.
+            transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
+            session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
+        };
 
         Ok(determination)
     }
@@ -2283,28 +2315,26 @@ impl Coordinator {
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
-        id_bundle: CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
-        let conn_id = session.conn_id();
-        let timestamp_context = self
-            .sequence_peek_timestamp(
-                session,
-                when,
-                cluster_id,
-                timeline_context,
-                &id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-            )?
-            .timestamp_context;
+        let conn_id = session.conn_id().clone();
+        let determination = self.sequence_peek_timestamp(
+            session,
+            when,
+            cluster_id,
+            timeline_context,
+            id_bundle,
+            &source_ids,
+            real_time_recency_ts,
+        )?;
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
-        dataflow.set_as_of(timestamp_context.antichain());
+        dataflow.set_as_of(determination.timestamp_context.antichain());
         let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+            logical_time: EvalTime::Time(determination.timestamp_context.timestamp_or_default()),
             session,
         };
         let state = self.catalog().state();
@@ -2329,52 +2359,11 @@ impl Coordinator {
 
         Ok(PlannedPeek {
             plan: peek_plan,
-            timestamp_context,
+            determination,
             conn_id,
             source_arity: typ.arity(),
-            id_bundle,
             source_ids,
         })
-    }
-
-    /// Verifies that no timedomain conflicts exist between the transaction's current read
-    /// holds and the specified sets of incoming collections
-    fn check_txn_timedomain_conflicts(
-        &self,
-        session: &Session,
-        timestamp_context: &TimestampContext<Timestamp>,
-        incoming_id_bundle: &CollectionIdBundle,
-    ) -> Result<(), AdapterError> {
-        // If there are no `txn_reads`, then this must be the first query in the transaction
-        // and we can skip timedomain validations.
-        if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
-            // Queries without a timestamp and timeline can belong to any existing timedomain.
-            if let TimestampContext::TimelineTimestamp(_, _) = timestamp_context {
-                // Verify that the references and indexes for this query are in the
-                // current read transaction.
-                let allowed_id_bundle = txn_reads.id_bundle();
-                // Find the first reference or index (if any) that is not in the transaction. A
-                // reference could be caused by a user specifying an object in a different
-                // schema than the first query. An index could be caused by a CREATE INDEX
-                // after the transaction started.
-                let outside = incoming_id_bundle.difference(&allowed_id_bundle);
-                if !outside.is_empty() {
-                    let mut valid_names =
-                        self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
-                    let mut invalid_names =
-                        self.resolve_collection_id_bundle_names(session, &outside);
-                    // Sort so error messages are deterministic.
-                    valid_names.sort();
-                    invalid_names.sort();
-                    return Err(AdapterError::RelationOutsideTimeDomain {
-                        relations: invalid_names,
-                        names: valid_names,
-                    });
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
@@ -2402,7 +2391,6 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plan: SubscribePlan,
-        depends_on: Vec<GlobalId>,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
         let SubscribePlan {
@@ -2442,11 +2430,11 @@ impl Coordinator {
 
         // Determine the frontier of updates to subscribe *from*.
         // Updates greater or equal to this frontier will be produced.
-        let uses = match from {
-            SubscribeFrom::Id(id) => vec![id],
-            SubscribeFrom::Query { .. } => depends_on,
-        };
-        let id_bundle = self.index_oracle(cluster_id).sufficient_collections(&uses);
+        let depends_on = from.depends_on();
+        check_no_invalid_log_reads(self.catalog(), cluster, &depends_on, &mut target_replica)?;
+        let id_bundle = self
+            .index_oracle(cluster_id)
+            .sufficient_collections(&depends_on);
         let timeline = self.validate_timeline_context(id_bundle.iter())?;
         let as_of = self
             .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
@@ -2476,12 +2464,6 @@ impl Coordinator {
 
         let mut dataflow = match from {
             SubscribeFrom::Id(from_id) => {
-                check_no_invalid_log_reads(
-                    self.catalog(),
-                    cluster,
-                    &btreeset!(from_id),
-                    &mut target_replica,
-                )?;
                 let from = self.catalog().get_entry(&from_id);
                 let from_desc = from
                     .desc(
@@ -2498,12 +2480,6 @@ impl Coordinator {
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
             SubscribeFrom::Query { expr, desc } => {
-                check_no_invalid_log_reads(
-                    self.catalog(),
-                    cluster,
-                    &expr.depends_on(),
-                    &mut target_replica,
-                )?;
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
@@ -2526,13 +2502,13 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             user: session.user().clone(),
-            conn_id: session.conn_id(),
+            conn_id: session.conn_id().clone(),
             channel: tx,
             emit_progress,
             as_of,
             arity: sink_desc.from_desc.arity(),
             cluster_id,
-            depends_on: uses.into_iter().collect(),
+            depends_on: depends_on.into_iter().collect(),
             start_time: self.now(),
             dropping: false,
             output,
@@ -2555,7 +2531,7 @@ impl Coordinator {
         }
 
         self.active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(session.conn_id())
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
@@ -2575,17 +2551,16 @@ impl Coordinator {
 
     pub(super) fn sequence_explain(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
-            _ => tx.send(
-                self.sequence_explain_plan(&mut session, plan, target_cluster),
-                session,
-            ),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
+            _ => {
+                let result = self.sequence_explain_plan(ctx.session_mut(), plan, target_cluster);
+                ctx.retire(result);
+            }
         }
     }
 
@@ -2595,7 +2570,6 @@ impl Coordinator {
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_compute_client::plan::Plan;
         use mz_repr::explain::trace_plan;
         use ExplainStage::*;
 
@@ -2696,8 +2670,20 @@ impl Coordinator {
             })?;
 
             let mut dataflow = DataflowDesc::new("explanation".to_string());
-            self.dataflow_builder(cluster_id)
-                .import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+            let mut builder = self.dataflow_builder(cluster_id);
+            builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+
+            // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
+            // timestamp.
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Deferred,
+                session,
+            };
+            let state = self.catalog().state();
+            dataflow.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
+            )?;
 
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
@@ -2740,15 +2726,22 @@ impl Coordinator {
                 _ => None,
             };
 
+            if matches!(explainee, Explainee::Query) {
+                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+                if let Some(as_of) = dataflow.as_of.as_ref() {
+                    if !as_of.is_empty() {
+                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
+                        {
+                            dataflow.until = timely::progress::Antichain::from_elem(next);
+                        }
+                    }
+                }
+            }
+
             // Execute the `optimize/finalize_dataflow` stage.
             let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
-                Plan::<mz_repr::Timestamp>::finalize_dataflow(
-                    dataflow,
-                    self.catalog()
-                        .system_config()
-                        .enable_monotonic_oneshot_selects(),
-                )
-                .map_err(AdapterError::Internal)
+                self.finalize_dataflow(dataflow, cluster_id)
             })?;
 
             // Trace the resulting plan for the top-level `optimize` path.
@@ -2823,32 +2816,25 @@ impl Coordinator {
         Ok(send_immediate_rows(rows))
     }
 
-    fn sequence_explain_timestamp_begin(
-        &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
-        plan: ExplainPlan,
-    ) {
+    fn sequence_explain_timestamp_begin(&mut self, mut ctx: ExecuteContext, plan: ExplainPlan) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(&session, plan),
-            tx,
-            session
+            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan),
+            ctx
         );
-        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
-                let validity = PeekValidity {
+                let validity = PlanValidity {
                     transient_revision: self.catalog().transient_revision(),
                     source_ids,
-                    cluster_id,
+                    cluster_id: Some(cluster_id),
                     replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = ctx.session().conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
+                    conn_id.clone(),
                     RealTimeRecencyContext::ExplainTimestamp {
-                        tx,
-                        session,
+                        ctx,
                         format,
                         cluster_id,
                         optimized_plan,
@@ -2868,17 +2854,17 @@ impl Coordinator {
                     }
                 });
             }
-            None => tx.send(
-                self.sequence_explain_timestamp_finish_inner(
-                    &mut session,
+            None => {
+                let result = self.sequence_explain_timestamp_finish_inner(
+                    ctx.session_mut(),
                     format,
                     cluster_id,
                     optimized_plan,
                     id_bundle,
                     None,
-                ),
-                session,
-            ),
+                );
+                ctx.retire(result);
+            }
         }
     }
 
@@ -2910,35 +2896,13 @@ impl Coordinator {
         Ok((format, source_ids, optimized_plan, cluster.id(), id_bundle))
     }
 
-    pub(super) fn sequence_explain_timestamp_finish_inner(
-        &mut self,
-        session: &mut Session,
-        format: ExplainFormat,
+    pub(crate) fn explain_timestamp(
+        &self,
+        session: &Session,
         cluster_id: ClusterId,
-        source: OptimizedMirRelationExpr,
-        id_bundle: CollectionIdBundle,
-        real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let is_json = match format {
-            ExplainFormat::Text => false,
-            ExplainFormat::Json => true,
-            ExplainFormat::Dot => {
-                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
-            }
-        };
-        let source_ids = source.depends_on();
-        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
-
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &QueryWhen::Immediately,
-            cluster_id,
-            timeline_context,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-        )?;
-
+        id_bundle: &CollectionIdBundle,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+    ) -> TimestampExplanation<mz_repr::Timestamp> {
         let mut sources = Vec::new();
         {
             for id in id_bundle.storage_ids.iter() {
@@ -2990,10 +2954,42 @@ impl Coordinator {
                 }
             }
         }
-        let explanation = TimestampExplanation {
+        TimestampExplanation {
             determination,
             sources,
+        }
+    }
+
+    pub(super) fn sequence_explain_timestamp_finish_inner(
+        &mut self,
+        session: &mut Session,
+        format: ExplainFormat,
+        cluster_id: ClusterId,
+        source: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let is_json = match format {
+            ExplainFormat::Text => false,
+            ExplainFormat::Json => true,
+            ExplainFormat::Dot => {
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
+            }
         };
+        let source_ids = source.depends_on();
+        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
+
+        let determination = self.sequence_peek_timestamp(
+            session,
+            &QueryWhen::Immediately,
+            cluster_id,
+            timeline_context,
+            &id_bundle,
+            &source_ids,
+            real_time_recency_ts,
+        )?;
+        let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
+
         let s = if is_json {
             serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
         } else {
@@ -3072,28 +3068,26 @@ impl Coordinator {
         })
     }
 
-    pub(super) async fn sequence_insert(
-        &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
-        plan: InsertPlan,
-    ) {
+    pub(super) async fn sequence_insert(&mut self, mut ctx: ExecuteContext, plan: InsertPlan) {
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
         } else {
-            return_if_err!(self.view_optimizer.optimize(plan.values), tx, session)
+            return_if_err!(self.view_optimizer.optimize(plan.values), ctx)
         };
 
         match optimized_mir.into_inner() {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
-                    tx.send(
-                        Self::sequence_insert_constant(&catalog, &mut session, plan.id, selection),
-                        session,
-                    )
+                    let result = Self::sequence_insert_constant(
+                        &catalog,
+                        ctx.session_mut(),
+                        plan.id,
+                        selection,
+                    );
+                    ctx.retire(result);
                 });
             }
             // All non-constant values must be planned as read-then-writes.
@@ -3103,28 +3097,22 @@ impl Coordinator {
                         .desc(
                             &self
                                 .catalog()
-                                .resolve_full_name(table.name(), Some(session.conn_id())),
+                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
                         )
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        tx.send(
-                            Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                                plan.id.to_string(),
-                            ))),
-                            session,
-                        );
+                        ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
+                            plan.id.to_string(),
+                        ))));
                         return;
                     }
                 };
 
                 if selection.contains_temporal() {
-                    tx.send(
-                        Err(AdapterError::Unsupported(
-                            "calls to mz_now in write statements",
-                        )),
-                        session,
-                    );
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    )));
                     return;
                 }
 
@@ -3144,7 +3132,7 @@ impl Coordinator {
                     returning: plan.returning,
                 };
 
-                self.sequence_read_then_write(tx, session, read_then_write_plan)
+                self.sequence_read_then_write(ctx, read_then_write_plan)
                     .await;
             }
         }
@@ -3194,44 +3182,48 @@ impl Coordinator {
 
     pub(super) fn sequence_copy_rows(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         id: GlobalId,
         columns: Vec<usize>,
         rows: Vec<Row>,
     ) {
         let catalog = self.owned_catalog();
         mz_ore::task::spawn(|| "coord::sequence_copy_rows", async move {
-            let conn_catalog = catalog.for_session(&session);
-            let res: Result<_, AdapterError> =
-                mz_sql::plan::plan_copy_from(session.pcx(), &conn_catalog, id, columns, rows)
+            let conn_catalog = catalog.for_session(ctx.session());
+            let result: Result<_, AdapterError> =
+                mz_sql::plan::plan_copy_from(ctx.session().pcx(), &conn_catalog, id, columns, rows)
                     .err_into()
                     .and_then(|values| values.lower().err_into())
-                    .and_then(|values| Optimizer::logical_optimizer().optimize(values).err_into())
+                    .and_then(|values| {
+                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
+                            .optimize(values)
+                            .err_into()
+                    })
                     .and_then(|values| {
                         // Copied rows must always be constants.
                         Self::sequence_insert_constant(
                             &catalog,
-                            &mut session,
+                            ctx.session_mut(),
                             id,
                             values.into_inner(),
                         )
                     });
-            tx.send(res, session);
+            ctx.retire(result);
         });
     }
 
-    // ReadThenWrite is a plan whose writes depend on the results of a
-    // read. This works by doing a Peek then queuing a SendDiffs. No writes
-    // or read-then-writes can occur between the Peek and SendDiff otherwise a
-    // serializability violation could occur.
+    /// ReadThenWrite is a plan whose writes depend on the results of a
+    /// read. This works by doing a Peek then queuing a SendDiffs. No writes
+    /// or read-then-writes can occur between the Peek and SendDiff otherwise a
+    /// serializability violation could occur.
     pub(super) async fn sequence_read_then_write(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         plan: ReadThenWritePlan,
     ) {
-        guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
+        let mut source_ids = plan.selection.depends_on();
+        source_ids.insert(plan.id);
+        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
 
         let ReadThenWritePlan {
             id,
@@ -3248,17 +3240,14 @@ impl Coordinator {
                 .desc(
                     &self
                         .catalog()
-                        .resolve_full_name(table.name(), Some(session.conn_id())),
+                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
                 )
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                tx.send(
-                    Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                        id.to_string(),
-                    ))),
-                    session,
-                );
+                ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
+                    id.to_string(),
+                ))));
                 return;
             }
         };
@@ -3281,9 +3270,10 @@ impl Coordinator {
                             && (
                                 // empty `uses` indicates either system func or
                                 // view created from constants
-                                entry.uses().is_empty()
+                                entry.uses().0.is_empty()
                                     || entry
                                         .uses()
+                                        .0
                                         .iter()
                                         .all(|id| validate_read_dependencies(catalog, id))
                             )
@@ -3300,17 +3290,23 @@ impl Coordinator {
 
         for id in selection.depends_on() {
             if !validate_read_dependencies(self.catalog(), &id) {
-                tx.send(Err(AdapterError::InvalidTableMutationSelection), session);
+                ctx.retire(Err(AdapterError::InvalidTableMutationSelection));
                 return;
             }
         }
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
-        self.sequence_peek(
+        let (tx, _, session, extra) = ctx.into_parts();
+        let peek_ctx = ExecuteContext::from_parts(
             peek_client_tx,
+            self.internal_cmd_tx.clone(),
             session,
-            PeekPlan {
+            Default::default(),
+        );
+        self.sequence_peek(
+            peek_ctx,
+            SelectPlan {
                 source: selection,
                 when: QueryWhen::Freshest,
                 finishing,
@@ -3324,7 +3320,7 @@ impl Coordinator {
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         let max_result_size = self.catalog().system_config().max_result_size();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
-            let (peek_response, mut session) = match peek_rx.await {
+            let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
                     result: Ok(resp),
                     session,
@@ -3332,11 +3328,17 @@ impl Coordinator {
                 Ok(Response {
                     result: Err(e),
                     session,
-                }) => return tx.send(Err(e), session),
+                }) => {
+                    let ctx =
+                        ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+                    ctx.retire(Err(e));
+                    return;
+                }
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
-            let timeout_dur = *session.vars().statement_timeout();
+            let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+            let timeout_dur = *ctx.session().vars().statement_timeout();
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
@@ -3399,9 +3401,7 @@ impl Coordinator {
                                     Ok(diffs)
                                 }(rows)
                             }
-                            PeekResponseUnary::Canceled => {
-                                Err(AdapterError::Unstructured(anyhow!("execution canceled")))
-                            }
+                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
                             }
@@ -3412,7 +3412,7 @@ impl Coordinator {
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
                             let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
-                                conn_id: session.conn_id(),
+                                conn_id: ctx.session().conn_id().clone(),
                             });
                             if let Err(e) = result {
                                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -3421,7 +3421,10 @@ impl Coordinator {
                         }
                     }
                 }
-                resp @ ExecuteResponse::Canceled => return tx.send(Ok(resp), session),
+                resp @ ExecuteResponse::Canceled => {
+                    ctx.retire(Ok(resp));
+                    return;
+                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),
@@ -3473,7 +3476,7 @@ impl Coordinator {
 
             // We need to clear out the timestamp context so the write doesn't fail due to a
             // read only transaction.
-            let timestamp_context = session.take_transaction_timestamp_context();
+            let timestamp_context = ctx.session_mut().take_transaction_timestamp_context();
             // No matter what isolation level the client is using, we must linearize this
             // read. The write will be performed right after this, as part of a single
             // transaction, so the write must have a timestamp greater than or equal to the
@@ -3510,22 +3513,20 @@ impl Coordinator {
 
             match diffs {
                 Ok(diffs) => {
-                    tx.send(
-                        Self::sequence_send_diffs(
-                            &mut session,
-                            SendDiffsPlan {
-                                id,
-                                updates: diffs,
-                                kind,
-                                returning: returning_rows,
-                                max_result_size,
-                            },
-                        ),
-                        session,
+                    let result = Self::sequence_send_diffs(
+                        ctx.session_mut(),
+                        SendDiffsPlan {
+                            id,
+                            updates: diffs,
+                            kind,
+                            returning: returning_rows,
+                            max_result_size,
+                        },
                     );
+                    ctx.retire(result);
                 }
                 Err(e) => {
-                    tx.send(Err(e), session);
+                    ctx.retire(Err(e));
                 }
             }
         });
@@ -3661,32 +3662,260 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_source(
         &mut self,
-        session: &Session,
-        AlterSourcePlan { id, size }: AlterSourcePlan,
+        session: &mut Session,
+        AlterSourcePlan { id, action }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let source = self
-            .catalog()
-            .get_entry(&id)
-            .source()
-            .expect("known to be source");
-        match source.data_source {
-            DataSourceDesc::Ingestion(_) => (),
+        let cur_entry = self.catalog().get_entry(&id);
+        let cur_source = cur_entry.source().expect("known to be source");
+
+        let cur_ingestion = match &cur_source.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
+            | DataSourceDesc::Webhook
             | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }
-        }
-        let cluster_config = alter_storage_cluster_config(size);
-        if let Some(cluster_config) = cluster_config {
-            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
-            ops.push(catalog::Op::AlterSource {
-                id,
-                cluster_config: cluster_config.clone(),
-            });
-            self.catalog_transact(Some(session), ops).await?;
+        };
 
-            self.maybe_alter_linked_cluster(id).await;
+        match action {
+            AlterSourceAction::Resize(size) => {
+                let cluster_config = alter_storage_cluster_config(size);
+                if let Some(cluster_config) = cluster_config {
+                    let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+                    ops.push(catalog::Op::AlterSource {
+                        id,
+                        cluster_config: cluster_config.clone(),
+                    });
+                    self.catalog_transact(Some(session), ops).await?;
+
+                    self.maybe_alter_linked_cluster(id).await;
+                }
+            }
+            AlterSourceAction::DropSubsourceExports { to_drop } => {
+                mz_ore::soft_assert!(!to_drop.is_empty());
+
+                const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
+
+                // Stick this in a function so we can reuse it.
+                let create_sql_to_stmt_deps =
+                    |coord: &Coordinator, session: &Session, create_source_sql| {
+                        // Parse statement.
+                        let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
+                            .expect("invalid create sql persisted to catalog")
+                            .into_element()
+                        {
+                            Statement::CreateSource(stmt) => stmt,
+                            _ => unreachable!("proved type is source"),
+                        };
+
+                        let catalog = coord.catalog().for_session(session);
+
+                        // Resolve items in statement
+                        mz_sql::names::resolve(&catalog, create_source_stmt)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                    };
+
+                let (mut create_source_stmt, mut resolved_ids) =
+                    create_sql_to_stmt_deps(self, session, cur_entry.create_sql())?;
+
+                // Ensure that we are only dropping items on which we depend.
+                for t in &to_drop {
+                    // Remove dependency.
+                    let existed = resolved_ids.0.remove(t);
+                    if !existed {
+                        Err(AdapterError::internal(
+                            ALTER_SOURCE,
+                            format!("removed {t}, but {id} did not have dependency"),
+                        ))?;
+                    }
+                }
+
+                // We are doing a lot of unwrapping, so just make an error to reference; all of
+                // these invariants are guaranteed to be true because of how we plan subsources.
+                let purification_err =
+                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
+
+                let referenced_subsources = match create_source_stmt
+                    .referenced_subsources
+                    .as_mut()
+                    .ok_or(purification_err())?
+                {
+                    ReferencedSubsources::SubsetTables(ref mut s) => s,
+                    _ => return Err(purification_err()),
+                };
+
+                let mut dropped_references = BTreeSet::new();
+
+                // Fixup referenced_subsources. We panic rather than return
+                // errors here because `retain` is an infallible operation and
+                // actually erroring here is both incredibly unlikely and
+                // recoverable (users can stop trying to drop subsources if it
+                // panics).
+                referenced_subsources.retain(
+                    |CreateSourceSubsource {
+                         subsource,
+                         reference,
+                     }| {
+                        match subsource
+                            .as_ref()
+                            .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
+                        {
+                            DeferredItemName::Named(name) => match name {
+                                // Retain all sources which we still have a dependency on.
+                                ResolvedItemName::Item { id, .. } => {
+                                    let contains = resolved_ids.0.contains(id);
+                                    if !contains {
+                                        dropped_references.insert(reference.clone());
+                                    }
+                                    contains
+                                }
+                                _ => unreachable!("{}", purification_err()),
+                            },
+                            _ => unreachable!("{}", purification_err()),
+                        }
+                    },
+                );
+
+                referenced_subsources.sort();
+
+                // Remove dropped references from text columns.
+                match &mut create_source_stmt.connection {
+                    CreateSourceConnection::Postgres { options, .. } => {
+                        if let Some(text_cols) = options
+                            .iter_mut()
+                            .find(|option| option.name == PgConfigOptionName::TextColumns)
+                        {
+                            match &mut text_cols.value {
+                                Some(WithOptionValue::Sequence(names)) => {
+                                    names.retain(|name| match name {
+                                        WithOptionValue::UnresolvedItemName(
+                                            column_qualified_reference,
+                                        ) => {
+                                            mz_ore::soft_assert!(
+                                                column_qualified_reference.0.len() == 4
+                                            );
+                                            if column_qualified_reference.0.len() == 4 {
+                                                let mut table = column_qualified_reference.clone();
+                                                table.0.truncate(3);
+                                                !dropped_references.contains(&table)
+                                            } else {
+                                                tracing::warn!(
+                                                    "PgConfigOptionName::TextColumns had unexpected value {:?}; should have 4 components",
+                                                    column_qualified_reference
+                                                );
+                                                true
+                                            }
+                                        }
+                                        _ => true,
+                                    });
+
+                                    names.sort();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Open a new catalog, which we will use to re-plan our
+                // statement with the desired subsources.
+                let mut catalog = self.catalog().for_system_session();
+                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
+
+                // Re-define our source in terms of the amended statement
+                let plan = match mz_sql::plan::plan(
+                    None,
+                    &catalog,
+                    Statement::CreateSource(create_source_stmt),
+                    &Params::empty(),
+                )
+                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
+                {
+                    Plan::CreateSource(plan) => plan,
+                    _ => unreachable!("create source plan is only valid response"),
+                };
+
+                // Ensure we have actually removed the subsource from the source's dependency and
+                // did not in any other way alter the dependencies.
+                let (_, new_resolved_ids) =
+                    create_sql_to_stmt_deps(self, session, &plan.source.create_sql)?;
+
+                if let Some(id) = new_resolved_ids.0.iter().find(|id| to_drop.contains(id)) {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        format!("failed to remove dropped ID {id} from dependencies"),
+                    ))?;
+                }
+
+                if new_resolved_ids.0 != resolved_ids.0 {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        format!("expected resolved items to be {resolved_ids:?}, but is actually {new_resolved_ids:?}"),
+                    ))?;
+                }
+
+                let source = catalog::Source::new(
+                    id,
+                    plan,
+                    // Use the same cluster ID.
+                    Some(cur_ingestion.instance_id),
+                    resolved_ids,
+                    cur_source.custom_logical_compaction_window,
+                    cur_source.is_retained_metrics_object,
+                );
+
+                // Get new ingestion description for storage.
+                let ingestion = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => ingestion.clone(),
+                    _ => unreachable!("already verified of type ingestion"),
+                };
+
+                self.controller
+                    .storage
+                    .check_alter_collection(id, ingestion.clone())
+                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                // Do not drop this source, even though it's a dependency.
+                let primary_source = btreeset! {ObjectId::Item(id)};
+
+                // CASCADE
+                let drops = self.catalog().object_dependents_except(
+                    &to_drop.into_iter().map(ObjectId::Item).collect(),
+                    session.conn_id(),
+                    primary_source,
+                );
+
+                let DropOps {
+                    mut ops,
+                    dropped_active_db,
+                    dropped_active_cluster,
+                } = self.sequence_drop_common(session, drops)?;
+
+                assert!(
+                    !dropped_active_db && !dropped_active_cluster,
+                    "dropping subsources does not drop DBs or clusters"
+                );
+
+                // Redefine source.
+                ops.push(Op::UpdateItem {
+                    id,
+                    // Look this up again so we don't have to hold an immutable reference to the
+                    // entry for so long.
+                    name: self.catalog.get_entry(&id).name().clone(),
+                    to_item: CatalogItem::Source(source),
+                });
+
+                self.catalog_transact(Some(session), ops).await?;
+
+                // Commit the new ingestion to storage.
+                self.controller
+                    .storage
+                    .alter_collection(id, ingestion)
+                    .await
+                    .expect("altering collection after txn must succeed");
+            }
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
@@ -3790,7 +4019,16 @@ impl Coordinator {
         if session.user().is_system_user()
             || (var_name == Some(ENABLE_RBAC_CHECKS.name()) && session.is_superuser())
         {
-            Ok(())
+            match var_name {
+                Some(name) => {
+                    // In lieu of plumbing the user to all system config functions, just check that the var is
+                    // visible.
+                    let var = self.catalog().system_config().get(name)?;
+                    var.visible(session.user(), Some(self.catalog().system_config()))?;
+                    Ok(())
+                }
+                None => Ok(()),
+            }
         } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
             Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Superuser {
@@ -3820,160 +4058,232 @@ impl Coordinator {
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");
-        let sql = ps.sql().cloned();
+        let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
+        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
     }
 
-    pub(super) async fn sequence_grant_privilege(
+    pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &mut Session,
-        GrantPrivilegePlan {
-            acl_mode,
-            object_id,
+        GrantPrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
-        }: GrantPrivilegePlan,
+        }: GrantPrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             grantees,
-            grantor,
             UpdatePrivilegeVariant::Grant,
         )
         .await
     }
 
-    pub(super) async fn sequence_revoke_privilege(
+    pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &mut Session,
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
+        RevokePrivilegesPlan {
+            update_privileges,
             revokees,
-            grantor,
-        }: RevokePrivilegePlan,
+        }: RevokePrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             revokees,
-            grantor,
             UpdatePrivilegeVariant::Revoke,
         )
         .await
     }
 
-    async fn sequence_update_privilege(
+    async fn sequence_update_privileges(
         &mut self,
         session: &mut Session,
-        acl_mode: AclMode,
-        object_id: ObjectId,
+        update_privileges: Vec<UpdatePrivilege>,
         grantees: Vec<RoleId>,
-        grantor: RoleId,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog()
-            .ensure_not_reserved_object(&object_id, session.conn_id())?;
+        let mut ops = Vec::with_capacity(update_privileges.len() * grantees.len());
+        let mut warnings = Vec::new();
+        let catalog = self.catalog().for_session(session);
 
-        let privileges = self
-            .catalog()
-            .get_privileges(&object_id, session.conn_id())
-            .expect("cannot grant privileges on objects without privileges");
-
-        let mut ops = Vec::with_capacity(grantees.len());
-        for grantee in grantees {
-            let existing_privilege = privileges
-                .get(&grantee)
-                .and_then(|privileges| {
-                    privileges
-                        .into_iter()
-                        .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-                })
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
-
-            match variant {
-                UpdatePrivilegeVariant::Grant
-                    if !existing_privilege.acl_mode.contains(acl_mode) =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+        for UpdatePrivilege {
+            acl_mode,
+            target_id,
+            grantor,
+        } in update_privileges
+        {
+            let actual_object_type = catalog.get_system_object_type(&target_id);
+            // For all relations we allow all applicable table privileges, but send a warning if the
+            // privilege isn't actually applicable to the object type.
+            if actual_object_type.is_relation() {
+                let applicable_privileges = rbac::all_object_privileges(actual_object_type);
+                let non_applicable_privileges = acl_mode.difference(applicable_privileges);
+                if !non_applicable_privileges.is_empty() {
+                    let object_description =
+                        ErrorMessageObjectDescription::from_id(&target_id, &catalog);
+                    warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
+                        non_applicable_privileges,
+                        object_description,
+                    })
                 }
-                UpdatePrivilegeVariant::Revoke
-                    if !existing_privilege
-                        .acl_mode
-                        .intersection(acl_mode)
-                        .is_empty() =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            }
+
+            if let SystemObjectId::Object(object_id) = &target_id {
+                self.catalog()
+                    .ensure_not_reserved_object(object_id, session.conn_id())?;
+            }
+
+            let privileges = self
+                .catalog()
+                .get_privileges(&target_id, session.conn_id())
+                // Should be unreachable since the parser will refuse to parse grant/revoke
+                // statements on objects without privileges.
+                .ok_or(AdapterError::Unsupported(
+                    "GRANTs/REVOKEs on an object type with no privileges",
+                ))?;
+
+            for grantee in &grantees {
+                self.catalog().ensure_not_system_role(grantee)?;
+                let existing_privilege = privileges
+                    .get_acl_item(grantee, &grantor)
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
+
+                match variant {
+                    UpdatePrivilegeVariant::Grant
+                        if !existing_privilege.acl_mode.contains(acl_mode) =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            target_id: target_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    UpdatePrivilegeVariant::Revoke
+                        if !existing_privilege
+                            .acl_mode
+                            .intersection(acl_mode)
+                            .is_empty() =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            target_id: target_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    // no-op
+                    _ => {}
                 }
-                // no-op
-                _ => {}
             }
         }
 
         if ops.is_empty() {
+            session.add_notices(warnings);
             return Ok(variant.into());
         }
 
-        self.catalog_transact(Some(session), ops)
+        let res = self
+            .catalog_transact(Some(session), ops)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
                 UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
-            })
+            });
+        if res.is_ok() {
+            session.add_notices(warnings);
+        }
+        res
+    }
+
+    pub(super) async fn sequence_alter_default_privileges(
+        &mut self,
+        session: &mut Session,
+        AlterDefaultPrivilegesPlan {
+            privilege_objects,
+            privilege_acl_items,
+            is_grant,
+        }: AlterDefaultPrivilegesPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mut ops = Vec::with_capacity(privilege_objects.len() * privilege_acl_items.len());
+        let variant = if is_grant {
+            UpdatePrivilegeVariant::Grant
+        } else {
+            UpdatePrivilegeVariant::Revoke
+        };
+        for privilege_object in &privilege_objects {
+            self.catalog()
+                .ensure_not_system_role(&privilege_object.role_id)?;
+            if let Some(database_id) = privilege_object.database_id {
+                self.catalog()
+                    .ensure_not_reserved_object(&database_id.into(), session.conn_id())?;
+            }
+            if let Some(schema_id) = privilege_object.schema_id {
+                let database_spec: ResolvedDatabaseSpecifier = privilege_object.database_id.into();
+                let schema_spec: SchemaSpecifier = schema_id.into();
+
+                self.catalog().ensure_not_reserved_object(
+                    &(database_spec, schema_spec).into(),
+                    session.conn_id(),
+                )?;
+            }
+            for privilege_acl_item in &privilege_acl_items {
+                self.catalog()
+                    .ensure_not_system_role(&privilege_acl_item.grantee)?;
+                ops.push(Op::UpdateDefaultPrivilege {
+                    privilege_object: privilege_object.clone(),
+                    privilege_acl_item: privilege_acl_item.clone(),
+                    variant,
+                })
+            }
+        }
+
+        self.catalog_transact(Some(session), ops).await?;
+        Ok(ExecuteResponse::AlteredDefaultPrivileges)
     }
 
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &mut Session,
         GrantRolePlan {
-            role_id,
+            role_ids,
             member_ids,
             grantor_id,
         }: GrantRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
-        let mut ops = Vec::new();
-        for member_id in member_ids {
-            let member_membership: BTreeSet<_> =
-                catalog.get_role(&member_id).membership().keys().collect();
-            if member_membership.contains(&role_id) {
-                let role_name = catalog.get_role(&role_id).name().to_string();
-                let member_name = catalog.get_role(&member_id).name().to_string();
-                // We need this check so we don't accidentally return a success on a reserved role.
-                catalog.ensure_not_reserved_role(&member_id)?;
-                catalog.ensure_not_reserved_role(&role_id)?;
-                session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
-                    role_name,
-                    member_name,
-                });
-            } else {
-                ops.push(catalog::Op::GrantRole {
-                    role_id,
-                    member_id,
-                    grantor_id,
-                });
+        let mut ops = Vec::with_capacity(role_ids.len() * member_ids.len());
+        for role_id in role_ids {
+            for member_id in &member_ids {
+                let member_membership: BTreeSet<_> =
+                    catalog.get_role(member_id).membership().keys().collect();
+                if member_membership.contains(&role_id) {
+                    let role_name = catalog.get_role(&role_id).name().to_string();
+                    let member_name = catalog.get_role(member_id).name().to_string();
+                    // We need this check so we don't accidentally return a success on a reserved role.
+                    catalog.ensure_not_reserved_role(member_id)?;
+                    catalog.ensure_not_reserved_role(&role_id)?;
+                    session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
+                        role_name,
+                        member_name,
+                    });
+                } else {
+                    ops.push(catalog::Op::GrantRole {
+                        role_id,
+                        member_id: *member_id,
+                        grantor_id,
+                    });
+                }
             }
         }
 
@@ -3990,32 +4300,34 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         RevokeRolePlan {
-            role_id,
+            role_ids,
             member_ids,
             grantor_id,
         }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
-        let mut ops = Vec::new();
-        for member_id in member_ids {
-            let member_membership: BTreeSet<_> =
-                catalog.get_role(&member_id).membership().keys().collect();
-            if !member_membership.contains(&role_id) {
-                let role_name = catalog.get_role(&role_id).name().to_string();
-                let member_name = catalog.get_role(&member_id).name().to_string();
-                // We need this check so we don't accidentally return a success on a reserved role.
-                catalog.ensure_not_reserved_role(&member_id)?;
-                catalog.ensure_not_reserved_role(&role_id)?;
-                session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
-                    role_name,
-                    member_name,
-                });
-            } else {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id,
-                    member_id,
-                    grantor_id,
-                });
+        let mut ops = Vec::with_capacity(role_ids.len() * member_ids.len());
+        for role_id in role_ids {
+            for member_id in &member_ids {
+                let member_membership: BTreeSet<_> =
+                    catalog.get_role(member_id).membership().keys().collect();
+                if !member_membership.contains(&role_id) {
+                    let role_name = catalog.get_role(&role_id).name().to_string();
+                    let member_name = catalog.get_role(member_id).name().to_string();
+                    // We need this check so we don't accidentally return a success on a reserved role.
+                    catalog.ensure_not_reserved_role(member_id)?;
+                    catalog.ensure_not_reserved_role(&role_id)?;
+                    session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
+                        role_name,
+                        member_name,
+                    });
+                } else {
+                    ops.push(catalog::Op::RevokeRole {
+                        role_id,
+                        member_id: *member_id,
+                        grantor_id,
+                    });
+                }
             }
         }
 
@@ -4074,196 +4386,30 @@ impl Coordinator {
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }
 
-    /// Generates the catalog operations to create a linked cluster for the
-    /// source or sink with the given name.
-    ///
-    /// The operations are written to the provided `ops` vector. The ID
-    /// allocated for the linked cluster is returned.
-    async fn create_linked_cluster_ops(
+    pub(super) async fn sequence_reassign_owned(
         &mut self,
-        linked_object_id: GlobalId,
-        name: &QualifiedItemName,
-        config: &SourceSinkClusterConfig,
-        ops: &mut Vec<catalog::Op>,
-        session: &Session,
-    ) -> Result<ClusterId, AdapterError> {
-        let size = match config {
-            SourceSinkClusterConfig::Linked { size } => size.clone(),
-            SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
-            SourceSinkClusterConfig::Existing { id } => return Ok(*id),
-        };
-        let id = self.catalog().allocate_user_cluster_id().await?;
-        let name = self.catalog().resolve_full_name(name, None);
-        let name = format!("{}_{}_{}", name.database, name.schema, name.item);
-        let name = self.catalog().find_available_cluster_name(&name);
-        let introspection_sources = self.catalog().allocate_introspection_sources().await;
-        ops.push(catalog::Op::CreateCluster {
-            id,
-            name: name.clone(),
-            linked_object_id: Some(linked_object_id),
-            introspection_sources,
-            owner_id: *session.role_id(),
-        });
-        self.create_linked_cluster_replica_op(id, size, ops, *session.role_id())
-            .await?;
-        Ok(id)
-    }
-
-    /// Generates the catalog operation to create a replica of the given linked
-    /// cluster for the given storage cluster configuration.
-    async fn create_linked_cluster_replica_op(
-        &mut self,
-        cluster_id: ClusterId,
-        size: String,
-        ops: &mut Vec<catalog::Op>,
-        owner_id: RoleId,
-    ) -> Result<(), AdapterError> {
-        let availability_zone = {
-            let azs = self.catalog().state().availability_zones();
-            let n_replicas_per_az = azs
-                .iter()
-                .map(|az| (az.clone(), 0))
-                .collect::<BTreeMap<_, _>>();
-            Self::choose_az(&n_replicas_per_az)
-        };
-        let location = SerializedReplicaLocation::Managed {
-            size: size.to_string(),
-            availability_zone,
-            az_user_specified: false,
-        };
-        let location = self.catalog().concretize_replica_location(
-            location,
-            &self
-                .catalog()
-                .system_config()
-                .allowed_cluster_replica_sizes(),
-        )?;
-        let logging = {
-            ReplicaLogging {
-                log_logging: false,
-                interval: Some(Duration::from_micros(
-                    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
-                )),
-            }
-        };
-        ops.push(catalog::Op::CreateClusterReplica {
-            cluster_id,
-            id: self.catalog().allocate_replica_id().await?,
-            name: LINKED_CLUSTER_REPLICA_NAME.into(),
-            config: ReplicaConfig {
-                location,
-                compute: ComputeReplicaConfig {
-                    logging,
-                    idle_arrangement_merge_effort: None,
-                },
-            },
-            owner_id,
-        });
-        Ok(())
-    }
-
-    /// Generates the catalog operations to alter the linked cluster for the
-    /// source or sink with the given ID, if such a cluster exists.
-    async fn alter_linked_cluster_ops(
-        &mut self,
-        linked_object_id: GlobalId,
-        config: &SourceSinkClusterConfig,
-    ) -> Result<Vec<catalog::Op>, AdapterError> {
-        let mut ops = vec![];
-        match self.catalog().get_linked_cluster(linked_object_id) {
-            None => {
-                coord_bail!("cannot change the size of a source or sink created with IN CLUSTER");
-            }
-            Some(linked_cluster) => {
-                for id in linked_cluster.replicas_by_id.keys() {
-                    ops.extend(
-                        self.catalog()
-                            .cluster_replica_dependents(linked_cluster.id(), *id)
-                            .into_iter()
-                            .map(catalog::Op::DropObject),
-                    );
-                }
-                let size = match config {
-                    SourceSinkClusterConfig::Linked { size } => size.clone(),
-                    SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
-                    SourceSinkClusterConfig::Existing { .. } => {
-                        coord_bail!("cannot change the cluster of a source or sink")
-                    }
-                };
-                self.create_linked_cluster_replica_op(
-                    linked_cluster.id,
-                    size,
-                    &mut ops,
-                    linked_cluster.owner_id,
-                )
-                .await?;
-            }
+        session: &mut Session,
+        ReassignOwnedPlan {
+            old_roles,
+            new_role,
+            reassign_ids,
+        }: ReassignOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        for role_id in old_roles.iter().chain(iter::once(&new_role)) {
+            self.catalog().ensure_not_reserved_role(role_id)?;
         }
-        Ok(ops)
-    }
 
-    fn default_linked_cluster_size(&self) -> Result<String, AdapterError> {
-        if !self.catalog().config().unsafe_mode {
-            let mut entries = self
-                .catalog()
-                .cluster_replica_sizes()
-                .0
-                .iter()
-                .collect::<Vec<_>>();
-            entries.sort_by_key(
-                |(
-                    _name,
-                    ReplicaAllocation {
-                        scale,
-                        workers,
-                        memory_limit,
-                        ..
-                    },
-                )| (scale, workers, memory_limit),
-            );
-            let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-            return Err(AdapterError::SourceOrSinkSizeRequired { expected });
-        }
-        Ok(self.catalog().default_linked_cluster_size())
-    }
+        let ops = reassign_ids
+            .into_iter()
+            .map(|id| Op::UpdateOwner {
+                id,
+                new_owner: new_role,
+            })
+            .collect();
 
-    /// Creates the cluster linked to the specified object after a create
-    /// operation, if such a linked cluster exists.
-    async fn maybe_create_linked_cluster(&mut self, linked_object_id: GlobalId) {
-        if let Some(cluster) = self.catalog().get_linked_cluster(linked_object_id) {
-            self.create_cluster(cluster.id).await;
-        }
-    }
-
-    /// Updates the replicas of the cluster linked to the specified object after
-    /// an alter operation, if such a linked cluster exists.
-    async fn maybe_alter_linked_cluster(&mut self, linked_object_id: GlobalId) {
-        if let Some(cluster) = self.catalog().get_linked_cluster(linked_object_id) {
-            // The old replicas of the linked cluster will have been dropped by
-            // `catalog_transact`, both from the catalog state and from the
-            // controller. The new replicas will be in the catalog state, and
-            // need to be recreated in the controller.
-            let cluster_id = cluster.id;
-            let replicas: Vec<_> = cluster
-                .replicas_by_id
-                .keys()
-                .copied()
-                .map(|r| (cluster_id, r))
-                .collect();
-            self.create_cluster_replicas(&replicas).await;
-        }
-    }
-
-    /// Returns whether the given cluster exclusively maintains items
-    /// that were formerly maintained on `computed`.
-    fn is_compute_cluster(&self, id: ClusterId) -> bool {
-        let cluster = self.catalog().get_cluster(id);
-        cluster.bound_objects().iter().all(|id| {
-            matches!(
-                self.catalog().get_entry(id).item_type(),
-                CatalogItemType::Index | CatalogItemType::MaterializedView
-            )
-        })
+        self.catalog_transact(Some(session), ops)
+            .await
+            .map(|_| ExecuteResponse::ReassignOwned)
     }
 }
 

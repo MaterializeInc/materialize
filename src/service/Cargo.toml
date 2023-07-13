@@ -26,7 +26,7 @@ os_info = "3.5.1"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 semver = "1.0.16"
 sysinfo = "0.27.2"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = "1.24.2"
 tokio-stream = "0.1.11"
 tonic = "0.8.2"

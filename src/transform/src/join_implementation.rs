@@ -26,7 +26,7 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use self::index_map::IndexMap;
+use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformArgs, TransformError};
 
@@ -53,10 +53,6 @@ impl CheckedRecursion for JoinImplementation {
 }
 
 impl crate::Transform for JoinImplementation {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -84,31 +80,34 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
     ) -> Result<(), TransformError> {
-        if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action_recursive(value, indexes)?;
-            match &**value {
-                MirRelationExpr::ArrangeBy { keys, .. } => {
-                    for key in keys {
-                        indexes.add_local(*id, key.clone());
+        self.checked_recur(|_| {
+            if let MirRelationExpr::Let { id, value, body } = relation {
+                self.action_recursive(value, indexes)?;
+                match &**value {
+                    MirRelationExpr::ArrangeBy { keys, .. } => {
+                        for key in keys {
+                            indexes.add_local(*id, key.clone());
+                        }
                     }
+                    MirRelationExpr::Reduce { group_key, .. } => {
+                        indexes.add_local(
+                            *id,
+                            (0..group_key.len()).map(MirScalarExpr::Column).collect(),
+                        );
+                    }
+                    _ => {}
                 }
-                MirRelationExpr::Reduce { group_key, .. } => {
-                    indexes.add_local(
-                        *id,
-                        (0..group_key.len()).map(MirScalarExpr::Column).collect(),
-                    );
-                }
-                _ => {}
+                self.action_recursive(body, indexes)?;
+                indexes.remove_local(*id);
+                Ok(())
+            } else {
+                let (mfp, mfp_input) =
+                    MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
+                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
+                self.action(mfp_input, mfp, indexes)?;
+                Ok(())
             }
-            self.action_recursive(body, indexes)?;
-            indexes.remove_local(*id);
-            Ok(())
-        } else {
-            let (mfp, mfp_input) = MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
-            mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
-            self.action(mfp_input, mfp, indexes)?;
-            Ok(())
-        }
+        })
     }
 
     /// Determines the join implementation for join operators.
@@ -142,10 +141,20 @@ impl JoinImplementation {
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
-            mz_expr::canonicalize::canonicalize_equivalences(
-                equivalences,
-                input_types.iter().map(|t| &t.column_types),
-            );
+            if matches!(implementation, Unimplemented) {
+                // Let's do this only if it's the first run of JoinImplementation, in which case we
+                // are guaranteed to produce a new plan, which will be compatible with the modified
+                // equivalences from the below call. Otherwise, if we already have a Differential or
+                // a Delta join, then we might discard the new plan and go with the old plan, which
+                // was created previously for the old equivalences, and might be invalid for the
+                // modified equivalences from the below call. Note that this issue can arise only if
+                // `canonicalize_equivalences` is not idempotent, which unfortunately seems to be
+                // the case.
+                mz_expr::canonicalize::canonicalize_equivalences(
+                    equivalences,
+                    input_types.iter().map(|t| &t.column_types),
+                );
+            }
 
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
@@ -495,10 +504,10 @@ mod delta_queries {
 }
 
 mod differential {
-    use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert;
 
+    use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use crate::TransformError;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.

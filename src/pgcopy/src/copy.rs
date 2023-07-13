@@ -11,9 +11,7 @@ use std::borrow::Cow;
 use std::io;
 
 use bytes::BytesMut;
-use csv::ByteRecord;
-use csv::ReaderBuilder;
-
+use csv::{ByteRecord, ReaderBuilder};
 use mz_repr::{Datum, RelationType, Row, RowArena};
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
@@ -515,7 +513,7 @@ pub fn decode_copy_format_csv(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
         let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
@@ -563,7 +561,7 @@ mod tests {
         assert!(parser.is_eof());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_copy_format_text_empty_null_string() {
         let text = "\t\n10\t20\n30\t\n40\t".as_bytes();
         let expect = vec![
@@ -600,7 +598,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_copy_format_text_parser_escapes() {
         struct TestCase {
             input: &'static str,

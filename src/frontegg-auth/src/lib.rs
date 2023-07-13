@@ -78,8 +78,11 @@ mod auth;
 mod client;
 mod error;
 
-pub use crate::app_password::{AppPassword, AppPasswordParseError};
-pub use auth::{Authentication, AuthenticationConfig, Claims, REFRESH_SUFFIX};
+pub use auth::{
+    Authentication, AuthenticationConfig, Claims, ValidatedApiTokenResponse, REFRESH_SUFFIX,
+};
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
 pub use client::Client;
 pub use error::Error;
+
+pub use crate::app_password::{AppPassword, AppPasswordParseError};

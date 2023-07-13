@@ -201,9 +201,9 @@ SELECT E'\u&&&&'
 parse-statement
 SELECT [1, 2]
 ----
-error: Expected an expression, found left square bracket
+error: expected id
 SELECT [1, 2]
-       ^
+        ^
 
 # Subscripts must have values
 parse-statement

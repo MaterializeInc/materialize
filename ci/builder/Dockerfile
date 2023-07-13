@@ -99,6 +99,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     make \
     openssh-client \
     pkg-config \
+    postgresql-client-14 \
     python3 \
     python3-dev \
     python3-pip \
@@ -118,6 +119,10 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && tar -xf buf.tar.gz -C /usr/local/bin --strip-components 2 buf/bin \
     && rm buf.tar.gz \
     && chmod +x /usr/local/bin/buf /usr/local/bin/protoc-gen-buf-breaking /usr/local/bin/protoc-gen-buf-lint \
+    && curl -fsSL https://github.com/boz/kail/releases/download/v0.16.1/kail_v0.16.1_linux_$ARCH_GO.tar.gz > kail.tar.gz \
+    && tar -xf kail.tar.gz -C /usr/local/bin kail \
+    && rm kail.tar.gz \
+    && chmod +x /usr/local/bin/kail \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
@@ -173,10 +178,6 @@ RUN mkdir rust \
 
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
-
-# Install the Antithesis stub instrumentation library.
-
-COPY libvoidstar.so /usr/local/lib/
 
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.

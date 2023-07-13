@@ -13,11 +13,10 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
 use columnation::{CloneRegion, Columnation};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.role_id.rs"));
 
@@ -175,7 +174,7 @@ impl Columnation for RoleId {
     type InnerRegion = CloneRegion<RoleId>;
 }
 
-#[test]
+#[mz_ore::test]
 fn test_role_id_parsing() {
     let s = "s42";
     let role_id: RoleId = s.parse().unwrap();
@@ -205,7 +204,7 @@ fn test_role_id_parsing() {
     assert!(s.parse::<RoleId>().is_err());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_role_id_binary() {
     let role_id = RoleId::System(42);
     assert_eq!(
@@ -228,7 +227,7 @@ fn test_role_id_binary() {
     assert!(RoleId::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
 }
 
-#[test]
+#[mz_ore::test]
 fn test_role_id_binary_size() {
     assert_eq!(9, RoleId::binary_size());
 }

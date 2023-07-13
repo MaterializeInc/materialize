@@ -46,6 +46,9 @@ class Check:
         if self._can_run():
             self.current_version = e.current_mz_version
             self._manipulate = self.manipulate()
+            assert (
+                len(self._manipulate) == 2
+            ), f"manipulate() should return a list with exactly 2 elements, but actually returns {len(self._manipulate)} elements"
             self._manipulate[phase].execute(e)
 
     def join_manipulate(self, e: Executor, phase: int) -> None:

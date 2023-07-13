@@ -1,5 +1,16 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Fix a bug in the `materialize__list_relations_without_caching` macro which
+  could cause the adapter to break for multi-output sources ([#20483](https://github.com/MaterializeInc/materialize/issues/20483)).
+
+* **Breaking change.** Expose `owner` in the dbt documentation, now that
+    Materialize supports [role-based access control (RBAC)](https://materialize.com/docs/manage/access-control/).
+
+  This change requires [Materialize >=0.48.0](https://materialize.com/docs/releases/v0.48/).
+  **Users of older versions should pin `dbt-materialize` to `v1.4.1`.**
+
 ## 1.4.1 - 2023-04-28
 
 * Let Materialize automatically run introspection queries in the

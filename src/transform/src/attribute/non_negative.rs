@@ -9,13 +9,10 @@
 
 //! Definition and helper structs for the [`NonNegative`] attribute.
 
-use mz_expr::Id;
-use mz_expr::MirRelationExpr;
+use mz_expr::{Id, MirRelationExpr};
 
-use super::subtree_size::SubtreeSize;
-use super::DerivedAttributes;
-use super::RequiredAttributes;
-use super::{Attribute, Env};
+use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
 
 /// Traverses a [`MirRelationExpr`] tree and figures out whether for subtree
 /// the sum of all diffs up to a specific time for any record can be a
@@ -27,9 +24,8 @@ use super::{Attribute, Env};
 /// This method is a conservative approximation and is known to miss not-hard
 /// cases.
 ///
-/// It assumes that all `Get` bindings correspond to collections without negative
-/// multiplicities. Local let bindings present in `safe_lets` are relied on to have
-/// no non-negative multiplicities by the `env` field.
+/// It assumes that all `Get`s to global ids correspond to collections without negative
+/// multiplicities. Local let bindings' non-negativity results are stored in `env`.
 #[derive(Default)]
 #[allow(missing_debug_implementations)]
 pub struct NonNegative {
@@ -97,7 +93,7 @@ impl Attribute for NonNegative {
                     result &= &self.results[n - offset];
                     offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
-                self.results.push(result); // can be refined
+                self.results.push(result);
             }
             Reduce { input: _, .. } => {
                 let input = self.results[n - 1];
@@ -108,7 +104,8 @@ impl Attribute for NonNegative {
                 self.results.push(input);
             }
             Negate { input: _ } => {
-                self.results.push(false); // can be refined
+                // Can be refined if we have proper LetRec handling
+                self.results.push(false);
             }
             Threshold { input: _ } => {
                 self.results.push(true);
@@ -121,7 +118,7 @@ impl Attribute for NonNegative {
                     offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
                 result &= &self.results[n - offset]; // include the base result
-                self.results.push(result); // can be refined
+                self.results.push(result);
             }
             ArrangeBy { input: _, .. } => {
                 let input = self.results[n - 1];

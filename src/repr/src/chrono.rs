@@ -20,9 +20,8 @@ use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
 };
 use chrono_tz::{Tz, TZ_VARIANTS};
-use proptest::prelude::Strategy;
-
 use mz_proto::{RustType, TryFromProtoError};
+use proptest::prelude::Strategy;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.chrono.rs"));
 
@@ -156,15 +155,15 @@ pub fn any_timezone() -> impl Strategy<Value = Tz> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;
-    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn naive_date_protobuf_roundtrip(expect in any_naive_date() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDate>(&expect);
@@ -172,7 +171,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn naive_date_time_protobuf_roundtrip(expect in any_naive_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
@@ -180,7 +179,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn date_time_protobuf_roundtrip(expect in any_datetime() ) {
             let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
@@ -188,7 +187,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
         fn fixed_offset_protobuf_roundtrip(expect in any_fixed_offset() ) {
             let actual = protobuf_roundtrip::<_, ProtoFixedOffset>(&expect);

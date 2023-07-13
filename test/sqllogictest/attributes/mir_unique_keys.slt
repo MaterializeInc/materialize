@@ -109,7 +109,7 @@ Explained Query:
     Union // { keys: "()" }
       Project (#1, #2) // { keys: "([1])" }
         Map (integer_to_double(#0)) // { keys: "([0], [2])" }
-          TopK group_by=[#0] limit=1 monotonic=false // { keys: "([0])" }
+          TopK group_by=[#0] limit=1 // { keys: "([0])" }
             Project (#0, #1) // { keys: "()" }
               Join on=(#0 = #2) type=differential // { keys: "()" }
                 ArrangeBy keys=[[#0]] // { keys: "([0])" }
@@ -165,7 +165,7 @@ Explained Query:
                 Project () // { keys: "()" }
                   Get l0 // { keys: "()" }
     cte l0 =
-      TopK limit=3 monotonic=true // { keys: "()" }
+      TopK limit=3 monotonic // { keys: "()" }
         FlatMap generate_series(1, 100000, 1) // { keys: "()" }
           Constant // { keys: "([])" }
             - ()

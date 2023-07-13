@@ -73,14 +73,13 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeMap;
+use std::io::{BufReader, Write};
+use std::{env, fs};
+
 use anyhow::Context;
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
-
-use std::collections::BTreeMap;
-use std::env;
-use std::fs;
-use std::io::{BufReader, Write};
 
 /// The path of a protobuf file and its [`md5`] hash.
 ///
@@ -186,25 +185,30 @@ fn main() -> anyhow::Result<()> {
         .map(|entry| format!("protos/{}", entry.name))
         .collect();
 
+    const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]";
+
     // 'as' is okay here because we're using it to define the type of the empty slice, which is
     // necessary since the method takes the slice as a generic arg.
     #[allow(clippy::as_conversions)]
     prost_build::Config::new()
         .btree_map(["."])
         .bytes(["."])
-        .message_attribute(".", "#[derive(Eq, PartialOrd, Ord)]")
+        .message_attribute(".", ATTR)
         // Note(parkmycar): This is annoying, but we need to manually specify each oneof so we can
         // get them to implement Eq, PartialEq, and Ord. If you define a new oneof you should add
         // it here.
-        .enum_attribute("CatalogItem.value", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("GlobalId.value", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("ClusterId.value", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("DatabaseId.value", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("SchemaId.value", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("RoleId.value", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("ReplicaConfig.location", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("AuditLogEventV1.details", "#[derive(Eq, PartialOrd, Ord)]")
-        .enum_attribute("AuditLogKey.event", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("CatalogItem.value", ATTR)
+        .enum_attribute("ClusterConfig.variant", ATTR)
+        .enum_attribute("GlobalId.value", ATTR)
+        .enum_attribute("ClusterId.value", ATTR)
+        .enum_attribute("DatabaseId.value", ATTR)
+        .enum_attribute("SchemaId.value", ATTR)
+        .enum_attribute("RoleId.value", ATTR)
+        .enum_attribute("ReplicaConfig.location", ATTR)
+        .enum_attribute("AuditLogEventV1.details", ATTR)
+        .enum_attribute("AuditLogKey.event", ATTR)
+        .enum_attribute("StorageUsageKey.usage", ATTR)
+        .enum_attribute("ResolvedDatabaseSpecifier.value", ATTR)
         .compile_protos(
             &paths,
             &[ /*

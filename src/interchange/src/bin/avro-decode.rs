@@ -77,13 +77,12 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::Context;
-use tokio::fs;
-
 use mz_interchange::avro::Decoder;
 use mz_interchange::confluent;
 use mz_ore::cli;
 use mz_ore::cli::CliConfig;
 use mz_ore::error::ErrorExt;
+use tokio::fs;
 
 /// Decode a single Avro row using Materialize's Avro decoder.
 #[derive(clap::Parser)]

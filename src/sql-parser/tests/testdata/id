@@ -21,6 +21,13 @@ SELECT * FROM [u123 AS materialize.public.foo]
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u123", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
+SELECT [u123 AS materialize.public.foo](1)
+----
+SELECT [u123 AS materialize.public.foo](1)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: Id("u123", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")])), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
 SELECT * FROM [u123 AS foo]
 ----
 error: table name in square brackets must be fully qualified

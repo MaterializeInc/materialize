@@ -1477,7 +1477,7 @@ SELECT 14::oid = 14::smallint;
 ----
 true
 
-query error OID out of range
+query error "120129019392" OID out of range
 SELECT 120129019392::bigint::oid;
 
 # Check that our non-linear type promotion structure works as intended.
@@ -1569,7 +1569,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
 SELECT jsonb_object_agg(1::uint8, 2::int);
 ----
-Reduce aggregates=[jsonb_object_agg(row(row(uint8_to_text(integer_to_uint8(1)), jsonb_or_null_to_jsonb(integer_to_numeric(2)))))]
+Reduce aggregates=[jsonb_object_agg[order_by=[]](row(row(uint8_to_text(integer_to_uint8(1)), jsonb_or_null_to_jsonb(integer_to_numeric(2)))))]
   Constant
     - ()
 

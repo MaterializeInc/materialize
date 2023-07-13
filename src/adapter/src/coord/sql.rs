@@ -19,8 +19,8 @@ use crate::catalog::Catalog;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
-use crate::util::{describe, ClientTransmitter};
-use crate::{metrics, AdapterError, ExecuteResponse};
+use crate::util::describe;
+use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -30,28 +30,23 @@ impl Coordinator {
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(
-            Some(pcx),
-            &self.catalog().for_session(session),
-            stmt,
-            params,
-        )?;
+        let catalog = self.catalog().for_session(session);
+        let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params)?;
         Ok(plan)
     }
 
     pub(crate) fn declare(
         &self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        mut ctx: ExecuteContext,
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
         mz_ore::task::spawn(|| "coord::declare", async move {
-            let res = Self::declare_inner(&mut session, &catalog, name, stmt, param_types)
+            let result = Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, param_types)
                 .map(|()| ExecuteResponse::DeclaredCursor);
-            tx.send(res, session);
+            ctx.retire(result);
         });
     }
 
@@ -104,7 +99,7 @@ impl Coordinator {
         if let Some(revision) = Self::verify_statement_revision(
             catalog,
             session,
-            ps.sql(),
+            ps.stmt(),
             ps.desc(),
             ps.catalog_revision,
         )? {
@@ -179,13 +174,13 @@ impl Coordinator {
     ) -> TransactionStatus<mz_repr::Timestamp> {
         let conn_meta = self
             .active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(session.conn_id())
             .expect("must exist for active session");
         let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks);
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(session.conn_id()) {
             self.release_read_hold(&txn_reads);
         }
 

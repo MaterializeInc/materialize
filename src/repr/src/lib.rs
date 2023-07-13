@@ -101,6 +101,7 @@ pub mod antichain;
 pub mod chrono;
 pub mod explain;
 pub mod global_id;
+pub mod namespaces;
 pub mod role_id;
 pub mod stats;
 pub mod strconv;
@@ -114,7 +115,8 @@ pub use crate::relation::{
     ProtoRelationType, RelationDesc, RelationType,
 };
 pub use crate::row::encoding::{
-    DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder, RowEncoder,
+    is_no_stats_type, DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder,
+    RowEncoder,
 };
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,

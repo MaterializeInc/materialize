@@ -9,14 +9,13 @@
 
 //! Types for describing dataflow sinks.
 
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationDesc};
+use mz_storage_client::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
-
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc};
-use mz_storage_client::controller::CollectionMetadata;
 
 include!(concat!(
     env!("OUT_DIR"),

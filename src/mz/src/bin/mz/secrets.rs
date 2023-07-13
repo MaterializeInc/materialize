@@ -12,14 +12,13 @@ use std::fs::read_to_string;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use mz::api::{get_provider_region_environment, CloudProviderRegion};
+use mz::configuration::ValidProfile;
 use postgres_protocol::escape::{escape_identifier, escape_literal};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use mz::api::{get_provider_region_environment, CloudProviderRegion};
-use mz::configuration::ValidProfile;
-
-pub use clap_clippy_hack::*;
+pub use self::clap_clippy_hack::*;
 
 // Do not add anything but structs/enums with Clap derives in this module!
 //
@@ -32,6 +31,7 @@ pub use clap_clippy_hack::*;
 #[allow(clippy::almost_swapped)]
 mod clap_clippy_hack {
     use super::*;
+
     #[derive(Debug, Subcommand)]
     pub enum SecretCommand {
         /// Create a new secret

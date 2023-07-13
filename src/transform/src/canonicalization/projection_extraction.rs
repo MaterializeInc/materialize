@@ -9,9 +9,10 @@
 
 //! Transform column references in a `Map` into a `Project`.
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
+
+use crate::TransformArgs;
 
 /// Transform column references in a `Map` into a `Project`, or repeated
 /// aggregations in a `Reduce` into a `Project`.
@@ -19,10 +20,6 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

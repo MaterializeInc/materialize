@@ -1,12 +1,12 @@
 ---
 title: "SHOW VIEWS"
-description: "`SHOW VIEWS` returns a list of views in your Materialize instances."
+description: "`SHOW VIEWS` returns a list of views in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW VIEWS` returns a list of views in your Materialize instances.
+`SHOW VIEWS` returns a list of views in Materialize.
 
 ## Syntax
 

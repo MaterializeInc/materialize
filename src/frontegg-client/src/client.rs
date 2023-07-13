@@ -21,21 +21,25 @@
 
 use std::time::{Duration, SystemTime};
 
+use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use mz_frontegg_auth::{AppPassword, Claims};
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
 
-use mz_frontegg_auth::AppPassword;
-
 use crate::config::{ClientBuilder, ClientConfig};
 use crate::error::{ApiError, Error};
 
 pub mod app_password;
+pub mod role;
 pub mod user;
 
-const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
+const CREDENTIALS_AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "user"];
+const APP_PASSWORD_AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
+
 const REFRESH_AUTH_PATH: [&str; 7] = [
     "identity",
     "resources",
@@ -57,7 +61,14 @@ struct AuthenticationResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AuthenticationRequest<'a> {
+struct CredentialsAuthenticationRequest<'a> {
+    email: &'a str,
+    password: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppPasswordAuthenticationRequest<'a> {
     client_id: &'a str,
     secret: &'a str,
 }
@@ -76,6 +87,31 @@ pub(crate) struct Auth {
     refresh_token: String,
 }
 
+/// Representation of the two possible ways to authenticate a user.
+///
+/// The usage of [Authentication::AppPassword] is more favorable
+/// and recommended. App-passwords can be created for a particular
+/// usage and be removed at any time. While the user credentials
+/// may have a broader impact.
+pub enum Authentication {
+    /// Legitimate email and password that will remain in use to identify
+    /// the user throughout the client's existence.
+    Credentials(Credentials),
+    /// A singular, legitimate app password that will remain in use to identify
+    /// the user throughout the client's existence.
+    AppPassword(AppPassword),
+}
+
+/// Representation of a user's credentials.
+/// They are the same as a user needs to
+/// log in to Materialize's console.
+pub struct Credentials {
+    /// User's email to authenticate with Materialize console
+    pub email: String,
+    /// User's password to authenticate with Materialize console
+    pub password: String,
+}
+
 /// An API client for Frontegg.
 ///
 /// The API client is designed to be wrapped in an [`Arc`] and used from
@@ -85,7 +121,7 @@ pub(crate) struct Auth {
 /// [`Arc`]: std::sync::Arc
 pub struct Client {
     pub(crate) inner: reqwest::Client,
-    pub(crate) app_password: AppPassword,
+    pub(crate) authentication: Authentication,
     pub(crate) endpoint: Url,
     pub(crate) auth: Mutex<Option<Auth>>,
 }
@@ -181,18 +217,33 @@ impl Client {
                 }
             }
             None => {
-                // No auth available in the client, request a new one.
-                req = self.build_request(Method::POST, AUTH_PATH);
-                let authentication_request = AuthenticationRequest {
-                    client_id: &self.app_password.client_id.to_string(),
-                    secret: &self.app_password.secret_key.to_string(),
-                };
-                req = req.json(&authentication_request);
+                match &self.authentication {
+                    Authentication::Credentials(credentials) => {
+                        // No auth available in the client, request a new one.
+                        req = self.build_request(Method::POST, CREDENTIALS_AUTH_PATH);
+
+                        let authentication_request = CredentialsAuthenticationRequest {
+                            email: &credentials.email,
+                            password: &credentials.password,
+                        };
+                        req = req.json(&authentication_request);
+                    }
+                    Authentication::AppPassword(app_password) => {
+                        req = self.build_request(Method::POST, APP_PASSWORD_AUTH_PATH);
+
+                        let authentication_request = AppPasswordAuthenticationRequest {
+                            client_id: &app_password.client_id.to_string(),
+                            secret: &app_password.secret_key.to_string(),
+                        };
+                        req = req.json(&authentication_request);
+                    }
+                }
             }
         }
 
         // Do the request.
         let res: AuthenticationResponse = self.send_unauthenticated_request(req).await?;
+
         *auth = Some(Auth {
             token: res.access_token.clone(),
             // Refresh twice as frequently as we need to, to be safe.
@@ -201,5 +252,30 @@ impl Client {
             refresh_token: res.refresh_token,
         });
         Ok(res.access_token)
+    }
+
+    /// Returns the JSON Web Key Set (JWKS) from the well known endpoint: `/.well-known/jwks.json`
+    async fn get_jwks(&self) -> Result<JwkSet, Error> {
+        let well_known = vec![".well-known", "jwks.json"];
+        let req = self.build_request(Method::GET, well_known);
+        let jwks: JwkSet = self.send_request(req).await?;
+        Ok(jwks)
+    }
+
+    /// Verifies the JWT signature using a JWK from the well-known endpoint and
+    /// returns the user claims.
+    pub async fn claims(&self) -> Result<Claims, Error> {
+        let jwks = self.get_jwks().await.map_err(|_| Error::FetchingJwks)?;
+        let jwk = jwks.keys.first().ok_or_else(|| Error::EmptyJwks)?;
+        let token = self.auth().await?;
+
+        let token_data = decode::<Claims>(
+            &token,
+            &DecodingKey::from_jwk(jwk).map_err(|_| Error::ConvertingJwks)?,
+            &Validation::new(Algorithm::RS256),
+        )
+        .map_err(|_| Error::DecodingClaims)?;
+
+        Ok(token_data.claims)
     }
 }

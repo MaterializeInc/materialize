@@ -21,9 +21,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use atty::Stream;
-use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
-
 use mz_ore::error::ErrorExt;
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// An error produced when parsing or executing a testdrive script.
 ///

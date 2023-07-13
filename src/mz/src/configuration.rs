@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
+use std::collections::BTreeMap;
+use std::fmt::Display;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
+use std::{fmt, fs};
 
 use anyhow::{bail, Context};
 use dirs::home_dir;

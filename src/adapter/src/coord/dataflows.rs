@@ -17,10 +17,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Antichain;
-use timely::PartialOrder;
-use tracing::warn;
-
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
@@ -37,14 +33,17 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use timely::progress::Antichain;
+use timely::PartialOrder;
+use tracing::warn;
 
-use super::timestamp_selection::TimestampProvider;
 use crate::catalog::{
     Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
 };
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
@@ -420,7 +419,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             .expect("can only create indexes on items with a valid description")
             .typ()
             .clone();
-        let name = index_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(index_entry.name(), index_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
@@ -496,7 +498,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             ),
         };
 
-        let name = mview_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(mview_entry.name(), mview_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
 
         self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
@@ -527,6 +532,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
+            | DataSourceDesc::Webhook
             | DataSourceDesc::Source => false,
         }
     }
@@ -774,7 +780,12 @@ fn eval_unmaterializable_func(
             let t: Datum = session.pcx().wall_time.try_into()?;
             pack(t)
         }
-        UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
+        UnmaterializableFunc::CurrentUser => pack(Datum::from(
+            state.get_role(session.current_role_id()).name(),
+        )),
+        UnmaterializableFunc::SessionUser => pack(Datum::from(
+            state.get_role(session.session_role_id()).name(),
+        )),
         UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
             rbac::is_rbac_enabled_for_session(state.system_config(), session),
         )),
@@ -798,9 +809,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
-        UnmaterializableFunc::PgBackendPid => {
-            pack(Datum::Int32(i32::reinterpret_cast(session.conn_id())))
-        }
+        UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(i32::reinterpret_cast(
+            session.conn_id().unhandled(),
+        ))),
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;
             pack(t)

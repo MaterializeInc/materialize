@@ -17,14 +17,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use mz_ore::error::ErrorExt;
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::time;
 use tracing::{info, warn};
-
-use mz_ore::error::ErrorExt;
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::keys::SshKeyPair;
 
@@ -200,8 +199,8 @@ async fn connect(
         // Force use of IPv4 loopback. Do not use the hostname `localhost`,
         // as that can resolve to IPv6, and the SSH tunnel is only listening
         // for IPv4 connections.
-        let local = openssh::Socket::new(&(Ipv4Addr::LOCALHOST, local_port))?;
-        let remote = openssh::Socket::new(&(host, port))?;
+        let local = openssh::Socket::from((Ipv4Addr::LOCALHOST, local_port));
+        let remote = openssh::Socket::new(host, port);
 
         match session
             .request_port_forward(ForwardType::Local, local, remote)
