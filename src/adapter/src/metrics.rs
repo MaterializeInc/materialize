@@ -21,6 +21,7 @@ pub struct Metrics {
     pub active_subscribes: IntGaugeVec,
     pub queue_busy_seconds: HistogramVec,
     pub determine_timestamp: IntCounterVec,
+    pub timestamp_difference_for_strict_serializable: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: HistogramVec,
     pub subscribe_outputs: IntCounterVec,
@@ -54,6 +55,12 @@ impl Metrics {
                 name: "mz_determine_timestamp",
                 help: "The total number of calls to determine_timestamp.",
                 var_labels:["respond_immediately", "isolation_level", "compute_instance"],
+            )),
+            timestamp_difference_for_strict_serializable: registry.register(metric!(
+                name: "mz_timestamp_difference_for_strict_serializable",
+                help: "Difference in timestamp in seconds for running in strict serializable vs serializable isolation level.",
+                var_labels:["compute_instance"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",
