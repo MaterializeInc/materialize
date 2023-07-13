@@ -8,7 +8,7 @@ menu:
 
 `ALTER SYSTEM RESET` restores the value of a system variable to its default value. This command is an alternative spelling for [`ALTER SYSTEM SET...TO DEFAULT`](../alter-system-set).
 
-To see the current value of a session variable, use [`SHOW`](../show).
+To see the current value of a system variable, use [`SHOW`](../show).
 
 ## Syntax
 

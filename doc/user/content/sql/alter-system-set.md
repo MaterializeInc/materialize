@@ -19,7 +19,7 @@ Field                   | Use
 ------------------------|-----
 _variable&lowbar;name_  | The name of the system variable to modify.
 _variable&lowbar;value_ | The value to assign to the system variable.
-**DEFAULT**             | Reset the session variable's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
+**DEFAULT**             | Reset the system variable's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
 {{% system-variables %}}
 
