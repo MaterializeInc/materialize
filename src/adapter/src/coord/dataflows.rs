@@ -745,6 +745,14 @@ fn eval_unmaterializable_func(
 
     match f {
         UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
+        UnmaterializableFunc::CurrentSchema => {
+            let catalog = Catalog::for_session_state(state, session);
+            let schema = catalog
+                .search_path()
+                .first()
+                .map(|(db, schema)| &*state.get_schema(db, schema, session.conn_id()).name.schema);
+            pack(Datum::from(schema))
+        }
         UnmaterializableFunc::CurrentSchemasWithSystem => {
             let catalog = Catalog::for_session_state(state, session);
             let search_path = catalog.effective_search_path(false);

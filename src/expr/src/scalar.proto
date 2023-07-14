@@ -95,6 +95,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty current_setting = 15;
         google.protobuf.Empty is_rbac_enabled = 16;
         google.protobuf.Empty session_user = 17;
+        google.protobuf.Empty current_schema = 18;
     }
 }
 
