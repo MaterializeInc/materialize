@@ -19,11 +19,12 @@ use tokio::task::JoinHandle;
 /// that may be CPU intensive such as encoding/decoding and shard
 /// maintenance.
 ///
-/// Using a separate runtime ensures Persist isolates its expensive
-/// workloads on its own OS threads. This ensures that, even if one
-/// of these tasks fails to yield for arbitrarily long, the OS
-/// scheduler can still context switch to other threads and their
-/// tasks, preserving liveness for the rest of the process.
+/// Using a separate runtime allows Persist to isolate its expensive
+/// workloads on its own OS threads as an insurance policy against
+/// tasks that erroneously fail to yield for a long time. By using
+/// separate OS threads, the scheduler is able to context switch
+/// out of any problematic tasks, preserving liveness for the rest
+/// of the process.
 #[derive(Debug)]
 pub struct IsolatedRuntime {
     inner: Option<Runtime>,
