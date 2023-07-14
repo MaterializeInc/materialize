@@ -72,6 +72,7 @@ pub struct CompactRes<T> {
 #[derive(Debug, Clone)]
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
+    pub(crate) compaction_yield_after_n_updates: usize,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
@@ -81,6 +82,7 @@ impl CompactConfig {
     pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
         CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
+            compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
         }
@@ -726,6 +728,7 @@ where
                 // once after this initial heap population.
                 timings.part_fetching += start.elapsed();
                 let start = Instant::now();
+                let mut updates_decoded = 0;
                 while let Some((k, v, mut t, d)) = part.next() {
                     t.advance_by(desc.since().borrow());
                     let d = D::decode(d);
@@ -734,6 +737,11 @@ where
                     // default heap ordering is descending
                     sorted_updates.push(Reverse((((k, v), t, d), index)));
                     remaining_updates_by_run[index] += 1;
+
+                    updates_decoded += 1;
+                    if updates_decoded % cfg.compaction_yield_after_n_updates == 0 {
+                        tokio::task::yield_now().await;
+                    }
                 }
                 timings.heap_population += start.elapsed();
             }
@@ -751,6 +759,7 @@ where
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
         // consumed.
+        let mut updates_encoded = 0;
         while let Some(Reverse((((k, v), t, d), index))) = sorted_updates.pop() {
             remaining_updates_by_run[index] -= 1;
             if remaining_updates_by_run[index] == 0 {
@@ -777,6 +786,7 @@ where
                     );
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
+                    let mut updates_decoded = 0;
                     while let Some((k, v, mut t, d)) = part.next() {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);
@@ -785,12 +795,22 @@ where
                         // default heap ordering is descending
                         sorted_updates.push(Reverse((((k, v), t, d), index)));
                         remaining_updates_by_run[index] += 1;
+
+                        updates_decoded += 1;
+                        if updates_decoded % cfg.compaction_yield_after_n_updates == 0 {
+                            tokio::task::yield_now().await;
+                        }
                     }
                     timings.heap_population += start.elapsed();
                 }
             }
 
             batch.add(&real_schemas, &k, &v, &t, &d).await?;
+
+            updates_encoded += 1;
+            if updates_encoded % cfg.compaction_yield_after_n_updates == 0 {
+                tokio::task::yield_now().await;
+            }
         }
 
         let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
