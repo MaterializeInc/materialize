@@ -532,6 +532,8 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (PgLegacyChar, Int32) => Explicit: CastPgLegacyCharToInt32(func::CastPgLegacyCharToInt32),
 
         // PG LEGACY NAME
+        // Under the hood VarChars and Name's are just Strings, so we can re-use existing methods
+        // on Strings and VarChars instead of defining new ones.
         (PgLegacyName, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
         (PgLegacyName, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
             let length = to_type.unwrap_char_length();
