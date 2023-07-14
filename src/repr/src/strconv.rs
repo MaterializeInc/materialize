@@ -2138,7 +2138,7 @@ mod tests {
     #[mz_ore::test]
     fn test_parse_pg_legacy_name() {
         let s = "hello world";
-        assert_eq!(s, parse_pg_legacy_name(&s));
+        assert_eq!(s, parse_pg_legacy_name(s));
 
         let s = "x".repeat(63);
         assert_eq!(s, parse_pg_legacy_name(&s));
