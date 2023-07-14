@@ -25,7 +25,7 @@
 --   137438972267 | Wall of Peng Li                 | 2010-03-23 00:17:08.427+00 |  2199023264745 |           63
 -- (20 rows)
 -- 
--- Time: 86768.407 ms (01:26.768)
+-- Time: 28700.050 ms (00:28.700)
 /* Q3. Popular topics in a country
 \set tagClass '\'MusicalArtist\''
 \set country '\'Burma\''

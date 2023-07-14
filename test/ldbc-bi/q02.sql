@@ -1,6 +1,6 @@
 \set date '\'2010-06-08\'::timestamp'
 \set tagClass '\'ChristianBishop\''
--- materialize=> \i q02.sql 
+-- materialize=> \i q02.sql
 --         tag.name         | coalesce | coalesce | diff 
 -- -------------------------+----------+----------+------
 --  Pope_John_XXIII         |       13 |       36 |   23
@@ -54,7 +54,7 @@
 --  Thomas_Becket           |        0 |        0 |    0
 -- (49 rows)
 -- 
--- Time: 118568.786 ms (01:58.569)
+-- Time: 42939.038 ms (00:42.939)
 /* Q2. Tag evolution
 \set date '\'2012-06-01\''::timestamp
 \set tagClass '\'MusicalArtist\''
