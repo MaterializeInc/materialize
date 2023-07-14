@@ -804,6 +804,9 @@ ALTER SYSTEM SET log_filter = 'debug'
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange Timely(Reachability)"
+"ArrangeByKey Compute(ArrangementHeapAllocations)"
+"ArrangeByKey Compute(ArrangementHeapCapacity)"
+"ArrangeByKey Compute(ArrangementHeapSize)"
 "ArrangeByKey Compute(DataflowCurrent)"
 "ArrangeByKey Compute(DataflowDependency)"
 "ArrangeByKey Compute(FrontierCurrent)"
@@ -811,6 +814,7 @@ ALTER SYSTEM SET log_filter = 'debug'
 "ArrangeByKey Compute(ImportFrontierCurrent)"
 "ArrangeByKey Compute(PeekCurrent)"
 "ArrangeByKey Compute(PeekDuration)"
+"ArrangeByKey Compute(ShutdownDuration)"
 "ArrangeByKey Differential(ArrangementBatches)"
 "ArrangeByKey Differential(ArrangementRecords)"
 "ArrangeByKey Differential(Sharing)"
