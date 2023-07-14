@@ -4683,7 +4683,7 @@ mod tests {
             };
             let pcx = PlanContext::zero();
             let scx = StatementContext::new(Some(&pcx), &conn_catalog);
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
             let ecx = ExprContext {
                 qcx: &qcx,
                 name: "smoketest",

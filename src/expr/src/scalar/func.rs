@@ -2176,7 +2176,6 @@ pub enum BinaryFunc {
     DateTruncInterval,
     TimezoneTimestamp,
     TimezoneTimestampTz,
-    TimezoneTime { wall_time: NaiveDateTime },
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
@@ -2419,8 +2418,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
                 Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
             }),
-            BinaryFunc::TimezoneTime { wall_time } => parse_timezone(a.unwrap_str())
-                .map(|tz| timezone_time(tz, b.unwrap_time(), wall_time).into()),
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
@@ -2603,7 +2600,7 @@ impl BinaryFunc {
                 ScalarType::TimestampTz.nullable(in_nullable)
             }
 
-            TimezoneTime { .. } | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+            TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
             SubTime => ScalarType::Interval.nullable(in_nullable),
 
@@ -2828,7 +2825,6 @@ impl BinaryFunc {
             | DateTruncInterval
             | TimezoneTimestamp
             | TimezoneTimestampTz
-            | TimezoneTime { .. }
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
@@ -3052,7 +3048,6 @@ impl BinaryFunc {
             | DateTruncTimestampTz
             | TimezoneTimestamp
             | TimezoneTimestampTz
-            | TimezoneTime { .. }
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
@@ -3243,7 +3238,6 @@ impl BinaryFunc {
             | BinaryFunc::DateTruncInterval => (false, false),
             BinaryFunc::TimezoneTimestamp
             | BinaryFunc::TimezoneTimestampTz
-            | BinaryFunc::TimezoneTime { .. }
             | BinaryFunc::TimezoneIntervalTimestamp
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime => (false, false),
@@ -3442,7 +3436,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
             BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
-            BinaryFunc::TimezoneTime { .. } => f.write_str("timezonet"),
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
@@ -3651,9 +3644,6 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::DateTruncInterval).boxed(),
             Just(BinaryFunc::TimezoneTimestamp).boxed(),
             Just(BinaryFunc::TimezoneTimestampTz).boxed(),
-            any_naive_datetime()
-                .prop_map(|wall_time| BinaryFunc::TimezoneTime { wall_time })
-                .boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestamp).boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestampTz).boxed(),
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
@@ -3854,7 +3844,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::DateTruncInterval => DateTruncInterval(()),
             BinaryFunc::TimezoneTimestamp => TimezoneTimestamp(()),
             BinaryFunc::TimezoneTimestampTz => TimezoneTimestampTz(()),
-            BinaryFunc::TimezoneTime { wall_time } => TimezoneTime(wall_time.into_proto()),
             BinaryFunc::TimezoneIntervalTimestamp => TimezoneIntervalTimestamp(()),
             BinaryFunc::TimezoneIntervalTimestampTz => TimezoneIntervalTimestampTz(()),
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
@@ -4053,9 +4042,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 DateTruncInterval(()) => Ok(BinaryFunc::DateTruncInterval),
                 TimezoneTimestamp(()) => Ok(BinaryFunc::TimezoneTimestamp),
                 TimezoneTimestampTz(()) => Ok(BinaryFunc::TimezoneTimestampTz),
-                TimezoneTime(wall_time) => Ok(BinaryFunc::TimezoneTime {
-                    wall_time: wall_time.into_rust()?,
-                }),
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
@@ -7228,6 +7214,7 @@ pub enum VariadicFunc {
     ArrayFill {
         elem_type: ScalarType,
     },
+    TimezoneTime,
 }
 
 impl VariadicFunc {
@@ -7311,6 +7298,14 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
+            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str()).map(|tz| {
+                timezone_time(
+                    tz,
+                    ds[1].unwrap_time(),
+                    &ds[1].unwrap_timestamptz().naive_utc(),
+                )
+                .into()
+            }),
         }
     }
 
@@ -7352,7 +7347,8 @@ impl VariadicFunc {
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
-            | VariadicFunc::ArrayFill { .. } => false,
+            | VariadicFunc::ArrayFill { .. }
+            | VariadicFunc::TimezoneTime => false,
         }
     }
 
@@ -7435,6 +7431,7 @@ impl VariadicFunc {
             ArrayFill { elem_type } => {
                 ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
+            TimezoneTime => ScalarType::Time.nullable(in_nullable),
         }
     }
 
@@ -7500,7 +7497,8 @@ impl VariadicFunc {
             | Or
             | MakeMzAclItem
             | ArrayPosition
-            | ArrayFill { .. } => false,
+            | ArrayFill { .. }
+            | TimezoneTime => false,
             Coalesce
             | Greatest
             | Least
@@ -7601,7 +7599,8 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestamp
             | VariadicFunc::DateDiffTimestampTz
             | VariadicFunc::DateDiffDate
-            | VariadicFunc::DateDiffTime => false,
+            | VariadicFunc::DateDiffTime
+            | VariadicFunc::TimezoneTime => false,
         }
     }
 }
@@ -7654,6 +7653,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
+            VariadicFunc::TimezoneTime => f.write_str("timezonet"),
         }
     }
 }
@@ -7767,6 +7767,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
             VariadicFunc::ArrayPosition => ArrayPosition(()),
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
+            VariadicFunc::TimezoneTime => TimezoneTime(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7826,6 +7827,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 ArrayFill(elem_type) => Ok(VariadicFunc::ArrayFill {
                     elem_type: elem_type.into_rust()?,
                 }),
+                TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
             }
         } else {
             Err(TryFromProtoError::missing_field(

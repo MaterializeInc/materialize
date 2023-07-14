@@ -178,10 +178,7 @@ async fn datadriven() {
                             let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
                             let pcx = &PlanContext::zero();
                             let scx = StatementContext::new(Some(pcx), &catalog);
-                            let qcx = QueryContext::root(
-                                &scx,
-                                QueryLifetime::OneShot(scx.pcx().unwrap()),
-                            );
+                            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
                             let q = parsed[0].clone();
                             let q = match q {
                                 Statement::Select(s) => s.query,

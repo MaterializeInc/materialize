@@ -432,6 +432,8 @@ message ProtoBinaryFunc {
         bool rev = 2;
     }
 
+    reserved 93; // timezone_time
+    reserved "timezone_time";
     oneof kind {
         google.protobuf.Empty add_int16 = 46;
         google.protobuf.Empty add_int32 = 11;
@@ -523,7 +525,6 @@ message ProtoBinaryFunc {
         google.protobuf.Empty date_trunc_interval = 90;
         google.protobuf.Empty timezone_timestamp = 91;
         google.protobuf.Empty timezone_timestamp_tz = 92;
-        mz_repr.chrono.ProtoNaiveDateTime timezone_time = 93;
         google.protobuf.Empty timezone_interval_timestamp = 94;
         google.protobuf.Empty timezone_interval_timestamp_tz = 95;
         google.protobuf.Empty timezone_interval_time = 96;
@@ -661,6 +662,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty date_diff_timestamp_tz = 34;
         google.protobuf.Empty date_diff_date = 35;
         google.protobuf.Empty date_diff_time = 36;
+        google.protobuf.Empty timezone_time = 37;
     }
 }
 
