@@ -716,7 +716,20 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
-    if: build.tag != "" && build.branch =~ /^v/
+    if: build.tag != "" && build.branch =~ /^v.*\..*\$/
+    coverage: skip
+
+  - id: nightly-if-release
+    label: Nightly for releases
+    depends_on: devel-docker-tags
+    trigger: nightlies
+    async: true
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    if: build.tag != "" && build.branch =~ /^v.*\..*\$/
     coverage: skip
 
   - wait: ~
