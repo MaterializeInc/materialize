@@ -384,8 +384,8 @@ def workflow_autospill(c: Composition) -> None:
             ],
             additional_system_parameter_defaults={
                 "upsert_source_disk_default": "true",
-                "upsert_source_auto_spill_to_disk": "true",
-                "upsert_source_auto_spill_threshold_bytes": "200",
+                "upsert_rocksdb_auto_spill_to_disk": "true",
+                "upsert_rocksdb_auto_spill_threshold_bytes": "200",
             },
         ),
     ):

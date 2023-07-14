@@ -259,7 +259,7 @@ impl UpsertMetrics {
                 var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_autospill_in_use: registry.register(metric!(
-                name: "mz_storage_upsert_state_rocksdb_autospill_is_use",
+                name: "mz_storage_upsert_state_rocksdb_autospill_in_use",
                 help: "Flag to denote whether upsert state has spilled to rocksdb \
                     or using in-memory state",
                 var_labels: ["source_id", "worker_id"],

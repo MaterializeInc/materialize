@@ -39,10 +39,10 @@ pub struct StorageParameters {
     pub finalize_shards: bool,
     pub tracing: TracingParameters,
     /// A set of parameters used configure auto spill behaviour if disk is used.
-    pub upsert_auto_spill_config: AutoSpillConfig,
+    pub upsert_auto_spill_config: UpsertAutoSpillConfig,
 }
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct AutoSpillConfig {
+pub struct UpsertAutoSpillConfig {
     /// A flag to whether allow automatically spilling to disk or not
     pub allow_spilling_to_disk: bool,
     /// The size in bytes of the upsert state after which rocksdb will be used
@@ -50,7 +50,7 @@ pub struct AutoSpillConfig {
     pub spill_to_disk_threshold_bytes: usize,
 }
 
-impl RustType<ProtoUpsertAutoSpillConfig> for AutoSpillConfig {
+impl RustType<ProtoUpsertAutoSpillConfig> for UpsertAutoSpillConfig {
     fn into_proto(&self) -> ProtoUpsertAutoSpillConfig {
         ProtoUpsertAutoSpillConfig {
             allow_spilling_to_disk: self.allow_spilling_to_disk,

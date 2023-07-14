@@ -31,7 +31,7 @@ pub struct DataflowParameters {
     pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig,
     /// A set of parameters to configure auto spill to disk behaviour for a `DISK`
     /// enabled upsert source
-    pub auto_spill_config: mz_storage_client::types::parameters::AutoSpillConfig,
+    pub auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
 }
 
 impl DataflowParameters {
@@ -40,7 +40,7 @@ impl DataflowParameters {
         &mut self,
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
-        auto_spill_config: mz_storage_client::types::parameters::AutoSpillConfig,
+        auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
@@ -88,7 +88,7 @@ pub enum InternalStorageCommand {
     UpdateConfiguration(
         mz_postgres_util::ReplicationTimeouts,
         mz_rocksdb::RocksDBTuningParameters,
-        mz_storage_client::types::parameters::AutoSpillConfig,
+        mz_storage_client::types::parameters::UpsertAutoSpillConfig,
     ),
 }
 
