@@ -43,13 +43,14 @@ reloptions          true        text[]
 > SHOW COLUMNS FROM pg_database
 name         nullable  type
 ---------------------------
- oid         false     oid
- datname     false     text
- datdba      false     oid
- encoding    false     integer
- datcollate  false     text
- datctype    false     text
- datacl      true      text[]
+ oid            false     oid
+ datname        false     text
+ datdba         false     oid
+ encoding       false     integer
+ datistemplate  false     boolean
+ datcollate     false     text
+ datctype       false     text
+ datacl         true      text[]
 
 > SHOW COLUMNS FROM pg_index
 name         nullable  type
@@ -301,3 +302,13 @@ name                nullable    type
  refobjid           false       oid
  refobjsubid        false       integer
  deptype            false       char
+
+> SHOW COLUMNS FROM pg_indexes
+name                nullable    type
+------------------------------------------------------------
+ table_catalog      false       text
+ schemaname         false       text
+ tablename          false       text
+ indexname          false       text
+ tablespace         true        text
+ indexdef           true        text

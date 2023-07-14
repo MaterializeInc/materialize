@@ -2452,6 +2452,8 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     d.name as datname,
     role_owner.oid as datdba,
     6 as encoding,
+    -- Materialize doesn't support database cloning.
+    FALSE AS datistemplate,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
@@ -2494,6 +2496,24 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
+};
+
+pub const PG_INDEXES: BuiltinView = BuiltinView {
+    name: "pg_indexes",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_indexes AS SELECT
+    current_database() as table_catalog,
+    s.name AS schemaname,
+    r.name AS tablename,
+    i.name AS indexname,
+    NULL::text AS tablespace,
+    -- TODO(jkosh44) Fill in with actual index definition.
+    NULL::text AS indexdef
+FROM mz_catalog.mz_indexes i
+JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
@@ -3246,6 +3266,33 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
+    name: "routines",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.routines AS SELECT
+    current_database() as routine_catalog,
+    s.name AS routine_schema,
+    f.name AS routine_name,
+    'FUNCTION' AS routine_type,
+    NULL::text AS routine_definition
+FROM mz_catalog.mz_functions f
+JOIN mz_catalog.mz_schemas s ON s.id = f.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_SCHEMATA: BuiltinView = BuiltinView {
+    name: "schemata",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.schemata AS
+SELECT
+    current_database() as catalog_name,
+    s.name AS schema_name
+FROM mz_catalog.mz_schemas s
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
@@ -3260,6 +3307,41 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     END AS table_type
 FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
+    name: "triggers",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.triggers AS SELECT
+    NULL::text as trigger_catalog,
+    NULL::text AS trigger_schema,
+    NULL::text AS trigger_name,
+    NULL::text AS event_manipulation,
+    NULL::text AS event_object_catalog,
+    NULL::text AS event_object_schema,
+    NULL::text AS event_object_table,
+    NULL::integer AS action_order,
+    NULL::text AS action_condition,
+    NULL::text AS action_statement,
+    NULL::text AS action_orientation,
+    NULL::text AS action_timing,
+    NULL::text AS action_reference_old_table,
+    NULL::text AS action_reference_new_table
+WHERE FALSE",
+};
+
+pub const INFORMATION_SCHEMA_VIEWS: BuiltinView = BuiltinView {
+    name: "views",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.views AS SELECT
+    current_database() as table_catalog,
+    s.name AS table_schema,
+    v.name AS table_name,
+    v.definition AS view_definition
+FROM mz_catalog.mz_views v
+JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
@@ -4113,8 +4195,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_EVENT_TRIGGER),
         Builtin::View(&PG_LANGUAGE),
         Builtin::View(&PG_SHDESCRIPTION),
+        Builtin::View(&PG_INDEXES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
+        Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
+        Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
+        Builtin::View(&INFORMATION_SCHEMA_VIEWS),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
