@@ -32,7 +32,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement, StatementKind};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, IsolationLevel, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -620,6 +620,7 @@ where
             }
         }
 
+        let isolation_level = *self.adapter_client.session().vars().transaction_isolation();
         let execute_started = Instant::now();
         let result = match self
             .adapter_client
@@ -637,6 +638,7 @@ where
                     None,
                     ExecuteTimeout::None,
                     Some(statement_kind),
+                    isolation_level,
                     Some(execute_started),
                 )
                 .await
@@ -956,6 +958,7 @@ where
         let execute_started = Instant::now();
         async move {
             let aborted_txn = self.is_aborted_txn();
+            let isolation_level = *self.adapter_client.session().vars().transaction_isolation();
 
             // Check if the portal has been started and can be continued.
             let portal = match self
@@ -1006,6 +1009,7 @@ where
                                 fetch_portal_name,
                                 timeout,
                                 statement_kind,
+                                isolation_level,
                                 Some(execute_started),
                             )
                             .await
@@ -1028,6 +1032,7 @@ where
                         fetch_portal_name,
                         timeout,
                         statement_kind,
+                        isolation_level,
                         None, // don't need metrics because we've already started returning results
                     )
                     .await
@@ -1294,6 +1299,7 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
         statement_kind: Option<StatementKind>,
+        isolation_level: IsolationLevel,
         execute_started: Option<Instant>,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
@@ -1360,6 +1366,7 @@ where
                     fetch_portal_name,
                     timeout,
                     statement_kind,
+                    isolation_level,
                     execute_started,
                 )
                 .instrument(span)
@@ -1411,6 +1418,7 @@ where
                     fetch_portal_name,
                     timeout,
                     statement_kind,
+                    isolation_level,
                     execute_started,
                 )
                 .await
@@ -1433,7 +1441,15 @@ where
                             .await;
                     }
                 };
-                self.copy_rows(format, row_desc, rows).await
+                self.copy_rows(
+                    format,
+                    row_desc,
+                    rows,
+                    statement_kind,
+                    isolation_level,
+                    execute_started,
+                )
+                .await
             }
             ExecuteResponse::CopyFrom {
                 id,
@@ -1527,7 +1543,8 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
         statement_kind: Option<StatementKind>,
-        execute_started: Option<Instant>,
+        isolation_level: IsolationLevel,
+        mut execute_started: Option<Instant>,
     ) -> Result<State, io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
@@ -1603,10 +1620,11 @@ where
                 FetchResult::Rows(Some(mut batch_rows)) => {
                     if !saw_any_rows {
                         saw_any_rows = true;
-                        if let Some(execute_started) = execute_started {
+                        if let Some(execute_started) = execute_started.take() {
                             // Not ideal but also includes the time to send notices back to the client, if applicable
                             self.metrics.time_to_first_row(
                                 statement_kind.clone(),
+                                isolation_level.clone(),
                                 execute_started.elapsed(),
                             );
                         }
@@ -1718,6 +1736,9 @@ where
         format: CopyFormat,
         row_desc: RelationDesc,
         mut stream: RowBatchStream,
+        statement_kind: Option<StatementKind>,
+        isolation_level: IsolationLevel,
+        mut execute_started: Option<Instant>,
     ) -> Result<State, io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
@@ -1787,6 +1808,11 @@ where
                             .await;
                     }
                     Some(PeekResponseUnary::Rows(rows)) => {
+                        if count == 0 {
+                            if let Some(execute_started) = execute_started.take() {
+                                self.metrics.time_to_first_row(statement_kind, isolation_level, execute_started.elapsed());
+                            }
+                        }
                         count += rows.len();
                         for row in rows {
                             encode_fn(row, typ, &mut out)?;
