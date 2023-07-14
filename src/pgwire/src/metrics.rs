@@ -18,7 +18,7 @@ use mz_sql::ast::{statement_kind_label_value, StatementKind};
 #[derive(Clone, Debug)]
 pub struct MetricsConfig {
     connection_status: IntCounterVec,
-    individual_query_latency: HistogramVec,
+    individual_query_latency_seconds: HistogramVec,
 }
 
 impl MetricsConfig {
@@ -29,8 +29,8 @@ impl MetricsConfig {
                 help: "Count of completed network connections, by status",
                 var_labels: ["source", "status"],
             }),
-            individual_query_latency: registry.register(metric! {
-                name: "mz_individual_query_latency",
+            individual_query_latency_seconds: registry.register(metric! {
+                name: "mz_individual_query_latency_seconds",
                 help: "Latency of an individual statement in a pgwire query",
                 var_labels: ["source", "status", "kind"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
@@ -65,7 +65,7 @@ impl Metrics {
 
     pub fn one_query_latency(&self, is_ok: bool, statement_kind: StatementKind, latency: Duration) {
         self.inner
-            .individual_query_latency
+            .individual_query_latency_seconds
             .with_label_values(&[
                 self.source_label(),
                 Self::status_label(is_ok),
