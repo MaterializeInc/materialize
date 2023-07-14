@@ -48,7 +48,7 @@ use crate::{rbac, ExecuteContext};
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
-// `sequence_peek_stage`.
+// `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
 mod cluster;
 mod inner;
 mod linked_cluster;
@@ -130,10 +130,8 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateConnection(plan) => {
-                let result = self
-                    .sequence_create_connection(ctx.session_mut(), plan, resolved_ids)
+                self.sequence_create_connection(ctx, plan, resolved_ids)
                     .await;
-                ctx.retire(result);
             }
             Plan::CreateDatabase(plan) => {
                 let result = self.sequence_create_database(ctx.session_mut(), plan).await;

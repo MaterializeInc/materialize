@@ -243,7 +243,15 @@ pub type CreateSourceStatementReady = BackgroundWorkResult<(
     CreateSourceStatement<Aug>,
 )>;
 
-pub type CreateConnectionValidationReady = BackgroundWorkResult<CreateConnectionPlan>;
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct CreateConnectionValidationReady {
+    #[derivative(Debug = "ignore")]
+    pub ctx: ExecuteContext,
+    pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub plan_validity: PlanValidity,
+    pub otel_ctx: OpenTelemetryContext,
+}
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -388,7 +396,7 @@ pub struct PlanValidity {
     /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
     /// Objects on which the plan depends.
-    source_ids: BTreeSet<GlobalId>,
+    dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
 }
@@ -416,7 +424,7 @@ impl PlanValidity {
         // - Ids do not mutate.
         // - Ids are not reused.
         // - If an id was dropped, this will detect it and error.
-        for id in &self.source_ids {
+        for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan);
             }

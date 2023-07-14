@@ -460,30 +460,21 @@ impl Coordinator {
     async fn message_create_connection_validation_ready(
         &mut self,
         CreateConnectionValidationReady {
-            ctx,
+            mut ctx,
             result,
-            params,
-            original_stmt,
-            resolved_ids,
+            mut plan_validity,
             otel_ctx,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
 
         // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in. If any have gone missing, we
-        // revalidate the original statement. This will either produce a nice
-        // "unknown secret" error, or pick up a new connector that has
-        // replaced the dropped connector.
+        // `DROP SECRET` may have sneaked in.
         //
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if !resolved_ids
-            .0
-            .iter()
-            .all(|id| self.catalog().try_get_entry(id).is_some())
-        {
-            self.handle_execute_inner(original_stmt, params, ctx).await;
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            ctx.retire(Err(e));
             return;
         }
 
@@ -492,8 +483,14 @@ impl Coordinator {
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        self.sequence_plan(ctx, Plan::CreateConnection(plan), resolved_ids)
+        let result = self
+            .sequence_create_connection_stage_finish(
+                ctx.session_mut(),
+                plan,
+                ResolvedIds(plan_validity.dependency_ids),
+            )
             .await;
+        ctx.retire(result);
     }
 
     #[tracing::instrument(level = "debug", skip(self, ctx))]

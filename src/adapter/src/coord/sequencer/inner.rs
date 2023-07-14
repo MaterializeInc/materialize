@@ -30,6 +30,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -94,10 +95,10 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
-    peek, Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
-    PeekStageTimestamp, PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn,
-    PendingTxnResponse, PlanValidity, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
+    PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
+    PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
+    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -324,6 +325,52 @@ impl Coordinator {
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_connection(
+        &mut self,
+        mut ctx: ExecuteContext,
+        plan: CreateConnectionPlan,
+        resolved_ids: ResolvedIds,
+    ) {
+        if plan.validate {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let transient_revision = self.catalog().transient_revision();
+            let conn_id = ctx.session().conn_id().clone();
+            let connection_context = self.connection_context.clone();
+            let otel_ctx = OpenTelemetryContext::obtain();
+            task::spawn(|| format!("validate_connection:{conn_id}"), async move {
+                let connection = &plan.connection.connection;
+                let result = match connection.validate(&connection_context).await {
+                    Ok(()) => Ok(plan),
+                    Err(err) => Err(err.into()),
+                };
+
+                // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                let result = internal_cmd_tx.send(Message::CreateConnectionValidationReady(
+                    CreateConnectionValidationReady {
+                        ctx,
+                        result,
+                        plan_validity: PlanValidity {
+                            transient_revision,
+                            dependency_ids: resolved_ids.0,
+                            cluster_id: None,
+                            replica_id: None,
+                        },
+                        otel_ctx,
+                    },
+                ));
+                if let Err(e) = result {
+                    tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
+            });
+        } else {
+            let result = self
+                .sequence_create_connection_stage_finish(ctx.session_mut(), plan, resolved_ids)
+                .await;
+            ctx.retire(result);
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
         plan: CreateConnectionPlan,
@@ -1955,7 +2002,7 @@ impl Coordinator {
 
         let validity = PlanValidity {
             transient_revision: catalog.transient_revision(),
-            source_ids: source_ids.clone(),
+            dependency_ids: source_ids.clone(),
             cluster_id: Some(cluster.id()),
             replica_id: target_replica,
         };
@@ -2830,7 +2877,7 @@ impl Coordinator {
             Some(fut) => {
                 let validity = PlanValidity {
                     transient_revision: self.catalog().transient_revision(),
-                    source_ids,
+                    dependency_ids: source_ids,
                     cluster_id: Some(cluster_id),
                     replica_id: None,
                 };
