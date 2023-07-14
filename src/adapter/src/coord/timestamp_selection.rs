@@ -11,11 +11,10 @@
 
 use std::fmt;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
-use mz_ore::now::SYSTEM_TIME;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -542,6 +541,10 @@ pub struct TimestampExplanation<T> {
     pub determination: TimestampDetermination<T>,
     /// Details about each source.
     pub sources: Vec<TimestampSource<T>>,
+    /// Wall time of first statement executed in this transaction
+    pub session_wall_time: DateTime<Utc>,
+    /// Cached value of determination.respond_immediately()
+    pub respond_immediately: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -598,8 +601,12 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
     for TimestampExplanation<T>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let now = SYSTEM_TIME();
-        writeln!(f, "                   system clock: {}", now)?;
+        writeln!(
+            f,
+            "              session wall time: {:13} ({})",
+            self.session_wall_time.naive_local().timestamp_millis(),
+            self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
+        )?;
         let timeline = self.determination.timestamp_context.timeline();
         writeln!(
             f,
@@ -644,7 +651,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
         writeln!(
             f,
             "        can respond immediately: {}",
-            self.determination.respond_immediately()
+            self.respond_immediately
         )?;
         writeln!(f, "                       timeline: {:?}", &timeline)?;
 

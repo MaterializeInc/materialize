@@ -28,7 +28,6 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::SYSTEM_TIME;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -3007,9 +3006,12 @@ impl Coordinator {
                 }
             }
         }
+        let respond_immediately = determination.respond_immediately();
         TimestampExplanation {
             determination,
             sources,
+            session_wall_time: session.pcx().wall_time,
+            respond_immediately,
         }
     }
 
@@ -3044,11 +3046,7 @@ impl Coordinator {
         let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
 
         let s = if is_json {
-            let can_respond_immediately = explanation.determination.respond_immediately();
-            let mut value = serde_json::to_value(explanation).expect("failed to create Value");
-            value["system_clock"] = serde_json::json!(SYSTEM_TIME());
-            value["can_respond_immediately"] = serde_json::json!(can_respond_immediately);
-            serde_json::to_string_pretty(&value).expect("failed to serialize explanation")
+            serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
         } else {
             explanation.to_string()
         };
