@@ -108,7 +108,7 @@ pub enum Command {
         schema: String,
         name: String,
         conn_id: ConnectionId,
-        tx: oneshot::Sender<Result<Option<AppendWebhookResponse>, AdapterError>>,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     },
 
     GetSystemVars {

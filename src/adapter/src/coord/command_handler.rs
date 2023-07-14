@@ -831,7 +831,7 @@ impl Coordinator {
         schema: String,
         name: String,
         conn_id: ConnectionId,
-        tx: oneshot::Sender<Result<Option<AppendWebhookResponse>, AdapterError>>,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         // Make sure the feature is enabled before doing anything else.
         if !self.catalog().system_config().enable_webhook_sources() {
@@ -850,17 +850,16 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
-        ) -> Option<AppendWebhookResponse> {
+        ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
                 database: Some(database),
                 schema: Some(schema),
                 item: name,
             };
-            let entry = coord
-                .catalog()
-                .resolve_entry(None, &vec![], &name, &conn_id)
-                .ok()?;
+            let Ok(entry) = coord.catalog().resolve_entry(None, &vec![], &name, &conn_id) else {
+                return Err(name);
+            };
 
             let (body_ty, header_ty, validate_using) = match entry.item() {
                 CatalogItem::Source(Source {
@@ -873,7 +872,8 @@ impl Coordinator {
 
                     let body = desc
                         .get_by_name(&"body".into())
-                        .map(|(_idx, ty)| ty.clone())?;
+                        .map(|(_idx, ty)| ty.clone())
+                        .ok_or(name)?;
                     let header = desc
                         .get_by_name(&"headers".into())
                         .map(|(_idx, ty)| ty.clone());
@@ -901,12 +901,12 @@ impl Coordinator {
                     });
                     (body, header, validate)
                 }
-                _ => return None,
+                _ => return Err(name),
             };
 
             // Get a channel so we can queue updates to be written.
             let row_tx = coord.controller.storage.monotonic_appender(entry.id());
-            Some(AppendWebhookResponse {
+            Ok(AppendWebhookResponse {
                 tx: row_tx,
                 body_ty,
                 header_ty,
@@ -914,7 +914,13 @@ impl Coordinator {
             })
         }
 
-        let response = resolve(self, database, schema, name, conn_id);
-        let _ = tx.send(Ok(response));
+        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
+        let _ = tx.send(response);
     }
 }

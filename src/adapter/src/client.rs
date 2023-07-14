@@ -233,7 +233,7 @@ impl Client {
         schema: String,
         name: String,
         conn_id: ConnectionId,
-    ) -> Result<Option<AppendWebhookResponse>, AdapterError> {
+    ) -> Result<AppendWebhookResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
 
         // Send our request.
