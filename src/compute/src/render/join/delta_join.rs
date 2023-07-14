@@ -361,6 +361,7 @@ where
     if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
+            // Safety: `half_join` holds on to the trace.
             unsafe { trace.inner(enable_arrangement_size_logging) },
             |time| time.step_back(),
             comparison,
@@ -397,6 +398,7 @@ where
     } else {
         let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
+            // Safety: `half_join` holds on to the trace.
             unsafe { trace.inner(enable_arrangement_size_logging) },
             |time| time.step_back(),
             comparison,

@@ -68,6 +68,7 @@ where
         L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
         Self: ArrangementSize,
     {
+        // Safety: `reduce_abelian` holds on to the trace.
         let inner = unsafe { self.inner(enable_arrangement_size_logging) };
         // Allow access to `reduce_abelian` since we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
