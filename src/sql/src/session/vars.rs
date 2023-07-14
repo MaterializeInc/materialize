@@ -925,6 +925,7 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+// TODO(mgree) change this to a SelectOption
 pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_cardinality_estimates"),
     value: &false,

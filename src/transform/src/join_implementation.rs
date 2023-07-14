@@ -1006,10 +1006,10 @@ impl<'a> Orderer<'a> {
                 self.arrangement_active[input].push(pos);
                 self.priority_queue.push((
                     JoinInputCharacteristics::new(
-                        cardinality,
                         is_unique,
                         0,
                         true,
+                        cardinality,
                         self.filters[input].clone(),
                         input,
                     ),
@@ -1019,10 +1019,10 @@ impl<'a> Orderer<'a> {
             } else {
                 self.priority_queue.push((
                     JoinInputCharacteristics::new(
-                        cardinality,
                         is_unique,
                         0,
                         false,
+                        cardinality,
                         self.filters[input].clone(),
                         input,
                     ),
@@ -1054,10 +1054,10 @@ impl<'a> Orderer<'a> {
         // We start with some default values:
         let mut start_tuple = (
             JoinInputCharacteristics::new(
-                self.cardinalities[start],
                 false,
                 0,
                 false,
+                self.cardinalities[start],
                 self.filters[start].clone(),
                 start,
             ),
@@ -1090,10 +1090,10 @@ impl<'a> Orderer<'a> {
                     .is_some();
                 start_tuple = (
                     JoinInputCharacteristics::new(
-                        cardinality,
                         is_unique,
                         candidate_start_key.len(),
                         arranged,
+                        cardinality,
                         self.filters[start].clone(),
                         start,
                     ),
@@ -1179,10 +1179,10 @@ impl<'a> Orderer<'a> {
                                             let is_unique = self.unique_arrangement[rel][pos];
                                             self.priority_queue.push((
                                                 JoinInputCharacteristics::new(
-                                                    self.cardinalities[rel],
                                                     is_unique,
                                                     key.len(),
                                                     true,
+                                                    self.cardinalities[rel],
                                                     self.filters[rel].clone(),
                                                     rel,
                                                 ),
@@ -1201,10 +1201,10 @@ impl<'a> Orderer<'a> {
                                 });
                                 self.priority_queue.push((
                                     JoinInputCharacteristics::new(
-                                        self.cardinalities[rel],
                                         is_unique,
                                         self.bound[rel].len(),
                                         false,
+                                        self.cardinalities[rel],
                                         self.filters[rel].clone(),
                                         rel,
                                     ),

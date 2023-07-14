@@ -223,6 +223,8 @@ impl OptimizerTrace {
 
 impl From<&OptimizerTrace> for tracing::Dispatch {
     fn from(value: &OptimizerTrace) -> Self {
+        // be not afraid: value.0 is a Dispatcher, which is Arc<dyn Subscriber + ...>
+        // https://docs.rs/tracing-core/0.1.30/src/tracing_core/dispatcher.rs.html#451-453
         value.0.clone()
     }
 }

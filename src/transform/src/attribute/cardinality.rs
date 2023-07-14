@@ -72,10 +72,10 @@ pub type SymExp = SymbolicExpression<FactorizerVariable>;
 pub trait Factorizer {
     /// Compute selectivity for the flat map of `tf`
     fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp;
-    /// Computes selectivity of the predicate `expr`, given that `indexed_columns` are indexed
+    /// Computes selectivity of the predicate `expr`, given that `unique_columns` are indexed/unique
     ///
     /// The result should be in the range (0, 1.0]
-    fn predicate(&self, expr: &MirScalarExpr, indexed_columns: &BTreeSet<usize>) -> SymExp;
+    fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp;
     /// Computes selectivity for a filter
     fn filter(
         &self,
@@ -85,12 +85,12 @@ pub trait Factorizer {
     ) -> SymExp;
     /// Computes selectivity for a join; the cardinality estimate for each input is paired with the keys on that input
     ///
-    /// `indexed_columns` maps column references (with indices) to their index in `inputs`
+    /// `unique_columns` maps column references (that are indexed/unique) to their relation's index in `inputs`
     fn join(
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         implementation: &JoinImplementation,
-        indexed_columns: BTreeMap<usize, usize>,
+        unique_columns: BTreeMap<usize, usize>,
         inputs: Vec<&SymExp>,
     ) -> SymExp;
     /// Computes selectivity for a reduce
@@ -127,10 +127,6 @@ pub const WORST_CASE_SELECTIVITY: f64 = 0.1;
 impl Factorizer for WorstCaseFactorizer {
     fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp {
         match tf {
-            TableFunc::GenerateSeriesInt32
-            | TableFunc::GenerateSeriesInt64
-            | TableFunc::GenerateSeriesTimestamp
-            | TableFunc::GenerateSeriesTimestampTz => input.clone(),
             TableFunc::Wrap { types, width } => {
                 input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
             }
@@ -141,11 +137,11 @@ impl Factorizer for WorstCaseFactorizer {
         }
     }
 
-    fn predicate(&self, expr: &MirScalarExpr, indexed_columns: &BTreeSet<usize>) -> SymExp {
+    fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp {
         let index_cardinality = |expr: &MirScalarExpr| -> Option<SymExp> {
             match expr {
                 MirScalarExpr::Column(col) => {
-                    if indexed_columns.contains(col) {
+                    if unique_columns.contains(col) {
                         Some(SymbolicExpression::symbolic(FactorizerVariable::Index(
                             *col,
                         )))
@@ -162,7 +158,7 @@ impl Factorizer for WorstCaseFactorizer {
             | MirScalarExpr::Literal(_, _)
             | MirScalarExpr::CallUnmaterializable(_) => SymExp::from(1.0),
             MirScalarExpr::CallUnary { func, expr } => match func {
-                UnaryFunc::Not(_) => 1.0 - self.predicate(expr, indexed_columns),
+                UnaryFunc::Not(_) => 1.0 - self.predicate(expr, unique_columns),
                 UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_) => SymExp::from(0.5),
                 UnaryFunc::IsNull(_) => {
                     if let Some(icard) = index_cardinality(expr) {
@@ -190,7 +186,7 @@ impl Factorizer for WorstCaseFactorizer {
                         (None, None) => SymExp::from(1.0 - WORST_CASE_SELECTIVITY),
                     },
                     BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
-                        // if we have high/low key values and one of the columns is an index
+                        // TODO(mgree) if we have high/low key values and one of the columns is an index, we can do better
                         SymExp::from(0.33)
                     }
                     _ => SymExp::from(1.0), // TOOD(mgree): are there other interesting cases?
@@ -202,7 +198,7 @@ impl Factorizer for WorstCaseFactorizer {
                     let mut factor = SymExp::from(1.0);
 
                     for expr in exprs {
-                        factor = factor * self.predicate(expr, indexed_columns);
+                        factor = factor * self.predicate(expr, unique_columns);
                     }
 
                     factor
@@ -216,14 +212,15 @@ impl Factorizer for WorstCaseFactorizer {
                     let mut expr1;
 
                     if let Some(first) = exprs.next() {
-                        expr1 = self.predicate(first, indexed_columns);
+                        expr1 = self.predicate(first, unique_columns);
                     } else {
                         return SymExp::from(1.0);
                     }
 
                     for expr2 in exprs {
-                        let expr2 = self.predicate(expr2, indexed_columns);
+                        let expr2 = self.predicate(expr2, unique_columns);
 
+                        // TODO(mgree) a big expression! two things could help: hash-consing and simplification
                         expr1 = expr1.clone() + expr2.clone() - expr1.clone() * expr2;
                     }
                     expr1
@@ -231,8 +228,8 @@ impl Factorizer for WorstCaseFactorizer {
                 _ => SymExp::from(1.0),
             },
             MirScalarExpr::If { cond: _, then, els } => SymExp::max(
-                self.predicate(then, indexed_columns),
-                self.predicate(els, indexed_columns),
+                self.predicate(then, unique_columns),
+                self.predicate(els, unique_columns),
             ),
         }
     }
@@ -244,10 +241,10 @@ impl Factorizer for WorstCaseFactorizer {
         input: &SymExp,
     ) -> SymExp {
         // TODO(mgree): should we try to do something for indices built on multiple columns?
-        let mut indexed_columns = BTreeSet::new();
+        let mut unique_columns = BTreeSet::new();
         for key in keys {
             if key.len() == 1 {
-                indexed_columns.insert(key[0]);
+                unique_columns.insert(key[0]);
             }
         }
 
@@ -255,7 +252,7 @@ impl Factorizer for WorstCaseFactorizer {
         let mut factor = SymExp::from(1.0);
 
         for expr in predicates {
-            let predicate_scaling_factor = self.predicate(expr, &indexed_columns);
+            let predicate_scaling_factor = self.predicate(expr, &unique_columns);
 
             // constant scaling factors should be in (0,1]
             debug_assert!(match predicate_scaling_factor {
@@ -273,7 +270,7 @@ impl Factorizer for WorstCaseFactorizer {
         &self,
         equivalences: &Vec<Vec<MirScalarExpr>>,
         _implementation: &JoinImplementation,
-        indexed_columns: BTreeMap<usize, usize>,
+        unique_columns: BTreeMap<usize, usize>,
         inputs: Vec<&SymExp>,
     ) -> SymExp {
         let mut inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
@@ -285,7 +282,7 @@ impl Factorizer for WorstCaseFactorizer {
 
             for expr in equiv {
                 if let MirScalarExpr::Column(col) = expr {
-                    if let Some(idx) = indexed_columns.get(col) {
+                    if let Some(idx) = unique_columns.get(col) {
                         unique_sources.insert(*idx);
                     } else {
                         all_unique = false;
@@ -400,7 +397,11 @@ impl Attribute for Cardinality {
                 let input = self.results[n - 1].clone();
                 self.results.push(input);
             }
-            LetRec { .. } => unimplemented!("cardinality analysis does not yet support recursion"),
+            LetRec { .. } =>
+            // TODO(mgree): implement a recurrence-based approach (or at least identify common idioms, e.g. transitive closure)
+            {
+                FactorizerVariable::Unknown
+            }
             Union { base: _, inputs } => {
                 let mut branches = Vec::with_capacity(inputs.len() + 1);
                 let mut offset = 1;
@@ -431,7 +432,7 @@ impl Attribute for Cardinality {
                 let mut input_results = Vec::with_capacity(inputs.len());
 
                 // maps a column to the index in `inputs` that it belongs to
-                let mut indexed_columns = BTreeMap::new();
+                let mut unqiue_columns = BTreeMap::new();
                 let mut key_offset = 0;
 
                 let mut offset = 1;
@@ -443,7 +444,7 @@ impl Attribute for Cardinality {
                     let keys = &deps.get_results::<UniqueKeys>()[n - offset];
                     for key in keys {
                         if key.len() == 1 {
-                            indexed_columns.insert(key_offset + key[0], idx);
+                            unique_columns.insert(key_offset + key[0], idx);
                         }
                     }
                     key_offset += arity;
@@ -454,7 +455,7 @@ impl Attribute for Cardinality {
                 self.results.push(self.factorize.join(
                     equivalences,
                     implementation,
-                    indexed_columns,
+                    unique_columns,
                     input_results,
                 ));
             }

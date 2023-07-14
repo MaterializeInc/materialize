@@ -513,8 +513,8 @@ impl fmt::Display for Attributes {
         if let Some(keys) = &self.keys {
             builder.field("keys", keys);
         }
-        if let Some(keys) = &self.cardinality {
-            builder.field("cardinality", keys);
+        if let Some(cardinality) = &self.cardinality {
+            builder.field("cardinality", cardinality);
         }
         builder.finish()
     }

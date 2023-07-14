@@ -2750,10 +2750,10 @@ pub struct JoinInputCharacteristics {
 impl JoinInputCharacteristics {
     /// Creates a new instance with the given characteristics.
     pub fn new(
-        cardinality: Option<usize>,
         unique_key: bool,
         key_length: usize,
         arranged: bool,
+        cardinality: Option<usize>,
         filters: FilterCharacteristics,
         input: usize,
     ) -> Self {

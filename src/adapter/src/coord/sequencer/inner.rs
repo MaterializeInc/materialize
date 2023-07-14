@@ -1973,7 +1973,7 @@ impl Coordinator {
         mz_transform::optimize_dataflow(
             &mut dataflow,
             &builder.index_oracle(),
-            self.statistics_oracle(session, &source_ids, query_as_of)
+            self.statistics_oracle(session, &source_ids, query_as_of, true)
                 .await?
                 .as_ref(),
         )?;
@@ -1987,6 +1987,7 @@ impl Coordinator {
             index_id,
             source_ids,
             cluster_id,
+            id_bundle,
             when,
             target_replica,
             timeline_context,
@@ -2009,6 +2010,7 @@ impl Coordinator {
             index_id,
             source_ids,
             cluster_id,
+            id_bundle,
             when,
             target_replica,
             timeline_context,
@@ -2062,6 +2064,7 @@ impl Coordinator {
                     copy_to,
                     dataflow,
                     cluster_id,
+                    id_bundle,
                     when,
                     target_replica,
                     view_id,
@@ -2086,6 +2089,7 @@ impl Coordinator {
             copy_to,
             dataflow,
             cluster_id,
+            id_bundle,
             when,
             target_replica,
             view_id,
@@ -2097,12 +2101,6 @@ impl Coordinator {
             typ,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
-        // We know cluster_id still exists because this function is only called if the transient
-        // revision did not change.
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
-
         let peek_plan = self.plan_peek(
             dataflow,
             session,
@@ -2565,7 +2563,6 @@ impl Coordinator {
 
         let pipeline_result = {
             self.sequence_explain_plan_pipeline(
-                &optimizer_trace,
                 explainee,
                 raw_plan,
                 no_errors,
@@ -2643,7 +2640,6 @@ impl Coordinator {
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
     async fn sequence_explain_plan_pipeline(
         &mut self,
-        _optimizer_trace: &OptimizerTrace,
         explainee: Explainee,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
@@ -2673,9 +2669,9 @@ impl Coordinator {
             }
         }
 
-        let explainee_id = match explainee {
-            Explainee::Dataflow(id) => id,
-            Explainee::Query => GlobalId::Explain,
+        let (explainee_id, is_oneshot) = match explainee {
+            Explainee::Dataflow(id) => (id, false),
+            Explainee::Query => (GlobalId::Explain, true),
         };
 
         // Execute the various stages of the optimization pipeline
@@ -2751,7 +2747,7 @@ impl Coordinator {
 
         // Load cardinality statistics.
         let stats = self
-            .statistics_oracle(session, &source_ids, query_as_of.clone())
+            .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
             .await?;
 
         // Execute the `optimize/global` stage.
@@ -4175,6 +4171,7 @@ struct CachedStatisticsOracle {
 }
 
 const OPTIMIZER_MAX_STATS_WAIT: Duration = Duration::from_millis(250);
+const OPTIMIZER_ONESHOT_STATS_WAIT: Duration = Duration::from_millis(10);
 
 impl CachedStatisticsOracle {
     pub async fn new<T: Clone + std::fmt::Debug + timely::PartialOrder + Send + Sync>(
@@ -4221,13 +4218,21 @@ impl Coordinator {
         session: &Session,
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: Antichain<Timestamp>,
+        is_oneshot: bool,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
         if !session.vars().enable_session_cardinality_estimates() {
             return Ok(Box::new(EmptyStatisticsOracle));
         }
 
+        let timeout = if is_oneshot {
+            // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
+            OPTIMIZER_ONESHOT_STATS_WAIT
+        } else {
+            OPTIMIZER_MAX_STATS_WAIT
+        };
+
         let cached_stats = mz_ore::future::timeout(
-            OPTIMIZER_MAX_STATS_WAIT,
+            timeout,
             CachedStatisticsOracle::new(source_ids, &query_as_of, self.controller.storage.as_ref()),
         )
         .await;
