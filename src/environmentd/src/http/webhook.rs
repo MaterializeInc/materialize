@@ -40,13 +40,14 @@ pub async fn handle_webhook(
     let conn_id = client.new_conn_id().context("allocate connection id")?;
 
     // Get an appender for the provided object, if that object exists.
-    let maybe_appender = client
-        .append_webhook(database.clone(), schema.clone(), name.clone(), conn_id)
+    let AppendWebhookResponse {
+        tx,
+        body_ty,
+        header_ty,
+        validate_expr,
+    } = client
+        .append_webhook(database, schema, name, conn_id)
         .await?;
-    let Some(AppendWebhookResponse { tx, body_ty, header_ty, validate_expr }) = maybe_appender else {
-        let desc = format!("{database}.{schema}.{name}");
-        return Err(WebhookError::NotFound(desc.quoted().to_string()));
-    };
 
     // If this source requires validation, then validate!
     if let Some(validate_expr) = validate_expr {
@@ -59,7 +60,7 @@ pub async fn handle_webhook(
     // Send the row to get appended.
     tx.append(vec![(row, 1)]).await?;
 
-    Ok(())
+    Ok::<_, WebhookError>(())
 }
 
 async fn validate_request(
@@ -213,6 +214,11 @@ impl From<AdapterError> for WebhookError {
     fn from(err: AdapterError) -> Self {
         match err {
             AdapterError::Unsupported(feat) => WebhookError::Unsupported(feat),
+            AdapterError::UnknownWebhookSource {
+                database,
+                schema,
+                name,
+            } => WebhookError::NotFound(format!("'{database}.{schema}.{name}'")),
             e => WebhookError::InternalAdapterError(e),
         }
     }
