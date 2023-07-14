@@ -80,6 +80,7 @@ const MAX_STRING_BYTES: usize = 1024 * 1024 * 100;
 )]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
+    CurrentSchema,
     CurrentSchemasWithSystem,
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
@@ -102,7 +103,14 @@ impl UnmaterializableFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
             UnmaterializableFunc::CurrentDatabase => ScalarType::String.nullable(false),
-            // TODO: The `CurrentSchemas` functions should should return name[].
+            // TODO: The `CurrentSchema` function should return `name`. This is
+            // tricky in Materialize because `name` truncates to 63 characters
+            // but Materialize does not have a limit on identifier length.
+            UnmaterializableFunc::CurrentSchema => ScalarType::String.nullable(true),
+            // TODO: The `CurrentSchemas` function should return `name[]`. This
+            // is tricky in Materialize because `name` truncates to 63
+            // characters but Materialize does not have a limit on identifier
+            // length.
             UnmaterializableFunc::CurrentSchemasWithSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
@@ -135,6 +143,7 @@ impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UnmaterializableFunc::CurrentDatabase => f.write_str("current_database"),
+            UnmaterializableFunc::CurrentSchema => f.write_str("current_schema"),
             UnmaterializableFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 f.write_str("current_schemas(false)")
@@ -162,6 +171,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
         use crate::scalar::proto_unmaterializable_func::Kind::*;
         let kind = match self {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
+            UnmaterializableFunc::CurrentSchema => CurrentSchema(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
             UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
@@ -187,6 +197,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
         if let Some(kind) = proto.kind {
             match kind {
                 CurrentDatabase(()) => Ok(UnmaterializableFunc::CurrentDatabase),
+                CurrentSchema(()) => Ok(UnmaterializableFunc::CurrentSchema),
                 CurrentSchemasWithSystem(()) => Ok(UnmaterializableFunc::CurrentSchemasWithSystem),
                 CurrentSchemasWithoutSystem(()) => {
                     Ok(UnmaterializableFunc::CurrentSchemasWithoutSystem)

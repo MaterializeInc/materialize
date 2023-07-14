@@ -1894,8 +1894,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64) => UnaryFunc::Cot(func::Cot) => Float64, 1607;
         },
         "current_schema" => Scalar {
-            // TODO: this should be name
-            params!() => sql_impl_func("pg_catalog.current_schemas(false)[1]") => String, 1402;
+            // TODO: this should be `name`. This is tricky in Materialize
+            // because `name` truncates to 63 characters but Materialize does
+            // not have a limit on identifier length.
+            params!() => UnmaterializableFunc::CurrentSchema => String, 1402;
         },
         "current_schemas" => Scalar {
             params!(Bool) => Operation::unary(|_ecx, e| {
@@ -1904,7 +1906,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     then: Box::new(HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::CurrentSchemasWithSystem)),
                     els: Box::new(HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::CurrentSchemasWithoutSystem)),
                 })
-                // TODO: this should be name[]
+                // TODO: this should be `name[]`. This is tricky in Materialize
+                // because `name` truncates to 63 characters but Materialize
+                // does not have a limit on identifier length.
             }) => ScalarType::Array(Box::new(ScalarType::String)), 1403;
         },
         "current_database" => Scalar {
