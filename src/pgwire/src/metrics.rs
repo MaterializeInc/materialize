@@ -18,7 +18,7 @@ use mz_sql::ast::{statement_kind_label_value, StatementKind};
 #[derive(Clone, Debug)]
 pub struct MetricsConfig {
     connection_status: IntCounterVec,
-    individual_query_latency_seconds: HistogramVec,
+    time_to_first_row_seconds: HistogramVec,
 }
 
 impl MetricsConfig {
@@ -29,10 +29,10 @@ impl MetricsConfig {
                 help: "Count of completed network connections, by status",
                 var_labels: ["source", "status"],
             }),
-            individual_query_latency_seconds: registry.register(metric! {
-                name: "mz_individual_query_latency_seconds",
-                help: "Latency of an individual statement in a pgwire query",
-                var_labels: ["source", "status", "kind"],
+            time_to_first_row_seconds: registry.register(metric! {
+                name: "mz_time_to_first_row_seconds",
+                help: "Latency of an execute for a successful query from pgwire's perspective",
+                var_labels: ["source", "kind"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
             }),
         }
@@ -63,13 +63,14 @@ impl Metrics {
             .with_label_values(&[self.source_label(), Self::status_label(is_ok)])
     }
 
-    pub fn one_query_latency(&self, is_ok: bool, statement_kind: StatementKind, latency: Duration) {
+    pub fn time_to_first_row(&self, statement_kind: Option<StatementKind>, latency: Duration) {
         self.inner
-            .individual_query_latency_seconds
+            .time_to_first_row_seconds
             .with_label_values(&[
                 self.source_label(),
-                Self::status_label(is_ok),
-                statement_kind_label_value(statement_kind),
+                statement_kind
+                    .map(statement_kind_label_value)
+                    .unwrap_or("none"),
             ])
             .observe(latency.as_secs_f64());
     }

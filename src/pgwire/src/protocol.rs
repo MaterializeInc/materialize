@@ -579,6 +579,7 @@ where
     }
 
     async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
+        let statement_kind = StatementKind::from(&stmt);
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         let param_types = vec![];
@@ -619,6 +620,7 @@ where
             }
         }
 
+        let execute_started = Instant::now();
         let result = match self
             .adapter_client
             .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
@@ -634,6 +636,8 @@ where
                     portal_exec_message,
                     None,
                     ExecuteTimeout::None,
+                    Some(statement_kind),
+                    Some(execute_started),
                 )
                 .await
             }
@@ -701,16 +705,7 @@ where
             // statement.
             self.start_transaction(Some(num_stmts));
 
-            let kind = StatementKind::from(&stmt);
-
-            let start = Instant::now();
-            let result = self.one_query(stmt).await;
-            let latency = start.elapsed();
-
-            self.metrics
-                .one_query_latency(result.is_ok(), kind, latency);
-
-            match result? {
+            match self.one_query(stmt).await? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
@@ -958,6 +953,7 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
     ) -> BoxFuture<'_, Result<State, io::Error>> {
+        let execute_started = Instant::now();
         async move {
             let aborted_txn = self.is_aborted_txn();
 
@@ -985,7 +981,7 @@ where
             }
 
             let row_desc = portal.desc.relation_desc.clone();
-
+            let statement_kind = portal.stmt.as_ref().map(StatementKind::from);
             match &mut portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one. Postgres does this both here and
@@ -1009,6 +1005,8 @@ where
                                 get_response,
                                 fetch_portal_name,
                                 timeout,
+                                statement_kind,
+                                Some(execute_started),
                             )
                             .await
                         }
@@ -1029,6 +1027,8 @@ where
                         get_response,
                         fetch_portal_name,
                         timeout,
+                        statement_kind,
+                        None, // don't need metrics because we've already started returning results
                     )
                     .await
                 }
@@ -1293,6 +1293,8 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
+        statement_kind: Option<StatementKind>,
+        execute_started: Option<Instant>,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
 
@@ -1357,6 +1359,8 @@ where
                     get_response,
                     fetch_portal_name,
                     timeout,
+                    statement_kind,
+                    execute_started,
                 )
                 .instrument(span)
                 .await
@@ -1397,7 +1401,7 @@ where
                     self.conn.flush().await?;
                 }
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::Tailing");
+                    row_desc.expect("missing row description for ExecuteResponse::Subscribing");
                 self.send_rows(
                     row_desc,
                     portal_name,
@@ -1406,6 +1410,8 @@ where
                     get_response,
                     fetch_portal_name,
                     timeout,
+                    statement_kind,
+                    execute_started,
                 )
                 .await
             }
@@ -1520,6 +1526,8 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
+        statement_kind: Option<StatementKind>,
+        execute_started: Option<Instant>,
     ) -> Result<State, io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
@@ -1560,6 +1568,7 @@ where
             ExecuteCount::All => usize::MAX,
             ExecuteCount::Count(count) => count,
         };
+        let mut saw_any_rows = false;
 
         // Send rows while the client still wants them and there are still rows to send.
         loop {
@@ -1592,6 +1601,16 @@ where
             match batch {
                 FetchResult::Rows(None) => break,
                 FetchResult::Rows(Some(mut batch_rows)) => {
+                    if !saw_any_rows {
+                        saw_any_rows = true;
+                        if let Some(execute_started) = execute_started {
+                            // Not ideal but also includes the time to send notices back to the client, if applicable
+                            self.metrics.time_to_first_row(
+                                statement_kind.clone(),
+                                execute_started.elapsed(),
+                            );
+                        }
+                    }
                     // Verify the first row is of the expected type. This is often good enough to
                     // find problems. Notably it failed to find #6304 when "FETCH 2" was used in a
                     // test, instead we had to use "FETCH 1" twice.
@@ -1633,7 +1652,6 @@ where
                         wait_once = false;
                     }
 
-                    //  let mut batch_rows = batch_rows;
                     // Drain panics if it's > len, so cap it.
                     let drain_rows = cmp::min(want_rows, batch_rows.len());
                     self.send_all(batch_rows.drain(..drain_rows).map(|row| {
