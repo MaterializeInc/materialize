@@ -142,7 +142,6 @@ tests_without_views=(
     test/sqllogictest/scoping.slt
     test/sqllogictest/secret.slt
     test/sqllogictest/select_all_group_by.slt
-    test/sqllogictest/select_distinct.slt
     test/sqllogictest/session-window-wmr.slt
     test/sqllogictest/show_create_system_objects.slt
     test/sqllogictest/slt.slt
