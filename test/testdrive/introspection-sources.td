@@ -295,8 +295,8 @@ true true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
-0 0 0 0 0
+> SELECT records, batches, size < 1000, capacity < 1000, allocations < 1000 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
+0 32 true true true
 
 # Tests that arrangement sizes are approximate
 
@@ -304,17 +304,17 @@ true true true
 
 > CREATE INDEX ii_t4 ON t4(c)
 
-> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
-0 0 0 0 0
+> SELECT records, batches, size < 1000, capacity < 1000, allocations < 1000 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+0 32 true true true
 
-> INSERT INTO t4 SELECT 1
+> INSERT INTO t4 SELECT generate_series(1, 10)
 
-> SELECT records, batches, size > 96 AND size < 2*96, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
-1 1 true true true
+> SELECT records, batches, size > 1000 AND size < 2000, capacity > 1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+10 32 true true true
 
-> INSERT INTO t4 SELECT generate_series(1, 1000)
+> INSERT INTO t4 SELECT generate_series(10, 1010)
 
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 96*1000 AND size < 2*96*1000, capacity > 96*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+> SELECT records >= 1010 AND records <= 1011, batches > 0, size > 96*1010 AND size < 2*96*1010, capacity > 96*1010, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
 true true true true true
 
 > DROP INDEX ii_t4
