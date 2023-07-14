@@ -203,6 +203,7 @@ where
                                             |t1, t2| t1.le(t2),
                                             closure,
                                             self.shutdown_token.clone(),
+                                            self.enable_arrangement_size_logging,
                                         )
                                     } else {
                                         build_halfjoin(
@@ -213,6 +214,7 @@ where
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                             self.shutdown_token.clone(),
+                                            self.enable_arrangement_size_logging,
                                         )
                                     }
                                 }
@@ -226,6 +228,7 @@ where
                                             |t1, t2| t1.le(t2),
                                             closure,
                                             self.shutdown_token.clone(),
+                                            self.enable_arrangement_size_logging,
                                         )
                                     } else {
                                         build_halfjoin(
@@ -236,6 +239,7 @@ where
                                             |t1, t2| t1.lt(t2),
                                             closure,
                                             self.shutdown_token.clone(),
+                                            self.enable_arrangement_size_logging,
                                         )
                                     }
                                 }
@@ -317,6 +321,7 @@ fn build_halfjoin<G, Tr, CF>(
     comparison: CF,
     closure: JoinClosure,
     shutdown_token: ShutdownToken,
+    enable_arrangement_size_logging: bool,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -356,7 +361,7 @@ where
     if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
-            unsafe { trace.inner() },
+            unsafe { trace.inner(enable_arrangement_size_logging) },
             |time| time.step_back(),
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
@@ -392,7 +397,7 @@ where
     } else {
         let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
-            unsafe { trace.inner() },
+            unsafe { trace.inner(enable_arrangement_size_logging) },
             |time| time.step_back(),
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,

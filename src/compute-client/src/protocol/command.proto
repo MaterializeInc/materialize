@@ -68,4 +68,5 @@ message ProtoComputeParameters {
     optional uint64 dataflow_max_inflight_bytes = 3;
     optional bool enable_mz_join_core = 4;
     mz_tracing.params.ProtoTracingParameters tracing = 5;
+    optional bool enable_arrangement_size_logging = 6;
 }

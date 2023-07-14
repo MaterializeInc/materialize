@@ -3090,16 +3090,16 @@ heap_allocations_cte AS (
 SELECT
     batches_cte.operator_id,
     batches_cte.worker_id,
-    records_cte.records,
+    COALESCE(records_cte.records, 0) AS records,
     batches_cte.batches,
-    heap_size_cte.size,
-    heap_capacity_cte.capacity,
-    heap_allocations_cte.allocations
+    COALESCE(heap_size_cte.size, 0) AS size,
+    COALESCE(heap_capacity_cte.capacity, 0) AS capacity,
+    COALESCE(heap_allocations_cte.allocations, 0) AS allocations
 FROM batches_cte
-JOIN records_cte USING (operator_id, worker_id)
-JOIN heap_size_cte USING (operator_id, worker_id)
-JOIN heap_capacity_cte USING (operator_id, worker_id)
-JOIN heap_allocations_cte USING (operator_id, worker_id)",
+LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {

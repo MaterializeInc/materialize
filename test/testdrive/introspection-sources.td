@@ -278,6 +278,9 @@ mv1_primary_idx mv1
 
 > CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b;
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_arrangement_size_logging = true
+
 > CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr

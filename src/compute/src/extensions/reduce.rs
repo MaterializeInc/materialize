@@ -29,7 +29,12 @@ where
     G::Timestamp: Lattice + Ord,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, T2>(&self, name: &str, logic: L) -> MzArranged<G, TraceAgent<T2>>
+    fn mz_reduce_abelian<L, T2>(
+        &self,
+        name: &str,
+        enable_arrangement_size_logging: bool,
+        logic: L,
+    ) -> MzArranged<G, TraceAgent<T2>>
     where
         T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
         T2::Val: Data,
@@ -49,7 +54,12 @@ where
     T1: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
     Arranged<G, T1>: ReduceCore<G, K, V, R>,
 {
-    fn mz_reduce_abelian<L, T2>(&self, name: &str, logic: L) -> MzArranged<G, TraceAgent<T2>>
+    fn mz_reduce_abelian<L, T2>(
+        &self,
+        name: &str,
+        enable_arrangement_size_logging: bool,
+        logic: L,
+    ) -> MzArranged<G, TraceAgent<T2>>
     where
         T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
         T2::Val: Data,
@@ -58,7 +68,7 @@ where
         L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
         Self: ArrangementSize,
     {
-        let inner = unsafe { self.inner() };
+        let inner = unsafe { self.inner(enable_arrangement_size_logging) };
         // Allow access to `reduce_abelian` since we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
         inner.reduce_abelian::<_, T2>(name, logic).into()
@@ -79,6 +89,7 @@ where
         &self,
         name1: &str,
         name2: &str,
+        enable_arrangement_size_logging: bool,
         logic1: L1,
         logic2: L2,
     ) -> (MzArranged<G, TraceAgent<T1>>, MzArranged<G, TraceAgent<T2>>)
@@ -105,6 +116,7 @@ where
         &self,
         name1: &str,
         name2: &str,
+        enable_arrangement_size_logging: bool,
         logic1: L1,
         logic2: L2,
     ) -> (MzArranged<G, TraceAgent<T1>>, MzArranged<G, TraceAgent<T2>>)
@@ -121,8 +133,10 @@ where
         L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
         Self: ArrangementSize,
     {
-        let arranged1 = self.mz_reduce_abelian::<L1, T1>(name1, logic1);
-        let arranged2 = self.mz_reduce_abelian::<L2, T2>(name2, logic2);
+        let arranged1 =
+            self.mz_reduce_abelian::<L1, T1>(name1, enable_arrangement_size_logging, logic1);
+        let arranged2 =
+            self.mz_reduce_abelian::<L2, T2>(name2, enable_arrangement_size_logging, logic2);
         (arranged1, arranged2)
     }
 }
