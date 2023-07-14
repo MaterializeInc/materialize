@@ -4127,6 +4127,7 @@ impl Catalog {
             CatalogType::Numeric => CatalogType::Numeric,
             CatalogType::Oid => CatalogType::Oid,
             CatalogType::PgLegacyChar => CatalogType::PgLegacyChar,
+            CatalogType::PgLegacyName => CatalogType::PgLegacyName,
             CatalogType::Pseudo => CatalogType::Pseudo,
             CatalogType::RegClass => CatalogType::RegClass,
             CatalogType::RegProc => CatalogType::RegProc,

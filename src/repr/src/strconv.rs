@@ -55,6 +55,7 @@ use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::MzAclItem;
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
 
@@ -604,6 +605,21 @@ where
 {
     buf.write_str(s);
     Nestable::MayNeedEscaping
+}
+
+pub fn parse_pg_legacy_name(s: &str) -> String {
+    // To match PostgreSQL, we truncate the string to 64 bytes, while being
+    // careful not to truncate in the middle of any multibyte characters.
+    let mut out = String::new();
+    let mut len = 0;
+    for c in s.chars() {
+        len += c.len_utf8();
+        if len > NAME_MAX_BYTES {
+            break;
+        }
+        out.push(c);
+    }
+    out
 }
 
 pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
@@ -2118,5 +2134,24 @@ mod tests {
             format_nanos_to_micros(&mut buf, nanos);
             assert_eq!(&buf, expect);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_pg_legacy_name() {
+        let s = "hello world";
+        assert_eq!(s, parse_pg_legacy_name(s));
+
+        let s = "x".repeat(63);
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = "x".repeat(64);
+        assert_eq!("x".repeat(63), parse_pg_legacy_name(&s));
+
+        // The Hebrew character Aleph (א) has a length of 2 bytes.
+        let s = format!("{}{}", "x".repeat(61), "א");
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = format!("{}{}", "x".repeat(62), "א");
+        assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
     }
 }

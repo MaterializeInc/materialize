@@ -146,7 +146,9 @@ impl ToJson for TypedDatum<'_> {
                     serde_json::Value::String(format!("{}", datum.unwrap_interval()))
                 }
                 ScalarType::Bytes => json!(datum.unwrap_bytes()),
-                ScalarType::String | ScalarType::VarChar { .. } => json!(datum.unwrap_str()),
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+                    json!(datum.unwrap_str())
+                }
                 ScalarType::Char { length } => {
                     let s = char::format_str_pad(datum.unwrap_str(), *length);
                     serde_json::Value::String(s)
@@ -259,7 +261,10 @@ fn build_row_schema_field(
         }),
         ScalarType::Interval => type_namer.interval_type(),
         ScalarType::Bytes => json!("bytes"),
-        ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
+        ScalarType::String
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::PgLegacyName => {
             json!("string")
         }
         ScalarType::Jsonb => json!({

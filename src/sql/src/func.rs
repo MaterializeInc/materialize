@@ -95,6 +95,7 @@ impl TypeCategory {
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
             ScalarType::PgLegacyChar
+            | ScalarType::PgLegacyName
             | ScalarType::String
             | ScalarType::Char { .. }
             | ScalarType::VarChar { .. } => Self::String,
@@ -165,6 +166,7 @@ impl TypeCategory {
             CatalogType::Interval => Self::Timespan,
             CatalogType::List { .. } => Self::List,
             CatalogType::PgLegacyChar
+            | CatalogType::PgLegacyName
             | CatalogType::String
             | CatalogType::Char { .. }
             | CatalogType::VarChar { .. } => Self::String,
@@ -859,6 +861,7 @@ impl From<ScalarBaseType> for ParamType {
             Char => ScalarType::Char { length: None },
             VarChar => ScalarType::VarChar { max_length: None },
             PgLegacyChar => ScalarType::PgLegacyChar,
+            PgLegacyName => ScalarType::PgLegacyName,
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
@@ -4067,6 +4070,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(String, String) => BinaryFunc::Lt => Bool, 664;
             params!(Char, Char) => BinaryFunc::Lt => Bool, 1058;
             params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Lt => Bool, 631;
+            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Lt => Bool, 660;
             params!(Jsonb, Jsonb) => BinaryFunc::Lt => Bool, 3242;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
@@ -4095,6 +4099,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(String, String) => BinaryFunc::Lte => Bool, 665;
             params!(Char, Char) => BinaryFunc::Lte => Bool, 1059;
             params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Lte => Bool, 632;
+            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Lte => Bool, 661;
             params!(Jsonb, Jsonb) => BinaryFunc::Lte => Bool, 3244;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
@@ -4123,6 +4128,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(String, String) => BinaryFunc::Gt => Bool, 666;
             params!(Char, Char) => BinaryFunc::Gt => Bool, 1060;
             params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Gt => Bool, 633;
+            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Gt => Bool, 662;
             params!(Jsonb, Jsonb) => BinaryFunc::Gt => Bool, 3243;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
@@ -4151,6 +4157,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(String, String) => BinaryFunc::Gte => Bool, 667;
             params!(Char, Char) => BinaryFunc::Gte => Bool, 1061;
             params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Gte => Bool, 634;
+            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Gte => Bool, 663;
             params!(Jsonb, Jsonb) => BinaryFunc::Gte => Bool, 3245;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
@@ -4188,6 +4195,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(String, String) => BinaryFunc::Eq => Bool, 98;
             params!(Char, Char) => BinaryFunc::Eq => Bool, 1054;
             params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Eq => Bool, 92;
+            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Eq => Bool, 93;
             params!(Jsonb, Jsonb) => BinaryFunc::Eq => Bool, 3240;
             params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
@@ -4218,6 +4226,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(String, String) => BinaryFunc::NotEq => Bool, 531;
             params!(Char, Char) => BinaryFunc::NotEq => Bool, 1057;
             params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::NotEq => Bool, 630;
+            params!(PgLegacyName, PgLegacyName) => BinaryFunc::NotEq => Bool, 643;
             params!(Jsonb, Jsonb) => BinaryFunc::NotEq => Bool, 3241;
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;

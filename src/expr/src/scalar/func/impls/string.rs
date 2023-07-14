@@ -21,6 +21,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::pg_legacy_name::PgLegacyName;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -49,6 +50,14 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastPgLegacyCharToString)]
     fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
         PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_name"]
+    #[preserves_uniqueness = true]
+    fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
+        PgLegacyName(strconv::parse_pg_legacy_name(a))
     }
 );
 

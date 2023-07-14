@@ -417,6 +417,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
+            PgType::NAME => Self(Value::Name(types::text_from_sql(raw)?.to_string())),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Oid(types::oid_from_sql(raw)?)),
             PgType::REGCLASS => Self(Value::Oid(types::oid_from_sql(raw)?)),
@@ -530,6 +531,7 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::INT8
                 | PgType::INTERVAL
                 | PgType::JSONB
+                | PgType::NAME
                 | PgType::NUMERIC
                 | PgType::OID
                 | PgType::REGCLASS
