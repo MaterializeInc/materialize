@@ -37,7 +37,8 @@ use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::Scope;
+use timely::dataflow::operators::Map;
+use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
@@ -45,7 +46,8 @@ use crate::decode::avro::AvroDecoderState;
 use crate::decode::csv::CsvDecoderState;
 use crate::decode::metrics::DecodeMetrics;
 use crate::decode::protobuf::ProtobufDecoderState;
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::render::sources::OutputIndex;
+use crate::source::types::{DecodeResult, HealthStatus, HealthStatusUpdate, SourceOutput};
 
 mod avro;
 mod csv;
@@ -279,8 +281,8 @@ async fn get_decoder(
     is_connection_delimited: bool,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> DataDecoder {
-    match encoding.inner {
+) -> Result<DataDecoder, anyhow::Error> {
+    let decoder = match encoding.inner {
         DataEncodingInner::Avro(AvroEncoding {
             schema,
             csr_connection,
@@ -288,12 +290,7 @@ async fn get_decoder(
         }) => {
             let csr_client = match csr_connection {
                 None => None,
-                Some(csr_connection) => Some(
-                    csr_connection
-                        .connect(connection_context)
-                        .await
-                        .expect("CSR connection unexpectedly missing secrets"),
-                ),
+                Some(csr_connection) => Some(csr_connection.connect(connection_context).await?),
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
@@ -347,7 +344,8 @@ async fn get_decoder(
         DataEncodingInner::RowCodec(_) => {
             unreachable!("RowCodec sources should not go through the general decoding path.")
         }
-    }
+    };
+    Ok(decoder)
 }
 
 async fn decode_delimited(
@@ -396,6 +394,7 @@ pub fn render_decode_delimited<G>(
     connection_context: ConnectionContext,
 ) -> (
     Collection<G, DecodeResult, Diff>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Option<Box<dyn Any + Send + Sync>>,
 )
 where
@@ -417,97 +416,115 @@ where
     let mut input = builder.new_input(&input.inner, Exchange::new(dist));
     let (mut output_handle, output) = builder.new_output();
 
-    builder.build(move |_caps| async move {
-        let mut key_decoder = match key_encoding {
-            Some(encoding) => Some(
-                get_decoder(
-                    encoding,
-                    &debug_name,
-                    true,
-                    metrics.clone(),
-                    &connection_context,
-                )
-                .await,
-            ),
-            None => None,
-        };
+    let (_, transient_errors) = builder.build_fallible(move |caps| {
+        Box::pin(async move {
+            let [cap]: &mut [_; 1] = caps.try_into().unwrap();
+            *cap = None;
 
-        let mut value_decoder = get_decoder(
-            value_encoding,
-            &debug_name,
-            true,
-            metrics,
-            &connection_context,
-        )
-        .await;
+            let mut key_decoder = match key_encoding {
+                Some(encoding) => Some(
+                    get_decoder(
+                        encoding,
+                        &debug_name,
+                        true,
+                        metrics.clone(),
+                        &connection_context,
+                    )
+                    .await?,
+                ),
+                None => None,
+            };
 
-        let mut output_container = Vec::new();
+            let mut value_decoder = get_decoder(
+                value_encoding,
+                &debug_name,
+                true,
+                metrics,
+                &connection_context,
+            )
+            .await?;
 
-        while let Some(event) = input.next().await {
-            let AsyncEvent::Data(cap, data) = event else {
+            let mut output_container = Vec::new();
+
+            while let Some(event) = input.next().await {
+                let AsyncEvent::Data(cap, data) = event else {
                 continue;
             };
 
-            let mut n_errors = 0;
-            let mut n_successes = 0;
-            for (output, ts, diff) in data.iter() {
-                let SourceOutput {
-                    key,
-                    value,
-                    position,
-                    upstream_time_millis,
-                    partition,
-                    headers,
-                } = output;
+                let mut n_errors = 0;
+                let mut n_successes = 0;
+                for (output, ts, diff) in data.iter() {
+                    let SourceOutput {
+                        key,
+                        value,
+                        position,
+                        upstream_time_millis,
+                        partition,
+                        headers,
+                    } = output;
 
-                let key = match key_decoder.as_mut().zip(key.as_ref()) {
-                    Some((decoder, buf)) => decode_delimited(decoder, buf).await.transpose(),
-                    None => None,
-                };
+                    let key = match key_decoder.as_mut().zip(key.as_ref()) {
+                        Some((decoder, buf)) => decode_delimited(decoder, buf).await.transpose(),
+                        None => None,
+                    };
 
-                let value = match value.as_ref() {
-                    Some(buf) => decode_delimited(&mut value_decoder, buf).await.transpose(),
-                    None => None,
-                };
+                    let value = match value.as_ref() {
+                        Some(buf) => decode_delimited(&mut value_decoder, buf).await.transpose(),
+                        None => None,
+                    };
 
-                if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                    n_errors += 1;
-                } else if matches!(&value, Some(Ok(_))) {
-                    n_successes += 1;
+                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                        n_errors += 1;
+                    } else if matches!(&value, Some(Ok(_))) {
+                        n_successes += 1;
+                    }
+
+                    let result = DecodeResult {
+                        key,
+                        value,
+                        position: *position,
+                        upstream_time_millis: *upstream_time_millis,
+                        partition: partition.clone(),
+                        metadata: to_metadata_row(
+                            &metadata_items,
+                            partition.clone(),
+                            *position,
+                            *upstream_time_millis,
+                            headers.as_deref(),
+                        ),
+                    };
+                    output_container.push((result, ts.clone(), *diff));
                 }
 
-                let result = DecodeResult {
-                    key,
-                    value,
-                    position: *position,
-                    upstream_time_millis: *upstream_time_millis,
-                    partition: partition.clone(),
-                    metadata: to_metadata_row(
-                        &metadata_items,
-                        partition.clone(),
-                        *position,
-                        *upstream_time_millis,
-                        headers.as_deref(),
-                    ),
-                };
-                output_container.push((result, ts.clone(), *diff));
+                // Matching historical practice, we only log metrics on the value decoder.
+                if n_errors > 0 {
+                    value_decoder.log_errors(n_errors);
+                }
+                if n_successes > 0 {
+                    value_decoder.log_successes(n_successes);
+                }
+
+                output_handle
+                    .give_container(&cap, &mut output_container)
+                    .await;
             }
 
-            // Matching historical practice, we only log metrics on the value decoder.
-            if n_errors > 0 {
-                value_decoder.log_errors(n_errors);
-            }
-            if n_successes > 0 {
-                value_decoder.log_successes(n_successes);
-            }
-
-            output_handle
-                .give_container(&cap, &mut output_container)
-                .await;
-        }
+            Ok(())
+        })
     });
 
-    (output.as_collection(), None)
+    let health = transient_errors.map(|err: Rc<anyhow::Error>| {
+        let halt_status = HealthStatusUpdate {
+            update: HealthStatus::StalledWithError {
+                error: err.display_with_causes().to_string(),
+                hint: None,
+            },
+            should_halt: true,
+        };
+        (0, halt_status)
+    });
+
+    (output.as_collection(), health, None)
 }
 
 fn to_metadata_row(

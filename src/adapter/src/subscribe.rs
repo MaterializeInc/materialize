@@ -47,7 +47,7 @@ pub struct ActiveSubscribe {
     pub arity: usize,
     /// The cluster that the subscribe is running on.
     pub cluster_id: ClusterId,
-    /// All `GlobalId`s that the subscribe depend on.
+    /// All `GlobalId`s that the subscribe's expression depends on.
     pub depends_on: BTreeSet<GlobalId>,
     /// The time when the subscribe was started.
     pub start_time: EpochMillis,

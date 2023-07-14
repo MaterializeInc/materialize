@@ -43,7 +43,7 @@ test_source = """
 {{ config(
     materialized='source',
     database='materialize',
-    pre_hook="CREATE CONNECTION kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
+    pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
     )
 }}
 
@@ -61,6 +61,18 @@ test_source_index = """
 CREATE SOURCE {{ this }}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
 FORMAT BYTES
+"""
+
+test_subsources = """
+{{ config(
+    materialized='source',
+    database='materialize'
+    )
+}}
+
+CREATE SOURCE {{ this }}
+FROM LOAD GENERATOR AUCTION
+FOR ALL TABLES;
 """
 
 test_sink = """

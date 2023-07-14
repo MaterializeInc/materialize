@@ -1216,3 +1216,20 @@ INSERT INTO error_test VALUES (0)
 
 query error division by zero
 SELECT t1.a / t2.a FROM error_test t1, error_test t2
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20060
+query
+select
+  from
+    (select
+          ref_4."schema_id" as c0
+        from
+          mz_catalog.mz_default_privileges as ref_4
+        where current_schemas(
+            CAST((select max(atthasdef) from pg_attribute)
+               as bool)) = mz_internal.mz_normalize_object_name(
+            CAST(ref_4."schema_id" as text))
+               ) as subq_7
+  where (select "child_id" from mz_internal.mz_view_foreign_keys limit 1)
+       = subq_7."c0";
+----

@@ -14,8 +14,8 @@ menu:
 
 Field | Use
 ------|-----
-_on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the cluster are shown.
 _schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path if neither `on_name` nor `cluster_name` are specified. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the schema are shown.
 _cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
 
 ## Details

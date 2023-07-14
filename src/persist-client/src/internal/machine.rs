@@ -401,7 +401,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                            inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
                         };
                         compact_reqs.push(req);
                     }
@@ -1353,7 +1353,7 @@ pub mod datadriven {
         let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
-        let mut cfg = BatchBuilderConfig::from(&datadriven.client.cfg);
+        let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1372,7 +1372,6 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
-            WriterId::new(),
             since,
             Some(upper.clone()),
             consolidate,
@@ -1531,13 +1530,12 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::from(&cfg),
+            CompactConfig::new(&cfg, &writer_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             req,
-            writer_id,
             schemas,
         )
         .await?;
@@ -1882,7 +1880,7 @@ pub mod tests {
     use crate::ShardId;
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
@@ -1938,7 +1936,7 @@ pub mod tests {
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn regression_gc_skipped_req_and_interrupted() {
         let mut client = new_test_client().await;
         let intercept = InterceptHandle::default();

@@ -51,7 +51,7 @@ To use a specific SIZE for sources, sinks and dataflows:
 To benchmark specific product features:
 
 ```
-./mzcompose run default --this-params="enable_upsert_source_disk=false;upsert_source_disk_default=false" --other-params="..."
+./mzcompose run default --this-params="enable_disk_cluster_replicas=false;disk_cluster_replicas_default=false" --other-params="..."
 ```
 
 Make sure to describe the desired state of any relevant flags exhaustively in order to avoid the unwanted
@@ -153,6 +153,12 @@ the retry attempts.
 
 Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
 output until reliably reproduced locally.
+
+# Measuring memory consumption
+
+If started with `--measure-memory`, the feature benchmark will measure memory consumption and report any regressions.
+
+`docker stats` is used to measure the memory consumption of the entire Materialize container, which includes CRDB.
 
 # Troubleshooting
 

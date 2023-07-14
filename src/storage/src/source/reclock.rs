@@ -295,33 +295,35 @@ where
                     dest_frontier.extend(dest_ts);
                 }
                 Err(ReclockError::BeyondUpper(_)) => {}
-                Err(err @ ReclockError::NotBeyondSince(_) | err @ ReclockError::Uninitialized) => {
-                    return Err(err)
-                }
+                Err(err @ ReclockError::Uninitialized) => return Err(err),
             }
         }
 
         Ok(dest_frontier)
     }
 
-    /// Implements the inverse of the `reclock_frontier` operation.
+    /// Reclocks an `IntoTime` frontier into a `FromTime` frontier.
+
+    /// The conversion has the property that all messages that would be reclocked to times beyond
+    /// the provided `IntoTime` frontier will be beyond the returned `FromTime` frontier. This can
+    /// be used to compute a safe starting point to resume producing an `IntoTime` collection at a
+    /// particular frontier.
     pub fn source_upper_at_frontier<'a>(
         &self,
         frontier: AntichainRef<'a, IntoTime>,
     ) -> Result<Antichain<FromTime>, ReclockError<AntichainRef<'a, IntoTime>>> {
         let inner = self.inner.borrow();
-        if *frontier == [IntoTime::minimum()] {
+        if PartialOrder::less_equal(&frontier, &inner.since.frontier()) {
             return Ok(Antichain::from_elem(FromTime::minimum()));
         }
         if !PartialOrder::less_than(&frontier, &inner.upper.borrow()) {
             if PartialOrder::less_equal(&frontier, &inner.upper.borrow()) {
                 return Ok(inner.source_upper.frontier().to_owned());
+            } else if frontier.is_empty() {
+                return Ok(Antichain::new());
             } else {
                 return Err(ReclockError::BeyondUpper(frontier));
             }
-        }
-        if !PartialOrder::less_than(&inner.since.frontier(), &frontier) {
-            return Err(ReclockError::NotBeyondSince(frontier));
         }
         let mut source_upper = MutableAntichain::new();
 
@@ -402,7 +404,6 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> Drop
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReclockError<T> {
     Uninitialized,
-    NotBeyondSince(T),
     BeyondUpper(T),
 }
 
@@ -729,7 +730,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_basic_usage() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -782,7 +783,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_frontier() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -952,7 +953,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1041,7 +1042,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_gh16318() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1070,7 +1071,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_compaction() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -1180,7 +1181,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_sharing() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1211,7 +1212,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_concurrency() {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
@@ -1267,7 +1268,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_inversion() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -1421,16 +1422,14 @@ mod tests {
 
         assert_eq!(
             follower.source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow()),
-            Err(ReclockError::NotBeyondSince(
-                Antichain::from_elem(2001.into()).borrow()
-            ))
+            Ok(Antichain::from_elem(Partitioned::minimum()))
         );
     }
 
     // Regression test for
     // https://github.com/MaterializeInc/materialize/issues/14740.
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 

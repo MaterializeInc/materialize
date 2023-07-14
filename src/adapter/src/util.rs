@@ -318,15 +318,18 @@ impl ShouldHalt for StorageError {
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
-            | StorageError::InvalidUsage(_) => true,
+            | StorageError::InvalidUsage(_)
+            | StorageError::ResourceExhausted(_) => true,
             StorageError::SourceIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
+            | StorageError::IdentifierInvalid(_)
             | StorageError::IngestionInstanceMissing { .. }
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
             | StorageError::DataflowError(_)
-            | StorageError::InvalidAlterSource { .. } => false,
+            | StorageError::InvalidAlterSource { .. }
+            | StorageError::ShuttingDown(_) => false,
             StorageError::IOError(e) => e.should_halt(),
         }
     }

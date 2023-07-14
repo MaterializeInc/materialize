@@ -32,6 +32,7 @@ relkind             true        text
 relchecks           false       smallint
 relhasrules         false       boolean
 relhastriggers      false       boolean
+relhassubclass      false       boolean
 relrowsecurity      false       boolean
 relforcerowsecurity false       boolean
 relreplident        false       char
@@ -42,13 +43,14 @@ reloptions          true        text[]
 > SHOW COLUMNS FROM pg_database
 name         nullable  type
 ---------------------------
- oid         false     oid
- datname     false     text
- datdba      false     oid
- encoding    false     integer
- datcollate  false     text
- datctype    false     text
- datacl      true      text[]
+ oid            false     oid
+ datname        false     text
+ datdba         false     oid
+ encoding       false     integer
+ datistemplate  false     boolean
+ datcollate     false     text
+ datctype       false     text
+ datacl         true      text[]
 
 > SHOW COLUMNS FROM pg_index
 name         nullable  type
@@ -140,8 +142,8 @@ name                nullable    type
  rolname            false       text
  rolsuper           true        boolean
  rolinherit         false       boolean
- rolcreaterole      false       boolean
- rolcreatedb        false       boolean
+ rolcreaterole      true        boolean
+ rolcreatedb        true        boolean
  rolcanlogin        true        boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean
@@ -258,3 +260,55 @@ name                nullable    type
  extversion         false       text
  extconfig          false       oid[]
  extcondition       false       text[]
+
+> SHOW COLUMNS FROM pg_event_trigger
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ evtname            false       text
+ evtevent           false       text
+ evtowner           false       oid
+ evtfoid            false       oid
+ evtenabled         false       char
+ evttags            false       text[]
+
+> SHOW COLUMNS FROM pg_language
+name                nullable    type
+------------------------------------------------------------
+ lanname            false       text
+ oid                false       oid
+ lanowner           false       oid
+ lanispl            false       boolean
+ lanpltrusted       false       boolean
+ lanplcallfoid      false       oid
+ laninline          false       oid
+ lanvalidator       false       oid
+ lanacl             false       text[]
+
+> SHOW COLUMNS FROM pg_shdescription
+name                nullable    type
+------------------------------------------------------------
+ objoid             false       oid
+ classoid           false       oid
+ description        false       text
+
+> SHOW COLUMNS FROM pg_depend
+name                nullable    type
+------------------------------------------------------------
+ classid            true        oid
+ objid              false       oid
+ objsubid           false       integer
+ refclassid         true        oid
+ refobjid           false       oid
+ refobjsubid        false       integer
+ deptype            false       char
+
+> SHOW COLUMNS FROM pg_indexes
+name                nullable    type
+------------------------------------------------------------
+ table_catalog      false       text
+ schemaname         false       text
+ tablename          false       text
+ indexname          false       text
+ tablespace         true        text
+ indexdef           true        text

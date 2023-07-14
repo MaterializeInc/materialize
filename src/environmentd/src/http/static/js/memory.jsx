@@ -285,23 +285,7 @@ function View(props) {
         FROM
           mz_internal.mz_dataflow_addresses
         WHERE
-          id
-          IN (
-              SELECT
-                id
-              FROM
-                mz_internal.mz_dataflow_addresses
-              WHERE
-                address[1]
-                  = (
-                      SELECT
-                        address[1]
-                      FROM
-                        mz_internal.mz_dataflow_addresses
-                      WHERE
-                        id = ${props.dataflowId}
-                    )
-            );
+          address[1] = ${props.dataflowId};
 
         SELECT
           id, name
@@ -315,15 +299,7 @@ function View(props) {
               FROM
                 mz_internal.mz_dataflow_addresses
               WHERE
-                address[1]
-                  = (
-                      SELECT
-                        address[1]
-                      FROM
-                        mz_internal.mz_dataflow_addresses
-                      WHERE
-                        id = ${props.dataflowId}
-                    )
+                address[1] = ${props.dataflowId}
             );
 
         SELECT
@@ -340,15 +316,7 @@ function View(props) {
               FROM
                 mz_internal.mz_dataflow_addresses
               WHERE
-                address[1]
-                  = (
-                      SELECT
-                        address[1]
-                      FROM
-                        mz_internal.mz_dataflow_addresses
-                      WHERE
-                        id = ${props.dataflowId}
-                    )
+                address[1] = ${props.dataflowId}
             );
 
         SELECT
@@ -363,15 +331,7 @@ function View(props) {
               FROM
                 mz_internal.mz_dataflow_addresses
               WHERE
-                address[1]
-                  = (
-                      SELECT
-                        address[1]
-                      FROM
-                        mz_internal.mz_dataflow_addresses
-                      WHERE
-                        id = ${props.dataflowId}
-                    )
+                address[1] = ${props.dataflowId}
             );
 
         SELECT

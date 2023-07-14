@@ -18,11 +18,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use mz_sql_lexer::keywords::Keyword;
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, QualifiedReplica};
-use crate::keywords::Keyword;
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -165,7 +165,7 @@ impl_display!(UnresolvedDatabaseName);
 
 // The name of an item not yet created during name resolution, which should be
 // resolveable as an item name later.
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub enum DeferredItemName<T: AstInfo> {
     Named(T::ItemName),
     Deferred(UnresolvedItemName),

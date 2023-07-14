@@ -294,7 +294,7 @@ pub fn show_objects<'a>(
     match object_type {
         ShowObjectType::Table => show_tables(scx, from, filter),
         ShowObjectType::Source => show_sources(scx, from, filter),
-        ShowObjectType::Subsource { on_source } => show_subsources(scx, on_source, filter),
+        ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
         ShowObjectType::Sink => show_sinks(scx, from, filter),
         ShowObjectType::Type => show_types(scx, from, filter),
@@ -372,24 +372,45 @@ fn show_sources<'a>(
 
 fn show_subsources<'a>(
     scx: &'a StatementContext<'a>,
-    from_source: ResolvedItemName,
+    from_schema: Option<ResolvedSchemaName>,
+    on_source: Option<ResolvedItemName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let source = scx.get_item_by_resolved_name(&from_source)?;
+    let mut query_filter = Vec::new();
+
+    if on_source.is_none() && from_schema.is_none() {
+        query_filter.push("subsources.id NOT LIKE 's%'".into());
+        let schema_spec = scx.resolve_active_schema().map(|spec| spec.clone())?;
+        query_filter.push(format!("subsources.schema_id = '{schema_spec}'"));
+    }
+
+    if let Some(on_source) = &on_source {
+        let on_item = scx.get_item_by_resolved_name(on_source)?;
+        if on_item.item_type() != CatalogItemType::Source {
+            sql_bail!(
+                "cannot show subsources on {} because it is a {}",
+                on_source.full_name_str(),
+                on_item.item_type(),
+            );
+        }
+        query_filter.push(format!("sources.id = '{}'", on_item.id()));
+    }
+
+    if let Some(schema) = from_schema {
+        let schema_spec = schema.schema_spec();
+        query_filter.push(format!("subsources.schema_id = '{schema_spec}'"));
+    }
+
     let query = format!(
         "SELECT
-            s.name AS name,
-            s.type AS type
+            subsources.name AS name,
+            subsources.type AS type
         FROM
-            mz_sources AS s
-            JOIN (
-                SELECT object_id, referenced_object_id AS subsource
-                FROM
-                mz_internal.mz_object_dependencies AS d
-                WHERE d.object_id = '{}'
-            ) AS d
-            ON s.id = d.subsource",
-        source.id()
+            mz_sources AS subsources
+            JOIN mz_internal.mz_object_dependencies deps ON subsources.id = deps.referenced_object_id
+            JOIN mz_sources AS sources ON sources.id = deps.object_id
+        WHERE {}",
+        itertools::join(query_filter, " AND "),
     );
     ShowSelect::new(scx, query, filter, None, None)
 }

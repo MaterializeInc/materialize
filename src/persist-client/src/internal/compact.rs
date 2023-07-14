@@ -76,12 +76,13 @@ pub struct CompactConfig {
     pub(crate) batch: BatchBuilderConfig,
 }
 
-impl From<&PersistConfig> for CompactConfig {
-    fn from(value: &PersistConfig) -> Self {
+impl CompactConfig {
+    /// Initialize the compaction config from Persist configuration.
+    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
         CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::from(value),
+            batch: BatchBuilderConfig::new(value, writer_id),
         }
     }
 }
@@ -309,13 +310,12 @@ where
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        CompactConfig::from(&cfg),
+                        CompactConfig::new(&cfg, &writer_id),
                         Arc::clone(&blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
                         Arc::clone(&cpu_heavy_runtime),
                         req,
-                        writer_id,
                         schemas.clone(),
                     )
                     .instrument(compact_span),
@@ -416,7 +416,6 @@ where
         shard_metrics: Arc<ShardMetrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
-        writer_id: WriterId,
         schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
@@ -483,7 +482,6 @@ where
                 Arc::clone(&metrics),
                 Arc::clone(&shard_metrics),
                 Arc::clone(&cpu_heavy_runtime),
-                writer_id.clone(),
                 schemas.clone(),
             )
             .await?;
@@ -647,7 +645,6 @@ where
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-        writer_id: WriterId,
         real_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
@@ -696,7 +693,6 @@ where
             cpu_heavy_runtime,
             shard_id.clone(),
             cfg.version.clone(),
-            writer_id,
             desc.since().clone(),
             Some(desc.upper().clone()),
             true,
@@ -999,7 +995,6 @@ mod tests {
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_minimum_since() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1041,13 +1036,12 @@ mod tests {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::from(&write.cfg),
+            CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id()),
             Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
-            write.writer_id.clone(),
             schemas,
         )
         .await
@@ -1067,7 +1061,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn compaction_partial_order() {
         let data = vec![
             (
@@ -1127,13 +1120,12 @@ mod tests {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), CodecProduct, i64>::compact(
-            CompactConfig::from(&write.cfg),
+            CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id()),
             Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
-            write.writer_id.clone(),
             schemas,
         )
         .await
@@ -1153,7 +1145,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn prefetches() {
         let desc = Description::new(
             Antichain::from_elem(0u64),

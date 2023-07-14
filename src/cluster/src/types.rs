@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use timely::worker::Worker as TimelyWorker;
 
@@ -38,6 +39,7 @@ pub trait AsRunnableWorker<C, R> {
             crossbeam_channel::Sender<Self::Activatable>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     );
 }
 

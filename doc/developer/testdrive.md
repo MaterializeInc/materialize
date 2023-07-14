@@ -689,6 +689,19 @@ Add partitions to an existing topic
 
 Create a Kafka topic
 
+#### `$ kafka-delete-topic-flaky`
+
+Delete a Kafka topic
+
+Even though `kafka-delete-topic-flaky` ensures that the topic no longer exists
+in the broker metadata there is still work to be done asychnronously before
+it's truly gone that must complete before we attempt to recreate it. There is
+no way to observe this work completing so the only option left is sleeping for
+a while after executing this command.
+
+For this reason this command must be used with great care or not at all,
+otherwise there is a risk of introducing flakiness in CI.
+
 #### `$ kafka-ingest topic=... schema=... ...`
 
 Sends the data provided to a kafka topic. This action has many arguments:
@@ -844,6 +857,24 @@ $ http-request method=POST url=http://example/com content-type=application/json
 ```
 
 The test will fail unless the HTTP status code of the response is in the 200 range.
+
+## Actions on Webhook Sources
+
+#### `$ webhook-append name=... [database=...] [schema=...] [status=404] [header_name=header_value, ...]`
+
+Issues an HTTP POST request to a webhook source at `<database>.<schema>.<name>`, by default
+`database` is `materialize` and `schema` is `public`. The body of the command is used as the body
+of the request. You can optionally specify an expected response status code, by default we expect a
+status of 200. Any remaining arguments are appended to the request as headers.
+
+See `webhook.td` for more examples.
+
+```
+$ webhook-append database=materialize schema=public name=webhook_json app_name=test_drive
+{
+  "hello": "world"
+}
+```
 
 ## Actions with `psql`
 

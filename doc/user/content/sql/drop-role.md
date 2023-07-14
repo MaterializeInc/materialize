@@ -8,7 +8,7 @@ menu:
 
 `DROP ROLE` removes a role from Materialize.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -22,6 +22,14 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 ## Details
 
 You cannot drop the current role.
+
+## Privileges
+
+{{< private-preview />}}
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

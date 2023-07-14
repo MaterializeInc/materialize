@@ -23,7 +23,7 @@ use mz_pgrepr::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
-use mz_sql::plan::{Params, PlanContext, StatementDesc};
+use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYSTEM_USER};
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
@@ -38,7 +38,7 @@ use tokio::sync::OwnedMutexGuard;
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
@@ -306,18 +306,21 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         *ops = add_ops;
                     }
-                    TransactionOps::Peeks(txn_timestamp_context) => match add_ops {
-                        TransactionOps::Peeks(add_timestamp_context) => {
-                            match (&txn_timestamp_context, add_timestamp_context) {
+                    TransactionOps::Peeks(determination) => match add_ops {
+                        TransactionOps::Peeks(add_timestamp_determination) => {
+                            match (
+                                &determination.timestamp_context,
+                                &add_timestamp_determination.timestamp_context,
+                            ) {
                                 (
                                     TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
                                     TimestampContext::TimelineTimestamp(add_timeline, add_ts),
                                 ) => {
-                                    assert_eq!(*txn_timeline, add_timeline);
-                                    assert_eq!(*txn_ts, add_ts);
+                                    assert_eq!(txn_timeline, add_timeline);
+                                    assert_eq!(txn_ts, add_ts);
                                 }
-                                (TimestampContext::NoTimestamp, add_timestamp_context) => {
-                                    *txn_timestamp_context = add_timestamp_context
+                                (TimestampContext::NoTimestamp, _) => {
+                                    *determination = add_timestamp_determination
                                 }
                                 (_, TimestampContext::NoTimestamp) => {}
                             };
@@ -326,7 +329,7 @@ impl<T: TimestampManipulation> Session<T> {
                         // they are constant), we can switch to a write
                         // transaction.
                         writes @ TransactionOps::Writes(..)
-                            if !txn_timestamp_context.contains_timestamp() =>
+                            if !determination.timestamp_context.contains_timestamp() =>
                         {
                             *ops = writes;
                         }
@@ -354,8 +357,8 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.
-                        TransactionOps::Peeks(timestamp_context)
-                            if !timestamp_context.contains_timestamp() => {}
+                        TransactionOps::Peeks(determination)
+                            if !determination.timestamp_context.contains_timestamp() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }
@@ -442,7 +445,11 @@ impl<T: TimestampManipulation> Session<T> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks(_) = ops {
                 let ops = std::mem::take(ops);
-                Some(ops.timestamp_context().expect("checked above"))
+                Some(
+                    ops.timestamp_determination()
+                        .expect("checked above")
+                        .timestamp_context,
+                )
             } else {
                 None
             }
@@ -451,19 +458,19 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the transaction's read timestamp context, if set.
+    /// Returns the transaction's read timestamp determination, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_context(&self) -> Option<TimestampContext<T>> {
+    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination<T>> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(timestamp_context),
+                ops: TransactionOps::Peeks(determination),
                 write_lock_guard: _,
                 access: _,
                 id: _,
-            }) => Some(timestamp_context.clone()),
+            }) => Some(determination.clone()),
             _ => None,
         }
     }
@@ -474,7 +481,10 @@ impl<T: TimestampManipulation> Session<T> {
             self.transaction.inner(),
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(TimestampContext::TimelineTimestamp(_, _)),
+                ops: TransactionOps::Peeks(TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                    ..
+                }),
                 write_lock_guard: _,
                 access: _,
                 id: _,
@@ -889,6 +899,11 @@ impl<T> TransactionStatus<T> {
         }
     }
 
+    /// Whether the transaction is in a multi-statement, immediate transaction.
+    pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
+        self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
+    }
+
     /// Grants the write lock to the inner transaction.
     ///
     /// # Panics
@@ -961,9 +976,10 @@ impl<T> Transaction<T> {
     /// The timeline of the transaction, if one exists.
     fn timeline(&self) -> Option<Timeline> {
         match &self.ops {
-            TransactionOps::Peeks(TimestampContext::TimelineTimestamp(timeline, _)) => {
-                Some(timeline.clone())
-            }
+            TransactionOps::Peeks(TimestampDetermination {
+                timestamp_context: TimestampContext::TimelineTimestamp(timeline, _),
+                ..
+            }) => Some(timeline.clone()),
             TransactionOps::Peeks(_)
             | TransactionOps::None
             | TransactionOps::Subscribe
@@ -1022,7 +1038,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
@@ -1031,7 +1047,7 @@ pub enum TransactionOps<T> {
     /// is has a timestamp, it must only do other peeks. However, if it doesn't
     /// have a timestamp (i.e. the values are constants), the transaction can still
     /// perform writes.
-    Peeks(TimestampContext<T>),
+    Peeks(TimestampDetermination<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
@@ -1040,9 +1056,9 @@ pub enum TransactionOps<T> {
 }
 
 impl<T> TransactionOps<T> {
-    fn timestamp_context(self) -> Option<TimestampContext<T>> {
+    fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
         match self {
-            TransactionOps::Peeks(timestamp_context) => Some(timestamp_context),
+            TransactionOps::Peeks(determination) => Some(determination),
             TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
         }
     }

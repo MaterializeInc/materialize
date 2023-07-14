@@ -50,11 +50,7 @@ pub enum SourceType<G: Scope> {
     Row(Collection<G, SourceOutput<(), Row>, Diff>),
 }
 
-/// The worker index for health streams, used to differentiate itself from [`OutputIndex`].
-pub(crate) type WorkerId = usize;
-
-/// The output index for health streams, used to handle multiplexed streams and differentiate itself
-/// from [`WorkerId`].
+/// The output index for health streams, used to handle multiplexed streams
 pub(crate) type OutputIndex = usize;
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -73,15 +69,17 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     dataflow_debug_name: &String,
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<mz_repr::Timestamp>,
-    source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
+    source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
 ) {
     // Tokens that we should return from the method.
@@ -114,8 +112,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         now: storage_state.now.clone(),
         // TODO(guswynn): avoid extra clones here
         base_metrics: storage_state.source_metrics.clone(),
-        resume_upper: resume_upper.clone(),
-        source_resume_upper,
+        as_of: as_of.clone(),
+        resume_uppers,
+        source_resume_uppers,
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
         source_statistics: storage_state
@@ -129,20 +128,16 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         params,
     };
 
-    // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning
-    // a million fields
-    let resumption_calculator = description.clone();
-
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (streams, mut health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -153,10 +148,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::Postgres(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -167,10 +162,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::LoadGenerator(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -181,10 +176,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::TestScript(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
+                resume_stream,
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
-                resumption_calculator,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -211,7 +206,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             id,
             ok_source,
             description.clone(),
-            resume_upper.clone(),
+            as_of.clone(),
             error_collections,
             storage_state,
             base_source_config.clone(),
@@ -232,7 +227,7 @@ fn render_source_stream<G>(
     id: GlobalId,
     ok_source: SourceType<G>,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<G::Timestamp>,
+    as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
@@ -240,7 +235,7 @@ fn render_source_stream<G>(
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
     Vec<Rc<dyn Any>>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -293,7 +288,7 @@ where
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
             // stream into a `DecodeResult`.
-            let (results, extra_token) = match ok_source {
+            let (decoded_stream, decode_health, extra_token) = match ok_source {
                 SourceType::Delimited(source) => render_decode_delimited(
                     &source,
                     key_encoding,
@@ -312,6 +307,7 @@ where
                         partition: r.partition,
                         metadata: Row::default(),
                     }),
+                    empty(scope),
                     None,
                 ),
             };
@@ -320,7 +316,7 @@ where
             }
 
             // render envelopes
-            match &envelope {
+            let (envelope_ok, envelope_err, envelope_health) = match &envelope {
                 SourceEnvelope::Debezium(dbz_envelope) => {
                     let (debezium_ok, errors) = match &dbz_envelope.dedup.tx_metadata {
                         Some(tx_metadata) => {
@@ -330,8 +326,6 @@ where
                                 .expect("dependent source missing from ingestion description")
                                 .clone();
                             let persist_clients = Arc::clone(&storage_state.persist_clients);
-                            let upper_ts = resume_upper.as_option().copied().unwrap();
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
                             let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                 persist_source::persist_source(
                                     scope,
@@ -352,16 +346,18 @@ where
                             needed_tokens.push(tx_token);
                             error_collections.push(tx_source_err);
 
-                            super::debezium::render_tx(dbz_envelope, &results, tx_source_ok)
+                            super::debezium::render_tx(dbz_envelope, &decoded_stream, tx_source_ok)
                         }
-                        None => super::debezium::render(dbz_envelope, &results),
+                        None => super::debezium::render(dbz_envelope, &decoded_stream),
                     };
                     (debezium_ok, Some(errors), empty(scope))
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
-                    let upsert_input = upsert_commands(results, upsert_envelope.clone());
+                    let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
+                    // TODO: Get this to work with the as_of.
+                    let resume_upper = base_source_config.resume_uppers[&id].clone();
 
                     let upper_ts = resume_upper
                         .as_option()
@@ -406,7 +402,7 @@ where
                     )
                 }
                 SourceEnvelope::None(none_envelope) => {
-                    let results = append_metadata_to_value(results);
+                    let results = append_metadata_to_value(decoded_stream);
 
                     let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
 
@@ -416,7 +412,13 @@ where
                     (stream.as_collection(), Some(errors), empty(scope))
                 }
                 SourceEnvelope::CdcV2 => unreachable!(),
-            }
+            };
+
+            (
+                envelope_ok,
+                envelope_err,
+                decode_health.concat(&envelope_health),
+            )
         }
     };
 

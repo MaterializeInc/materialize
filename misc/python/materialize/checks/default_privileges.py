@@ -26,7 +26,12 @@ class DefaultPrivileges(Check):
             > SET DATABASE = defpriv_db
             > CREATE SCHEMA defpriv_schema
             > SET SCHEMA defpriv_schema
-            > CREATE ROLE defpriv_role1 CREATEDB CREATECLUSTER
+            > CREATE ROLE defpriv_role1
+            >[version<5900] ALTER ROLE defpriv_role1 CREATEDB CREATECLUSTER
+
+            $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
+
             > CREATE TABLE defpriv_table1 (c int)
             """
             )
@@ -40,14 +45,24 @@ class DefaultPrivileges(Check):
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role1;
-                > CREATE ROLE defpriv_role2 CREATEDB CREATECLUSTER
+                > CREATE ROLE defpriv_role2
+                >[version<5900] ALTER ROLE defpriv_role2 CREATEDB CREATECLUSTER
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role2
+
                 > CREATE TABLE defpriv_table2 (c int)
                 """,
                 """
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role2;
-                > CREATE ROLE defpriv_role3 CREATEDB CREATECLUSTER
+                > CREATE ROLE defpriv_role3
+                >[version<5900] ALTER ROLE defpriv_role3 CREATEDB CREATECLUSTER
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role3
+
                 > CREATE TABLE defpriv_table3 (c int)
                 """,
             ]
@@ -73,6 +88,9 @@ class DefaultPrivileges(Check):
                   LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
                   LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
                   ORDER BY role_name, grantee_name;
+                PUBLIC <null> <null> CLUSTER mz_introspection U
+                PUBLIC <null> <null> DATABASE mz_introspection U
+                PUBLIC <null> <null> SCHEMA mz_introspection U
                 PUBLIC <null> <null> TYPE PUBLIC U
                 materialize defpriv_db defpriv_schema TABLE defpriv_role1 arwd
                 materialize defpriv_db defpriv_schema TABLE defpriv_role2 arwd

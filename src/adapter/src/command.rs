@@ -19,13 +19,15 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use mz_expr::EvalError;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{GlobalId, Row, ScalarType};
+use mz_repr::{ColumnType, GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
+use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{oneshot, watch};
 
 use crate::client::{ConnectionId, ConnectionIdType};
@@ -101,6 +103,14 @@ pub enum Command {
         ctx_extra: ExecuteContextExtra,
     },
 
+    AppendWebhook {
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+    },
+
     GetSystemVars {
         session: Session,
         tx: oneshot::Sender<Response<GetVariablesResponse>>,
@@ -132,7 +142,9 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
+            Command::CancelRequest { .. }
+            | Command::AppendWebhook { .. }
+            | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 
@@ -149,7 +161,9 @@ impl Command {
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
-            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => None,
+            Command::CancelRequest { .. }
+            | Command::AppendWebhook { .. }
+            | Command::PrivilegedCancelRequest { .. } => None,
         }
     }
 }
@@ -264,6 +278,31 @@ impl IntoIterator for GetVariablesResponse {
     }
 }
 
+/// Type of closure that is called to validate a webhook request.
+pub type AppendWebhookValidation = Box<
+    dyn FnOnce(mz_repr::Datum, mz_repr::Datum) -> Result<bool, EvalError>
+        + Send
+        + std::panic::UnwindSafe,
+>;
+
+pub struct AppendWebhookResponse {
+    pub tx: MonotonicAppender,
+    pub body_ty: ColumnType,
+    pub header_ty: Option<ColumnType>,
+    pub validate_expr: Option<AppendWebhookValidation>,
+}
+
+impl fmt::Debug for AppendWebhookResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppendWebhookResponse")
+            .field("tx", &self.tx)
+            .field("body_ty", &self.body_ty)
+            .field("header_ty", &self.header_ty)
+            .field("validate_expr", &"(...)")
+            .finish()
+    }
+}
+
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(EnumKind, Derivative)]
 #[derivative(Debug)]
@@ -311,6 +350,8 @@ pub enum ExecuteResponse {
     CreatedSecret,
     /// The requested sink was created.
     CreatedSink,
+    /// The requested HTTP source was created.
+    CreatedWebhookSource,
     /// The requested source was created.
     CreatedSource,
     /// The requested sources were created.
@@ -396,6 +437,8 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+    /// A connection was validated.
+    ValidatedConnection,
 }
 
 impl ExecuteResponse {
@@ -420,6 +463,7 @@ impl ExecuteResponse {
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
+            CreatedWebhookSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSources => Some("CREATE SOURCES".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
@@ -461,6 +505,7 @@ impl ExecuteResponse {
             TransactionCommitted { .. } => Some("COMMIT".into()),
             TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
+            ValidatedConnection => Some("VALIDATE CONNECTION".into()),
         }
     }
 
@@ -501,6 +546,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
+            CreateWebhookSource => vec![CreatedWebhookSource],
             CreateSource | CreateSources => vec![CreatedSource, CreatedSources],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
@@ -536,6 +582,7 @@ impl ExecuteResponse {
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
             SideEffectingFunc => vec![SendingRows],
+            ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
 }

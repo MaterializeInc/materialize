@@ -84,7 +84,7 @@ use mz_storage_client::types::sources::SourceEnvelope;
 mod setup;
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 fn test_datadriven() {
     datadriven::walk("tests/datadriven", |f| {
         let mut sources: BTreeMap<

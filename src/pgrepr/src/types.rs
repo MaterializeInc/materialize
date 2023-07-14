@@ -91,6 +91,9 @@ pub enum Type {
         /// The type of the values in the map.
         value_type: Box<Type>,
     },
+    /// A character type for storing identifiers of no more than 64 bytes
+    /// in length.
+    Name,
     /// An arbitrary precision number.
     Numeric {
         /// Optional constraints on the type.
@@ -682,6 +685,7 @@ impl Type {
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
                 Type::List(_) => unreachable!(),
                 Type::Map { .. } => unreachable!(),
+                Type::Name { .. } => &postgres_types::Type::NAME_ARRAY,
                 Type::Numeric { .. } => &postgres_types::Type::NUMERIC_ARRAY,
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
@@ -726,6 +730,7 @@ impl Type {
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
             Type::Map { .. } => &MAP,
+            Type::Name => &postgres_types::Type::NAME,
             Type::Numeric { .. } => &postgres_types::Type::NUMERIC,
             Type::Oid => &postgres_types::Type::OID,
             Type::Record(_) => &postgres_types::Type::RECORD,
@@ -856,6 +861,7 @@ impl Type {
             | Type::Jsonb
             | Type::List(_)
             | Type::Map { .. }
+            | Type::Name
             | Type::Numeric { constraints: None }
             | Type::Int2Vector
             | Type::Oid
@@ -898,6 +904,7 @@ impl Type {
             Type::Jsonb => -1,
             Type::List(_) => -1,
             Type::Map { .. } => -1,
+            Type::Name { .. } => 64,
             Type::Numeric { .. } => -1,
             Type::Oid => 4,
             Type::Record(_) => -1,
@@ -978,6 +985,7 @@ impl TryFrom<&Type> for ScalarType {
                 value_type: Box::new(TryFrom::try_from(&**value_type)?),
                 custom_id: None,
             }),
+            Type::Name => Ok(ScalarType::PgLegacyName),
             Type::Numeric { constraints } => {
                 let max_scale = match constraints {
                     Some(constraints) => {
@@ -1158,6 +1166,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Map { value_type, .. } => Type::Map {
                 value_type: Box::new(From::from(&**value_type)),
             },
+            ScalarType::PgLegacyName => Type::Name,
             ScalarType::Oid => Type::Oid,
             ScalarType::Record { fields, .. } => Type::Record(
                 fields

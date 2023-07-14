@@ -25,7 +25,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
+    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
 use mz_ore::halt;
@@ -74,6 +74,8 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The disk limit for each process in the replica.
+    pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
     pub scale: u16,
     /// The number of worker threads in the replica.
@@ -91,6 +93,7 @@ fn test_replica_allocation_deserialization() {
         {
             "cpu_limit": 1.0,
             "memory_limit": "10GiB",
+            "disk_limit": "100MiB",
             "scale": 16,
             "workers": 1,
             "credits_per_hour": "16"
@@ -178,6 +181,8 @@ pub struct ManagedReplicaLocation {
     /// `true` if the AZ was specified by the user and must be respected;
     /// `false` if it was picked arbitrarily by Materialize.
     pub az_user_specified: bool,
+    /// Whether the replica needs scratch disk space.
+    pub disk: bool,
 }
 
 /// Configures logging for a cluster replica.
@@ -556,6 +561,8 @@ where
                             },
                         },
                     ]),
+                    disk_limit: location.allocation.disk_limit,
+                    disk: location.disk,
                 },
             )
             .await?;

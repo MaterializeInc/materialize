@@ -586,6 +586,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
     fn test_writer_roundtrip() {
         let schema = Schema::from_str(SCHEMA).unwrap();
         let make_record = |a: i64, b| {

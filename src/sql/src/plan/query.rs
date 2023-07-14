@@ -905,6 +905,52 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
+/// Plans an expression in the VALIDATE USING position of a `CREATE SOURCE ... FROM WEBHOOK`.
+pub fn plan_webhook_validate_using(
+    scx: &StatementContext,
+    mut expr: Expr<Aug>,
+) -> Result<MirScalarExpr, PlanError> {
+    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+
+    // We _always_ provide the body of the request as bytes and include the headers when validating
+    // a request, regardless of what has otherwise been specified for the source.
+    let column_typs = vec![
+        ColumnType {
+            scalar_type: ScalarType::Bytes,
+            nullable: false,
+        },
+        ColumnType {
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            },
+            nullable: false,
+        },
+    ];
+    let column_names = ["body", "headers"];
+
+    let relation_typ = RelationType::new(column_typs);
+    let desc = RelationDesc::new(relation_typ, column_names);
+    let scope = Scope::from_source(None, column_names);
+
+    transform_ast::transform(scx, &mut expr)?;
+
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "VALIDATE USING",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let expr = plan_expr(ecx, &expr)?
+        .type_as(ecx, &ScalarType::Bool)?
+        .lower_uncorrelated()?;
+    Ok(expr)
+}
+
 pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Aug>,
@@ -1469,9 +1515,27 @@ fn plan_set_expr(
             Ok((expr, scope))
         }
         SetExpr::Show(stmt) => {
+            // The create SQL definition of involving this query, will have the explicit `SHOW`
+            // command in it. Many `SHOW` commands will expand into a sub-query that involves the
+            // current schema of the executing user. When Materialize restarts and tries to re-plan
+            // these queries, it will only have access to the raw `SHOW` command and have no idea
+            // what schema to use. As a result Materialize will fail to boot.
+            //
+            // Some `SHOW` commands are ok, like `SHOW CLUSTERS`, and there are probably other ways
+            // around this issue. Such as expanding the `SHOW` command in the SQL definition. For
+            // now we just disallow any `SHOW` commands in views.
+            //
+            // Ideally, the `SHOW` commands that use the current schema would expand to use the
+            // `current_schema()` function, instead of hard-coding the current schema id, so that
+            // planning can correctly identify that they are unmaterializable. However, that's a
+            // little tricky because `current_schema()` returns a schema name not id, which is what
+            // we need.
+            if qcx.lifetime == QueryLifetime::Static {
+                return Err(PlanError::ShowCommandInView);
+            }
+
             // Some SHOW statements are a SELECT query. Others produces Rows
             // directly. Convert both of these to the needed Hir and Scope.
-
             fn to_hirscope(
                 plan: ShowCreatePlan,
                 desc: StatementDesc,
@@ -1518,7 +1582,7 @@ fn plan_set_expr(
                 ShowStatement::ShowObjects(stmt) => {
                     show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
                 }
-                ShowStatement::ShowVariable(_) => sql_bail!("unsupported SHOW statement"),
+                ShowStatement::ShowVariable(_) => bail_unsupported!("SHOW variable in subqueries"),
                 ShowStatement::InspectShard(_) => sql_bail!("unsupported INSPECT statement"),
             }
         }
@@ -5148,6 +5212,7 @@ fn scalar_type_from_catalog(
                 CatalogType::Jsonb => Ok(ScalarType::Jsonb),
                 CatalogType::Oid => Ok(ScalarType::Oid),
                 CatalogType::PgLegacyChar => Ok(ScalarType::PgLegacyChar),
+                CatalogType::PgLegacyName => Ok(ScalarType::PgLegacyName),
                 CatalogType::Pseudo => {
                     sql_bail!(
                         "cannot reference pseudo type {}",

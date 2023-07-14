@@ -38,6 +38,7 @@ _interval
 _jsonb
 _mz_aclitem
 _mz_timestamp
+_name
 _numeric
 _numrange
 _oid
@@ -87,6 +88,7 @@ list
 map
 mz_aclitem
 mz_timestamp
+name
 numeric
 numrange
 oid

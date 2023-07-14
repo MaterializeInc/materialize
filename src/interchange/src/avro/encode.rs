@@ -335,7 +335,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     buf
                 }),
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                ScalarType::String | ScalarType::VarChar { .. } => {
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
                     Value::String(datum.unwrap_str().to_owned())
                 }
                 ScalarType::Char { length } => {

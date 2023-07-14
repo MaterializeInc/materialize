@@ -29,6 +29,9 @@ pub struct DataflowParameters {
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     /// `None` means the defaults.
     pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig,
+    /// A set of parameters to configure auto spill to disk behaviour for a `DISK`
+    /// enabled upsert source
+    pub auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
 }
 
 impl DataflowParameters {
@@ -37,9 +40,11 @@ impl DataflowParameters {
         &mut self,
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
+        auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
-        self.upsert_rocksdb_tuning_config.apply(rocksdb_params)
+        self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
+        self.auto_spill_config = auto_spill_config;
     }
 }
 
@@ -61,10 +66,15 @@ pub enum InternalStorageCommand {
         id: GlobalId,
         /// The description of the ingestion/source.
         ingestion_description: IngestionDescription<CollectionMetadata>,
-        /// The frontier at which we should (re-)start ingestion.
-        resumption_frontier: Antichain<mz_repr::Timestamp>,
-        /// The frontier at which we should (re-)start ingestion in the source time domain.
-        source_resumption_frontier: BTreeMap<GlobalId, Vec<Row>>,
+        /// The frontier beyond which ingested updates should be uncompacted. Inputs to the
+        /// ingestion are guaranteed to be readable at this frontier.
+        as_of: Antichain<mz_repr::Timestamp>,
+        /// A frontier in the Materialize time domain with the property that all updates not beyond
+        /// it have already been durably ingested.
+        resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
+        /// A frontier in the source time domain with the property that all updates not beyond it
+        /// have already been durably ingested.
+        source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
     /// Render a sink dataflow.
     CreateSinkDataflow(
@@ -78,6 +88,7 @@ pub enum InternalStorageCommand {
     UpdateConfiguration(
         mz_postgres_util::ReplicationTimeouts,
         mz_rocksdb::RocksDBTuningParameters,
+        mz_storage_client::types::parameters::UpsertAutoSpillConfig,
     ),
 }
 

@@ -118,6 +118,7 @@ impl Default for ClusterReplicaSizeMap {
                     ReplicaAllocation {
                         memory_limit: None,
                         cpu_limit: None,
+                        disk_limit: None,
                         scale: 1,
                         workers: workers.into(),
                         credits_per_hour: 1.into(),
@@ -133,6 +134,7 @@ impl Default for ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    disk_limit: None,
                     scale,
                     workers: 1,
                     credits_per_hour: scale.into(),
@@ -144,6 +146,7 @@ impl Default for ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    disk_limit: None,
                     scale,
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
@@ -155,6 +158,7 @@ impl Default for ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     cpu_limit: None,
+                    disk_limit: None,
                     scale: 1,
                     workers: 8,
                     credits_per_hour: 1.into(),
@@ -167,6 +171,7 @@ impl Default for ClusterReplicaSizeMap {
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                disk_limit: None,
                 scale: 2,
                 workers: 4,
                 credits_per_hour: 2.into(),

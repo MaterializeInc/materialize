@@ -54,9 +54,11 @@ SERVICES = [
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
             f"MZ_LAUNCHDARKLY_KEY_MAP=max_result_size={LD_FEATURE_FLAG_KEY}",
-            "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug",
             "MZ_CONFIG_SYNC_LOOP_INTERVAL=1s",
-        ]
+        ],
+        additional_system_parameter_defaults={
+            "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
+        },
     ),
     Testdrive(no_reset=True, seed=1),
 ]
@@ -113,8 +115,10 @@ def workflow_default(c: Composition) -> None:
                 environment_extra=[
                     f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
                     f"MZ_LAUNCHDARKLY_KEY_MAP=max_result_size={LD_FEATURE_FLAG_KEY}",
-                    "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug",
-                ]
+                ],
+                additional_system_parameter_defaults={
+                    "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
+                },
             )
         ):
             c.up("materialized")

@@ -14,6 +14,7 @@ use std::thread::Thread;
 
 use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
@@ -103,6 +104,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
@@ -114,6 +116,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.connection_context,
             config.instance_context,
             persist_clients,
+            tracing_handle,
         )
         .run();
     }

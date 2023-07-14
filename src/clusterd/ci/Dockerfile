@@ -12,7 +12,9 @@ MZFROM ubuntu-base
 RUN apt-get update \
     && apt-get -qy install ca-certificates curl ssh tini \
     && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
+    && useradd --system --gid=999 --uid=999 --create-home materialize \
+    && mkdir /scratch \
+    && chown materialize /scratch
 
 COPY clusterd entrypoint.sh /usr/local/bin/
 

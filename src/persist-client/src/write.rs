@@ -543,7 +543,7 @@ where
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::from(&self.cfg),
+            BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
             self.schemas.clone(),
@@ -553,7 +553,6 @@ where
             Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
             self.cfg.build_version.clone(),
-            self.writer_id.clone(),
             Antichain::from_elem(T::minimum()),
             None,
             false,

@@ -44,6 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
+
 use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
@@ -58,7 +59,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -80,10 +82,14 @@ pub(crate) mod with_options;
 use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use expr::{
+    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    WindowExprType,
+};
 pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
+pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
@@ -98,6 +104,7 @@ pub enum Plan {
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
+    CreateWebhookSource(CreateWebhookSourcePlan),
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
@@ -159,6 +166,7 @@ pub enum Plan {
     AlterDefaultPrivileges(AlterDefaultPrivilegesPlan),
     ReassignOwned(ReassignOwnedPlan),
     SideEffectingFunc(SideEffectingFunc),
+    ValidateConnection(ValidateConnectionPlan),
 }
 
 impl Plan {
@@ -209,6 +217,7 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
+            StatementKind::CreateWebhookSource => vec![PlanKind::CreateWebhookSource],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 vec![PlanKind::CreateSource]
             }
@@ -247,6 +256,7 @@ impl Plan {
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
             StatementKind::Update => vec![PlanKind::ReadThenWrite],
+            StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
         }
     }
 
@@ -259,6 +269,7 @@ impl Plan {
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
+            Plan::CreateWebhookSource(_) => "create source",
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
@@ -372,6 +383,7 @@ impl Plan {
             Plan::AlterDefaultPrivileges(_) => "alter default privileges",
             Plan::ReassignOwned(_) => "reassign owned",
             Plan::SideEffectingFunc(_) => "side effecting func",
+            Plan::ValidateConnection(_) => "validate connection",
         }
     }
 }
@@ -450,6 +462,7 @@ pub struct CreateClusterManagedPlan {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
+    pub disk: bool,
 }
 
 #[derive(Debug)]
@@ -488,7 +501,22 @@ pub enum ReplicaConfig {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
+        disk: bool,
     },
+}
+
+/// TODO(parkmycar): once we install webhook sources on clusterd, this struct should be
+/// delete/merged in favor of [`CreateSourcePlan`].
+///
+/// See <https://github.com/MaterializeInc/materialize/issues/19951>.
+#[derive(Debug)]
+pub struct CreateWebhookSourcePlan {
+    pub name: QualifiedItemName,
+    pub if_not_exists: bool,
+    pub create_sql: String,
+    pub desc: RelationDesc,
+    pub timeline: Timeline,
+    pub validate_using: Option<MirScalarExpr>,
 }
 
 #[derive(Debug)]
@@ -504,17 +532,7 @@ pub struct CreateSourcePlan {
 pub struct CreateSourcePlans {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
-    pub depends_on: Vec<GlobalId>,
-}
-
-impl From<(GlobalId, CreateSourcePlan, Vec<GlobalId>)> for CreateSourcePlans {
-    fn from(plan: (GlobalId, CreateSourcePlan, Vec<GlobalId>)) -> Self {
-        CreateSourcePlans {
-            source_id: plan.0,
-            plan: plan.1,
-            depends_on: plan.2,
-        }
-    }
+    pub resolved_ids: ResolvedIds,
 }
 
 /// Specifies the cluster for a source or a sink.
@@ -559,6 +577,14 @@ pub struct CreateConnectionPlan {
     pub name: QualifiedItemName,
     pub if_not_exists: bool,
     pub connection: Connection,
+    pub validate: bool,
+}
+
+#[derive(Debug)]
+pub struct ValidateConnectionPlan {
+    pub id: GlobalId,
+    /// The connection to validate.
+    pub connection: mz_storage_client::types::connections::Connection,
 }
 
 #[derive(Debug)]
@@ -827,9 +853,15 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceAction {
+    Resize(AlterOptionParameter),
+    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterOptionParameter,
+    pub action: AlterSourceAction,
 }
 
 #[derive(Debug)]
@@ -1203,6 +1235,7 @@ pub struct PlanClusterOption {
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
+    pub disk: AlterOptionParameter<bool>,
 }
 
 impl Default for PlanClusterOption {
@@ -1216,6 +1249,7 @@ impl Default for PlanClusterOption {
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
+            disk: AlterOptionParameter::Unchanged,
         }
     }
 }

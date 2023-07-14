@@ -25,6 +25,7 @@ use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
@@ -144,6 +145,8 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// A process-global handle to tracing configuration.
+    tracing_handle: Arc<TracingHandle>,
 }
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
@@ -157,6 +160,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             ActivatorSender,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker {
             timely_worker,
@@ -165,6 +169,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             compute_metrics: config.compute_metrics,
             persist_clients,
             compute_state: None,
+            tracing_handle,
         }
         .run()
     }
@@ -408,6 +413,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     dataflow_max_inflight_bytes: usize::MAX,
                     linear_join_impl: Default::default(),
                     metrics: self.compute_metrics.clone(),
+                    tracing_handle: Arc::clone(&self.tracing_handle),
                 });
             }
             _ => (),

@@ -87,6 +87,7 @@ use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -242,6 +243,7 @@ where
                         rocksdb::Env::new().unwrap(),
                     ),
                     Arc::clone(&persist_clients),
+                    Arc::new(TracingHandle::disabled()),
                 )
             };
 
@@ -270,7 +272,9 @@ where
                 let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
                 let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
-                let source_resumption_frontier = std::iter::once((
+                let resume_uppers =
+                    BTreeMap::from_iter([(id, Antichain::from_elem(Timestamp::minimum()))]);
+                let source_resume_uppers = BTreeMap::from_iter([(
                     id,
                     match &desc.connection {
                         GenericSourceConnection::Kafka(c) => minimum_frontier(c),
@@ -278,8 +282,7 @@ where
                         GenericSourceConnection::TestScript(c) => minimum_frontier(c),
                         GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
                     },
-                ))
-                .collect();
+                )]);
 
                 // NOTE: We only feed internal commands into the worker,
                 // bypassing "external" StorageCommand and the async worker that
@@ -308,8 +311,9 @@ where
                                 remap_collection_id: GlobalId::User(99),
                             },
                         // TODO: test resumption as well!
-                        resumption_frontier: Antichain::from_elem(Timestamp::minimum()),
-                        source_resumption_frontier,
+                        as_of: Antichain::from_elem(Timestamp::minimum()),
+                        resume_uppers,
+                        source_resume_uppers,
                     },
                 );
             }

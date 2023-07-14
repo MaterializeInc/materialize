@@ -154,7 +154,6 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
-use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
@@ -235,8 +234,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let data_cap = data_cap.as_mut().unwrap();
             trace!(
                 %id,
-                "timely-{worker_id} initializing table reader with {} and {} tables to snapshot",
-                config.resume_upper.pretty(),
+                "timely-{worker_id} initializing table reader with {} tables to snapshot",
                 reader_snapshot_table_info.len()
             );
 
@@ -384,6 +382,14 @@ async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), Transien
         .unwrap();
     let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
 
+    // When creating a replication slot postgres returns the LSN of its consistent point, which is
+    // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
+    // phase to the replication phase. `START_REPLICATION` includes all transactions that commit at
+    // LSNs *greater than or equal* to the passed LSN. Therefore the snapshot phase must happen at
+    // the greatest LSN that is not beyond the consistent point. That LSN is `consistent_point - 1`
+    let consistent_point = u64::from(consistent_point)
+        .checked_sub(1)
+        .expect("consistent point is always non-zero");
     Ok((snapshot, MzOffset::from(consistent_point)))
 }
 

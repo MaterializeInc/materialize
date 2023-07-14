@@ -37,7 +37,26 @@ DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
+    "scratch:/scratch",
 ]
+
+DEFAULT_SYSTEM_PARAMETERS = {
+    "persist_sink_minimum_batch_updates": "128",
+    "enable_multi_worker_storage_persist_sink": "true",
+    "storage_persist_sink_minimum_batch_updates": "100",
+    "persist_pubsub_push_diff_enabled": "true",
+    "persist_pubsub_client_enabled": "true",
+    "persist_stats_filter_enabled": "true",
+    "persist_stats_collection_enabled": "true",
+    "persist_stats_audit_percent": "100",
+    "enable_ld_rbac_checks": "true",
+    "enable_rbac_checks": "true",
+    "enable_monotonic_oneshot_selects": "true",
+    # Following values are set based on Load Test environment to
+    # reduce CRDB load as we are struggling with it in CI:
+    "persist_next_listen_batch_retryer_clamp": "100ms",
+    "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+}
 
 # TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
 DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
@@ -84,7 +103,6 @@ class Materialized(Service):
             # are enabled for testing purposes only
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
-            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/mzdata/source_data",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             # Please think twice before forwarding additional environment
@@ -99,20 +117,7 @@ class Materialized(Service):
         ]
 
         if system_parameter_defaults is None:
-            system_parameter_defaults = {
-                "enable_upsert_source_disk": "true",
-                "upsert_source_disk_default": "true",
-                "persist_sink_minimum_batch_updates": "128",
-                "enable_multi_worker_storage_persist_sink": "true",
-                "storage_persist_sink_minimum_batch_updates": "100",
-                "persist_pubsub_push_diff_enabled": "true",
-                "persist_pubsub_client_enabled": "true",
-                "persist_stats_filter_enabled": "true",
-                "persist_stats_collection_enabled": "true",
-                "persist_stats_audit_percent": "100",
-                "enable_ld_rbac_checks": "true",
-                "enable_rbac_checks": "true",
-            }
+            system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
 
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
@@ -243,7 +248,6 @@ class Clusterd(Service):
         environment = [
             "CLUSTERD_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
-            "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
             *environment_extra,
         ]
 
@@ -267,7 +271,7 @@ class Clusterd(Service):
         config.update(
             {
                 "command": command,
-                "ports": [2100, 2101],
+                "ports": [2100, 2101, 6878],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
             }
@@ -505,7 +509,7 @@ class MySql(Service):
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v23.1.1"
+    DEFAULT_COCKROACH_TAG = "v23.1.5"
 
     def __init__(
         self,
@@ -741,7 +745,7 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = "minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in
@@ -757,6 +761,7 @@ class Minio(Service):
                 "command": [command],
                 "image": image,
                 "ports": [9000, 9001],
+                "environment": ["MINIO_STORAGE_CLASS_STANDARD=EC:0"],
                 "healthcheck": {
                     "test": [
                         "CMD",
@@ -912,6 +917,13 @@ class SqlLogicTest(Service):
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["cockroach"],
     ) -> None:
+        environment += [
+            "MZ_SYSTEM_PARAMETER_DEFAULT="
+            + ";".join(
+                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+            )
+        ]
+
         super().__init__(
             name=name,
             config={
@@ -1073,6 +1085,24 @@ class Grafana(Service):
                 "volumes": [
                     str(ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
                     + ":/etc/grafana/provisioning/datasources",
+                ],
+            },
+        )
+
+
+class Dbt(Service):
+    def __init__(self, name: str = "dbt") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": "dbt-materialize",
+                "environment": [
+                    "TMPDIR=/share/tmp",
+                ],
+                "volumes": [
+                    ".:/workdir",
+                    "secrets:/secrets",
+                    "tmp:/share/tmp",
                 ],
             },
         )

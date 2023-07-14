@@ -22,6 +22,11 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 # Test mz_aclitem type and functions
 
 statement ok
@@ -180,6 +185,11 @@ NULL
 
 # Test default privileges
 
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
+----
+COMPLETE 0
+
 ## Create some helper views
 
 statement ok
@@ -202,21 +212,27 @@ SELECT * FROM database_privileges
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
 materialize  materialize=UC/mz_system
+materialize  mz_introspection=U/mz_system
 
 query TT
 SELECT name, privilege FROM schema_privileges ORDER BY name
 ----
 information_schema  =U/mz_system
 information_schema  mz_system=UC/mz_system
+information_schema  mz_introspection=U/mz_system
 mz_catalog          =U/mz_system
 mz_catalog          mz_system=UC/mz_system
+mz_catalog          mz_introspection=U/mz_system
 mz_internal         =U/mz_system
 mz_internal         mz_system=UC/mz_system
+mz_internal         mz_introspection=U/mz_system
 pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
+pg_catalog          mz_introspection=U/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
 public              materialize=UC/mz_system
+public              mz_introspection=U/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
@@ -224,6 +240,7 @@ SELECT * FROM cluster_privileges ORDER BY name
 default           =U/mz_system
 default           mz_system=UC/mz_system
 default           materialize=UC/mz_system
+default           mz_introspection=U/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
@@ -256,6 +273,11 @@ SELECT privileges::text FROM mz_system_privileges
 mz_system=RBN/mz_system
 
 ## Test user created objects
+
+simple conn=mz_system,user=mz_system
+GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
+----
+COMPLETE 0
 
 statement ok
 CREATE TABLE t (a INT);
@@ -307,7 +329,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'se'
 se  materialize=U/materialize
 
 statement ok
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'conn'
@@ -321,6 +343,7 @@ query TT
 SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 CREATE DATABASE d;
@@ -329,6 +352,7 @@ query TT
 SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY name
@@ -338,6 +362,8 @@ public  =U/materialize
 public  mz_system=UC/mz_system
 public  materialize=UC/mz_system
 public  materialize=UC/materialize
+public  mz_introspection=U/mz_system
+public  mz_introspection=U/materialize
 
 statement ok
 CREATE SCHEMA sch;
@@ -346,6 +372,7 @@ query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 # Changing the owner of an object should change the grantor of all privileges to the new owner and
 # transfer the privileges of the old owner to the new owner.
@@ -435,6 +462,7 @@ query TT
 SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=UC/joe
+c  mz_introspection=U/joe
 
 simple conn=mz_system,user=mz_system
 ALTER DATABASE d OWNER TO joe
@@ -445,6 +473,7 @@ query TT
 SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  joe=UC/joe
+d  mz_introspection=U/joe
 
 simple conn=mz_system,user=mz_system
 ALTER SCHEMA sch OWNER TO joe
@@ -455,6 +484,7 @@ query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=UC/joe
+sch  mz_introspection=U/joe
 
 ## Switch the owners back to materialize
 
@@ -1482,6 +1512,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1502,6 +1533,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on CLUSTER c TO PUBLIC
@@ -1512,6 +1544,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 c  =UC/materialize
 c  joe=U/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 simple conn=joe8,user=joe
 GRANT USAGE on CLUSTER c TO other
@@ -1529,6 +1562,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1549,6 +1583,7 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1563,6 +1598,7 @@ query TT
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for CLUSTER
 GRANT INSERT, SELECT, UPDATE, DELETE ON CLUSTER c TO joe
@@ -1597,6 +1633,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -1627,6 +1664,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on DATABASE d TO PUBLIC
@@ -1637,6 +1675,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 d  =UC/materialize
 d  joe=U/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 simple conn=joe9,user=joe
 GRANT USAGE on DATABASE d TO other
@@ -1654,6 +1693,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -1684,6 +1724,7 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1698,6 +1739,7 @@ query TT
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for DATABASE
 GRANT INSERT, SELECT, UPDATE, DELETE ON DATABASE d TO joe
@@ -1732,6 +1774,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -1762,6 +1805,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on SCHEMA sch TO PUBLIC
@@ -1772,6 +1816,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 sch  =UC/materialize
 sch  joe=U/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 simple conn=joe10,user=joe
 GRANT USAGE on SCHEMA sch TO other
@@ -1789,6 +1834,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -1819,6 +1865,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1833,8 +1880,14 @@ query TT
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 ## System
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
+----
+COMPLETE 0
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -1846,8 +1899,10 @@ SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREA
 ----
 false
 
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEDB ON SYSTEM TO joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1866,8 +1921,10 @@ SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREA
 true
 
 ### Duplicate grants have no effect
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEDB ON SYSTEM TO joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1875,8 +1932,10 @@ SELECT privileges::text FROM mz_system_privileges
 joe=B/mz_system
 mz_system=RBN/mz_system
 
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO PUBLIC
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1888,8 +1947,10 @@ mz_system=RBN/mz_system
 statement error role "joe" cannot be dropped because some objects depend on it
 DROP ROLE joe
 
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1908,8 +1969,10 @@ SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREA
 false
 
 ### Duplicate revokes have no effect
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -1923,8 +1986,10 @@ DROP ROLE joe
 statement ok
 CREATE ROLE joe
 
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEROLE, CREATECLUSTER ON SYSTEM FROM PUBLIC
+----
+COMPLETE 0
 
 query T
 SELECT privileges::text FROM mz_system_privileges
@@ -3119,22 +3184,22 @@ CREATE SECRET d2.s2.se4 AS decode('c2VjcmV0Cg==', 'base64');
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d1.s1.conn1 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.conn1 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d1.s1.conn2 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.conn2 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d2.s2.conn3 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.conn3 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d2.s2.conn4 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.conn4 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 

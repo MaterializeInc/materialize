@@ -40,9 +40,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::storage::stash::{
-    DEPLOY_GENERATION, SYSTEM_PRIVILEGES_COLLECTION, USER_VERSION,
-};
+use crate::catalog::storage::stash::{DEPLOY_GENERATION, USER_VERSION};
 use crate::catalog::{
     self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
@@ -53,12 +51,12 @@ use crate::coord::timeline;
 pub mod objects;
 pub mod stash;
 
-use crate::catalog::storage::stash::DEFAULT_PRIVILEGES_COLLECTION;
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION, ID_ALLOCATOR_COLLECTION,
-    ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION, SETTING_COLLECTION,
-    STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION,
+    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
+    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
+    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
     TIMESTAMP_COLLECTION,
 };
 
@@ -159,6 +157,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: bootstrap_args.default_availability_zone.clone(),
             az_user_specified: false,
+            disk: false,
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
@@ -363,8 +362,8 @@ impl Connection {
             .map_ok(|(k, v): (RoleKey, RoleValue)| Role {
                 id: k.id,
                 name: v.role.name,
-                attributes: v.role.attributes.expect("attributes not migrated"),
-                membership: v.role.membership.expect("membership not migrated"),
+                attributes: v.role.attributes,
+                membership: v.role.membership,
             })
             .collect::<Result<_, _>>()?;
 
@@ -545,7 +544,13 @@ impl Connection {
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, _): (SystemPrivilegesKey, ())| k.privileges)
+            .map_ok(
+                |(k, v): (SystemPrivilegesKey, SystemPrivilegesValue)| MzAclItem {
+                    grantee: k.grantee,
+                    grantor: k.grantor,
+                    acl_mode: v.acl_mode,
+                },
+            )
             .collect::<Result<_, _>>()?)
     }
 
@@ -911,7 +916,7 @@ pub struct Transaction<'a> {
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
-    system_privileges: TableTransaction<SystemPrivilegesKey, ()>,
+    system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     // Don't make this a table transaction so that it's not read into the stash
     // memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -1663,6 +1668,20 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Set persisted system privilege.
+    pub fn set_system_privilege(
+        &mut self,
+        grantee: RoleId,
+        grantor: RoleId,
+        acl_mode: Option<AclMode>,
+    ) -> Result<(), Error> {
+        self.system_privileges.set(
+            SystemPrivilegesKey { grantee, grantor },
+            acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
+        )?;
+        Ok(())
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {
@@ -1886,6 +1905,7 @@ pub struct ClusterReplica {
     pub owner_id: RoleId,
 }
 
+#[derive(Debug)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
@@ -2073,7 +2093,13 @@ pub struct DefaultPrivilegesValue {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesKey {
-    privileges: MzAclItem,
+    grantee: RoleId,
+    grantor: RoleId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SystemPrivilegesValue {
+    acl_mode: AclMode,
 }
 
 pub const ALL_COLLECTIONS: &[&str] = &[
@@ -2083,6 +2109,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     CLUSTER_REPLICA_COLLECTION.name(),
     CONFIG_COLLECTION.name(),
     DATABASES_COLLECTION.name(),
+    DEFAULT_PRIVILEGES_COLLECTION.name(),
     ID_ALLOCATOR_COLLECTION.name(),
     ITEM_COLLECTION.name(),
     ROLES_COLLECTION.name(),
@@ -2091,9 +2118,8 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     STORAGE_USAGE_COLLECTION.name(),
     SYSTEM_CONFIGURATION_COLLECTION.name(),
     SYSTEM_GID_MAPPING_COLLECTION.name(),
-    TIMESTAMP_COLLECTION.name(),
-    DEFAULT_PRIVILEGES_COLLECTION.name(),
     SYSTEM_PRIVILEGES_COLLECTION.name(),
+    TIMESTAMP_COLLECTION.name(),
 ];
 
 #[cfg(test)]
@@ -2105,6 +2131,7 @@ mod test {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_database_key_roundtrip(key: DatabaseKey) {
             let proto = key.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2113,6 +2140,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_database_value_roundtrip(value: DatabaseValue) {
             let proto = value.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2121,6 +2149,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_schema_key_roundtrip(key: SchemaKey) {
             let proto = key.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2129,6 +2158,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_schema_value_roundtrip(value: SchemaValue) {
             let proto = value.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2137,6 +2167,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_item_key_roundtrip(key: ItemKey) {
             let proto = key.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2145,6 +2176,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_item_value_roundtrip(value: ItemValue) {
             let proto = value.into_proto();
             let round = proto.into_rust().expect("to roundtrip");

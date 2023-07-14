@@ -144,11 +144,11 @@ async fn report_loop(
                             SELECT jsonb_object_agg(base.size, coalesce(count, 0))
                             FROM mz_internal.mz_cluster_replica_sizes base
                             LEFT JOIN (
-                                SELECT size, count(*)::int4
+                                SELECT r.size, count(*)::int4
                                 FROM mz_cluster_replicas r
                                 JOIN mz_clusters c ON c.id = r.cluster_id
                                 WHERE c.id LIKE 'u%'
-                                GROUP BY size
+                                GROUP BY r.size
                             ) extant ON base.size = extant.size
                         ),
                         'active_confluent_schema_registry_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'confluent-schema-registry')::int4,

@@ -11,9 +11,9 @@ mode cockroach
 
 reset-server
 
-# Give materialize the CREATEROLE attribute.
+# Give materialize the CREATEROLE system privilege.
 simple conn=mz_system,user=mz_system
-ALTER ROLE materialize CREATEROLE;
+GRANT CREATEROLE ON SYSTEM TO materialize;
 ----
 COMPLETE 0
 

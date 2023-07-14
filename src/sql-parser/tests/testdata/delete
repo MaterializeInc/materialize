@@ -30,6 +30,20 @@ DELETE FROM table
 =>
 Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("table")])), alias: None, using: [], selection: None })
 
+parse-statement
+DELETE FROM table as t2
+----
+DELETE FROM table AS t2
+=>
+Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("table")])), alias: Some(TableAlias { name: Ident("t2"), columns: [], strict: false }), using: [], selection: None })
+
+parse-statement
+DELETE FROM table USING a, b
+----
+DELETE FROM table USING a, b
+=>
+Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("table")])), alias: None, using: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }, TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("b")])), alias: None }, joins: [] }], selection: None })
+
 parse-statement roundtrip
 DELETE FROM foo WHERE name = 5
 ----

@@ -17,6 +17,7 @@ use mz_controller::clusters::{
     ClusterId, CreateReplicaConfig, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
     DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
+use mz_ore::cast::CastFrom;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{
@@ -24,6 +25,7 @@ use mz_sql::plan::{
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
+use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 use rand::seq::SliceRandom;
 
 use crate::catalog::{
@@ -124,6 +126,7 @@ impl Coordinator {
                     logging: logging.into(),
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
+                    disk: plan.disk,
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -161,6 +164,7 @@ impl Coordinator {
             compute,
             replication_factor,
             size,
+            disk,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,
@@ -181,6 +185,18 @@ impl Coordinator {
         self.catalog
             .ensure_valid_replica_size(allowed_replica_sizes, &size)?;
 
+        // Eagerly validate the `max_replicas_per_cluster` limit.
+        // `catalog_transact` will do this validation too, but allocating
+        // replica IDs is expensive enough that we need to do this validation
+        // before allocating replica IDs. See #20195.
+        self.validate_resource_limit(
+            0,
+            i64::from(replication_factor),
+            SystemVars::max_replicas_per_cluster,
+            "cluster replica",
+            MAX_REPLICAS_PER_CLUSTER.name(),
+        )?;
+
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             let id = self.catalog_mut().allocate_replica_id().await?;
             self.create_managed_cluster_replica_op(
@@ -193,6 +209,7 @@ impl Coordinator {
                 &size,
                 &mut ops,
                 &mut az_helper,
+                disk,
             )?;
         }
 
@@ -214,12 +231,14 @@ impl Coordinator {
         size: &String,
         ops: &mut Vec<Op>,
         az_helper: &mut AzHelper,
+        disk: bool,
     ) -> Result<(), AdapterError> {
         let availability_zone = az_helper.choose_az_and_increment();
         let location = SerializedReplicaLocation::Managed {
             size: size.clone(),
             availability_zone,
             az_user_specified,
+            disk,
         };
 
         let logging = if let Some(config) = compute.introspection {
@@ -282,6 +301,18 @@ impl Coordinator {
             }
         }
 
+        // Eagerly validate the `max_replicas_per_cluster` limit.
+        // `catalog_transact` will do this validation too, but allocating
+        // replica IDs is expensive enough that we need to do this validation
+        // before allocating replica IDs. See #20195.
+        self.validate_resource_limit(
+            0,
+            i64::try_from(replicas.len()).unwrap_or(i64::MAX),
+            SystemVars::max_replicas_per_cluster,
+            "cluster replica",
+            MAX_REPLICAS_PER_CLUSTER.name(),
+        )?;
+
         for (replica_name, replica_config) in replicas {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
@@ -307,6 +338,7 @@ impl Coordinator {
                     size,
                     availability_zone,
                     compute,
+                    disk,
                 } => {
                     let (availability_zone, user_specified) = availability_zone
                         .map(|az| (az, true))
@@ -315,6 +347,7 @@ impl Coordinator {
                         size: size.clone(),
                         availability_zone,
                         az_user_specified: user_specified,
+                        disk,
                     };
                     (compute, location)
                 }
@@ -426,6 +459,7 @@ impl Coordinator {
                 size,
                 availability_zone,
                 compute,
+                disk,
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
@@ -458,6 +492,7 @@ impl Coordinator {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
+                    disk,
                 };
                 (compute, location)
             }
@@ -549,8 +584,9 @@ impl Coordinator {
             | (Unmanaged, AlterOptionParameter::Set(true)) => {
                 // Generate a minimal correct configuration
 
-                // Size adjusted later when sequencing the actual configuration change.
+                // Size and disk adjusted later when sequencing the actual configuration change.
                 let size = "".to_string();
+                let disk = false;
                 let logging = ReplicaLogging {
                     log_logging: false,
                     interval: Some(Duration::from_micros(
@@ -563,6 +599,7 @@ impl Coordinator {
                     logging: logging.into(),
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
+                    disk,
                 });
             }
         }
@@ -574,11 +611,17 @@ impl Coordinator {
                 logging,
                 idle_arrangement_merge_effort,
                 replication_factor,
+                disk,
             }) => {
                 use AlterOptionParameter::*;
                 match &options.size {
                     Set(s) => *size = s.clone(),
                     Reset => coord_bail!("SIZE has no default value"),
+                    Unchanged => {}
+                }
+                match &options.disk {
+                    Set(d) => *disk = *d,
+                    Reset => *disk = self.catalog.system_config().disk_cluster_replicas_default(),
                     Unchanged => {}
                 }
                 match &options.availability_zones {
@@ -695,6 +738,7 @@ impl Coordinator {
                 availability_zones,
                 logging,
                 idle_arrangement_merge_effort,
+                disk,
             },
             ClusterVariantManaged {
                 size: new_size,
@@ -702,6 +746,7 @@ impl Coordinator {
                 availability_zones: new_availability_zones,
                 logging: new_logging,
                 idle_arrangement_merge_effort: new_idle_arrangement_merge_effort,
+                disk: new_disk,
             },
         ) = (&config, &new_config);
 
@@ -730,10 +775,25 @@ impl Coordinator {
                 }),
         };
 
+        // Eagerly validate the `max_replicas_per_cluster` limit.
+        // `catalog_transact` will do this validation too, but allocating
+        // replica IDs is expensive enough that we need to do this validation
+        // before allocating replica IDs. See #20195.
+        if new_replication_factor > replication_factor {
+            self.validate_resource_limit(
+                usize::cast_from(*replication_factor),
+                i64::from(*new_replication_factor) - i64::from(*replication_factor),
+                SystemVars::max_replicas_per_cluster,
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+        }
+
         if new_size != size
             || new_availability_zones != availability_zones
             || new_idle_arrangement_merge_effort != idle_arrangement_merge_effort
             || new_logging != logging
+            || new_disk != disk
         {
             // tear down all replicas, create new ones
             for name in (0..*replication_factor).map(managed_cluster_replica_name) {
@@ -757,6 +817,7 @@ impl Coordinator {
                     new_size,
                     &mut ops,
                     &mut az_helper,
+                    *new_disk,
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
@@ -798,6 +859,7 @@ impl Coordinator {
                     new_size,
                     &mut ops,
                     &mut az_helper,
+                    *new_disk,
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
@@ -831,6 +893,7 @@ impl Coordinator {
             availability_zones: _,
             logging: _,
             idle_arrangement_merge_effort: _,
+            disk: new_disk,
         } = &mut new_config;
 
         // Validate replication factor parameter
@@ -850,6 +913,7 @@ impl Coordinator {
 
         let mut names = BTreeSet::new();
         let mut sizes = BTreeSet::new();
+        let mut disks = BTreeSet::new();
 
         // Validate per-replica configuration
         for replica in cluster.replicas_by_id.values() {
@@ -860,6 +924,7 @@ impl Coordinator {
                 ),
                 ReplicaLocation::Managed(location) => {
                     sizes.insert(location.size.clone());
+                    disks.insert(location.disk);
                 }
             }
         }
@@ -907,6 +972,22 @@ impl Coordinator {
                 .join(", ");
             coord_bail!(
                 "Cannot convert unmanaged cluster to managed, invalid replica names: {formatted}"
+            );
+        }
+
+        if disks.len() == 1 {
+            let disk = disks.into_iter().next().expect("must exist");
+            match &options.disk {
+                AlterOptionParameter::Set(ds) if *ds != disk => {
+                    coord_bail!(
+                        "Cluster replicas with DISK {disk} do not match expected DISK {ds}"
+                    );
+                }
+                _ => *new_disk = disk,
+            }
+        } else if !disks.is_empty() {
+            coord_bail!(
+                "Cannot convert unmanaged cluster to managed, non-unique replica DISK options"
             );
         }
 

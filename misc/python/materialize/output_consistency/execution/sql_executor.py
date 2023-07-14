@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
@@ -57,12 +57,11 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         connection.autocommit = use_autocommit
         self.cursor = connection.cursor()
         self.output_printer = output_printer
+        self.last_started_query: Optional[str] = None
+        self.last_completed_query: Optional[str] = None
 
     def ddl(self, sql: str) -> None:
-        try:
-            self.cursor.execute(sql)
-        except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(self._extract_message_from_error(err))
+        self._execute_with_cursor(sql)
 
     def begin_tx(self, isolation_level: str) -> None:
         self._execute_with_cursor(f"BEGIN ISOLATION LEVEL {isolation_level};")
@@ -82,7 +81,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
 
     def _execute_with_cursor(self, sql: str) -> None:
         try:
+            self.last_started_query = sql
             self.cursor.execute(sql)
+            self.last_completed_query = sql
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(self._extract_message_from_error(err))
         except ValueError as err:
@@ -90,6 +91,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             raise err
         except InterfaceError:
             print("A network error occurred! Aborting!")
+            # The current or previous query might have broken the database.
+            print(f"Last started query: {self.last_started_query}")
+            print(f"Last completed query: {self.last_completed_query}")
             exit(1)
         except Exception:
             self.output_printer.print_error(f"Query with unexpected error is: {sql}")

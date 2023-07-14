@@ -79,7 +79,15 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use anyhow::{Context, Result};
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use mz_ore::retry::Retry;
+use once_cell::sync::Lazy;
+use secrets::SecretCommand;
+use serde::Deserialize;
+use utils::{ascii_validator, new_client};
+
 use mz::api::{
     disable_region_environment, enable_region_environment, get_provider_by_region_name,
     get_provider_region_environment, get_region_environment, list_cloud_providers, list_regions,
@@ -89,16 +97,12 @@ use mz::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use mz::vault::Vault;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::CliConfig;
-use once_cell::sync::Lazy;
-use secrets::SecretCommand;
-use serde::Deserialize;
-use utils::{ascii_validator, new_client};
 
 use crate::login::{generate_api_token, login_with_browser, login_with_console};
 use crate::password::list_passwords;
 use crate::region::{print_environment_status, print_region_enabled};
 use crate::shell::{check_environment_health, shell};
-use crate::utils::run_loading_spinner;
+use crate::utils::{parse_timeout, run_loading_spinner};
 
 use self::clap_clippy_hack::*;
 
@@ -208,6 +212,12 @@ mod clap_clippy_hack {
             version: Option<String>,
             #[clap(long, hide = true)]
             environmentd_extra_arg: Vec<String>,
+            #[clap(short, long)]
+            /// Skips checking that the region is healthy after enabling it
+            no_wait_healthy: bool,
+            #[clap(short, long, parse(try_from_str = parse_timeout), default_value = "360")]
+            /// Sets a timeout in seconds to wait the region to be healthy.
+            timeout: std::time::Duration,
         },
         /// Disable a region.
         #[clap(hide = true)]
@@ -328,6 +338,8 @@ async fn main() -> Result<()> {
                 cloud_provider_region,
                 version,
                 environmentd_extra_arg,
+                no_wait_healthy,
+                timeout,
             } => {
                 let mut profile = config.get_profile()?;
 
@@ -349,20 +361,30 @@ async fn main() -> Result<()> {
                 .await
                 .with_context(|| "Enabling region.")?;
 
-                loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
+                if !no_wait_healthy {
+                    Retry::default()
+                        .max_duration(timeout)
+                        .clamp_backoff(Duration::from_secs(1))
+                        .retry_async(|_| async {
+                            let environment =
+                                get_region_environment(&client, &valid_profile, &region)
+                                    .await
+                                    .with_context(|| "Retrieving environment data.")?;
+                            if !environment.resolvable {
+                                bail!(String::from("Timeout expired enabling region."));
+                            }
 
-                let health_spinner =
-                    run_loading_spinner("Waiting for region to come online...".to_string());
-                loop {
-                    let environment = get_region_environment(&client, &valid_profile, &region)
+                            loop {
+                                if check_environment_health(&valid_profile, &environment)? {
+                                    break Ok(environment);
+                                }
+                            }
+                        })
                         .await
                         .with_context(|| "Retrieving environment data.")?;
-                    if check_environment_health(&valid_profile, &environment)? {
-                        break;
-                    }
                 }
 
-                health_spinner.finish_with_message(format!("{cloud_provider_region} is online"));
+                loading_spinner.finish_with_message(format!("{cloud_provider_region} is online"));
                 profile.set_default_region(cloud_provider_region);
             }
 

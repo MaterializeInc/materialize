@@ -71,7 +71,7 @@ first second
 
 # Confirm we cannot drop the connection while a source depends upon it
 ! DROP CONNECTION testconn;
-contains:depended upon by catalog item 'materialize.public.connection_source'
+contains:depended upon by source connection_source
 
 # Confirm the drop works if we add cascade
 > DROP CONNECTION testconn CASCADE;
@@ -163,7 +163,7 @@ id creature
 1  lizard
 
 ! DROP CONNECTION csr_conn
-contains:depended upon by catalog item 'materialize.public.csr_source'
+contains:depended upon by source csr_source
 
 > DROP CONNECTION csr_conn CASCADE
 

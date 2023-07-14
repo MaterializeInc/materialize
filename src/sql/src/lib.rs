@@ -149,10 +149,19 @@ macro_rules! bail_unsupported {
 }
 
 macro_rules! bail_never_supported {
+    ($feature:expr, $docs:expr, $details:expr) => {
+        return Err(crate::plan::error::PlanError::NeverSupported {
+            feature: $feature.to_string(),
+            documentation_link: $docs.to_string(),
+            details: Some($details.to_string()),
+        }
+        .into())
+    };
     ($feature:expr, $docs:expr) => {
         return Err(crate::plan::error::PlanError::NeverSupported {
             feature: $feature.to_string(),
             documentation_link: $docs.to_string(),
+            details: None,
         }
         .into())
     };

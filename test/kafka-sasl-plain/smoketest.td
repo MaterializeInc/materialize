@@ -67,16 +67,12 @@ $ kafka-verify-data format=avro sink=materialize.public.data_snk sort-messages=t
 {"before": null, "after": {"row": {"a": 2}}}
 
 # Ensure that connectors do not require the certificate authority
-> CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
+# This ensures that the error is not that the CA was required, but simply that
+# not providing it prohibits connecting.
+! CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN',
     SASL USERNAME = 'materialize',
     SASL PASSWORD = SECRET sasl_password
   );
-
-# This ensures that the error is not that the CA was required, but simply that
-# not providing it prohibits connecting.
-! CREATE SOURCE connector_source
-  FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)

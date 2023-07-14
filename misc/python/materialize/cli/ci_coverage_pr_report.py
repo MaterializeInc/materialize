@@ -28,8 +28,15 @@ SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )
 # Deriving generates more code, but we don't expect to cover this in most
-# cases, so ignore such lines.
-IGNORE_RE = re.compile(r"#\[derive\(.*\)\]")
+# cases, so ignore such lines. Same for mz_ore::test
+IGNORE_RE = re.compile(
+    r"""
+    ( #\[derive\(.*\)\]
+    | #\[mz_ore::test.*\]
+    )
+    """,
+    re.VERBOSE,
+)
 
 
 def find_modified_lines() -> Coverage:
@@ -247,7 +254,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         )
     else:
         test_case.add_error_info(
-            message="All changed lines are covered outside of unit tests."
+            message="All changed, covered lines are covered outside of unit tests."
         )
     test_cases.append(test_case)
 

@@ -23,9 +23,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
+    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
+    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -314,6 +314,17 @@ pub fn create_statement(
             *if_not_exists = false;
         }
 
+        Statement::CreateWebhookSource(CreateWebhookSourceStatement {
+            name,
+            if_not_exists,
+            include_headers: _,
+            body_format: _,
+            validate_using: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+
         Statement::CreateSink(CreateSinkStatement {
             name,
             in_cluster: _,
@@ -409,6 +420,7 @@ pub fn create_statement(
         Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection: _,
+            with_options: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;

@@ -43,6 +43,7 @@ mod raise;
 mod scl;
 pub(crate) mod show;
 mod tcl;
+mod validate;
 
 pub(crate) use ddl::PgConfigOptionExtracted;
 use mz_repr::role_id::RoleId;
@@ -133,6 +134,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
@@ -218,6 +220,7 @@ pub fn describe(
         Statement::Show(ShowStatement::InspectShard(stmt)) => {
             scl::describe_inspect_shard(&scx, stmt)?
         }
+        Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -279,6 +282,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
@@ -354,6 +358,7 @@ pub fn plan(
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
+        Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
     };
 
     if let Ok(plan) = &plan {

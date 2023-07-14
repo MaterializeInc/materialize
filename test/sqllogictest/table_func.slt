@@ -1310,8 +1310,19 @@ query I
 SELECT generate_subscripts('{1,2,3,4}'::int[], 12345) AS s;
 ----
 
-query error parsing multi-dimensional arrays is not supported
+query T
 SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
+----
+1
+2
+
+query T
+SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 2) AS s;
+----
+1
+2
+3
+4
 
 query error table functions are not allowed in other table functions
 SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series(1, 1)) AS s

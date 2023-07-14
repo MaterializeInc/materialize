@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of AVAILABILITY or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -34,8 +34,18 @@ ALTER CLUSTER foo RENAME TO bar
 statement error unknown cluster 'foo'
 ALTER CLUSTER foo RENAME TO bar
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement error db error: ERROR: system cluster 'mz_introspection' cannot be modified
 ALTER CLUSTER mz_introspection RENAME TO foo
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 statement ok
 ALTER CLUSTER IF EXISTS bar RENAME TO foo
@@ -528,7 +538,7 @@ statement ok
 SET cluster = empty
 
 query error CLUSTER "empty" has no replicas available to service request
-SELECT 1;
+SELECT generate_series(1, 1);
 
 
 # Phillip's tests

@@ -853,7 +853,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn sanity_check() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -957,6 +956,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn invalid_usage() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1401,7 +1401,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1786,7 +1785,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn concurrency() {
         let data = DataGenerator::small();
 
@@ -1884,7 +1883,6 @@ mod tests {
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_blocking_reads() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -1956,7 +1954,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
@@ -2018,6 +2015,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());

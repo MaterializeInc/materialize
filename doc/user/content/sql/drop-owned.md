@@ -34,6 +34,14 @@ DROP OWNED BY joe;
 DROP OWNED BY joe, george CASCADE;
 ```
 
+## Privileges
+
+{{< private-preview />}}
+
+The privileges required to execute this statement are:
+
+- Role membership in `role_name`.
+
 ## Related pages
 
 - [REVOKE PRIVILEGE](../revoke-privilege)

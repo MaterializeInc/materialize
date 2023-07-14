@@ -97,6 +97,13 @@ START TRANSACTION ISOLATION LEVEL SERIALIZABLE
 StartTransaction(StartTransactionStatement { modes: [IsolationLevel(Serializable)] })
 
 parse-statement
+START TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+----
+START TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+=>
+StartTransaction(StartTransactionStatement { modes: [IsolationLevel(StrictSerializable)] })
+
+parse-statement
 START TRANSACTION ISOLATION LEVEL BAD
 ----
 error: Expected isolation level, found identifier "bad"
@@ -256,3 +263,38 @@ ROLLBACK TRANSACTION
 ROLLBACK
 =>
 Rollback(RollbackStatement { chain: false })
+
+parse-statement
+RAISE DEBUG
+----
+RAISE DEBUG
+=>
+Raise(RaiseStatement { severity: Debug })
+
+parse-statement
+RAISE INFO
+----
+RAISE INFO
+=>
+Raise(RaiseStatement { severity: Info })
+
+parse-statement
+RAISE LOG
+----
+RAISE LOG
+=>
+Raise(RaiseStatement { severity: Log })
+
+parse-statement
+RAISE NOTICE
+----
+RAISE NOTICE
+=>
+Raise(RaiseStatement { severity: Notice })
+
+parse-statement
+RAISE WARNING
+----
+RAISE WARNING
+=>
+Raise(RaiseStatement { severity: Warning })

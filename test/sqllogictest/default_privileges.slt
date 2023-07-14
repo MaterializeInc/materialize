@@ -22,12 +22,20 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 # Test pre-populated default privileges
 
 query TTTTTT
 SELECT * FROM mz_default_privileges
 ----
-p  NULL  NULL  TYPE  p  U
+p  NULL  NULL  TYPE      p   U
+p  NULL  NULL  SCHEMA    s2  U
+p  NULL  NULL  CLUSTER   s2  U
+p  NULL  NULL  DATABASE  s2  U
 
 statement ok
 CREATE TYPE ty AS LIST (ELEMENT TYPE = int4);
@@ -56,6 +64,7 @@ LEFT JOIN mz_roles AS roles ON defaults.role_id = roles.id
 LEFT JOIN mz_roles AS grantees ON defaults.grantee = grantees.id
 LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
 LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
+WHERE grantees.name IS NULL OR grantees.name <> 'mz_introspection'
 ORDER BY role_name, grantee_name
 
 # Test altering default privileges
@@ -97,22 +106,42 @@ statement ok
 CREATE ROLE r5
 
 statement ok
-CREATE ROLE r6 CREATECLUSTER CREATEDB
+CREATE ROLE r6
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r6;
+----
+COMPLETE 0
 
 statement ok
-CREATE ROLE r7 CREATECLUSTER CREATEDB
+CREATE ROLE r7
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r7;
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE r8
 
 statement ok
-CREATE ROLE r9 CREATECLUSTER CREATEDB
+CREATE ROLE r9
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r9;
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE r10
 
 statement ok
-CREATE ROLE r11 CREATECLUSTER CREATEDB
+CREATE ROLE r11
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER, CREATEDB ON SYSTEM TO r11;
+----
+COMPLETE 0
 
 statement ok
 CREATE ROLE r12
@@ -3331,7 +3360,7 @@ materialize  d1    s1    CONNECTION  r5      U
 materialize  d2    s2    CONNECTION  r5      U
 
 statement ok
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3346,7 +3375,7 @@ statement ok
 DROP CONNECTION c
 
 statement ok
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3362,7 +3391,7 @@ statement ok
 DROP CONNECTION d1.s11.c
 
 statement ok
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3378,7 +3407,7 @@ statement ok
 DROP CONNECTION d2.s22.c
 
 statement ok
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3395,7 +3424,7 @@ statement ok
 DROP CONNECTION d1.s1.c
 
 statement ok
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3412,7 +3441,7 @@ statement ok
 DROP CONNECTION d2.s2.c
 
 simple conn=r6,user=r6
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3428,7 +3457,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3444,7 +3473,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3460,7 +3489,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3476,7 +3505,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3492,7 +3521,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3507,7 +3536,7 @@ DROP CONNECTION d1.s11.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3523,7 +3552,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3652,7 +3681,7 @@ SELECT * FROM default_privileges
 PUBLIC       NULL  NULL  TYPE        PUBLIC  U
 
 statement ok
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3663,7 +3692,7 @@ statement ok
 DROP CONNECTION c
 
 statement ok
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3674,7 +3703,7 @@ statement ok
 DROP CONNECTION d1.s11.c
 
 statement ok
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3685,7 +3714,7 @@ statement ok
 DROP CONNECTION d2.s22.c
 
 statement ok
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3696,7 +3725,7 @@ statement ok
 DROP CONNECTION d1.s1.c
 
 statement ok
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3707,7 +3736,7 @@ statement ok
 DROP CONNECTION d2.s2.c
 
 simple conn=r6,user=r6
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3722,7 +3751,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3737,7 +3766,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3752,7 +3781,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3767,7 +3796,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3782,7 +3811,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3797,7 +3826,7 @@ DROP CONNECTION d1.s11.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3812,7 +3841,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3943,6 +3972,7 @@ sch  r2=U/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP SCHEMA sch
@@ -3959,6 +3989,7 @@ sch  r4=C/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP SCHEMA d1.sch
@@ -3975,6 +4006,7 @@ sch  r4=C/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP SCHEMA d2.sch
@@ -3989,6 +4021,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r8=C/r6
 sch  r6=UC/r6
+sch  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP SCHEMA materialize.sch
@@ -4005,6 +4038,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r8=C/r7
 sch  r7=UC/r7
+sch  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP SCHEMA materialize.sch
@@ -4021,6 +4055,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r10=C/r9
 sch  r9=UC/r9
+sch  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d1.sch
@@ -4037,6 +4072,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r10=C/r9
 sch  r9=UC/r9
+sch  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d2.sch
@@ -4138,6 +4174,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP SCHEMA sch
@@ -4149,6 +4186,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP SCHEMA d1.sch
@@ -4160,6 +4198,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
+sch  mz_introspection=U/materialize
 
 statement ok
 DROP SCHEMA d2.sch
@@ -4173,6 +4212,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r6=UC/r6
+sch  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP SCHEMA materialize.sch
@@ -4188,6 +4228,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r7=UC/r7
+sch  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP SCHEMA materialize.sch
@@ -4203,6 +4244,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r9=UC/r9
+sch  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d1.sch
@@ -4218,6 +4260,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r9=UC/r9
+sch  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d2.sch
@@ -4301,6 +4344,7 @@ d  r2=U/materialize
 d  r1=UC/materialize
 d  r3=UC/materialize
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement ok
 DROP DATABASE d
@@ -4315,6 +4359,7 @@ SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r8=C/r6
 d  r6=UC/r6
+d  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP DATABASE d
@@ -4331,6 +4376,7 @@ SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r8=C/r7
 d  r7=UC/r7
+d  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP DATABASE d
@@ -4346,6 +4392,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r9=UC/r9
+d  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP DATABASE d
@@ -4413,6 +4460,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  materialize=UC/materialize
+d  mz_introspection=U/materialize
 
 statement ok
 DROP DATABASE d
@@ -4426,6 +4474,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r6=UC/r6
+d  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP DATABASE d
@@ -4441,6 +4490,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r7=UC/r7
+d  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP DATABASE d
@@ -4456,6 +4506,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r9=UC/r9
+d  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP DATABASE d
@@ -4539,6 +4590,7 @@ c  r2=U/materialize
 c  r1=UC/materialize
 c  r3=UC/materialize
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4553,6 +4605,7 @@ SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r6
 c  r6=UC/r6
+c  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4569,6 +4622,7 @@ SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r7
 c  r7=UC/r7
+c  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4584,6 +4638,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
+c  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -4651,6 +4706,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  materialize=UC/materialize
+c  mz_introspection=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4664,6 +4720,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r6=UC/r6
+c  mz_introspection=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4679,6 +4736,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r7=UC/r7
+c  mz_introspection=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4694,6 +4752,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
+c  mz_introspection=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -4740,8 +4799,18 @@ DROP ROLE r4
 statement ok
 DROP ROLE r5
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r6;
+----
+COMPLETE 0
+
 statement ok
 DROP ROLE r6
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r7;
+----
+COMPLETE 0
 
 statement ok
 DROP ROLE r7
@@ -4749,11 +4818,21 @@ DROP ROLE r7
 statement ok
 DROP ROLE r8
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r9;
+----
+COMPLETE 0
+
 statement ok
 DROP ROLE r9
 
 statement ok
 DROP ROLE r10
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER, CREATEDB ON SYSTEM FROM r11;
+----
+COMPLETE 0
 
 statement ok
 DROP ROLE r11
@@ -5033,6 +5112,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
 
 statement error role name "mz_system" is reserved
 ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO mz_system
+
+statement error role name "mz_introspection" is reserved
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CLUSTERS FROM mz_introspection
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system

@@ -10,17 +10,20 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_expr::EvalError;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::ScalarType;
+use mz_repr::{Datum, RowArena, ScalarType};
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
+use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
@@ -31,14 +34,18 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    Canceled, Command, ExecuteResponse, GetVariablesResponse, Response, StartupMessage,
-    StartupResponse,
+    AppendWebhookResponse, AppendWebhookValidation, Canceled, Command, ExecuteResponse,
+    GetVariablesResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
+use crate::coord::{
+    ConnMeta, Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message,
+    PendingTxn,
+};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
@@ -71,6 +78,10 @@ impl Coordinator {
             Command::CopyRows { tx, session, .. } => send(tx, session, e),
             Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
             Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::AppendWebhook { tx, .. } => {
+                // We don't care if our listener went away.
+                let _ = tx.send(Err(e));
+            }
             Command::Terminate { tx, session, .. } => {
                 if let Some(tx) = tx {
                     send(tx, session, e)
@@ -177,9 +188,19 @@ impl Coordinator {
                 self.sequence_plan(
                     ctx,
                     Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
-                    Vec::new(),
+                    ResolvedIds(BTreeSet::new()),
                 )
                 .await;
+            }
+
+            Command::AppendWebhook {
+                database,
+                schema,
+                name,
+                conn_id,
+                tx,
+            } => {
+                self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
             Command::GetSystemVars { session, tx } => {
@@ -253,7 +274,8 @@ impl Coordinator {
                         })
                     }
                 };
-                self.sequence_plan(ctx, plan, Vec::new()).await;
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await;
             }
 
             Command::VerifyPreparedStatement {
@@ -521,6 +543,7 @@ impl Coordinator {
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
+                    | Statement::CreateWebhookSource(_)
                     | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
@@ -537,6 +560,7 @@ impl Coordinator {
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
+                    | Statement::ValidateConnection(_)
                     | Statement::ReassignOwned(_) => {
                         return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
                             stmt.to_string(),
@@ -549,11 +573,10 @@ impl Coordinator {
         let catalog = self.catalog();
         let catalog = catalog.for_session(ctx.session());
         let original_stmt = stmt.clone();
-        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = depends_on.into_iter().collect();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
@@ -581,7 +604,7 @@ impl Coordinator {
                             ctx,
                             result,
                             params,
-                            depends_on,
+                            resolved_ids,
                             original_stmt,
                             otel_ctx,
                         },
@@ -598,9 +621,55 @@ impl Coordinator {
                 "CREATE SUBSOURCE statements",
             ))),
 
+            // `CREATE CONNECTION` statements might need validation which happens off the main
+            // coordinator thread of control.
+            stmt @ Statement::CreateConnection(_) => {
+                let plan = match self.plan_statement(ctx.session_mut(), stmt, &params) {
+                    Ok(Plan::CreateConnection(plan)) => plan,
+                    Ok(_) => unreachable!(),
+                    Err(e) => {
+                        ctx.retire(Err(e));
+                        return;
+                    }
+                };
+
+                if plan.validate {
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    let conn_id = ctx.session().conn_id().clone();
+                    let connection_context = self.connection_context.clone();
+                    let otel_ctx = OpenTelemetryContext::obtain();
+                    task::spawn(|| format!("validate_connection:{conn_id}"), async move {
+                        let connection = &plan.connection.connection;
+                        let result = match connection.validate(&connection_context).await {
+                            Ok(()) => Ok(plan),
+                            Err(err) => Err(err.into()),
+                        };
+
+                        // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                        let result =
+                            internal_cmd_tx.send(Message::CreateConnectionValidationReady(
+                                CreateConnectionValidationReady {
+                                    ctx,
+                                    result,
+                                    params,
+                                    resolved_ids,
+                                    original_stmt,
+                                    otel_ctx,
+                                },
+                            ));
+                        if let Err(e) = result {
+                            tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                        }
+                    });
+                } else {
+                    self.sequence_plan(ctx, Plan::CreateConnection(plan), resolved_ids)
+                        .await;
+                }
+            }
+
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {
-                Ok(plan) => self.sequence_plan(ctx, plan, depends_on).await,
+                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },
         }
@@ -754,5 +823,104 @@ impl Coordinator {
         self.cancel_pending_peeks(session.conn_id());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
+    }
+
+    fn handle_append_webhook(
+        &mut self,
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+    ) {
+        // Make sure the feature is enabled before doing anything else.
+        if !self.catalog().system_config().enable_webhook_sources() {
+            // We don't care if the listener went away.
+            let _ = tx.send(Err(AdapterError::Unsupported("enable_webhook_sources")));
+            return;
+        }
+
+        /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
+        ///
+        /// Returns a struct that can be used to append data to the underlying storate collection, and the
+        /// types we should cast the request to.
+        fn resolve(
+            coord: &Coordinator,
+            database: String,
+            schema: String,
+            name: String,
+            conn_id: ConnectionId,
+        ) -> Result<AppendWebhookResponse, PartialItemName> {
+            // Resolve our collection.
+            let name = PartialItemName {
+                database: Some(database),
+                schema: Some(schema),
+                item: name,
+            };
+            let Ok(entry) = coord.catalog().resolve_entry(None, &vec![], &name, &conn_id) else {
+                return Err(name);
+            };
+
+            let (body_ty, header_ty, validate_using) = match entry.item() {
+                CatalogItem::Source(Source {
+                    data_source: DataSourceDesc::Webhook { validate_using },
+                    desc,
+                    ..
+                }) => {
+                    // All Webhook sources should have at most 2 columns.
+                    mz_ore::soft_assert!(desc.arity() <= 2);
+
+                    let body = desc
+                        .get_by_name(&"body".into())
+                        .map(|(_idx, ty)| ty.clone())
+                        .ok_or(name)?;
+                    let header = desc
+                        .get_by_name(&"headers".into())
+                        .map(|(_idx, ty)| ty.clone());
+
+                    // Create a closure that we can call to validate a webhook request.
+                    let validate = validate_using.as_ref().map(|expr| {
+                        let expr = expr.clone();
+                        let f: AppendWebhookValidation =
+                            Box::new(move |body, headers| -> Result<bool, EvalError> {
+                                // TODO(parkmycar): When we add rate limiting for the number of
+                                // concurrent validations, we should make a pool of workers each
+                                // with a single RowArena that continuously gets re-used.
+                                let temp_storage = RowArena::default();
+                                let valid = expr.eval(&[body, headers], &temp_storage)?;
+
+                                match valid {
+                                    Datum::True => Ok(true),
+                                    Datum::False | Datum::Null => Ok(false),
+                                    _ => unreachable!(
+                                        "Creating a webhook source asserts we return a boolean"
+                                    ),
+                                }
+                            });
+                        f
+                    });
+                    (body, header, validate)
+                }
+                _ => return Err(name),
+            };
+
+            // Get a channel so we can queue updates to be written.
+            let row_tx = coord.controller.storage.monotonic_appender(entry.id());
+            Ok(AppendWebhookResponse {
+                tx: row_tx,
+                body_ty,
+                header_ty,
+                validate_expr: validate_using,
+            })
+        }
+
+        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
+        let _ = tx.send(response);
     }
 }

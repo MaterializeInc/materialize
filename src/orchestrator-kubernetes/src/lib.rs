@@ -84,10 +84,11 @@ use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource, ObjectFieldSelector,
-    PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod, PodAffinityTerm, PodAntiAffinity,
+    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
+    EphemeralVolumeSource, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    PersistentVolumeClaimTemplate, Pod, PodAffinityTerm, PodAntiAffinity, PodSecurityContext,
     PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
-    ServiceSpec, VolumeMount,
+    ServiceSpec, Toleration, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -100,8 +101,9 @@ use maplit::btreemap;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator, NotReadyReason,
-    Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics, ServiceStatus,
+    DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
+    NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
+    ServiceStatus,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -112,6 +114,7 @@ pub mod secrets;
 pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
+const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -134,6 +137,14 @@ pub struct KubernetesOrchestratorConfig {
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Whether to use code coverage mode or not. Always false for production.
     pub coverage: bool,
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the orchestrator will refuse to create services that
+    /// request disk.
+    pub ephemeral_volume_storage_class: Option<String>,
+    /// The optional fs group for service's pods' `securityContext`.
+    pub service_fs_group: Option<i64>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -502,6 +513,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             labels: labels_in,
             availability_zone,
             anti_affinity,
+            disk,
+            disk_limit,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let name = format!("{}-{id}", self.namespace);
@@ -629,6 +642,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             );
         }
 
+        node_selector.insert("materialize.cloud/disk".to_string(), disk.to_string());
+
         let container_name = image
             .splitn(2, '/')
             .skip(1)
@@ -697,14 +712,62 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let volume_mounts = if self.config.coverage {
-            Some(vec![VolumeMount {
+        let mut volume_mounts = vec![];
+
+        if self.config.coverage {
+            volume_mounts.push(VolumeMount {
                 name: "coverage".to_string(),
                 mount_path: "/coverage".to_string(),
                 ..Default::default()
-            }])
-        } else {
-            None
+            })
+        }
+
+        let volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
+            (true, Some(ephemeral_volume_storage_class)) => {
+                volume_mounts.push(VolumeMount {
+                    name: "scratch".to_string(),
+                    mount_path: "/scratch".to_string(),
+                    ..Default::default()
+                });
+                args.push("--scratch-directory=/scratch".into());
+
+                Some(vec![Volume {
+                    name: "scratch".to_string(),
+                    ephemeral: Some(EphemeralVolumeSource {
+                        volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                            spec: PersistentVolumeClaimSpec {
+                                access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                                storage_class_name: Some(
+                                    ephemeral_volume_storage_class.to_string(),
+                                ),
+                                resources: Some(ResourceRequirements {
+                                    requests: Some(BTreeMap::from([(
+                                        "storage".to_string(),
+                                        Quantity(
+                                            disk_limit
+                                                .unwrap_or(DiskLimit::ARBITRARY)
+                                                .0
+                                                .as_u64()
+                                                .to_string(),
+                                        ),
+                                    )])),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }])
+            }
+            (true, None) => {
+                return Err(anyhow!(
+                    "service requested disk but no ephemeral volume storage class was configured"
+                ));
+            }
+            (false, _) => None,
         };
 
         let volume_claim_templates = if self.config.coverage {
@@ -729,6 +792,36 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         } else {
             None
         };
+
+        let security_context = if let Some(fs_group) = self.config.service_fs_group {
+            Some(PodSecurityContext {
+                fs_group: Some(fs_group),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let tolerations = Some(vec![
+            // When the node becomes `NotReady` it indicates there is a problem
+            // with the node. By default Kubernetes waits 300s (5 minutes)
+            // before descheduling the pod, but we tune this to 30s for faster
+            // recovery in the case of node failure.
+            Toleration {
+                effect: Some("NoExecute".into()),
+                key: Some("node.kubernetes.io/not-ready".into()),
+                operator: Some("Exists".into()),
+                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
+                value: None,
+            },
+            Toleration {
+                effect: Some("NoExecute".into()),
+                key: Some("node.kubernetes.io/unreachable".into()),
+                operator: Some("Exists".into()),
+                toleration_seconds: Some(NODE_FAILURE_THRESHOLD_SECONDS),
+                value: None,
+            },
+        ]);
 
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
@@ -759,10 +852,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits.clone()),
                         requests: Some(limits),
                     }),
-                    volume_mounts,
+                    volume_mounts: if !volume_mounts.is_empty() {
+                        Some(volume_mounts)
+                    } else {
+                        None
+                    },
                     env,
                     ..Default::default()
                 }],
+                volumes,
+                security_context,
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
@@ -770,6 +869,29 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     pod_anti_affinity: anti_affinity,
                     ..Default::default()
                 }),
+                tolerations,
+                // Setting a 0s termination grace period has the side effect of
+                // automatically starting a new pod when the previous pod is
+                // currently terminating. This enables recovery from a node
+                // failure with no manual intervention. Without this setting,
+                // the StatefulSet controller will refuse to start a new pod
+                // until the failed node is manually removed from the Kubernetes
+                // cluster.
+                //
+                // The Kubernetes documentation strongly advises against this
+                // setting, as StatefulSets attempt to provide "at most once"
+                // semantics [0]--that is, the guarantee that for a given pod in
+                // a StatefulSet there is *at most* one pod with that identity
+                // running in the cluster.
+                //
+                // Materialize services, however, are carefully designed to
+                // *not* rely on this guarantee. In fact, we do not believe that
+                // correct distributed systems can meaningfully rely on
+                // Kubernetes's guarantee--network packets from a pod can be
+                // arbitrarily delayed, long past that pod's termination.
+                //
+                // [0]: https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/#statefulset-considerations
+                termination_grace_period_seconds: Some(0),
                 ..Default::default()
             }),
         };

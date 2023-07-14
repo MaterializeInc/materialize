@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -417,6 +417,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
+            PgType::NAME => Self(Value::Name(types::text_from_sql(raw)?.to_string())),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Oid(types::oid_from_sql(raw)?)),
             PgType::REGCLASS => Self(Value::Oid(types::oid_from_sql(raw)?)),
@@ -530,6 +531,7 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::INT8
                 | PgType::INTERVAL
                 | PgType::JSONB
+                | PgType::NAME
                 | PgType::NUMERIC
                 | PgType::OID
                 | PgType::REGCLASS
@@ -862,6 +864,8 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        inner.ensure_fixed_features().await?;
+
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
@@ -873,6 +877,7 @@ impl<'a> Runner<'a> {
 impl<'a> RunnerInner<'a> {
     pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
@@ -923,7 +928,7 @@ impl<'a> RunnerInner<'a> {
                     .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
-                scratch_directory: None,
+                scratch_directory: scratch_dir.path().to_path_buf(),
             })
             .await?,
         );
@@ -938,6 +943,7 @@ impl<'a> RunnerInner<'a> {
         let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -954,17 +960,10 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory_enabled: false,
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,
             cloud_resource_controller: None,
-            // Setting the port to 0 means that the OS will automatically
-            // allocate an available port.
-            sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
@@ -976,7 +975,7 @@ impl<'a> RunnerInner<'a> {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: Default::default(),
+            system_parameter_defaults: config.system_parameter_defaults.clone(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
@@ -992,7 +991,6 @@ impl<'a> RunnerInner<'a> {
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
-            waiting_on_leader_promotion: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1012,7 +1010,7 @@ impl<'a> RunnerInner<'a> {
                     return;
                 }
             };
-            let server = match runtime.block_on(mz_environmentd::serve(server_config)) {
+            let server = match runtime.block_on(listeners.serve(server_config)) {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
@@ -1035,7 +1033,7 @@ impl<'a> RunnerInner<'a> {
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
 
-        Ok(RunnerInner {
+        let inner = RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
@@ -1050,7 +1048,26 @@ impl<'a> RunnerInner<'a> {
             enable_table_keys: config.enable_table_keys,
             verbosity: config.verbosity,
             stdout: config.stdout,
-        })
+        };
+        inner.ensure_fixed_features().await?;
+
+        Ok(inner)
+    }
+
+    /// Set features that should be enabled regardless of whether reset-server was
+    /// called. These features may be set conditionally depending on the run configuration.
+    async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
+        // If auto_index_selects is on, we should turn on enable_monotonic_oneshot_selects.
+        // TODO(vmarcos): Remove this code when we retire the feature flag.
+        if self.auto_index_selects {
+            self.system_client
+                .execute(
+                    "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
+                    &[],
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run_record<'r>(
@@ -1632,6 +1649,7 @@ pub struct RunConfig<'a> {
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -1959,8 +1977,8 @@ fn generate_view_sql(
     // DDL cost drops dramatically in the future.
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     assert!(stmts.len() == 1);
-    let query = match &stmts[0] {
-        Statement::Select(stmt) => &stmt.query,
+    let (query, query_as_of) = match &stmts[0] {
+        Statement::Select(stmt) => (&stmt.query, &stmt.as_of),
         _ => unreachable!("This function should only be called for SELECTs"),
     };
 
@@ -2094,7 +2112,7 @@ fn generate_view_sql(
             limit: None,
             offset: None,
         },
-        as_of: None,
+        as_of: query_as_of.clone(),
     })
     .to_ast_string_stable();
 
@@ -2260,6 +2278,7 @@ fn mutate(sql: &str) -> Vec<String> {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_generate_view_sql() {
     let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
     let cases = vec![

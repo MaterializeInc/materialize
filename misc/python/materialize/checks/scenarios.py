@@ -96,8 +96,6 @@ class RestartEntireMz(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            StartClusterdCompute(),
-            UseClusterdCompute(self),
             Initialize(self),
             KillMz(),
             StartMz(),

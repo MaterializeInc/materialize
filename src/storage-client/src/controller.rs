@@ -79,6 +79,8 @@ mod persist_handles;
 mod rehydration;
 mod statistics;
 
+pub use collection_mgmt::MonotonicAppender;
+
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
 pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
@@ -135,6 +137,8 @@ pub enum DataSource {
     Introspection(IntrospectionType),
     /// Data comes from the source's remapping/reclock operator.
     Progress,
+    /// Data comes from external HTTP requests pushed to Materialize.
+    Webhook,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
@@ -181,9 +185,13 @@ impl<T> CollectionDescription<T> {
                 }
                 result.push(ingestion.remap_collection_id);
             }
-            DataSource::Introspection(_) | DataSource::Progress => {
-                // Introspection, Progress sources have no dependencies, for
-                // now.
+            DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
+                // Introspection, Progress, and Webhook sources have no dependencies, for now.
+                //
+                // TODO(parkmycar): Once webhook sources support validation, then they will have
+                // dependencies.
+                //
+                // See <https://github.com/MaterializeInc/materialize/issues/20211>.
             }
             DataSource::Other => {
                 // We don't know anything about it's dependencies.
@@ -404,6 +412,10 @@ pub trait StorageController: Debug + Send {
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
+    /// monotonically append to the specified [`GlobalId`].
+    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -650,114 +662,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
-/// A trait that is used to calculate safe _resumption frontiers_ for a source.
-///
-/// Use [`CreateResumptionFrontierCalc::create_calc`] to create a [`ResumptionFrontierCalculator`].
-/// Then repeatedly call [`ResumptionFrontierCalculator::calculate_resumption_frontier`] to
-/// efficiently calculate an up-to-date frontier.
-#[async_trait]
-pub trait CreateResumptionFrontierCalc<T: Timestamp + Lattice + Codec64> {
-    /// Creates a [`ResumptionFrontierCalculator`], which can be used to efficiently calculate a new
-    /// _resumption frontier_ when needed.
-    async fn create_calc(
-        &self,
-        client_cache: &PersistClientCache,
-    ) -> ResumptionFrontierCalculator<T>;
-}
-
-/// Holds both the [`WriteHandle`] and the last effective upper we want to use for that handle.
-///
-/// We use the term "effective upper" because we might want to "move the upper backward" so that the
-/// shard's upper appears to be the resumption frontier. This upper, then, is _not_ appropriate to
-/// use with [`WriteHandle::compare_and_append`] (i.e. it is not appropriate to use as the
-/// `expected_upper` argument), but is meant to be used in contexts where [`WriteHandle::append`] is
-/// appropriate.
-pub struct UpperState<T: Timestamp + Lattice + Codec64> {
-    handle: WriteHandle<SourceData, (), T, Diff>,
-    last_upper: Antichain<T>,
-}
-
-impl<T: Timestamp + Lattice + Codec64> UpperState<T> {
-    pub fn new(handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
-        UpperState {
-            handle,
-            last_upper: Antichain::from_elem(T::minimum()),
-        }
-    }
-}
-
-impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for UpperState<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UpperState")
-            .field("handle", &"<omitted>")
-            .field("last_upper", &self.last_upper)
-            .finish()
-    }
-}
-
-#[derive(Debug)]
-/// Provides convenience method to to efficiently calculate a new _resumption frontier_ from the
-/// shards desribed by its `upper_states.
-///
-/// For details about the resumption frontier calculation logic, see
-/// [`Self::calculate_resumption_frontier`]'s implementation.
-pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
-    initial_frontier: Antichain<T>,
-    upper_states: BTreeMap<GlobalId, UpperState<T>>,
-}
-
-impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
-    pub fn new(
-        initial_frontier: Antichain<T>,
-        upper_states: BTreeMap<GlobalId, UpperState<T>>,
-    ) -> Self {
-        ResumptionFrontierCalculator {
-            initial_frontier,
-            upper_states,
-        }
-    }
-
-    /// Determine the resumption frontier of an ingestion comprised of the shards described by
-    /// `upper_states`.
-    pub async fn calculate_resumption_frontier(&mut self) -> Antichain<T> {
-        // Refresh all write handles' uppers.
-        for UpperState { handle, last_upper } in self.upper_states.values_mut() {
-            *last_upper = handle.fetch_recent_upper().await.clone();
-        }
-
-        let mut resume_upper = self.initial_frontier.clone();
-
-        // The resumption frontier is the min of (the stored initial frontier, all uppers).
-        for t in self
-            .upper_states
-            .values()
-            .map(|UpperState { last_upper, .. }| last_upper.elements())
-            .flatten()
-        {
-            resume_upper.insert(t.clone());
-        }
-
-        // Ensure no upper exceeds the resume upper; however, uppers are permitted to be below it;
-        // this is currently the same as setting each upper to the resume upper, but will, in the
-        // future, let us add collections whose uppers are beneath the resume upper.
-        for UpperState { last_upper, .. } in self.upper_states.values_mut() {
-            if PartialOrder::less_than(&resume_upper, last_upper) {
-                *last_upper = resume_upper.clone();
-            }
-        }
-
-        resume_upper
-    }
-
-    /// Get the most recent uppers of the shards used to generate the last resumption frontier.
-    pub fn get_uppers(&self) -> BTreeMap<GlobalId, Antichain<T>> {
-        self.upper_states
-            .iter()
-            .map(|(id, state)| (*id, state.last_upper.clone()))
-            .collect()
-    }
-}
-
 /// The subset of [`CollectionMetadata`] that must be durable stored.
 #[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
@@ -932,8 +836,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
     config: StorageParameters,
-    /// Whther clusters have scratch directories enabled.
-    scratch_directory_enabled: bool,
 }
 
 /// A storage controller for a storage instance.
@@ -965,6 +867,8 @@ pub enum StorageError {
     SinkIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
+    /// The provided identifier was invalid, maybe missing, wrong type, not registered, etc.
+    IdentifierInvalid(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
@@ -990,6 +894,10 @@ pub enum StorageError {
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
+    /// The specified resource was exhausted, and is not currently accepting more requests.
+    ResourceExhausted(&'static str),
+    /// The specified component is shutting down.
+    ShuttingDown(&'static str),
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -1001,6 +909,7 @@ impl Error for StorageError {
             Self::SourceIdReused(_) => None,
             Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
+            Self::IdentifierInvalid(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
             Self::InvalidUppers(_) => None,
@@ -1010,6 +919,8 @@ impl Error for StorageError {
             Self::DataflowError(err) => Some(err),
             Self::InvalidAlterSource { .. } => None,
             Self::InvalidUsage(_) => None,
+            Self::ResourceExhausted(_) => None,
+            Self::ShuttingDown(_) => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -1028,6 +939,7 @@ impl fmt::Display for StorageError {
                 "sink identifier was re-created after having been dropped: {id}"
             ),
             Self::IdentifierMissing(id) => write!(f, "collection identifier is not present: {id}"),
+            Self::IdentifierInvalid(id) => write!(f, "collection identifier is invalid {id}"),
             Self::UpdateBeyondUpper(id) => {
                 write!(
                     f,
@@ -1070,6 +982,8 @@ impl fmt::Display for StorageError {
                 write!(f, "{id} cannot be altered in the requested way")
             }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
+            Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
+            Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }
@@ -1096,7 +1010,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         now: NowFn,
         factory: &StashFactory,
         envd_epoch: NonZeroI64,
-        scratch_directory_enabled: bool,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -1183,7 +1096,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             clients: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
-            scratch_directory_enabled,
         }
     }
 }
@@ -1531,7 +1443,10 @@ where
                         &storage_dependencies,
                     )?;
                 }
-                DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
+                DataSource::Webhook
+                | DataSource::Introspection(_)
+                | DataSource::Progress
+                | DataSource::Other => {
                     // No since to patch up and no read holds to install on
                     // dependencies!
                 }
@@ -1624,6 +1539,10 @@ where
                         }
                     }
                 }
+                DataSource::Webhook => {
+                    // Register the collection so our manager knows about it.
+                    self.state.collection_manager.register_collection(id).await;
+                }
                 DataSource::Progress | DataSource::Other => {}
             }
         }
@@ -1653,12 +1572,9 @@ where
             .expect("verified valid in check_alter_collection_inner");
 
         let collection = self.collection_mut(id).expect("validated exists");
-
-        // Install new ingestion here rather than in `check_alter_collection_inner` because of
-        // mutability; making check_alter_collection_inner take a mutable reference is possible but
-        // renders the code even harder to reason about.
         let new_source_exports = match &mut collection.description.data_source {
             DataSource::Ingestion(active_ingestion) => {
+                // Determine which IDs we're adding.
                 let new_source_exports: Vec<_> = description
                     .source_exports
                     .keys()
@@ -1672,9 +1588,14 @@ where
             _ => unreachable!("verified collection refers to ingestion"),
         };
 
+        // Assess dependency since, which we have to fast-forward this
+        // collection's since to.
         let storage_dependencies = collection.description.get_storage_dependencies();
 
-        // Install read capability for all dependencies on new source exports.
+        // Ensure this new collection's since is aligned with the dependencies.
+        // This will likely place its since beyond its upper which is OK because
+        // its snapshot will catch it up with the rest of the source, i.e. we
+        // will never see its upper at a state beyond 0 and less than its since.
         self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
 
         // Fetch the client for this ingestion's instance.
@@ -1959,6 +1880,10 @@ where
         }
 
         Ok(self.state.persist_write_handles.append(commands))
+    }
+
+    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
+        self.state.collection_manager.monotonic_appender(id)
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
@@ -2497,21 +2422,13 @@ where
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        scratch_directory_enabled: bool,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             build_info,
-            state: StorageControllerState::new(
-                postgres_url,
-                tx,
-                now,
-                postgres_factory,
-                envd_epoch,
-                scratch_directory_enabled,
-            )
-            .await,
+            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
+                .await,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
@@ -2544,7 +2461,7 @@ where
     /// The outer error is a potentially recoverable internal error, while the
     /// inner error is appropriate to return to the adapter.
     fn determine_collection_since_joins(
-        &mut self,
+        &self,
         collections: &[GlobalId],
     ) -> Result<Antichain<T>, StorageError> {
         let mut joined_since = Antichain::from_elem(T::minimum());
@@ -3168,44 +3085,68 @@ where
         Ok(())
     }
 
-    /// On each element of `collections`, install a read hold on all of the `storage_dependencies`.
+    /// For each element of `collections`, install a read hold on all of the
+    /// `storage_dependencies`.
+    ///
+    /// Note that this adjustment is only guaranteed to be reflected in memory;
+    /// downgrades to persist shards are not guaranteed to occur unless they
+    /// close the shard.
+    ///
+    /// # Panics
+    ///
+    /// - If any identified collection's since is less than the dependency since
+    ///   and:
+    ///     - Its read policy is not `ReadPolicy::NoPolicy`
+    ///     - Its read policy is `ReadPolicy::NoPolicy(f)` and the dependency
+    ///       since is <= `f`.
+    ///
+    ///     - Its write frontier is neither `T::minimum` nor beyond the
+    ///       dependency since.
+    /// - If any identified collection's data source is not
+    ///   [`DataSource::Ingestion] (primary source) or [`DataSource::Other`]
+    ///   (subsources).
     fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
         &mut self,
         collections: I,
         storage_dependencies: &[GlobalId],
     ) -> Result<(), StorageError> {
         let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+
         for id in collections {
             let collection = self.collection(id).expect("known to exist");
+            assert!(
+                matches!(collection.description.data_source, DataSource::Other | DataSource::Ingestion(_)),
+                "only primary sources w/ subsources and subsources can have dependency read holds installed"
+            );
 
-            // At the time of collection creation, we did not yet
-            // have firm guarantees that the since of our
-            // dependencies was not advanced beyond those of its
-            // dependents, so we need to patch up the
-            // implied_capability/since of the collction.
+            // Because of the "backward" dependency structure (primary sources
+            // depend on subsources, rather than the other way around, which one
+            // might expect), we do not know what the initial since of the
+            // collection should be. We only find out that information once its
+            // primary sources comes along and correlates the subsource to its
+            // dependency sinces (e.g. remap shards).
             //
-            // TODO(aljoscha): This comes largely from the fact that
-            // subsources are created with a `DataSource::Other`, so
-            // we have no idea (at their creation time) that they
-            // are a subsource, or that they are a subsource of a
-            // source where they need a read hold on that
-            // ingestion's remap collection.
+            // Once we find that out, we need ensure that the controller's
+            // version of the since is sufficiently advanced so that we may
+            // install the read hold.
+            //
+            // TODO: remove this if statement once we fix the inverse dependency
+            // of subsources
             if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
                 assert!(
-                    PartialOrder::less_than(&dependency_since, &collection.write_frontier),
-                    "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
-                    collection.write_frontier,
-                    dependency_since,
-                );
-                mz_ore::soft_assert!(
-                    matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
+                    match &collection.read_policy {
+                        ReadPolicy::NoPolicy { initial_since } =>
+                            PartialOrder::less_than(initial_since, &dependency_since),
+                        _ => false,
+                    },
                     "subsources should not have external read holds installed until \
                                     their ingestion is created, but {:?} has read policy {:?}",
                     id,
                     collection.read_policy
                 );
 
-                // This patches up the implied_capability!
+                // Patch up the implied capability + maybe the persist shard's
+                // since.
                 self.set_read_policy(vec![(
                     id,
                     ReadPolicy::NoPolicy {
@@ -3225,6 +3166,14 @@ where
 
             // Fill in the storage dependencies.
             let collection = self.collection_mut(id).expect("known to exist");
+
+            assert!(
+                PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
+                    // Whenever a collection is being initialized, this state is
+                    // acceptable.
+                    || *collection.write_frontier == [T::minimum()]
+            );
+
             collection
                 .storage_dependencies
                 .extend(storage_dependencies.iter().cloned());
@@ -3235,8 +3184,8 @@ where
                     &collection.implied_capability.borrow()
                 ),
                 "{id}: at this point, there can be no read holds for any time that is not \
-                                beyond the implied capability \
-                                but we have implied_capability {:?}, read_capabilities {:?}",
+                    beyond the implied capability  but we have implied_capability {:?}, \
+                    read_capabilities {:?}",
                 collection.implied_capability,
                 collection.read_capabilities,
             );
@@ -3262,16 +3211,6 @@ where
             // top-level collection.
             let metadata = self.collection(id)?.collection_metadata.clone();
             source_imports.insert(id, metadata);
-        }
-
-        if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
-            if upsert.disk && !self.state.scratch_directory_enabled {
-                return Err(StorageError::InvalidUsage(
-                    "Attempting to render `ON DISK` source without a \
-                    configured scratch directory. This is a bug."
-                        .into(),
-                ));
-            }
         }
 
         // The ingestion metadata is simply the collection metadata of the collection with
@@ -3358,7 +3297,10 @@ impl<T: Timestamp> CollectionState<T> {
     fn cluster_id(&self) -> Option<StorageInstanceId> {
         match &self.description.data_source {
             DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Introspection(_) | DataSource::Other | DataSource::Progress => None,
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Other
+            | DataSource::Progress => None,
         }
     }
 }

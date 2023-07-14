@@ -69,6 +69,7 @@ Modifier | Description
 **join_impls** | Render details about the implementation strategy of optimized MIR `Join` nodes.
 **keys** | Annotate each subplan with its unique keys.
 **types** | Annotate each subplan with its inferred type.
+**filter_pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ## Query compilation pipeline
 
@@ -249,7 +250,8 @@ Operator | Meaning | Example
 
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement, view, or materialized view -- valuable information to acknowledge query delays.
 
-The explanation divides in two parts:
+The explanation is divided in two parts:
+
 1. Determinations for a timestamp
 2. Sources frontiers
 
@@ -394,3 +396,15 @@ Each source contains two frontiers:
  source materialize.public.a (u2014, storage):                            +
                    read frontier:[1673612423000 (2023-01-13 12:20:23.000)]+
                   write frontier:[1673612424152 (2023-01-13 12:20:24.152)]+ -->
+
+## Privileges
+
+{{< private-preview />}}
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schemas that all relations in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+    - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+      execute the view definition.
+- `USAGE` privileges on all types used in the query.

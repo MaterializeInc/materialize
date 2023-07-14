@@ -84,6 +84,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use mz_adapter::catalog::storage::MZ_SYSTEM_ROLE_ID;
@@ -93,7 +94,9 @@ use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
 use mz_sql::catalog::CatalogDatabase;
-use mz_sql::names::{self, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+use mz_sql::names::{
+    self, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
 use tokio::sync::Mutex;
@@ -102,6 +105,7 @@ use tokio::sync::Mutex;
 // catalog.
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn datadriven() {
     datadriven::walk_async("tests/testdata/sql", |mut f| async {
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that
@@ -155,7 +159,7 @@ async fn datadriven() {
                                             desc: RelationDesc::empty(),
                                             defaults: vec![Expr::null(); 0],
                                             conn_id: None,
-                                            depends_on: vec![],
+                                            resolved_ids: ResolvedIds(BTreeSet::new()),
                                             custom_logical_compaction_window: None,
                                             is_retained_metrics_object: false,
                                         }),
