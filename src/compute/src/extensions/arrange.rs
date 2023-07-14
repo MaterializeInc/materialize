@@ -375,8 +375,8 @@ where
     ///
     /// This is unsafe because clients are required to use the trace, otherwise the arrangement size
     /// logging infrastructure will cause a memory leak.
-    pub unsafe fn inner(&self) -> Arranged<G, Tr> {
-        self.consume_trace();
+    pub unsafe fn inner(&self, enable_arrangement_size_logging: bool) -> Arranged<G, Tr> {
+        self.consume_trace(enable_arrangement_size_logging);
         self.arranged.clone()
     }
 
@@ -385,8 +385,8 @@ where
     /// Similarly to `inner`, clients must use the trace, otherwise a memory leak can occur because
     /// the arrangement size logging operator holds on the the trace.
     #[must_use]
-    pub fn trace(&self) -> Tr {
-        self.consume_trace();
+    pub fn trace(&self, enable_arrangement_size_logging: bool) -> Tr {
+        self.consume_trace(enable_arrangement_size_logging);
 
         self.arranged.trace.clone()
     }
@@ -394,9 +394,9 @@ where
     /// Indicate that something uses the trace, so we can install the arrangement size logging
     /// infrastructure. This uses inner mutability to only ever install the operator once for each
     /// trace.
-    fn consume_trace(&self) {
+    fn consume_trace(&self, enable_arrangement_size_logging: bool) {
         let mut trace_consumed = self.trace_consumed.borrow_mut();
-        if !*trace_consumed {
+        if enable_arrangement_size_logging && !*trace_consumed {
             self.log_arrangement_size();
             *trace_consumed = true;
         }

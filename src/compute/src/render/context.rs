@@ -95,6 +95,7 @@ where
     pub(super) shutdown_token: ShutdownToken,
     /// The implementation to use for rendering linear joins.
     pub(super) linear_join_impl: LinearJoinImpl,
+    pub(super) enable_arrangement_size_logging: bool,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -122,6 +123,7 @@ where
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
             linear_join_impl: Default::default(),
+            enable_arrangement_size_logging: Default::default(),
         }
     }
 }

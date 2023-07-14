@@ -366,6 +366,8 @@ pub struct ComputeParameters {
     pub persist: PersistParameters,
     /// Tracing configuration.
     pub tracing: TracingParameters,
+    /// Enable arrangement size logging
+    pub enable_arrangement_size_logging: Option<bool>,
 }
 
 impl ComputeParameters {
@@ -377,6 +379,7 @@ impl ComputeParameters {
             enable_mz_join_core,
             persist,
             tracing,
+            enable_arrangement_size_logging,
         } = other;
 
         if max_result_size.is_some() {
@@ -387,6 +390,10 @@ impl ComputeParameters {
         }
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
+        }
+
+        if enable_arrangement_size_logging.is_some() {
+            self.enable_arrangement_size_logging = enable_arrangement_size_logging;
         }
 
         self.persist.update(persist);
@@ -404,6 +411,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
             dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
+            enable_arrangement_size_logging: self.enable_arrangement_size_logging.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
@@ -414,6 +422,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
             dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
+            enable_arrangement_size_logging: proto.enable_arrangement_size_logging.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             persist: proto
                 .persist

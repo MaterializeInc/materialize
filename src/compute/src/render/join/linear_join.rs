@@ -160,6 +160,7 @@ where
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
+                    self.enable_arrangement_size_logging,
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -217,6 +218,7 @@ fn differential_join<G, T>(
         lookup_relation: _,
     }: LinearStagePlan,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    enable_arrangement_size_logging: bool,
 ) -> Collection<G, Row, Diff>
 where
     G: Scope,
@@ -261,13 +263,25 @@ where
         }
         JoinedFlavor::Local(local) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
+                let (oks, errs2) = differential_join_inner(
+                    join_impl,
+                    local,
+                    oks,
+                    closure,
+                    enable_arrangement_size_logging,
+                );
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
+                let (oks, errs2) = differential_join_inner(
+                    join_impl,
+                    local,
+                    oks,
+                    closure,
+                    enable_arrangement_size_logging,
+                );
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -275,13 +289,25 @@ where
         },
         JoinedFlavor::Trace(trace) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
+                let (oks, errs2) = differential_join_inner(
+                    join_impl,
+                    trace,
+                    oks,
+                    closure,
+                    enable_arrangement_size_logging,
+                );
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
+                let (oks, errs2) = differential_join_inner(
+                    join_impl,
+                    trace,
+                    oks,
+                    closure,
+                    enable_arrangement_size_logging,
+                );
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -301,6 +327,7 @@ fn differential_join_inner<G, T, Tr1, Tr2>(
     prev_keyed: MzArranged<G, Tr1>,
     next_input: MzArranged<G, Tr2>,
     closure: JoinClosure,
+    enable_arrangement_size_logging: bool,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, DataflowError, Diff>>,
@@ -318,8 +345,8 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    let prev_keyed = unsafe { prev_keyed.inner() };
-    let next_input = unsafe { next_input.inner() };
+    let prev_keyed = unsafe { prev_keyed.inner(enable_arrangement_size_logging) };
+    let next_input = unsafe { next_input.inner(enable_arrangement_size_logging) };
 
     if closure.could_error() {
         let (oks, err) = join_impl

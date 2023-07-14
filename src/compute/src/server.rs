@@ -414,6 +414,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     linear_join_impl: Default::default(),
                     metrics: self.compute_metrics.clone(),
                     tracing_handle: Arc::clone(&self.tracing_handle),
+                    enable_arrangement_size_logging: Default::default(),
                 });
             }
             _ => (),

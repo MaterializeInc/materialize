@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
 
+use crate::compute_state::ComputeState;
 use differential_dataflow::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
@@ -48,6 +49,7 @@ pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     event_queue: EventQueue<ReachabilityEvent>,
+    compute_state: &ComputeState,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -149,7 +151,7 @@ pub(super) fn construct<A: Allocate>(
 
                 let trace = updates
                     .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
-                    .trace();
+                    .trace(compute_state.enable_arrangement_size_logging);
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }
