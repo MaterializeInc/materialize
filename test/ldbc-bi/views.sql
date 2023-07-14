@@ -104,18 +104,18 @@ WITH MUTUALLY RECURSIVE
 -- every message accounts for exactly one post or comment:
 --
 -- materialize=> select count(*) from Message;
---   count  
+--   count
 -- ---------
 --  2860664
 -- (1 row)
--- 
+--
 -- Time: 1005301.819 ms (16:45.302)
 -- materialize=> select (select count(*) as num_posts from Post) + (select count(*) as num_comments from Comment);
---  ?column? 
+--  ?column?
 -- ----------
 --   2860664
 -- (1 row)
--- 
+--
 -- Time: 18313.558 ms (00:18.314)
 
 

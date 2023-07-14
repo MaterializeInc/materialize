@@ -1,6 +1,6 @@
 \set datetime '\'2010-06-11T09:21:46.000+00:00\'::TIMESTAMP'
 -- materialize=> \i q01.sql
---  messageyear | iscomment | lengthcategory | messagecount | averagemessagelength | summessagelength |           percentageofmessages            
+--  messageyear | iscomment | lengthcategory | messagecount | averagemessagelength | summessagelength |           percentageofmessages
 -- -------------+-----------+----------------+--------------+----------------------+------------------+-------------------------------------------
 --         2010 | f         |              2 |         5906 |   105.26684727395869 |           621706 | 0.198301044219856965382936574555954739281
 --         2010 | f         |              3 |          688 |    202.6627906976744 |           139432 | 0.023100426417755095188530369673975086459
@@ -9,7 +9,7 @@
 --         2010 | t         |              2 |           94 |    94.35106382978724 |             8869 | 0.003156162911728167075177114461269851929
 --         2010 | t         |              3 |            5 |                171.4 |              857 | 0.000167881005942987610381761407514353826
 -- (6 rows)
--- 
+--
 -- Time: 1637056.825 ms (27:17.057)
 
 /* Q1. Posting summary

@@ -1,7 +1,7 @@
 \set tagClass '\'Philosopher\''
 \set country '\'China\''
--- materialize=> \i q03.sql 
---    forum.id    |           forum.title           |     forum.creationDate     |   person.id    | messagecount 
+-- materialize=> \i q03.sql
+--    forum.id    |           forum.title           |     forum.creationDate     |   person.id    | messagecount
 -- ---------------+---------------------------------+----------------------------+----------------+--------------
 --   549755850815 | Group for John_Locke in Beipiao | 2010-11-01 04:46:01.493+00 |  6597069776126 |          248
 --   137438968449 | Wall of Bing Yang               | 2010-04-18 05:33:45.691+00 |  2199023260487 |          158
@@ -24,7 +24,7 @@
 --  1099511696581 | Wall of Wei Zhu                 | 2011-05-17 00:27:33.368+00 | 17592186047024 |           65
 --   137438972267 | Wall of Peng Li                 | 2010-03-23 00:17:08.427+00 |  2199023264745 |           63
 -- (20 rows)
--- 
+--
 -- Time: 28700.050 ms (00:28.700)
 /* Q3. Popular topics in a country
 \set tagClass '\'MusicalArtist\''

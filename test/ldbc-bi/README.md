@@ -4,7 +4,7 @@ To run this benchmark, you will need:
 
   - inputs at an appropriate scale factor
   - parameters at that same scale factor
-  
+
 You can download pre-fab datasets and parameters from <https://github.com/ldbc/ldbc_snb_bi/blob/main/snb-bi-pre-generated-data-sets.md>. (Note taht validation parameters exist only for scale factor 10.)
 
 # What does the benchmark run?

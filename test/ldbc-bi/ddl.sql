@@ -183,4 +183,3 @@ CREATE TABLE Person_knows_Person (
 );
 
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id);
-
