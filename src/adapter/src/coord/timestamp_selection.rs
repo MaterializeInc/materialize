@@ -601,12 +601,6 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
     for TimestampExplanation<T>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(
-            f,
-            "              session wall time: {:13} ({})",
-            self.session_wall_time.naive_local().timestamp_millis(),
-            self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
-        )?;
         let timeline = self.determination.timestamp_context.timeline();
         writeln!(
             f,
@@ -654,6 +648,12 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             self.respond_immediately
         )?;
         writeln!(f, "                       timeline: {:?}", &timeline)?;
+        writeln!(
+            f,
+            "              session wall time: {:13} ({})",
+            self.session_wall_time.naive_local().timestamp_millis(),
+            self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
+        )?;
 
         for source in &self.sources {
             writeln!(f, "")?;
