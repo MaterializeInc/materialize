@@ -3293,6 +3293,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
             assert!(actual.is_ok());

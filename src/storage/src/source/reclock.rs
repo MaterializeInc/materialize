@@ -730,7 +730,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_basic_usage() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -783,7 +783,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_frontier() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -953,7 +953,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1042,7 +1042,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_gh16318() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1071,7 +1071,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_compaction() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -1181,7 +1181,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_sharing() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1212,7 +1212,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_concurrency() {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
@@ -1268,7 +1268,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_inversion() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -1429,7 +1429,7 @@ mod tests {
     // Regression test for
     // https://github.com/MaterializeInc/materialize/issues/14740.
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 

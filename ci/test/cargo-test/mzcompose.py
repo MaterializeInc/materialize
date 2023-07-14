@@ -38,6 +38,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("--miri-full", action="store_true")
+    parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach")
@@ -107,27 +109,38 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
             )
     else:
-        spawn.runv(
-            [
-                "cargo",
-                "build",
-                "--bin",
-                "clusterd",
-            ],
-            env=env,
-        )
-        cpu_count = os.cpu_count()
-        assert cpu_count
-        spawn.runv(
-            [
-                "cargo",
-                "nextest",
-                "run",
-                "--profile=ci",
-                # Most tests don't use 100% of a CPU core, so run two tests per CPU.
-                # TODO(def-): Reenable when #19931 is fixed
-                # f"--test-threads={cpu_count * 2}",
-                *args.args,
-            ],
-            env=env,
-        )
+        if args.miri_full:
+            spawn.runv(
+                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri.sh"],
+                env=env,
+            )
+        elif args.miri_fast:
+            spawn.runv(
+                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri-fast.sh"],
+                env=env,
+            )
+        else:
+            spawn.runv(
+                [
+                    "cargo",
+                    "build",
+                    "--bin",
+                    "clusterd",
+                ],
+                env=env,
+            )
+            cpu_count = os.cpu_count()
+            assert cpu_count
+            spawn.runv(
+                [
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--profile=ci",
+                    # Most tests don't use 100% of a CPU core, so run two tests per CPU.
+                    # TODO(def-): Reenable when #19931 is fixed
+                    # f"--test-threads={cpu_count * 2}",
+                    *args.args,
+                ],
+                env=env,
+            )

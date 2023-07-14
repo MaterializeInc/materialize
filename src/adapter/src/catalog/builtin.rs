@@ -4201,6 +4201,7 @@ mod tests {
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -4552,6 +4553,7 @@ mod tests {
 
     // Execute all builtin functions with all combinations of arguments from interesting datums.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_smoketest_all_builtins() {
         fn inner(catalog: Catalog) {
             let conn_catalog = catalog.for_system_session();
@@ -4792,6 +4794,7 @@ mod tests {
 
     // Make sure pg views don't use types that only exist in Materialize.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();

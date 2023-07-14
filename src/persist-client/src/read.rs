@@ -1168,7 +1168,6 @@ mod tests {
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn drop_unused_subscribe() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1198,6 +1197,7 @@ mod tests {
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
     async fn seqno_leases() {
         let mut data = vec![];
         for i in 0..20 {
@@ -1390,6 +1390,7 @@ mod tests {
     // latest Consensus state if the one it currently has can serve the next
     // request.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn skip_consensus_fetch_optimization() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),

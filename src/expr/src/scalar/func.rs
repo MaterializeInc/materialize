@@ -7886,6 +7886,7 @@ mod test {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
             assert!(actual.is_ok());
@@ -7893,6 +7894,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
             assert!(actual.is_ok());
@@ -7900,6 +7902,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
             assert!(actual.is_ok());
@@ -7907,6 +7910,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());

@@ -1280,6 +1280,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn apply_lenient() {
         #[track_caller]
         fn testcase(

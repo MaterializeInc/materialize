@@ -17,6 +17,7 @@ steps:
       - select: Tests
         key: tests
         options:
+          - { value: miri-test }
           - { value: kafka-matrix }
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
@@ -96,6 +97,18 @@ steps:
       queue: linux
 
   - wait: ~
+
+  - id: miri-test
+    label: Miri test (full)
+    timeout_in_minutes: 600
+    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+          args: [--miri-full]
+    agents:
+      queue: builder-linux-x86_64
 
   - id: feature-benchmark
     label: "Feature benchmark against 'latest'"

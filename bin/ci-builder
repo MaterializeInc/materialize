@@ -180,6 +180,13 @@ case "$cmd" in
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env NO_COLOR
             --env PYPI_TOKEN
+            # For Miri with nightly Rust
+            --env ZOOKEEPER_ADDR
+            --env KAFKA_ADDRS
+            --env SCHEMA_REGISTRY_URL
+            --env POSTGRES_URL
+            --env COCKROACH_URL
+            --env MZ_SOFT_ASSERTIONS
         )
 
         if [[ $detach_container == "true" ]]; then

@@ -2131,6 +2131,7 @@ mod test {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_database_key_roundtrip(key: DatabaseKey) {
             let proto = key.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2139,6 +2140,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_database_value_roundtrip(value: DatabaseValue) {
             let proto = value.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2147,6 +2149,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_schema_key_roundtrip(key: SchemaKey) {
             let proto = key.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2155,6 +2158,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_schema_value_roundtrip(value: SchemaValue) {
             let proto = value.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2163,6 +2167,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_item_key_roundtrip(key: ItemKey) {
             let proto = key.into_proto();
             let round = proto.into_rust().expect("to roundtrip");
@@ -2171,6 +2176,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_item_value_roundtrip(value: ItemValue) {
             let proto = value.into_proto();
             let round = proto.into_rust().expect("to roundtrip");

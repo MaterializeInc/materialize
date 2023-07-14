@@ -2823,6 +2823,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2930,6 +2931,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2948,6 +2950,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

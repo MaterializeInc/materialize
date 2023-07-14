@@ -261,6 +261,7 @@ fn parse_query_when(s: &str) -> QueryWhen {
 /// returns the chosen timestamp. Append `full` as an argument to it to see the entire
 /// TimestampDetermination.
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_timestamp_selection() {
     datadriven::walk("tests/testdata/timestamp_selection", |tf| {
         let mut f = Frontiers {

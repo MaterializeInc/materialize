@@ -1138,6 +1138,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_recursive_types_a() {
         let mut act = test_term_rec_a(0);
         let exp = test_term_rec_a(20);

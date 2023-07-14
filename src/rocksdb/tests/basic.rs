@@ -90,6 +90,7 @@ fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn basic() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;

@@ -377,7 +377,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn rate_limit() {
         let client = crate::tests::new_test_client().await;
 
@@ -405,7 +404,6 @@ mod tests {
 
     // Verifies that the handle updates its view of the opaque token correctly
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn handle_opaque_token() {
         let client = new_test_client().await;
         let shard_id = ShardId::new();
