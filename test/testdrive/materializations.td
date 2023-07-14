@@ -437,3 +437,28 @@ c    d
 0    1
 -4   0
 -2  -1
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+AccumulableErrorCheck
+AccumulableErrorCheck
+AccumulableErrorCheck
+ArrangeAccumulable
+ArrangeAccumulable
+ArrangeAccumulable
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(1)]]
+ArrangeBy[[Column(1)]]-errors
+ArrangeMonotonic
+ArrangeMonotonic
+ReduceAccumulable
+ReduceAccumulable
+ReduceAccumulable
+ReduceMonotonic
+ReduceMonotonic

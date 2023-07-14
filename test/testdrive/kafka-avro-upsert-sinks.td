@@ -346,3 +346,42 @@ contains:upsert key could not be validated as unique
   KEY (key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:upsert key could not be validated as unique
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+"Arrange ReduceMinsMaxes"
+"Arrange ReduceMinsMaxes"
+"Arranged DistinctBy"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+DistinctBy
+DistinctByErrorCheck
+ReduceMinsMaxes
+ReduceMinsMaxes
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"

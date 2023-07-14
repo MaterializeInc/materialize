@@ -180,6 +180,30 @@ Used Indexes:
 
 > CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
 
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeMonotonic
+ArrangeMonotonic
+ArrangeMonotonic
+"Arranged TopK input"
+ReduceMonotonic
+ReduceMonotonic
+ReduceMonotonic
+"Reduced TopK input"
+
 # Propagating monotonicity analysis through materialized views
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v11;
