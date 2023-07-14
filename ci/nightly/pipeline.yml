@@ -86,6 +86,8 @@ steps:
     label: Build x86_64
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
     timeout_in_minutes: 60
+    # For releases we trigger nightly from the test job directly, no need to build again
+    branches: "!v*.*"
     agents:
       queue: builder-linux-x86_64
 
