@@ -341,7 +341,7 @@ pub struct PeekStageTimestamp {
     index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
     cluster_id: ClusterId,
-    id_bundle: CollectionIdBundle,PeekSt
+    id_bundle: CollectionIdBundle,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -357,7 +357,7 @@ pub struct PeekStageFinish {
     pub copy_to: Option<CopyFormat>,
     pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     pub cluster_id: ClusterId,
-    pub id_bundle: CollectionIdBundle
+    pub id_bundle: Option<CollectionIdBundle>,
     pub when: QueryWhen,
     pub target_replica: Option<ReplicaId>,
     pub view_id: GlobalId,

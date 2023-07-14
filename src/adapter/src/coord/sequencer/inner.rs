@@ -2064,7 +2064,7 @@ impl Coordinator {
                     copy_to,
                     dataflow,
                     cluster_id,
-                    id_bundle,
+                    id_bundle: Some(id_bundle),
                     when,
                     target_replica,
                     view_id,
@@ -2101,6 +2101,10 @@ impl Coordinator {
             typ,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let id_bundle = id_bundle.unwrap_or_else(|| {
+            self.index_oracle(cluster_id)
+                .sufficient_collections(&source_ids)
+        });
         let peek_plan = self.plan_peek(
             dataflow,
             session,
@@ -2562,15 +2566,9 @@ impl Coordinator {
         };
 
         let pipeline_result = {
-            self.sequence_explain_plan_pipeline(
-                explainee,
-                raw_plan,
-                no_errors,
-                cluster_id,
-                session,
-            )
-            .with_subscriber(&optimizer_trace)
-            .await
+            self.sequence_explain_plan_pipeline(explainee, raw_plan, no_errors, cluster_id, session)
+                .with_subscriber(&optimizer_trace)
+                .await
         };
 
         let (used_indexes, fast_path_plan) = match pipeline_result {

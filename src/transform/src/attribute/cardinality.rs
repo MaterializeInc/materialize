@@ -400,7 +400,8 @@ impl Attribute for Cardinality {
             LetRec { .. } =>
             // TODO(mgree): implement a recurrence-based approach (or at least identify common idioms, e.g. transitive closure)
             {
-                FactorizerVariable::Unknown
+                self.results
+                    .push(SymbolicExpression::symbolic(FactorizerVariable::Unknown));
             }
             Union { base: _, inputs } => {
                 let mut branches = Vec::with_capacity(inputs.len() + 1);
@@ -432,7 +433,7 @@ impl Attribute for Cardinality {
                 let mut input_results = Vec::with_capacity(inputs.len());
 
                 // maps a column to the index in `inputs` that it belongs to
-                let mut unqiue_columns = BTreeMap::new();
+                let mut unique_columns = BTreeMap::new();
                 let mut key_offset = 0;
 
                 let mut offset = 1;
