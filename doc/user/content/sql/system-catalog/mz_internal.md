@@ -182,10 +182,10 @@ all database objects in the system.
 The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_object_dependencies).
 
 <!-- RELATION_SPEC mz_internal.mz_object_transitive_dependencies -->
-| Field                   | Type         | Meaning                                                                                                               |
-| ----------------------- | ------------ | --------                                                                                                              |
-| `id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
-| `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+| Field                  | Type         | Meaning                                                                                                               |
+|------------------------| ------------ | --------                                                                                                              |
+| `object_id`            | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
+| `referenced_object_id` | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
 ### `mz_postgres_sources`
 
