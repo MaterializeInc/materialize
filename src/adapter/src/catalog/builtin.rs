@@ -4879,7 +4879,8 @@ mod tests {
                         | ScalarType::RegType
                         | ScalarType::RegClass
                         | ScalarType::Int2Vector
-                        | ScalarType::Range { .. } => {}
+                        | ScalarType::Range { .. }
+                        | ScalarType::PgLegacyName => {}
                     }
                 }
             }
