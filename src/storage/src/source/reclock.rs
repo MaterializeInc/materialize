@@ -618,7 +618,7 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
@@ -800,9 +800,9 @@ mod tests {
         let mut remap_read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 remap_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::new("", "test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1088,9 +1088,9 @@ mod tests {
         let mut remap_read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 remap_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::new("", "test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1285,9 +1285,9 @@ mod tests {
         let mut remap_read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 remap_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::new("", "test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1477,9 +1477,9 @@ mod tests {
         let read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 binding_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::new("", "test_since_hold"),
             )
             .await
             .expect("error opening persist shard");

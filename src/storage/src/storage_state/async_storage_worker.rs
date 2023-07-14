@@ -20,6 +20,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row};
@@ -130,9 +131,9 @@ where
                     let read_handle = persist_client
                         .open_leased_reader::<SourceData, (), IntoTime, Diff>(
                             metadata.remap_shard.clone().unwrap(),
-                            "reclock",
                             Arc::new(ingestion_description.desc.connection.timestamp_desc()),
                             Arc::new(UnitSchema),
+                            Diagnostics::new("unknown", "reclock"),
                         )
                         .await
                         .expect("shard unavailable");
@@ -239,9 +240,12 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             let write_handle = client
                                 .open_writer::<SourceData, (), T, Diff>(
                                     *data_shard,
-                                    &format!("resumption data {}", id),
                                     Arc::new(relation_desc.clone()),
                                     Arc::new(UnitSchema),
+                                    Diagnostics::new(
+                                        &id.to_string(),
+                                        &format!("resumption data {}", id),
+                                    ),
                                 )
                                 .await
                                 .unwrap();
@@ -267,7 +271,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                         let read_handle = client
                                             .open_leased_reader::<SourceData, (), T, Diff>(
                                                 *remap_shard,
-                                                &format!("resumption data {}", id),
                                                 Arc::new(
                                                     ingestion_description
                                                         .desc
@@ -275,6 +278,10 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                                         .timestamp_desc(),
                                                 ),
                                                 Arc::new(UnitSchema),
+                                                Diagnostics::new(
+                                                    &id.to_string(),
+                                                    &format!("resumption data {}", id),
+                                                ),
                                             )
                                             .await
                                             .unwrap();

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::NowFn;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::types::sources::SourceData;
@@ -41,9 +41,12 @@ pub async fn write_to_persist(
     let mut handle = client
         .open_writer(
             status_shard,
-            &format!("healthcheck::write_to_persist {}", collection_id),
             Arc::new(relation_desc.clone()),
             Arc::new(UnitSchema),
+            Diagnostics::new(
+                &collection_id.to_string(),
+                &format!("healthcheck::write_to_persist {}", collection_id),
+            ),
         )
         .await
         .expect(

@@ -228,6 +228,32 @@ impl ShardId {
     }
 }
 
+/// Additional diagnostic information used within Persist
+/// e.g. for logging, metric labels, etc.
+#[derive(Clone, Debug)]
+pub struct Diagnostics {
+    shard_name: String,
+    handle_purpose: String,
+}
+
+impl Diagnostics {
+    /// Create a new `Diagnostics`.
+    pub fn new(shard_name: &str, handle_purpose: &str) -> Self {
+        Self {
+            shard_name: shard_name.to_string(),
+            handle_purpose: handle_purpose.to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            shard_name: "test".to_string(),
+            handle_purpose: "test".to_string(),
+        }
+    }
+}
+
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
 ///
@@ -307,9 +333,9 @@ impl PersistClient {
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -320,12 +346,12 @@ impl PersistClient {
         Ok((
             self.open_writer(
                 shard_id,
-                purpose,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
+                diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, purpose, key_schema, val_schema)
+            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics)
                 .await?,
         ))
     }
@@ -342,9 +368,9 @@ impl PersistClient {
     pub async fn open_leased_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -366,6 +392,7 @@ impl PersistClient {
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
             Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -375,7 +402,7 @@ impl PersistClient {
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
-                purpose,
+                &diagnostics.handle_purpose,
                 self.cfg.reader_lease_duration,
                 heartbeat_ts,
             )
@@ -412,6 +439,7 @@ impl PersistClient {
         shard_id: ShardId,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -425,7 +453,10 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
         );
-        let shard_metrics = self.metrics.shards.shard(&shard_id);
+        let shard_metrics = self
+            .metrics
+            .shards
+            .shard(&shard_id, &diagnostics.shard_name);
 
         // This call ensures that the types match what was used when creating
         // the shard or puts in place the types that we expect for future
@@ -499,7 +530,7 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
-        purpose: &str,
+        diagnostics: Diagnostics,
     ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -522,12 +553,13 @@ impl PersistClient {
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
             Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
-            .register_critical_reader::<O>(&reader_id, purpose)
+            .register_critical_reader::<O>(&reader_id, &diagnostics.handle_purpose)
             .await;
         maintenance.start_performing(&machine, &gc);
         let handle = SinceHandle::new(
@@ -553,9 +585,9 @@ impl PersistClient {
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -577,6 +609,7 @@ impl PersistClient {
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
             Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -599,7 +632,7 @@ impl PersistClient {
         let (shard_upper, _, maintenance) = machine
             .register_writer(
                 &writer_id,
-                purpose,
+                &diagnostics.handle_purpose,
                 self.cfg.writer_lease_duration,
                 heartbeat_ts,
             )
@@ -668,9 +701,9 @@ impl PersistClient {
     {
         self.open(
             shard_id,
-            "tests",
             Arc::new(K::Schema::default()),
             Arc::new(V::Schema::default()),
+            Diagnostics::for_tests(),
         )
         .await
         .expect("codec mismatch")
@@ -915,36 +948,36 @@ mod tests {
         let mut write1 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut read1 = client
             .open_leased_reader::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut read2 = client
             .open_leased_reader::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut write2 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
@@ -994,9 +1027,9 @@ mod tests {
                 client
                     .open::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1009,9 +1042,9 @@ mod tests {
                 client
                     .open::<String, Vec<u8>, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(VecU8Schema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1024,9 +1057,9 @@ mod tests {
                 client
                     .open::<String, String, i64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1039,9 +1072,9 @@ mod tests {
                 client
                     .open::<String, String, u64, u64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1058,9 +1091,9 @@ mod tests {
                 client
                     .open_leased_reader::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1073,9 +1106,9 @@ mod tests {
                 client
                     .open_writer::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),

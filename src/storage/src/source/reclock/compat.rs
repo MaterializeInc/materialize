@@ -24,6 +24,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc};
@@ -88,9 +89,9 @@ where
         let (write_handle, mut read_handle) = persist_client
             .open(
                 remap_shard,
-                &format!("reclock {}", id),
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics::new(&id.to_string(), &format!("reclock {}", id)),
             )
             .await
             .context("error opening persist shard")?;

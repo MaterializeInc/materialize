@@ -1061,6 +1061,8 @@ mod tests {
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id()),
             Arc::new(IsolatedRuntime::new()),
+            write.metrics.shards.shard(&write.machine.shard_id(), ""),
+            Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
             schemas,
         )
@@ -1145,6 +1147,8 @@ mod tests {
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id()),
             Arc::new(IsolatedRuntime::new()),
+            write.metrics.shards.shard(&write.machine.shard_id(), ""),
+            Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
             schemas,
         )
@@ -1222,7 +1226,7 @@ mod tests {
         let shard_id = ShardId::new();
         let blob = &client.blob;
         let metrics = &client.metrics;
-        let shard_metrics = &client.metrics.shards.shard(&shard_id);
+        let shard_metrics = &client.metrics.shards.shard(&shard_id, "");
 
         // NB: In the below, parts within a run are separated by `,` and runs
         // are separated by `|`. Example: `r0p0,r0p1|r1p0|r2p0,r2p1,r2p2`
