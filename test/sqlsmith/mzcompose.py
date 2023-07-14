@@ -141,6 +141,11 @@ known_errors = [
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
     "is out of range for type numeric: exceeds maximum precision",
     "CAST does not support casting from integer to ",  # TODO: Improve type system
+    "requested length too large",
+    "number of columns must be a positive integer literal",
+    "regex_extract requires a string literal as its first argument",
+    # TODO: Don't call returns_set functions inside of expressions, only from top level
+    "table functions are not allowed in",
 ]
 
 
