@@ -1210,26 +1210,26 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
         match &self.as_type {
             CreateTypeAs::List { options } => {
                 f.write_str(&self.as_type);
-                f.write_str("( ");
+                f.write_str("(");
                 if !options.is_empty() {
                     f.write_node(&display::comma_separated(options));
                 }
-                f.write_str(" )");
+                f.write_str(")");
             }
             CreateTypeAs::Map { options } => {
                 f.write_str(&self.as_type);
-                f.write_str("( ");
+                f.write_str("(");
                 if !options.is_empty() {
                     f.write_node(&display::comma_separated(options));
                 }
-                f.write_str(" )");
+                f.write_str(")");
             }
             CreateTypeAs::Record { column_defs } => {
-                f.write_str("( ");
+                f.write_str("(");
                 if !column_defs.is_empty() {
                     f.write_node(&display::comma_separated(column_defs));
                 }
-                f.write_str(" )");
+                f.write_str(")");
             }
         };
     }
@@ -1958,7 +1958,9 @@ pub struct InspectShardStatement {
 impl AstDisplay for InspectShardStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("INSPECT SHARD ");
-        f.write_str(&self.id);
+        f.write_str("'");
+        f.write_node(&display::escape_single_quote_string(&self.id));
+        f.write_str("'");
     }
 }
 impl_display!(InspectShardStatement);

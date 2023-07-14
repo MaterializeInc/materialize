@@ -16,28 +16,35 @@
 parse-statement
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 ----
-CREATE TYPE custom AS MAP ( KEY TYPE = text, VALUE TYPE = bool )
+CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: KeyType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }, CreateTypeMapOption { name: ValueType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] })) }] } })
 
 parse-statement
+CREATE TYPE custom AS (a int, b text)
+----
+CREATE TYPE custom AS (a int4, b text)
+=>
+CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }] } })
+
+parse-statement
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 ----
-CREATE TYPE custom AS MAP ( KEY TYPE = text, VALUE TYPE = custom_type )
+CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: KeyType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }, CreateTypeMapOption { name: ValueType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("custom_type")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (KEY TYPE = text)
 ----
-CREATE TYPE custom AS MAP ( KEY TYPE = text )
+CREATE TYPE custom AS MAP (KEY TYPE = text)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: KeyType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 ----
-CREATE TYPE custom AS MAP ( VALUE TYPE = bool )
+CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: ValueType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] })) }] } })
 
@@ -58,63 +65,63 @@ CREATE TYPE custom AS MAP (KEY TYPE = text, random_type=int)
 parse-statement
 CREATE TYPE custom AS LIST (ELEMENT TYPE=text)
 ----
-CREATE TYPE custom AS LIST ( ELEMENT TYPE = text )
+CREATE TYPE custom AS LIST (ELEMENT TYPE = text)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (ELEMENT TYPE=x)
 ----
-CREATE TYPE custom AS LIST ( ELEMENT TYPE = x )
+CREATE TYPE custom AS LIST (ELEMENT TYPE = x)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (ELEMENT TYPE=_text)
 ----
-CREATE TYPE custom AS LIST ( ELEMENT TYPE = _text )
+CREATE TYPE custom AS LIST (ELEMENT TYPE = _text)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("_text")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE schema.t2 AS LIST (ELEMENT TYPE=schema.t1)
 ----
-CREATE TYPE schema.t2 AS LIST ( ELEMENT TYPE = schema.t1 )
+CREATE TYPE schema.t2 AS LIST (ELEMENT TYPE = schema.t1)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("schema"), Ident("t2")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("schema"), Ident("t1")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE db2.schema2.t2 AS LIST (ELEMENT TYPE=db1.schema1.t1)
 ----
-CREATE TYPE db2.schema2.t2 AS LIST ( ELEMENT TYPE = db1.schema1.t1 )
+CREATE TYPE db2.schema2.t2 AS LIST (ELEMENT TYPE = db1.schema1.t1)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("db2"), Ident("schema2"), Ident("t2")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("db1"), Ident("schema1"), Ident("t1")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE numeric_list AS LIST (ELEMENT TYPE=numeric(100,100,100))
 ----
-CREATE TYPE numeric_list AS LIST ( ELEMENT TYPE = numeric(100, 100, 100) )
+CREATE TYPE numeric_list AS LIST (ELEMENT TYPE = numeric(100, 100, 100))
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("numeric_list")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("numeric")])), typ_mod: [100, 100, 100] })) }] } })
 
 parse-statement
 CREATE TYPE named_composite AS (a int, b text, c float8);
 ----
-CREATE TYPE named_composite AS ( a int4, b text, c float8 )
+CREATE TYPE named_composite AS (a int4, b text, c float8)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }] } })
 
 parse-statement
 CREATE TYPE named_composite AS (a InT,     b text, c flOAt8   );
 ----
-CREATE TYPE named_composite AS ( a int4, b text, c float8 )
+CREATE TYPE named_composite AS (a int4, b text, c float8)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }] } })
 
 parse-statement
 CREATE TYPE named_composite AS (a int, b other_type, c yet_another_type);
 ----
-CREATE TYPE named_composite AS ( a int4, b other_type, c yet_another_type )
+CREATE TYPE named_composite AS (a int4, b other_type, c yet_another_type)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("other_type")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("yet_another_type")])), typ_mod: [] }, collation: None, options: [] }] } })
 
@@ -238,6 +245,13 @@ CREATE TABLE schema_name.table_name (col_name int4)
 CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
+CREATE TABLE schema_name.table_name (col_name text COLLATE en)
+----
+CREATE TABLE schema_name.table_name (col_name text COLLATE en)
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: Some(UnresolvedItemName([Ident("en")])), options: [] }], constraints: [], if_not_exists: false, temporary: false })
+
+parse-statement
 CREATE TABLE "" (col_name int)
 ----
 error: zero-length delimited identifier
@@ -318,3 +332,17 @@ CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( header
 CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
 =>
 CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: [], op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) }) })
+
+parse-statement
+CREATE DATABASE IF NOT EXISTS db
+----
+CREATE DATABASE IF NOT EXISTS db
+=>
+CreateDatabase(CreateDatabaseStatement { name: UnresolvedDatabaseName(Ident("db")), if_not_exists: true })
+
+parse-statement
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) WITH (PROGRESS, REFERENCES)
+----
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) WITH (PROGRESS, REFERENCES)
+=>
+CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }, CreateSubsourceOption { name: References, value: None }] })

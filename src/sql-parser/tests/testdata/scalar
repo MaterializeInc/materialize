@@ -90,6 +90,26 @@ name NOT LIKE '%a' IS NULL
 ----
 IsExpr { expr: Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: true }, construct: Null, negated: false }
 
+parse-scalar roundtrip
+name ~~ '%a'
+----
+name ~~ '%a'
+
+parse-scalar roundtrip
+name ~~* '%a'
+----
+name ~~* '%a'
+
+parse-scalar roundtrip
+name !~~* '%a'
+----
+name !~~* '%a'
+
+parse-scalar roundtrip
+name LIKE '%a' ESCAPE '\\'
+----
+name LIKE '%a' ESCAPE '\\'
+
 parse-scalar
 name IS TRUE
 ----
@@ -218,65 +238,121 @@ EXTRACT(YEAR FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("year")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
+# TODO: Fix, need some help to find out where, is it in Expr::Function in expr.rs?
+#parse-scalar roundtrip
+#EXTRACT(YEAR FROM d)
+#----
+#EXTRACT(YEAR FROM d)
+
 parse-scalar
 EXTRACT(MILLENIUM FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("millenium")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+#parse-scalar roundtrip
+#EXTRACT(MILLENNIUM FROM d)
+#----
+#EXTRACT(MILLENNIUM FROM d)
 
 parse-scalar
 EXTRACT(CENTURY FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("century")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
-parse-scalar
-EXTRACT(YEAR FROM d)
-----
-Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("year")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+#parse-scalar roundtrip
+#EXTRACT(CENTURY FROM d)
+#----
+#EXTRACT(CENTURY FROM d)
 
 parse-scalar
 EXTRACT(ISOYEAR FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("isoyear")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
+#parse-scalar roundtrip
+#EXTRACT(ISOYEAR FROM d)
+#----
+#EXTRACT(ISOYEAR FROM d)
+
 parse-scalar
 EXTRACT(QUARTER FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("quarter")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+#parse-scalar roundtrip
+#EXTRACT(QUARTER FROM d)
+#----
+#EXTRACT(QUARTER FROM d)
 
 parse-scalar
 EXTRACT(MONTH FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("month")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
+#parse-scalar roundtrip
+#EXTRACT(MONTH FROM d)
+#----
+#EXTRACT(MONTH FROM d)
+
 parse-scalar
 EXTRACT(DAY FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("day")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+#parse-scalar roundtrip
+#EXTRACT(DAY FROM d)
+#----
+#EXTRACT(DAY FROM d)
 
 parse-scalar
 EXTRACT(HOUR FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("hour")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
+#parse-scalar roundtrip
+#EXTRACT(HOUR FROM d)
+#----
+#EXTRACT(HOUR FROM d)
+
 parse-scalar
 EXTRACT(MINUTE FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("minute")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+#parse-scalar roundtrip
+#EXTRACT(MINUTE FROM d)
+#----
+#EXTRACT(MINUTE FROM d)
 
 parse-scalar
 EXTRACT(SECOND FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("second")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
+#parse-scalar roundtrip
+#EXTRACT(SECOND FROM d)
+#----
+#EXTRACT(SECOND FROM d)
+
 parse-scalar
 EXTRACT(MILLISECONDS FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("milliseconds")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
+#parse-scalar roundtrip
+#EXTRACT(MILLISECOND FROM d)
+#----
+#EXTRACT(MILLISECOND FROM d)
+
 parse-scalar
 EXTRACT(MICROSECONDS FROM d)
 ----
 Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("microseconds")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+#parse-scalar roundtrip
+#EXTRACT(MICROSECONDS FROM d)
+#----
+#EXTRACT(MICROSECONDS FROM d)
 
 parse-scalar
 EXTRACT(TIMEZONE FROM d)
@@ -437,6 +513,21 @@ error: Expected an expression, found right parenthesis
 COALESCE()
          ^
 
+parse-scalar roundtrip
+COALESCE(foo, bar)
+----
+COALESCE(foo, bar)
+
+parse-scalar roundtrip
+GREATEST(foo, bar)
+----
+GREATEST(foo, bar)
+
+parse-scalar roundtrip
+LEAST(foo, bar)
+----
+LEAST(foo, bar)
+
 
 parse-scalar
 sqrt(id)
@@ -462,6 +553,57 @@ parse-scalar
 (SELECT 1) + (SELECT 2)
 ----
 Op { op: Op { namespace: [], op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
+
+parse-scalar roundtrip
+1 < 2
+----
+1 < 2
+
+parse-scalar roundtrip
+1 <= 2
+----
+1 <= 2
+
+parse-scalar roundtrip
+1 >= 2
+----
+1 >= 2
+
+parse-scalar roundtrip
+1 > 2
+----
+1 > 2
+
+parse-scalar roundtrip
+1 - 2
+----
+1 - 2
+
+parse-scalar roundtrip
+1 * 2
+----
+1 * 2
+
+parse-scalar roundtrip
+1 % 2
+----
+1 % 2
+
+parse-scalar roundtrip
+1 / 2
+----
+1 / 2
+
+# TODO(def-) Enable when fixed
+#parse-scalar roundtrip
+#1 OPERATOR(+) 2
+#----
+#1 OPERATOR(+) 2
+
+parse-scalar roundtrip
+1 OPERATOR(pg_catalog.+) 2
+----
+1 OPERATOR(pg_catalog.+) 2
 
 parse-scalar
 1 < ANY (SELECT 2)
@@ -557,6 +699,11 @@ parse-scalar
 ARRAY[]::int[2][2]
 ----
 Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
+
+parse-scalar roundtrip
+ARRAY[1, 2, 3][-1]
+----
+ARRAY[1, 2, 3][-1]
 
 parse-scalar
 a -> b

@@ -35,6 +35,13 @@ COPY (SELECT 1) TO STDOUT
 Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Stdout, options: [] })
 
 parse-statement
+COPY (subscribe (SELECT 1)) TO STDOUT
+----
+COPY (SUBSCRIBE (SELECT 1)) TO STDOUT
+=>
+Copy(CopyStatement { relation: Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Diffs }), direction: To, target: Stdout, options: [] })
+
+parse-statement
 COPY t(a, b) TO STDOUT
 ----
 COPY t(a, b) TO STDOUT
@@ -49,11 +56,11 @@ COPY t TO STDOUT WITH (FORMAT = text)
 Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Stdout, options: [CopyOption { name: Format, value: Some(Ident(Ident("text"))) }] })
 
 parse-statement
-COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '|')
+COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '|', NULL 'NULL', QUOTE '"', ESCAPE '\\', HEADER false)
 ----
-COPY t FROM STDIN WITH (FORMAT = csv, DELIMITER = '|')
+COPY t FROM STDIN WITH (FORMAT = csv, DELIMITER = '|', NULL = 'NULL', QUOTE = '"', ESCAPE = '\\', HEADER = false)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: Delimiter, value: Some(Value(String("|"))) }] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: Delimiter, value: Some(Value(String("|"))) }, CopyOption { name: Null, value: Some(Value(String("NULL"))) }, CopyOption { name: Quote, value: Some(Value(String("\""))) }, CopyOption { name: Escape, value: Some(Value(String("\\\\"))) }, CopyOption { name: Header, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
 COPY t TO STDOUT (format = text)

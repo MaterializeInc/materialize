@@ -382,6 +382,13 @@ CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
+CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID 'id', ENDPOINT 'endpoint', REGION 'region', ROLE ARN 'role-arn', SECRET ACCESS KEY 'key', TOKEN 'token')
+----
+CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', REGION = 'region', ROLE ARN = 'role-arn', SECRET ACCESS KEY = 'key', TOKEN = 'token')
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection: Aws { options: [AwsConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, AwsConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, AwsConnectionOption { name: Region, value: Some(Value(String("region"))) }, AwsConnectionOption { name: RoleArn, value: Some(Value(String("role-arn"))) }, AwsConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, AwsConnectionOption { name: Token, value: Some(Value(String("token"))) }] }, if_not_exists: false, with_options: [] })
+
+parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
@@ -410,11 +417,11 @@ CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazon
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false, with_options: [CreateConnectionOption { name: Validate, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
-CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
+CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun, DATABASE 'db', PASSWORD 'pw', SSL CERTIFICATE 'cert', SSL KEY 'key', SSL MODE 'mode', USER 'postgres'
 ----
-CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun)
+CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun, DATABASE = 'db', PASSWORD = 'pw', SSL CERTIFICATE = 'cert', SSL KEY = 'key', SSL MODE = 'mode', USER = 'postgres')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, PostgresConnectionOption { name: Database, value: Some(Value(String("db"))) }, PostgresConnectionOption { name: Password, value: Some(Value(String("pw"))) }, PostgresConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, PostgresConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, PostgresConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, PostgresConnectionOption { name: User, value: Some(Value(String("postgres"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
@@ -439,25 +446,25 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC 'topic') FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC 'topic', ACKS 'acks', CLIENT ID 'client-id', ENABLE IDEMPOTENCE 'true', FETCH MESSAGE MAX BYTES = 100, GROUP ID PREFIX 'prefix', ISOLATION LEVEL 'iso', TOPIC METADATA REFRESH INTERVAL MS = 100, TRANSACTION TIMEOUT MS = 10, START OFFSET = 1, START TIMESTAMP = 1234, PARTITION COUNT = 2) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC = 'topic') FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC = 'topic', ACKS = 'acks', CLIENT ID = 'client-id', ENABLE IDEMPOTENCE = 'true', FETCH MESSAGE MAX BYTES = 100, GROUP ID PREFIX = 'prefix', ISOLATION LEVEL = 'iso', TOPIC METADATA REFRESH INTERVAL MS = 100, TRANSACTION TIMEOUT MS = 10, START OFFSET = 1, START TIMESTAMP = 1234, PARTITION COUNT = 2) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaConfigOption { name: Acks, value: Some(Value(String("acks"))) }, KafkaConfigOption { name: ClientId, value: Some(Value(String("client-id"))) }, KafkaConfigOption { name: EnableIdempotence, value: Some(Value(String("true"))) }, KafkaConfigOption { name: FetchMessageMaxBytes, value: Some(Value(Number("100"))) }, KafkaConfigOption { name: GroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaConfigOption { name: IsolationLevel, value: Some(Value(String("iso"))) }, KafkaConfigOption { name: TopicMetadataRefreshIntervalMs, value: Some(Value(Number("100"))) }, KafkaConfigOption { name: TransactionTimeoutMs, value: Some(Value(Number("10"))) }, KafkaConfigOption { name: StartOffset, value: Some(Value(Number("1"))) }, KafkaConfigOption { name: StartTimestamp, value: Some(Value(Number("1234"))) }, KafkaConfigOption { name: PartitionCount, value: Some(Value(Number("2"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
+CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') INCLUDE TIMESTAMP;
 ----
-CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
+CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') INCLUDE TIMESTAMP
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: Some(Unresolved(Ident("c"))), col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: Some(Unresolved(Ident("c"))), col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [SourceIncludeMetadata { ty: Timestamp, alias: None }], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES
+CREATE SINK IF NOT EXISTS foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES ENVELOPE NONE
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES
+CREATE SINK IF NOT EXISTS foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES ENVELOPE NONE
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: Some(None), with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
@@ -796,6 +803,13 @@ SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
+SUBSCRIBE foo.bar WITH (PROGRESS) AS OF now()
+----
+SUBSCRIBE foo.bar WITH (PROGRESS) AS OF now()
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Progress, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
+
+parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
 error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
@@ -1101,11 +1115,11 @@ ALTER SINK name SET (property = true)
                      ^
 
 parse-statement
-ALTER SINK name SET (SIZE LARGE)
+ALTER SINK IF EXISTS name SET (SIZE LARGE)
 ----
-ALTER SINK name SET (SIZE = large)
+ALTER SINK IF EXISTS name SET (SIZE = large)
 =>
-AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: SetOptions([CreateSinkOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: true, action: SetOptions([CreateSinkOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
 
 parse-statement
 ALTER SINK name RESET (SIZE)
@@ -1585,11 +1599,11 @@ SHOW SECRETS
 Show(ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, filter: None }))
 
 parse-statement
-ALTER SECRET secret RENAME TO secret2
+ALTER SECRET IF EXISTS secret RENAME TO secret2
 ----
-ALTER SECRET secret RENAME TO secret2
+ALTER SECRET IF EXISTS secret RENAME TO secret2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedItemName([Ident("secret")])), to_item_name: Ident("secret2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: true, name: Item(UnresolvedItemName([Ident("secret")])), to_item_name: Ident("secret2") })
 
 parse-statement
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
@@ -1618,6 +1632,13 @@ CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-ma
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
+CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSH TUNNEL tun, SSL CERTIFICATE AUTHORITY 'authority', SASL MECHANISMS 'sasl-mechanisms', SASL USERNAME 'sasl-username', SASL PASSWORD = SECRET sc;
+----
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSH TUNNEL = tun, SSL CERTIFICATE AUTHORITY = 'authority', SASL MECHANISMS = 'sasl-mechanisms', SASL USERNAME = 'sasl-username', SASL PASSWORD = SECRET sc)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, KafkaConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("authority"))) }, KafkaConnectionOption { name: SaslMechanisms, value: Some(Value(String("sasl-mechanisms"))) }, KafkaConnectionOption { name: SaslUsername, value: Some(Value(String("sasl-username"))) }, KafkaConnectionOption { name: SaslPassword, value: Some(Secret(Name(UnresolvedItemName([Ident("sc")])))) }] }, if_not_exists: false, with_options: [] })
+
+parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1);
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1)
@@ -1625,14 +1646,14 @@ CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aw
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
-CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093));
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093, AVAILABILITY ZONE 'az1'));
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093))
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093, AVAILABILITY ZONE 'az1'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }, KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("az1"))) }] }) })) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
-CREATE CONNECTION conn1 TO KAFKA (
+CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (
     BROKERS (
         'kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092),
         'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093),
@@ -1640,9 +1661,9 @@ CREATE CONNECTION conn1 TO KAFKA (
     )
 );
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
+CREATE CONNECTION IF NOT EXISTS conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: true, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1688,11 +1709,25 @@ DROP CONNECTION conn1
 DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [Item(UnresolvedItemName([Ident("conn1")]))], cascade: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
+CREATE SOURCE IF NOT EXISTS src1 (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
+CREATE SOURCE IF NOT EXISTS src1 (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [Ident("a"), Ident("b")], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: true, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }), with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY (a, b) FORMAT BYTES
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY (a, b) FORMAT BYTES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: Some([Ident("a"), Ident("b")]) }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 (PRIMARY KEY (key1, key2) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
+----
+CREATE SOURCE src1 (PRIMARY KEY (key1, key2) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("key1"), Ident("key2")] }), with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
@@ -1715,11 +1750,11 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schem
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false, with_options: [] })
 
 parse-statement
-CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL ssh)
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL ssh, SSL CERTIFICATE 'cert', SSL CERTIFICATE AUTHORITY 'auth', SSL KEY 'key')
 ----
-CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL = ssh)
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL = ssh, SSL CERTIFICATE = 'cert', SSL CERTIFICATE AUTHORITY = 'auth', SSL KEY = 'key')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("ssh")])))) }] }, if_not_exists: false, with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { options: [CsrConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("ssh")])))) }, CsrConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, CsrConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, CsrConnectionOption { name: SslKey, value: Some(Value(String("key"))) }] }, if_not_exists: false, with_options: [] })
 
 
 parse-statement
@@ -1745,6 +1780,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF U
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
+
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
 ----
@@ -1759,7 +1795,7 @@ error: Expected end of statement, found left parenthesis
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
                                                                                ^
 
-# Note that this will error in planninf, as you cannot specify START OFFSET and START TIMESTAMP at the same time
+# Note that this will error in planning, as you cannot specify START OFFSET and START TIMESTAMP at the same time
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
@@ -1776,11 +1812,147 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC '
                                                      ^
 
 parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING SCHEMA 'schema'
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING SCHEMA 'schema'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(InlineSchema { schema: Schema { schema: "schema" }, with_options: [] })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING SCHEMA 'schema' (CONFLUENT WIRE FORMAT = false)
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING SCHEMA 'schema' (CONFLUENT WIRE FORMAT = false)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(InlineSchema { schema: Schema { schema: "schema" }, with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(false))) }] })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING SCHEMA 'schema' (CONFLUENT WIRE FORMAT = true)
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING SCHEMA 'schema' (CONFLUENT WIRE FORMAT = true)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(InlineSchema { schema: Schema { schema: "schema" }, with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(true))) }] })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696'
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(InlineSchema { message_name: "Batch", schema: Schema { schema: "\\x0a300a0d62696" } })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED VALUE SCHEMA '{"some": "seed"}' MESSAGE 'Batch' ENVELOPE DEBEZIUM
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED VALUE SCHEMA '{"some": "seed"}' MESSAGE 'Batch' ENVELOPE DEBEZIUM
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: None, value: CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" } }) } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE DEBEZIUM
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE DEBEZIUM
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } })), envelope: Some(Upsert), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE MATERIALIZE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE MATERIALIZE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } })), envelope: Some(CdcV2), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE NONE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE NONE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } })), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)' INCLUDE KEY
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT TEXT VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)' INCLUDE KEY
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Regex("(?P<animal>[^,]+),(?P<food>\\w+)") }, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT TEXT VALUE FORMAT CSV WITH 2 COLUMNS
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: KeyValue { key: Text, value: Csv { columns: Count(2), delimiter: ',' } }, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ';'
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT TEXT VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ';'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: KeyValue { key: Text, value: Csv { columns: Count(2), delimiter: ';' } }, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [CsrConfigOption { name: AvroKeyFullname, value: Some(Value(String("some.neat.class.foo"))) }, CsrConfigOption { name: AvroValueFullname, value: Some(Value(String("some.neat.class.bar"))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED VALUE SCHEMA '{"some": "schema"}' ENVELOPE NONE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED VALUE SCHEMA '{"some": "schema"}' ENVELOPE NONE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: Some(CsrSeedAvro { key_schema: None, value_schema: "{\"some\": \"schema\"}" }) } })), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "schema"}' VALUE SCHEMA '123' ENVELOPE NONE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "schema"}' VALUE SCHEMA '123' ENVELOPE NONE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: Some(CsrSeedAvro { key_schema: Some("{\"some\": \"schema\"}"), value_schema: "123" }) } })), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "schema"}' VALUE SCHEMA '123' ENVELOPE NONE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "schema"}' VALUE SCHEMA '123' ENVELOPE NONE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: KeyValue { key: Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }), value: Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: Some(CsrSeedAvro { key_schema: Some("{\"some\": \"schema\"}"), value_schema: "123" }) } }) }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "schema"}' VALUE SCHEMA '123' INCLUDE KEY, TIMESTAMP, PARTITION AS "PART2", TOPIC, OFFSET, HEADERS ENVELOPE NONE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "schema"}' VALUE SCHEMA '123' INCLUDE KEY, TIMESTAMP, PARTITION AS "PART2", TOPIC, OFFSET, HEADERS ENVELOPE NONE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }, SourceIncludeMetadata { ty: Timestamp, alias: None }, SourceIncludeMetadata { ty: Partition, alias: Some(Ident("PART2")) }, SourceIncludeMetadata { ty: Topic, alias: None }, SourceIncludeMetadata { ty: Offset, alias: None }, SourceIncludeMetadata { ty: Headers, alias: None }], format: KeyValue { key: Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }), value: Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: Some(CsrSeedAvro { key_schema: Some("{\"some\": \"schema\"}"), value_schema: "123" }) } }) }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+
+parse-statement
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large)
 ----
 error: Expected CONNECTION, found BROKER
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large)
                                 ^
+
+parse-statement
+CREATE SOURCE example FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT CSV WITH HEADER (id, value)
+----
+CREATE SOURCE example FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT CSV WITH HEADER (id, value)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("example")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Csv { columns: Header { names: [Ident("id"), Ident("value")] }, delimiter: ',' }), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE example FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT CSV WITH 5 COLUMNS
+----
+CREATE SOURCE example FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT CSV WITH 5 COLUMNS
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("example")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Csv { columns: Count(5), delimiter: ',' }), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah'
@@ -1802,18 +1974,53 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s')
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s', SCALE FACTOR 1, MAX CARDINALITY 100)
 ----
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s')
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s', SCALE FACTOR = 1, MAX CARDINALITY = 100)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }, LoadGeneratorOption { name: ScaleFactor, value: Some(Value(Number("1"))) }, LoadGeneratorOption { name: MaxCardinality, value: Some(Value(Number("100"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (SIZE 'small');
+CREATE SOURCE lg FROM LOAD GENERATOR MARKETING
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (SIZE = 'small')
+CREATE SOURCE lg FROM LOAD GENERATOR MARKETING
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Marketing, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE lg FROM LOAD GENERATOR AUCTION
+----
+CREATE SOURCE lg FROM LOAD GENERATOR AUCTION
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Auction, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE lg FROM LOAD GENERATOR DATUMS
+----
+CREATE SOURCE lg FROM LOAD GENERATOR DATUMS
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Datums, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE lg FROM LOAD GENERATOR TPCH
+----
+CREATE SOURCE lg FROM LOAD GENERATOR TPCH
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Tpch, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE ts FROM TEST SCRIPT 'foo.json'
+----
+CREATE SOURCE ts FROM TEST SCRIPT 'foo.json'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("ts")]), in_cluster: None, col_names: [], connection: TestScript { desc_json: "foo.json" }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (SIZE 'small', IGNORE KEYS 'true', TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
+----
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (SIZE = 'small', IGNORE KEYS = 'true', TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }, CreateSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }, CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical
@@ -1956,11 +2163,11 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = [foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz]) FOR ALL TABLES WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = [foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz], DETAILS = 'details') FOR ALL TABLES WITH (SIZE = 'small');
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = (foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz)) FOR ALL TABLES WITH (SIZE = 'small')
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = (foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz), DETAILS = 'details') FOR ALL TABLES WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("foo")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("foo")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }, PgConfigOption { name: Details, value: Some(Value(String("details"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (foo, bar as qux, baz into zop) WITH (SIZE = 'small');
@@ -2059,3 +2266,45 @@ DROP OWNED BY joe, mike CASCADE
 DROP OWNED BY joe, mike CASCADE
 =>
 DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: true })
+
+parse-statement
+ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')
+----
+ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: SetOptions([IndexOption { name: LogicalCompactionWindow, value: Some(Value(String("1ms"))) }]) })
+
+parse-statement
+ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (LOGICAL COMPACTION WINDOW)
+----
+ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (LOGICAL COMPACTION WINDOW)
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: ResetOptions([LogicalCompactionWindow]) })
+
+parse-statement
+ALTER CONNECTION IF EXISTS mc RENAME TO ic
+----
+ALTER CONNECTION IF EXISTS mc RENAME TO ic
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Connection, if_exists: true, name: Item(UnresolvedItemName([Ident("mc")])), to_item_name: Ident("ic") })
+
+parse-statement
+ALTER CONNECTION IF EXISTS mc ROTATE KEYS
+----
+ALTER CONNECTION IF EXISTS mc ROTATE KEYS
+=>
+AlterConnection(AlterConnectionStatement { name: UnresolvedItemName([Ident("mc")]), if_exists: true })
+
+parse-statement
+VALIDATE CONNECTION kafka_conn
+----
+VALIDATE CONNECTION kafka_conn
+=>
+ValidateConnection(ValidateConnectionStatement { name: Name(UnresolvedItemName([Ident("kafka_conn")])) })
+
+parse-statement
+INSPECT SHARD 'foo'
+----
+INSPECT SHARD 'foo'
+=>
+Show(InspectShard(InspectShardStatement { id: "foo" }))
