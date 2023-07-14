@@ -76,7 +76,7 @@ steps:
           - { value: parallel-workload-dml }
           - { value: parallel-workload }
           - { value: parallel-workload-100-threads }
-          - { value: parallel-workload-cancel }
+          #- { value: parallel-workload-cancel }
           #- { value: parallel-workload-kill }
         multiple: true
         required: false
@@ -775,16 +775,17 @@ steps:
           composition: parallel-workload
           args: [--runtime=3000, --threads=100]
 
-  - id: parallel-workload-cancel
-    label: "Parallel Workload (cancel)"
-    artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-    timeout_in_minutes: 60
-    agents:
-      queue: builder-linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: parallel-workload
-          args: [--runtime=3000, --scenario=cancel]
+  # TODO(def-) Enable after https://github.com/MaterializeInc/materialize/issues/20404 is fixed
+  #- id: parallel-workload-cancel
+  #  label: "Parallel Workload (cancel)"
+  #  artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+  #  timeout_in_minutes: 60
+  #  agents:
+  #    queue: builder-linux-x86_64
+  #  plugins:
+  #    - ./ci/plugins/mzcompose:
+  #        composition: parallel-workload
+  #        args: [--runtime=3000, --scenario=cancel]
 
   # TODO(def-) Enable after figuring out restoring catalog
   #- id: parallel-workload-kill
