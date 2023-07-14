@@ -60,17 +60,28 @@
 //!
 //! Note also that after snapshot consolidation, additional space may be used if `StateValue` is
 //! used.
+//!
+//! Allow usage of `std::collections::HashMap`.
+//! We need to iterate through all the values in the map, so we can't use `mz_ore` wrapper.
+//! Also, we don't need any ordering for the values fetched, so using std HashMap.
+#![allow(clippy::disallowed_types)]
 
+use std::collections::hash_map::Drain;
+use std::collections::HashMap;
 use std::num::Wrapping;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::{CastFrom, CastLossy};
-use mz_ore::collections::HashMap;
 use mz_ore::error::ErrorExt;
+use mz_ore::metrics::DeleteOnDropGauge;
+use mz_rocksdb::RocksDBConfig;
+use prometheus::core::AtomicU64;
 
+use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
 use crate::source::types::UpsertMetrics;
@@ -365,16 +376,25 @@ pub trait UpsertStateBackend {
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>;
 }
 
-/// A `HashMap` with additional scratch space used in some
-/// methods.
+/// A `HashMap` tracking its total size
 pub struct InMemoryHashMap {
     state: HashMap<UpsertKey, StateValue>,
+    total_size: i64,
+}
+
+impl InMemoryHashMap {
+    fn drain(&mut self) -> Drain<'_, UpsertKey, StateValue> {
+        // clearing the total_size when draining
+        self.total_size = 0;
+        self.state.drain()
+    }
 }
 
 impl Default for InMemoryHashMap {
     fn default() -> Self {
         Self {
             state: HashMap::new(),
+            total_size: 0,
         }
     }
 }
@@ -412,6 +432,7 @@ impl UpsertStateBackend for InMemoryHashMap {
                 }
             }
         }
+        self.total_size += stats.size_diff;
         Ok(stats)
     }
 
@@ -432,6 +453,124 @@ impl UpsertStateBackend for InMemoryHashMap {
             *result_out = UpsertValueAndSize { value, size };
         }
         Ok(stats)
+    }
+}
+
+pub enum BackendType {
+    InMemory(InMemoryHashMap),
+    RocksDb(RocksDB),
+}
+/// Params required to create rocksdb instance
+pub(crate) struct RocksDBParams {
+    pub(crate) instance_path: PathBuf,
+    pub(crate) env: rocksdb::Env,
+    pub(crate) tuning_config: RocksDBConfig,
+    pub(crate) metrics: Arc<mz_rocksdb::RocksDBMetrics>,
+}
+
+pub struct AutoSpillBackend {
+    backend_type: BackendType,
+    rockdsdb_params: RocksDBParams,
+    auto_spill_threshold_bytes: usize,
+    rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+}
+
+impl AutoSpillBackend {
+    pub(crate) fn new(
+        rockdsdb_params: RocksDBParams,
+        auto_spill_threshold_bytes: usize,
+        rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    ) -> Self {
+        // Initializing the metric to 0, to reflect in memory hash map is being used
+        rocksdb_autospill_in_use.set(0);
+        Self {
+            backend_type: BackendType::InMemory(InMemoryHashMap::default()),
+            rockdsdb_params,
+            auto_spill_threshold_bytes,
+            rocksdb_autospill_in_use,
+        }
+    }
+
+    async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB {
+        let RocksDBParams {
+            instance_path,
+            env,
+            tuning_config,
+            metrics,
+        } = rocksdb_params;
+        tracing::info!("spilling to disk for upsert at {:?}", instance_path);
+
+        RocksDB::new(
+            mz_rocksdb::RocksDBInstance::new(
+                instance_path,
+                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
+                tuning_config.clone(),
+                Arc::clone(metrics),
+                upsert_bincode_opts(),
+            )
+            .await
+            .unwrap(),
+        )
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl UpsertStateBackend for AutoSpillBackend {
+    async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
+    {
+        match &mut self.backend_type {
+            BackendType::InMemory(map) => {
+                let mut put_stats = map.multi_put(puts).await?;
+                let in_memory_size: usize = map
+                    .total_size
+                    .try_into()
+                    .expect("unexpected error while casting");
+                if in_memory_size > self.auto_spill_threshold_bytes {
+                    let mut rocksdb_backend =
+                        AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
+
+                    let new_puts = map.drain().map(|(k, v)| {
+                        (
+                            k,
+                            PutValue {
+                                value: Some(v),
+                                previous_persisted_size: None,
+                            },
+                        )
+                    });
+
+                    let rocksdb_stats = rocksdb_backend.multi_put(new_puts).await?;
+                    // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
+                    put_stats.size_diff += rocksdb_stats.size_diff;
+                    put_stats.size_diff -= map.total_size;
+                    // Setting backend to rocksdb
+                    self.backend_type = BackendType::RocksDb(rocksdb_backend);
+                    // Switching metric to 1 for rocksdb
+                    self.rocksdb_autospill_in_use.set(1);
+                }
+                Ok(put_stats)
+            }
+            BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
+        }
+    }
+
+    async fn multi_get<'r, G, R>(
+        &mut self,
+        gets: G,
+        results_out: R,
+    ) -> Result<GetStats, anyhow::Error>
+    where
+        G: IntoIterator<Item = UpsertKey>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
+    {
+        match &mut self.backend_type {
+            BackendType::InMemory(in_memory_hash_map) => {
+                in_memory_hash_map.multi_get(gets, results_out).await
+            }
+            BackendType::RocksDb(rocks_db) => rocks_db.multi_get(gets, results_out).await,
+        }
     }
 }
 
@@ -497,7 +636,7 @@ where
     /// Merge and consolidate the following updates into the state, during snapshotting.
     ///
     /// After an entire snapshot has been `merged`, all values must be in the correct state
-    /// (as determined by `StateValue::ensure_decoded`, and `merge_snapshot_chunk` must NOT
+    /// (as determined by `StateValue::ensure_decoded`), and `merge_snapshot_chunk` must NOT
     /// be called again.
     ///
     /// The `completed` boolean communicates whether or not this is the final chunk of updates

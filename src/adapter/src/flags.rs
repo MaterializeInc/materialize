@@ -11,7 +11,7 @@ use mz_compute_client::protocol::command::ComputeParameters;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_sql::session::vars::SystemVars;
-use mz_storage_client::types::parameters::StorageParameters;
+use mz_storage_client::types::parameters::{StorageParameters, UpsertAutoSpillConfig};
 use mz_tracing::params::TracingParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
@@ -64,6 +64,10 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         finalize_shards: config.enable_storage_shard_finalization(),
         tracing: tracing_config(config),
+        upsert_auto_spill_config: UpsertAutoSpillConfig {
+            allow_spilling_to_disk: config.upsert_rocksdb_auto_spill_to_disk(),
+            spill_to_disk_threshold_bytes: config.upsert_rocksdb_auto_spill_threshold_bytes(),
+        },
     }
 }
 

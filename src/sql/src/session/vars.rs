@@ -721,6 +721,25 @@ mod upsert_rocksdb {
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
+
+    /// Controls whether automatic spill to disk should be turned on when using `DISK`.
+    pub const UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_auto_spill_to_disk"),
+        value: &false,
+        description:
+            "Controls whether automatic spill to disk should be turned on when using `DISK`",
+        internal: true,
+    };
+
+    /// The upsert in memory state size threshold after which it will spill to disk.
+    /// The default is 256 MB = 268435456 bytes
+    pub const UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_auto_spill_threshold_bytes"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD,
+        description:
+            "The upsert in-memory state size threshold in bytes after which it will spill to disk",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -1760,6 +1779,8 @@ impl SystemVars {
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
@@ -2108,6 +2129,14 @@ impl SystemVars {
     /// Returns the `disk_cluster_replicas_default` configuration parameter.
     pub fn disk_cluster_replicas_default(&self) -> bool {
         *self.expect_value(&DISK_CLUSTER_REPLICAS_DEFAULT)
+    }
+
+    pub fn upsert_rocksdb_auto_spill_to_disk(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
+    }
+
+    pub fn upsert_rocksdb_auto_spill_threshold_bytes(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES)
     }
 
     pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb_types::config::CompactionStyle {

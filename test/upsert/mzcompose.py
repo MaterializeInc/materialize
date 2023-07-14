@@ -63,6 +63,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "failpoint",
         "incident-49",
         "rocksdb-cleanup",
+        "autospill",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -364,3 +365,29 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
                 assert num_files(dropped_source_path) == 0
 
         c.testdrive("#reset testdrive")
+
+
+def workflow_autospill(c: Composition) -> None:
+    """Testing auto spill to disk"""
+    c.down(destroy_volumes=True)
+    dependencies = [
+        "zookeeper",
+        "kafka",
+        "materialized",
+        "schema-registry",
+    ]
+
+    with c.override(
+        Materialized(
+            options=[
+                "--orchestrator-process-scratch-directory=/mzdata/source_data",
+            ],
+            additional_system_parameter_defaults={
+                "upsert_source_disk_default": "true",
+                "upsert_rocksdb_auto_spill_to_disk": "true",
+                "upsert_rocksdb_auto_spill_threshold_bytes": "200",
+            },
+        ),
+    ):
+        c.up(*dependencies)
+        c.run("testdrive", "autospill/bytes.td")
