@@ -47,26 +47,26 @@ WITH MUTUALLY RECURSIVE
   roots (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
     (      SELECT id AS MessageId, id AS RootPostId, language AS RootPostLanguage, ContainerForumId, NULL::bigint AS ParentMessageId FROM Post
      UNION SELECT
-     	     Comment.id AS MessageId,
-	     ParentPostId AS RootPostId,
-	     language AS RootPostLanguage,
-	     Post.ContainerForumId AS ContainerForumId,
-	     ParentPostId AS ParentMessageId
+              Comment.id AS MessageId,
+         ParentPostId AS RootPostId,
+         language AS RootPostLanguage,
+         Post.ContainerForumId AS ContainerForumId,
+         ParentPostId AS ParentMessageId
            FROM Comment
-	   JOIN Post
-	   ON Comment.ParentPostId = Post.id),
+       JOIN Post
+       ON Comment.ParentPostId = Post.id),
   ms (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
     (      SELECT *
            FROM roots
      UNION SELECT
-     	     Comment.id AS MessageId,
-	     ms.RootPostId AS RootPostId,
-	     ms.RootPostLanguage AS RootPostLanguage,
-	     ms.ContainerForumId AS ContainerForumId,
-	     ParentCommentId AS ParentMessageId
+              Comment.id AS MessageId,
+         ms.RootPostId AS RootPostId,
+         ms.RootPostLanguage AS RootPostLanguage,
+         ms.ContainerForumId AS ContainerForumId,
+         ParentCommentId AS ParentMessageId
            FROM Comment
-	   JOIN ms
-	   ON ParentCommentId = ms.MessageId)
+       JOIN ms
+       ON ParentCommentId = ms.MessageId)
   -- now do the late materialization
   (     SELECT
           creationDate,
@@ -97,9 +97,9 @@ WITH MUTUALLY RECURSIVE
           ms.ContainerForumId AS ContainerForumId,
           Comment.LocationCountryId AS LocationCityId,
           ms.ParentMessageId AS ParentMessageId
-	FROM Comment
-	JOIN ms
-	ON Comment.id = ms.MessageId));
+    FROM Comment
+    JOIN ms
+    ON Comment.id = ms.MessageId));
 
 -- every message accounts for exactly one post or comment:
 --
