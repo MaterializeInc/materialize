@@ -32,6 +32,7 @@ relkind             true        text
 relchecks           false       smallint
 relhasrules         false       boolean
 relhastriggers      false       boolean
+relhassubclass      false       boolean
 relrowsecurity      false       boolean
 relforcerowsecurity false       boolean
 relreplident        false       char
