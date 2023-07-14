@@ -91,7 +91,7 @@ pub enum Type {
         /// The type of the values in the map.
         value_type: Box<Type>,
     },
-    /// A character type for storing identifiers of no more than 64 characters
+    /// A character type for storing identifiers of no more than 64 bytes
     /// in length.
     Name,
     /// An arbitrary precision number.
