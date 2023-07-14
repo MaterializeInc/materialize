@@ -2433,6 +2433,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     d.name as datname,
     role_owner.oid as datdba,
     6 as encoding,
+    -- Materialize doesn't support database cloning.
     FALSE AS datistemplate,
     'C' as datcollate,
     'C' as datctype,
@@ -2487,6 +2488,7 @@ pub const PG_INDEXES: BuiltinView = BuiltinView {
     r.name AS tablename,
     i.name AS indexname,
     NULL::text AS tablespace,
+    -- TODO(jkosh44) Fill in with actual index definition.
     NULL::text AS indexdef
 FROM mz_catalog.mz_indexes i
 JOIN mz_catalog.mz_relations r ON i.on_id = r.id

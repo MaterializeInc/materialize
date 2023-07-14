@@ -24,6 +24,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_event_trigger`](https://www.postgresql.org/docs/current/catalog-pg-event-trigger.html)
   * [`pg_extension`](https://www.postgresql.org/docs/current/catalog-pg-extension.html)
   * [`pg_index`](https://www.postgresql.org/docs/current/catalog-pg-index.html)
+  * [`pg_indexes`](https://www.postgresql.org/docs/current/view-pg-indexes.html)
   * [`pg_inherits`](https://www.postgresql.org/docs/current/catalog-pg-inherits.html)
   * [`pg_language`](https://www.postgresql.org/docs/current/catalog-pg-language.html)
   * [`pg_locks`](https://www.postgresql.org/docs/current/view-pg-locks.html)
