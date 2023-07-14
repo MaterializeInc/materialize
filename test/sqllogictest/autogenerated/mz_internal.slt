@@ -112,7 +112,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
 ----
-1  id  text
+1  object_id  text
 2  referenced_object_id  text
 
 query ITT
