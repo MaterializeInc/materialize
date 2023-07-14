@@ -614,7 +614,7 @@ pub fn parse_pg_legacy_name(s: &str) -> String {
     let mut len = 0;
     for c in s.chars() {
         len += c.len_utf8();
-        if len > NAME_MAX_BYTES - 1 {
+        if len > NAME_MAX_BYTES {
             break;
         }
         out.push(c);
@@ -2133,5 +2133,24 @@ mod tests {
             format_nanos_to_micros(&mut buf, nanos);
             assert_eq!(&buf, expect);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_pg_legacy_name() {
+        let s = "hello world";
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = "x".repeat(63);
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = "x".repeat(64);
+        assert_eq!("x".repeat(63), parse_pg_legacy_name(&s));
+
+        // The Hebrew character Aleph (א) has a length of 2 bytes.
+        let s = format!("{}{}", "x".repeat(61), "א");
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = format!("{}{}", "x".repeat(62), "א");
+        assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
     }
 }
