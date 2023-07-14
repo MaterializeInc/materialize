@@ -847,6 +847,7 @@ mod tests {
     /// This is just a sanity check for the overall flow of computing ShardUsage.
     /// The edge cases are exercised in separate tests.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19981
     async fn usage_sanity() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),

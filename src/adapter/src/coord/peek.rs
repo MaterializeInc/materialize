@@ -581,6 +581,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_fast_path_plan_as_text() {
         let typ = RelationType::new(vec![ColumnType {
             scalar_type: ScalarType::String,

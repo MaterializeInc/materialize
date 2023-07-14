@@ -309,6 +309,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
     fn test_roundtrip() {
         let desc = RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))

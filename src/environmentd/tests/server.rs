@@ -243,7 +243,6 @@ fn test_source_sink_size_required() {
 
 // Test the POST and WS server endpoints.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
     // text or binary websocket messages that are the input. Output is
@@ -343,7 +342,6 @@ fn test_http_sql() {
 
 // Test that the server properly handles cancellation requests.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -455,19 +453,16 @@ fn test_cancellation_cancels_dataflows(query: &str) {
 
 // Test that dataflow uninstalls cancelled peeks.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_dataflow_removal() {
     test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_select() {
     test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_insert_select() {
     test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
@@ -562,13 +557,11 @@ fn test_closing_connection_cancels_dataflows(query: String) {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_long_select() {
     test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_insert_select() {
     test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
@@ -916,7 +909,6 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
@@ -948,7 +940,6 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -1076,7 +1067,6 @@ fn test_max_statement_batch_size() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_mz_system_user_admin() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();

@@ -1328,6 +1328,7 @@ mod grpc {
     // closely model an actual disconnect.
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `socket` on OS `linux`
     fn grpc_server() {
         let metrics = Arc::new(Metrics::new(
             &test_persist_config(),
@@ -1386,6 +1387,7 @@ mod grpc {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `socket` on OS `linux`
     fn grpc_client_sender_reconnects() {
         let metrics = Arc::new(Metrics::new(
             &test_persist_config(),
@@ -1466,6 +1468,7 @@ mod grpc {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `socket` on OS `linux`
     async fn grpc_client_sender_subscription_tokens() {
         let metrics = Arc::new(Metrics::new(
             &test_persist_config(),
@@ -1540,6 +1543,7 @@ mod grpc {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `socket` on OS `linux`
     fn grpc_client_receiver() {
         let metrics = Arc::new(Metrics::new(
             &PersistConfig::new_for_tests(),
