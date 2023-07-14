@@ -2066,6 +2066,30 @@ fn parse_ident<'a>(
     })?)
 }
 
+fn regexp_split_to_array<'a>(
+    text: Datum<'a>,
+    regexp: Datum<'a>,
+    flags: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let text = text.unwrap_str();
+    let regexp = regexp.unwrap_str();
+    let flags = flags.unwrap_str();
+    let regexp = build_regex(regexp, flags)?;
+    let found = mz_regexp::regexp_split_to_array(text, &regexp);
+
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    packer.push_array(
+        &[ArrayDimension {
+            lower_bound: 1,
+            length: found.len(),
+        }],
+        found.into_iter().map(Datum::String),
+    )?;
+    Ok(temp_storage.push_unary_row(row))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2690,7 +2714,7 @@ impl BinaryFunc {
 
             MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
 
-            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
         }
     }
 
@@ -7280,6 +7304,7 @@ pub enum VariadicFunc {
         elem_type: ScalarType,
     },
     TimezoneTime,
+    RegexpSplitToArray,
 }
 
 impl VariadicFunc {
@@ -7372,6 +7397,14 @@ impl VariadicFunc {
                 )
                 .into()
             }),
+            VariadicFunc::RegexpSplitToArray => {
+                let flags = if ds.len() == 2 {
+                    Datum::String("")
+                } else {
+                    ds[2]
+                };
+                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
+            }
         }
     }
 
@@ -7415,7 +7448,8 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
             | VariadicFunc::ArrayFill { .. }
-            | VariadicFunc::TimezoneTime => false,
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray => false,
         }
     }
 
@@ -7496,6 +7530,9 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
             TimezoneTime => ScalarType::Time.nullable(in_nullable),
+            RegexpSplitToArray => {
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+            }
         }
     }
 
@@ -7563,7 +7600,8 @@ impl VariadicFunc {
             | MakeMzAclItem
             | ArrayPosition
             | ArrayFill { .. }
-            | TimezoneTime => false,
+            | TimezoneTime
+            | RegexpSplitToArray => false,
             Coalesce
             | Greatest
             | Least
@@ -7666,7 +7704,8 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestampTz
             | VariadicFunc::DateDiffDate
             | VariadicFunc::DateDiffTime
-            | VariadicFunc::TimezoneTime => false,
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray => false,
         }
     }
 }
@@ -7721,6 +7760,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
             VariadicFunc::TimezoneTime => f.write_str("timezonet"),
+            VariadicFunc::RegexpSplitToArray => f.write_str("regexp_split_to_array"),
         }
     }
 }
@@ -7837,6 +7877,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::ArrayPosition => ArrayPosition(()),
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
             VariadicFunc::TimezoneTime => TimezoneTime(()),
+            VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7898,6 +7939,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.into_rust()?,
                 }),
                 TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
+                RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
             }
         } else {
             Err(TryFromProtoError::missing_field(

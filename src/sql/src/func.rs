@@ -3208,6 +3208,18 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "decode" => Scalar {
             params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
+        },
+        "regexp_split_to_array" => Scalar {
+            params!(String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2767;
+            params!(String, String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2768;
+        },
+        "regexp_split_to_table" => Table {
+            params!(String, String) => sql_impl_table_func("
+                SELECT unnest(regexp_split_to_array($1, $2))
+            ") => ReturnType::set_of(String.into()), 2765;
+            params!(String, String, String) => sql_impl_table_func("
+                SELECT unnest(regexp_split_to_array($1, $2, $3))
+            ") => ReturnType::set_of(String.into()), 2766;
         }
     };
 

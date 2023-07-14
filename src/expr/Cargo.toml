@@ -31,6 +31,7 @@ mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-proto = { path = "../proto" }
+mz-regexp = { path = "../regexp" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 num = "0.4.0"
