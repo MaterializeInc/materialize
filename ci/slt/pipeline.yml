@@ -19,7 +19,7 @@ steps:
 
   - id: sqllogictest
     label: ":bulb: SQL logic tests %n"
-    timeout_in_minutes: 600
+    timeout_in_minutes: 180
     parallelism: 10
     artifact_paths: junit_*.xml
     agents:
