@@ -140,11 +140,14 @@ known_errors = [
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
     "is out of range for type numeric: exceeds maximum precision",
-    "CAST does not support casting from integer to ",  # TODO: Improve type system
+    "CAST does not support casting from ",  # TODO: Improve type system
+    "SET clause does not support casting from ",  # TODO: Improve type system
+    "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
+    "coalesce types interval and integer cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
     "requested length too large",
     "number of columns must be a positive integer literal",
     "regex_extract requires a string literal as its first argument",
-    "SET clause does not support casting from ",  # TODO: Improve type system
+    "out of valid range",
 ]
 
 
