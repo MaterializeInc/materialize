@@ -261,3 +261,37 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 <null>
 <null>
 <null>
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+DistinctBy
+DistinctBy
+DistinctBy
+DistinctBy
+DistinctByErrorCheck
+DistinctByErrorCheck
+DistinctByErrorCheck
+DistinctByErrorCheck
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
