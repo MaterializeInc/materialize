@@ -30,7 +30,7 @@ WHERE
         SELECT
             l_orderkey
         FROM
-            lineitem
+            {{ source('tpch','lineitem') }}
         GROUP BY
             l_orderkey having
                 sum(l_quantity) > 250
