@@ -5289,3 +5289,109 @@ WHERE b = c and d = e
   "sources": []
 }
 EOF
+
+statement ok
+CREATE TABLE t2(s string, like_pat string, regex_pat string);
+
+statement ok
+INSERT INTO t2 VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
+
+# Our Regex wrapper struct's serde is currently not serializing the Regex itself, but all info should be visible in
+# the other fields.
+
+query T multiline
+EXPLAIN AS JSON
+SELECT s FROM t2 WHERE s ~ 'a.*';
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Project": {
+          "input": {
+            "Filter": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 13
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  }
+                }
+              },
+              "predicates": [
+                {
+                  "CallUnary": {
+                    "func": {
+                      "IsRegexpMatch": {
+                        "pattern": "a.*",
+                        "case_insensitive": false
+                      }
+                    },
+                    "expr": {
+                      "Column": 0
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "outputs": [
+            0
+          ]
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": "materialize.public.t2",
+      "op": {
+        "expressions": [],
+        "predicates": [
+          [
+            1,
+            {
+              "CallUnary": {
+                "func": {
+                  "IsRegexpMatch": {
+                    "pattern": "a.*",
+                    "case_insensitive": false
+                  }
+                },
+                "expr": {
+                  "Column": 0
+                }
+              }
+            }
+          ]
+        ],
+        "projection": [
+          0,
+          1,
+          2
+        ],
+        "input_arity": 3
+      }
+    }
+  ]
+}
+EOF
