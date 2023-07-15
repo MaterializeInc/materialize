@@ -41,9 +41,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 /// often useful to have _some_ equivalence relation available (e.g., to store
 /// types containing regexes in a hashmap) even if the equivalence relation is
 /// imperfect.
-///
-/// This type also implements [`Serialize`] and [`Deserialize`] via the
-/// [`serde_regex`] crate.
 #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
 pub struct Regex {
     pub pattern: String,
@@ -52,13 +49,21 @@ pub struct Regex {
     // [`regex::Regex`] (https://github.com/rust-lang/regex/issues/258). The
     // `serde_regex` crate serializes to a string and is forced to recompile the
     // regex during deserialization.
-    // TODO(ggevay): The serialization based on `as_str()` is actually incorrect, because it's
-    // not capturing `case_insensitive`! I fixed this for the protobuf serialization, but not yet
-    // for the Deserialize/Serialize implementations (which are derived by `serde_regex`).
-    // This is not so urgent to fix, because this is only used by non-essential things AFAIK:
+    // TODO(ggevay): This used to be serialized with #[serde(with = "serde_regex")], but this is
+    // actually incorrect, as it serializes based on `as_str()`, which is not capturing
+    // `case_insensitive`! I fixed this for our protobuf serialization, but not yet
+    // for the Deserialize/Serialize implementations. I opened an issue to serde_regex, but I'm not
+    // very hopeful that they will fix it: https://github.com/tailhook/serde-regex/issues/14
+    // Anyhow, this is not so urgent to fix, because it is only used by non-essential things AFAIK:
     // - `MzReflect`
     // - `EXPLAIN AS JSON` (through `DisplayJson`)
-    #[serde(with = "serde_regex")]
+    // For now, we just skip serializing it, to avoid putting incorrect information in
+    // serialized form. This also means that we panic if we try to deserialize it (which we should
+    // be able to easily avoid doing, as far as I can see). Note that EXPLAIN AS JSON will serialize
+    // our wrapping [Regex] struct, which _will_ show the `case_insensitive` field. Also note that
+    // EXPLAIN AS JSON does only serialization, but not deserialization.
+    // (see also the commented out test `regex_serde_case_insensitive`)
+    #[serde(with = "serde_regex", skip_serializing)]
     pub regex: regex::Regex,
 }
 
@@ -157,4 +162,28 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
     }
+
+    // This is currently failing due to the derived serde serialization being incorrect.
+    // See comment in the [Regex] struct above.
+    // (And also failing because of currently skipping the Regex field inside the wrapper struct.)
+    // (Also, there was some dependency conflict when I tried to add serde_assert as a dependency,
+    // so I'm not actually adding that for now.)
+    // #[mz_ore::test]
+    // fn regex_serde_case_insensitive() {
+    //     let orig_regex = Regex::new("AAA".to_string(), true).unwrap();
+    //     let serializer = serde_assert::Serializer::builder().build();
+    //     let serialized = orig_regex.serialize(&serializer);
+    //     // Uncomment this to see that the serialized forms are identical for case sensitive and
+    //     // insensitive:
+    //     //println!("serialized: {:?}", serialized);
+    //     assert!(serialized.is_ok());
+    //     let mut deserializer = serde_assert::Deserializer::builder()
+    //         .tokens(serialized.unwrap())
+    //         .build();
+    //     let roundtrip_result = Regex::deserialize(&mut deserializer).unwrap();
+    //     // Equality test between orig and roundtrip_result wouldn't work, because Eq doesn't test
+    //     // the actual regex object. So test the actual regex functionality.
+    //     assert_eq!(orig_regex.regex.is_match("aaa"), true);
+    //     assert_eq!(roundtrip_result.regex.is_match("aaa"), true);
+    // }
 }
