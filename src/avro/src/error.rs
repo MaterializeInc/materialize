@@ -89,7 +89,10 @@ pub enum DecodeError {
     I32OutOfRange(i64),
     IntConversionError,
     IntDecodeOverflow,
-    BadJson(serde_json::error::Category),
+    BadJson {
+        category: serde_json::error::Category,
+        original_bytes: Option<Vec<u8>>,
+    },
     BadUuid(uuid::Error),
     MismatchedBlockHeader {
         expected: [u8; 16],
@@ -168,7 +171,17 @@ impl DecodeError {
             DecodeError::StringUtf8Error => write!(f, "String was not valid UTF-8"),
             DecodeError::UuidUtf8Error => write!(f, "UUID was not valid UTF-8"),
             DecodeError::IntConversionError => write!(f, "Integer conversion failed"),
-            DecodeError::BadJson(inner_kind) => write!(f, "Json decoding failed: {:?}", inner_kind),
+            DecodeError::BadJson {
+                category,
+                original_bytes,
+            } => {
+                write!(f, "Json decoding failed: {:?}", category)?;
+                if let Some(original_bytes) = original_bytes {
+                    write!(f, " (got {})", String::from_utf8_lossy(original_bytes))
+                } else {
+                    Ok(())
+                }
+            }
             DecodeError::BadUuid(inner) => write!(f, "UUID decoding failed: {}", inner),
             DecodeError::MismatchedBlockHeader { expected, actual } => write!(
                 f,
