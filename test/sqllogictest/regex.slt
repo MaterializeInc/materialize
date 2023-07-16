@@ -56,7 +56,7 @@ EXPLAIN WITH(arity, join_impls) SELECT input ~ 'foo?' FROM data
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
-    Map ("foo?" ~(#0)) // { arity: 2 }
+    Map (is_regexp_match["foo?", case_insensitive=false](#0)) // { arity: 2 }
       Get materialize.public.data // { arity: 1 }
 
 EOF
@@ -69,5 +69,242 @@ Explained Query:
   Project (#1) // { arity: 1 }
     Map ((#0 ~ #0)) // { arity: 2 }
       Get materialize.public.data // { arity: 1 }
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT regexp_match('ABC', 'a.*');
+----
+Explained Query (fast path):
+  Constant
+    - (null)
+
+EOF
+
+query T
+SELECT regexp_match('ABC', 'a.*');
+----
+NULL
+
+query T multiline
+EXPLAIN
+SELECT regexp_match('ABC', 'a.*', 'i');
+----
+Explained Query (fast path):
+  Constant
+    - ({"ABC"})
+
+EOF
+
+query T
+SELECT regexp_match('ABC', 'a.*', 'i');
+----
+{ABC}
+
+query error db error: ERROR: invalid regular expression: regex parse error:
+SELECT 'abs' ~ '\';
+
+# Case-insensitive vs. case-sensitive regexes when there is no full const folding, but MirScalarExpr::reduce changes
+# from the binary to unary versions.
+
+statement ok
+CREATE TABLE t(s string, like_pat string, regex_pat string);
+
+statement ok
+INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s~'a.*';
+----
+Explained Query:
+  Project (#0)
+    Filter is_regexp_match["a.*", case_insensitive=false](#0)
+      Get materialize.public.t
+
+Source materialize.public.t
+  filter=(is_regexp_match["a.*", case_insensitive=false](#0))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s~'a.*';
+----
+abc
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s~*'a.*';
+----
+Explained Query:
+  Project (#0)
+    Filter is_regexp_match["a.*", case_insensitive=true](#0)
+      Get materialize.public.t
+
+Source materialize.public.t
+  filter=(is_regexp_match["a.*", case_insensitive=true](#0))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s~*'a.*';
+----
+ABC
+abc
+
+query T multiline
+EXPLAIN
+SELECT s, regexp_match(s, 'a.*') FROM t;
+----
+Explained Query:
+  Project (#0, #3)
+    Map (regexp_match["a.*", case_insensitive=false](#0))
+      Get materialize.public.t
+
+EOF
+
+query TT
+SELECT s, regexp_match(s, 'a.*') FROM t;
+----
+ABC
+NULL
+ccc
+NULL
+abc
+{abc}
+
+query T multiline
+EXPLAIN
+SELECT s, regexp_match(s, 'a.*', 'i') FROM t;
+----
+Explained Query:
+  Project (#0, #3)
+    Map (regexp_match["a.*", case_insensitive=true](#0))
+      Get materialize.public.t
+
+EOF
+
+query TT
+SELECT s, regexp_match(s, 'a.*', 'i') FROM t;
+----
+ccc
+NULL
+ABC
+{ABC}
+abc
+{abc}
+
+query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
+SELECT s FROM t WHERE s ~ '\';
+
+# Dynamic regexes (binary (or variadic) versions)
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s ~ regex_pat;
+----
+Explained Query:
+  Project (#0)
+    Filter (#0 ~ #2)
+      Get materialize.public.t
+
+Source materialize.public.t
+  filter=((#0 ~ #2))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s ~ regex_pat;
+----
+abc
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s ~* regex_pat;
+----
+Explained Query:
+  Project (#0)
+    Filter (#0 ~* #2)
+      Get materialize.public.t
+
+Source materialize.public.t
+  filter=((#0 ~* #2))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s ~* regex_pat;
+----
+ABC
+abc
+
+query T multiline
+EXPLAIN
+SELECT s, regex_pat, regexp_match(s, regex_pat) FROM t;
+----
+Explained Query:
+  Project (#0, #2, #3)
+    Map (regexp_match(#0, #2))
+      Get materialize.public.t
+
+EOF
+
+query TTT
+SELECT s, regex_pat, regexp_match(s, regex_pat) FROM t;
+----
+ABC
+a.*
+NULL
+ccc
+a.*
+NULL
+abc
+a.*
+{abc}
+
+query T multiline
+EXPLAIN
+SELECT s, regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
+----
+Explained Query:
+  Project (#0, #2, #3)
+    Map (regexp_match(#0, #2, "i"))
+      Get materialize.public.t
+
+EOF
+
+query TTT
+SELECT s, regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
+----
+ccc
+a.*
+NULL
+ABC
+a.*
+{ABC}
+abc
+a.*
+{abc}
+
+statement ok
+INSERT INTO T VALUES ('this is gonna be an invalid regex', '', '\');
+
+# Note: The actual error msg shows the regex itself (as it should), but it seems sqllogictest can't handle multiline
+# error msgs.
+query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
+SELECT s FROM t WHERE s ~* regex_pat;
+
+# TODO: multiline literal errors should be printed somehow differently in EXPLAIN
+query T multiline
+EXPLAIN
+SELECT *, s~'\' FROM t;
+----
+Explained Query:
+  Map (error("invalid regular expression: regex parse error:
+    \
+    ^
+error: incomplete escape sequence, reached end of pattern prematurely"))
+    Get materialize.public.t
 
 EOF
