@@ -102,6 +102,10 @@ Operator | Computes
 Operator | Computes
 ---------|---------
 <code>&vert;&vert;</code> | Concatenation
+`~~` | Matches LIKE pattern case sensitively, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`~~*` | Matches LIKE pattern case insensitively (ILIKE), using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`!~~` | Does not match LIKE pattern case sensitively, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`!~~*` | Does not match LIKE pattern case insensitively (ILIKE), using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 `~` | Matches regular expression, case sensitive
 `~*` | Matches regular expression, case insensitive
 `!~` | Does not match regular expression, case sensitive
