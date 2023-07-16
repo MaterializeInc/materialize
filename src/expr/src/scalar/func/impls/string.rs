@@ -854,7 +854,12 @@ impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
 
 impl fmt::Display for IsRegexpMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ~", self.0.as_str().quoted())
+        write!(
+            f,
+            "is_regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
     }
 }
 
@@ -942,7 +947,12 @@ impl LazyUnaryFunc for RegexpMatch {
 
 impl fmt::Display for RegexpMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "regexp_match[{}]", self.0.as_str())
+        write!(
+            f,
+            "regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
     }
 }
 

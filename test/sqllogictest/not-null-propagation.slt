@@ -349,7 +349,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGE
 ----
 Explained Query:
   Project (#2, #3) // { types: "(text[]?, text[]?)" }
-    Map (regexp_match[aaa](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
+    Map (regexp_match["aaa", case_insensitive=false](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
       Get materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
