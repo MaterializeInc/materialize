@@ -125,7 +125,7 @@ class DebeziumPostgres(Check):
                 # restart debezium after Postgres restart to avoid flakiness
                 $ http-request method=POST url=http://debezium:8083/connectors/psql-connector/restart content-type=application/json
                 { }
-                
+
                 > SELECT * FROM debezium_view1;
                 A 5 16000
                 B 5 16000
