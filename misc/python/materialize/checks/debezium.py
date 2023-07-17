@@ -26,7 +26,7 @@ class DebeziumPostgres(Check):
 
                 $ http-request method=POST url=http://debezium:8083/connectors content-type=application/json
                 {
-                    "name": "psql-connector",
+                  "name": "psql-connector",
                   "config": {
                     "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
                     "database.hostname": "postgres",
@@ -111,7 +111,7 @@ class DebeziumPostgres(Check):
                 BEGIN;
                 INSERT INTO debezium_table SELECT 'F', generate_series, 1, REPEAT('X', 16) FROM generate_series(1,1000);
                 UPDATE debezium_table SET f3 = f3 + 1;
-                COMMIT
+                COMMIT;
 
                 > CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3 GROUP BY f1, f3;
                 """,
