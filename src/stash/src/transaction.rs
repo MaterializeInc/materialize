@@ -28,21 +28,21 @@ use crate::{
     StashError, Timestamp,
 };
 
-// The limit AFTER which to split an update batch (that is, we will ship an update that
-// exceeds this number, but then start another batch).
-//
-// Cockroach's default limit for sql.conn.max_read_buffer_message_size is 16MiB
-// (https://github.com/cockroachdb/cockroach/blob/7e4e0b195cd61da6cd7a719a5b9aa2e84f68d475/pkg/sql/pgwire/pgwirebase/encoding.go#L50).
-// Use a number well under that but still big ish that most things won't ever need to
-// batch. Because we are only estimating the value size and ignoring various other
-// things that contribute to the total pgwire message size, having a 14MiB headspace
-// seems safe here.
+/// The limit AFTER which to split an update batch (that is, we will ship an update that
+/// exceeds this number, but then start another batch).
+///
+/// Cockroach's default limit for sql.conn.max_read_buffer_message_size is 16MiB
+/// <https://github.com/cockroachdb/cockroach/blob/7e4e0b195cd61da6cd7a719a5b9aa2e84f68d475/pkg/sql/pgwire/pgwirebase/encoding.go#L50>.
+/// Use a number well under that but still big ish that most things won't ever need to
+/// batch. Because we are only estimating the value size and ignoring various other
+/// things that contribute to the total pgwire message size, having a 14MiB headspace
+/// seems safe here.
 pub const INSERT_BATCH_SPLIT_SIZE: usize = 2 * 1024 * 1024;
 
 /// [`tokio_postgres`] has a maximum number of arguments it supports when executing a query. This
 /// is the limit at which to split a batch to make sure we don't try to include too many elements
 /// in any one update.
-pub const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
+const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
 
 impl Stash {
     pub async fn with_transaction<F, T>(&mut self, f: F) -> Result<T, StashError>
@@ -209,25 +209,7 @@ impl<'a> Transaction<'a> {
         Ok(BTreeMap::from_iter(names))
     }
 
-    /// Returns the raw sealed rows as serialized protobuf, not consolidated.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn peek_raw(
-        &self,
-        id: Id,
-    ) -> Result<impl Iterator<Item = ((Vec<u8>, Vec<u8>), Diff)>, StashError> {
-        let peek_timestamp = self.peek_timestamp_id(id).await?;
-        Ok(self
-            .iter_raw(id)
-            .await?
-            .filter_map(move |((k, v), time, diff)| {
-                if time.less_equal(&peek_timestamp) {
-                    Some(((k, v), diff))
-                } else {
-                    None
-                }
-            }))
-    }
-
+    // TODO(jkosh44) Only used in tests.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn consolidate(&self, id: Id) -> Result<(), StashError> {
         let since = self.since(id).await?;
@@ -272,25 +254,6 @@ impl<'a> Transaction<'a> {
         let since = Antichain::from_iter(since);
         maybe_update_antichain(&self.sinces, collection_id, since.clone());
         Ok(since)
-    }
-
-    /// Returns sinces for the requested collections.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn sinces_batch(
-        &self,
-        collections: &[Id],
-    ) -> Result<BTreeMap<Id, Antichain<Timestamp>>, StashError> {
-        let mut futures = Vec::with_capacity(collections.len());
-        for collection_id in collections {
-            futures.push(async move {
-                let since = self.since(*collection_id).await?;
-                // Without this type assertion, we get a "type inside `async fn` body must be
-                // known in this context" error.
-                Result::<_, StashError>::Ok((*collection_id, since))
-            });
-        }
-        let sinces = BTreeMap::from_iter(try_join_all(futures).await?);
-        Ok(sinces)
     }
 
     /// Iterates over a collection.
@@ -392,7 +355,7 @@ impl<'a> Transaction<'a> {
 
     /// Returns the most recent timestamp at which sealed entries can be read.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn peek_timestamp_id(&self, id: Id) -> Result<Timestamp, StashError> {
+    async fn peek_timestamp_id(&self, id: Id) -> Result<Timestamp, StashError> {
         let (since, upper) = try_join(self.since(id), self.upper(id)).await?;
         if PartialOrder::less_equal(&upper, &since) {
             return Err(StashError {
@@ -599,6 +562,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    // TODO(jkosh44) Only used in tests.
     /// Like update, but starts a savepoint.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn update_savepoint<K, V>(
@@ -782,10 +746,10 @@ impl<'a> Transaction<'a> {
     }
 }
 
-// Updates an antichain cache if the new value has advanced. Needed because the
-// functions here are often called in try_joins where the futures execute in
-// unknown order and we want to prevent a race condition poisioning the cache by
-// going backward.
+/// Updates an antichain cache if the new value has advanced. Needed because the
+/// functions here are often called in try_joins where the futures execute in
+/// unknown order and we want to prevent a race condition poisioning the cache by
+/// going backward.
 fn maybe_update_antichain(
     map: &Arc<Mutex<BTreeMap<Id, Antichain<Timestamp>>>>,
     id: Id,

@@ -108,8 +108,12 @@ pub const STASH_VERSION: u64 = 28;
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub const MIN_STASH_VERSION: u64 = 13;
+pub(crate) const MIN_STASH_VERSION: u64 = 13;
 
+// TODO(jkosh44) There's some circular logic going on with this key across crates.
+// mz_adapter::catalog::storage::stash initializes uses this value to initialize
+// `CONFIG_COLLECTION: mz_stash::TypedCollection`. Then `mz_stash::postgres::Stash` uses this value
+// to check if the stash has been initialized.
 /// The key within the Config Collection that stores the version of the Stash.
 pub const USER_VERSION_KEY: &str = "user_version";
 pub const COLLECTION_CONFIG: TypedCollection<
@@ -119,10 +123,11 @@ pub const COLLECTION_CONFIG: TypedCollection<
 
 pub type Diff = i64;
 pub type Timestamp = i64;
-pub type Id = i64;
 
-// A common trait for uses of K and V to express in a single place all of the
-// traits required by async_trait and StashCollection.
+pub(crate) type Id = i64;
+
+/// A common trait for uses of K and V to express in a single place all of the
+/// traits required by async_trait and StashCollection.
 pub trait Data:
     prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>
 {
@@ -142,11 +147,9 @@ impl<T: prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Dese
 ///
 /// A `StashCollection` maintains a since frontier and an upper frontier, as
 /// described in the [correctness vocabulary document]. To advance the since
-/// frontier, call [`compact`]. To advance the upper frontier, call [`seal`]. To
-/// physically compact data beneath the since frontier, call [`consolidate`].
+/// frontier, call [`compact`]. To advance the upper frontier, call [`seal`].
 ///
 /// [`compact`]: Transaction::compact
-/// [`consolidate`]: Stash::consolidate
 /// [`seal`]: Transaction::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
@@ -314,55 +317,23 @@ impl From<anyhow::Error> for StashError {
     }
 }
 
-/*
-/// A multi-collection extension of Stash.
-///
-/// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
-#[async_trait]
-pub trait Append: Stash {
-    /// Same as `append`, but does not consolidate batches.
-    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError>;
-
-    /// Atomically adds entries, seals, compacts, and consolidates multiple
-    /// collections.
-    ///
-    /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
-    /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
-    /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
-    ///
-    /// If this method returns `Ok`, the entries have been made durable and uppers
-    /// advanced, otherwise no changes were committed.
-    async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
-        if batches.is_empty() {
-            return Ok(());
-        }
-        self.append_batch(batches).await?;
-        let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
-        self.consolidate_batch(&ids).await?;
-        Ok(())
-    }
-}
-*/
-
+/// An [`AppendBatch`] describes a set of changes to append to a stash collection.
 #[derive(Clone, Debug)]
 pub struct AppendBatch {
-    pub collection_id: Id,
-    pub lower: Antichain<Timestamp>,
+    /// Id of stash collection.
+    pub(crate) collection_id: Id,
+    /// Current upper of the collection. The collection will also be compacted to `lower`.
+    pub(crate) lower: Antichain<Timestamp>,
+    /// The collection will be sealed to `upper`.
     pub upper: Antichain<Timestamp>,
-    pub timestamp: Timestamp,
-    pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
+    /// The timestamp of all entries in `entries`.
+    pub(crate) timestamp: Timestamp,
+    /// Entries to append to a collection. Each entry is of the form
+    /// ((key [in bytes], value [in bytes]), timestamp, diff).
+    pub(crate) entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
 }
 
 impl<K, V> StashCollection<K, V> {
-    /// Create a new AppendBatch for this collection from its current upper.
-    pub async fn make_batch(&self, stash: &mut Stash) -> Result<AppendBatch, StashError> {
-        let id = self.id;
-        let lower = stash
-            .with_transaction(move |tx| Box::pin(async move { tx.upper(id).await }))
-            .await?;
-        self.make_batch_lower(lower)
-    }
-
     /// Create a new AppendBatch for this collection from its current upper.
     pub async fn make_batch_tx(&self, tx: &Transaction<'_>) -> Result<AppendBatch, StashError> {
         let id = self.id;
@@ -395,6 +366,7 @@ where
     K: Data,
     V: Data,
 {
+    /// Append `key`, `value`, `diff` to `batch`.
     pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
         let key = key.encode_to_vec();
         let val = value.encode_to_vec();
@@ -436,41 +408,8 @@ where
     K: Data,
     V: Data,
 {
-    pub async fn make_batch(
-        &self,
-        stash: &mut Stash,
-    ) -> Result<(StashCollection<K, V>, AppendBatch), StashError> {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    let lower = tx.upper(collection.id).await?;
-                    let batch = collection.make_batch_lower(lower)?;
-                    Ok((collection, batch))
-                })
-            })
-            .await
-    }
-
-    pub async fn get(&self, stash: &mut Stash) -> Result<StashCollection<K, V>, StashError> {
-        stash.collection(self.name).await
-    }
-
     pub async fn from_tx(&self, tx: &Transaction<'_>) -> Result<StashCollection<K, V>, StashError> {
         tx.collection(self.name).await
-    }
-
-    pub async fn upper(&self, stash: &mut Stash) -> Result<Antichain<Timestamp>, StashError> {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    tx.upper(collection.id).await
-                })
-            })
-            .await
     }
 
     pub async fn iter(
@@ -483,18 +422,6 @@ where
                 Box::pin(async move {
                     let collection = tx.collection::<K, V>(name).await?;
                     tx.iter(collection).await
-                })
-            })
-            .await
-    }
-
-    pub async fn peek(&self, stash: &mut Stash) -> Result<Vec<(K, V, Diff)>, StashError> {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    tx.peek(collection).await
                 })
             })
             .await
@@ -731,55 +658,6 @@ where
             .await
     }
 
-    /// Transactionally deletes any kv pair from `self` which returns `true` for
-    /// `predicate`.
-    ///
-    /// Note that this operation:
-    /// - Runs in a single transaction and cannot be combined with other
-    ///   transactions.
-    /// - Scans the entire table to perform deletions.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn delete<P>(&self, stash: &mut Stash, predicate: P) -> Result<(), StashError>
-    where
-        P: Fn(&K, &V) -> bool + Clone + Sync + Send + 'static,
-        K: Clone,
-        V: Clone,
-    {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    let lower = tx.upper(collection.id).await?;
-                    let mut batch = collection.make_batch_lower(lower)?;
-                    let set = match tx.peek_one(collection).await {
-                        Ok(set) => set,
-                        Err(err) => match err.inner {
-                            InternalStashError::PeekSinceUpper(_) => {
-                                // If the upper isn't > since, bump the upper and try again to find a sealed
-                                // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
-                                let lower = tx.upper(collection.id).await?;
-                                batch = collection.make_batch_lower(lower)?;
-                                tx.peek_one(collection).await?
-                            }
-                            _ => return Err(err),
-                        },
-                    };
-
-                    for (k, v) in set {
-                        if (predicate)(&k, &v) {
-                            collection.append_to_batch(&mut batch, &k, &v, -1);
-                        }
-                    }
-
-                    tx.append(vec![batch]).await?;
-                    Ok(())
-                })
-            })
-            .await
-    }
-
     /// Transactionally deletes any kv pair from `self` whose key is in `keys`.
     ///
     /// Note that:
@@ -820,55 +698,6 @@ where
                             collection.append_to_batch(&mut batch, &key, &v, -1);
                         }
                     }
-                    tx.append(vec![batch]).await?;
-                    Ok(())
-                })
-            })
-            .await
-    }
-
-    /// Transactionally updates values in all KV pairs using `transform`.
-    ///
-    /// Note that this operation:
-    /// - Runs in a single transaction and cannot be combined with other
-    ///   transactions.
-    /// - Scans the entire table to perform deletions.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn update<T>(&self, stash: &mut Stash, transform: T) -> Result<(), StashError>
-    where
-        T: Fn(&K, &V) -> Option<V> + Clone + Sync + Send + 'static,
-        K: Clone,
-        V: Clone,
-    {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    let lower = tx.upper(collection.id).await?;
-                    let mut batch = collection.make_batch_lower(lower)?;
-                    let set = match tx.peek_one(collection).await {
-                        Ok(set) => set,
-                        Err(err) => match err.inner {
-                            InternalStashError::PeekSinceUpper(_) => {
-                                // If the upper isn't > since, bump the upper and try again to find a sealed
-                                // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
-                                let lower = tx.upper(collection.id).await?;
-                                batch = collection.make_batch_lower(lower)?;
-                                tx.peek_one(collection).await?
-                            }
-                            _ => return Err(err),
-                        },
-                    };
-
-                    for (k, v) in set {
-                        if let Some(new_v) = (transform)(&k, &v) {
-                            collection.append_to_batch(&mut batch, &k, &v, -1);
-                            collection.append_to_batch(&mut batch, &k, &new_v, 1);
-                        }
-                    }
-
                     tx.append(vec![batch]).await?;
                     Ok(())
                 })
@@ -1062,37 +891,6 @@ where
         });
         // Check for uniqueness violation.
         if let Err(err) = self.verify() {
-            self.pending = pending;
-            Err(err)
-        } else {
-            Ok(changed)
-        }
-    }
-
-    /// Migrates k, v pairs. `f` is a function that can return `Some((K, V))` if the key and value should
-    /// be updated, otherwise `None`. Returns the number of changed entries.
-    ///
-    /// Returns an error if the uniqueness check failed.
-    pub fn migrate<F: Fn(&K, &V) -> Option<(K, V)>>(&mut self, f: F) -> Result<Diff, StashError> {
-        let mut changed = 0;
-        // Keep a copy of pending in case of uniqueness violation.
-        let pending = self.pending.clone();
-        self.for_values_mut(|p, k, v| {
-            if let Some((new_k, new_v)) = f(k, v) {
-                changed += 1;
-
-                // If the key has changed, delete the old entry.
-                if *k != new_k {
-                    p.insert(k.clone(), None);
-                }
-
-                // Insert the new key and value.
-                p.insert(new_k, Some(new_v));
-            }
-        });
-        // Check for uniqueness violation.
-        if let Err(err) = self.verify() {
-            // Reset our pending set if we have a violation.
             self.pending = pending;
             Err(err)
         } else {

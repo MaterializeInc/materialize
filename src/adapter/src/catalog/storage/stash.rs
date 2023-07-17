@@ -20,7 +20,7 @@ use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_stash::objects::{proto, RustType};
-use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
+use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE};
@@ -33,9 +33,6 @@ use crate::catalog::storage::{
     USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::rbac;
-
-/// The key used within the "config" collection where we store the Stash version.
-pub(crate) const USER_VERSION: &str = "user_version";
 
 /// The key used within the "config" collection where we store the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
@@ -819,7 +816,7 @@ pub async fn initialize(
             [
                 (
                     proto::ConfigKey {
-                        key: USER_VERSION.to_string(),
+                        key: USER_VERSION_KEY.to_string(),
                     },
                     proto::ConfigValue {
                         value: STASH_VERSION,
@@ -854,7 +851,7 @@ pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, Stas
 }
 
 /// Defines the default config for a Cluster.
-pub fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
+fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
     // TODO: Use managed clusters by default.
     proto::ClusterConfig {
         variant: Some(proto::cluster_config::Variant::Unmanaged(proto::Empty {})),
@@ -862,7 +859,7 @@ pub fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
 }
 
 /// Defines the default config for a Cluster Replica.
-pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
+fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
     proto::ReplicaConfig {
         location: Some(proto::replica_config::Location::Managed(
             proto::replica_config::ManagedLocation {
@@ -889,14 +886,14 @@ struct IdAllocator {
 impl IdAllocator {
     const DEFAULT_ID: u64 = 1;
 
-    pub fn new() -> Self {
+    fn new() -> Self {
         IdAllocator {
             ids: BTreeMap::default(),
         }
     }
 
     /// For a given key, returns the current value and bumps the allocator.
-    pub fn allocate(&mut self, key: String) -> u64 {
+    fn allocate(&mut self, key: String) -> u64 {
         let next_id = self.ids.entry(key).or_insert(Self::DEFAULT_ID);
         let copy = *next_id;
         *next_id = next_id
@@ -906,7 +903,7 @@ impl IdAllocator {
     }
 
     /// Gets the next ID, without bumping the allocator.
-    pub fn next_id(&self, key: &str) -> u64 {
+    fn next_id(&self, key: &str) -> u64 {
         self.ids.get(key).copied().unwrap_or(Self::DEFAULT_ID)
     }
 }

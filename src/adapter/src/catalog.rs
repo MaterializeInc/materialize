@@ -7234,11 +7234,6 @@ impl Catalog {
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
-
-    pub async fn consolidate(&self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
-        Ok(self.storage().await.consolidate(collections).await?)
-    }
-
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
     }

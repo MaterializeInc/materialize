@@ -48,26 +48,25 @@ use crate::{
 pub mod json_to_proto;
 pub mod legacy_types;
 
-pub mod v13_to_v14;
-pub mod v14_to_v15;
-pub mod v15_to_v16;
-pub mod v16_to_v17;
-pub mod v17_to_v18;
-pub mod v18_to_v19;
-pub mod v19_to_v20;
-pub mod v20_to_v21;
-pub mod v21_to_v22;
-pub mod v22_to_v23;
-pub mod v23_to_v24;
-pub mod v24_to_v25;
-pub mod v25_to_v26;
-pub mod v26_to_v27;
-pub mod v27_to_v28;
+pub(crate) mod v13_to_v14;
+pub(crate) mod v14_to_v15;
+pub(crate) mod v15_to_v16;
+pub(crate) mod v16_to_v17;
+pub(crate) mod v17_to_v18;
+pub(crate) mod v18_to_v19;
+pub(crate) mod v19_to_v20;
+pub(crate) mod v20_to_v21;
+pub(crate) mod v21_to_v22;
+pub(crate) mod v22_to_v23;
+pub(crate) mod v23_to_v24;
+pub(crate) mod v24_to_v25;
+pub(crate) mod v25_to_v26;
+pub(crate) mod v26_to_v27;
+pub(crate) mod v27_to_v28;
 
-pub use json_to_proto::migrate_json_to_proto;
-
-pub enum MigrationAction<K1, K2, V2> {
+pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
+    #[allow(dead_code)]
     Delete(K1),
     /// Inserts the provided key-value pair. The key must not currently exist!
     Insert(K2, V2),
@@ -82,7 +81,7 @@ where
 {
     /// Provided a closure, will migrate a [`TypedCollection`] of types `K` and `V` to types `K2`
     /// and `V2`.
-    pub async fn migrate_to<K2, V2>(
+    pub(crate) async fn migrate_to<K2, V2>(
         &self,
         tx: &mut Transaction<'_>,
         f: impl for<'a> FnOnce(&'a BTreeMap<K, V>) -> Vec<MigrationAction<K, K2, V2>>,
@@ -170,7 +169,7 @@ where
 }
 
 impl TypedCollection<ConfigKey, ConfigValue> {
-    pub async fn version(&self, tx: &mut Transaction<'_>) -> Result<u64, StashError> {
+    pub(crate) async fn version(&self, tx: &mut Transaction<'_>) -> Result<u64, StashError> {
         let key = ConfigKey {
             key: USER_VERSION_KEY.to_string(),
         };
@@ -185,7 +184,7 @@ impl TypedCollection<ConfigKey, ConfigValue> {
         Ok(version.value)
     }
 
-    pub async fn set_version(
+    pub(crate) async fn set_version(
         &self,
         tx: &mut Transaction<'_>,
         version: u64,
