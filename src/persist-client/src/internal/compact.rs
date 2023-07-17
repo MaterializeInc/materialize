@@ -1059,10 +1059,8 @@ mod tests {
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
-            write.metrics.shards.shard(&write.machine.shard_id()),
-            Arc::new(IsolatedRuntime::new()),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
-            Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(IsolatedRuntime::new()),
             req.clone(),
             schemas,
         )
@@ -1145,10 +1143,8 @@ mod tests {
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
-            write.metrics.shards.shard(&write.machine.shard_id()),
-            Arc::new(IsolatedRuntime::new()),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
-            Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(IsolatedRuntime::new()),
             req.clone(),
             schemas,
         )
