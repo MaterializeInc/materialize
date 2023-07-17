@@ -104,3 +104,6 @@ contains:result exceeds max size of 56 B
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_result_size
+
+! SELECT csv_extract(9223372036854775807, '');
+contains:csv_extract number of columns too large
