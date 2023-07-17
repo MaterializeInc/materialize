@@ -2977,6 +2977,7 @@ where
                         shard_id,
                         Arc::new(RelationDesc::empty()),
                         Arc::new(UnitSchema),
+                        // TODO: thread the global ID into the shard finalization WAL
                         Diagnostics::new("unknown", "finalizing shards"),
                     )
                     .await
@@ -2990,6 +2991,7 @@ where
                             shard_id,
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
+                            // TODO: thread the global ID into the shard finalization WAL
                             Diagnostics::new("unknown", "finalizing shards"),
                         )
                         .await
