@@ -45,6 +45,7 @@ pub const INSERT_BATCH_SPLIT_SIZE: usize = 2 * 1024 * 1024;
 const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
 
 impl Stash {
+    /// Transactionally executes closure `f`.
     pub async fn with_transaction<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
         F: FnOnce(Transaction) -> BoxFuture<Result<T, StashError>> + Clone + Sync + Send + 'static,
@@ -211,7 +212,7 @@ impl<'a> Transaction<'a> {
 
     // TODO(jkosh44) Only used in tests.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn consolidate(&self, id: Id) -> Result<(), StashError> {
+    pub(crate) async fn consolidate(&self, id: Id) -> Result<(), StashError> {
         let since = self.since(id).await?;
         self.consolidations
             .send(ConsolidateRequest {
@@ -240,7 +241,10 @@ impl<'a> Transaction<'a> {
         Ok(upper)
     }
 
-    pub async fn since(&self, collection_id: Id) -> Result<Antichain<Timestamp>, StashError> {
+    pub(crate) async fn since(
+        &self,
+        collection_id: Id,
+    ) -> Result<Antichain<Timestamp>, StashError> {
         // We can't use .entry here because that would require holding the
         // MutexGuard across the .await.
         if let Some(entry) = self.sinces.lock().unwrap().get(&collection_id) {
@@ -258,7 +262,7 @@ impl<'a> Transaction<'a> {
 
     /// Iterates over a collection.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn iter<K, V>(
+    pub(crate) async fn iter<K, V>(
         &self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
@@ -285,7 +289,7 @@ impl<'a> Transaction<'a> {
 
     /// Iterates over a collection, returning the raw data on disk, unconsolidated.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn iter_raw(
+    pub(crate) async fn iter_raw(
         &self,
         id: Id,
     ) -> Result<impl Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>, StashError> {
@@ -314,7 +318,7 @@ impl<'a> Transaction<'a> {
 
     /// Iterates over the values of a key.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn iter_key<K, V>(
+    pub(crate) async fn iter_key<K, V>(
         &self,
         collection: StashCollection<K, V>,
         key: &K,
@@ -378,7 +382,7 @@ impl<'a> Transaction<'a> {
 
     /// Returns the most recent timestamp at which sealed entries can be read.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn peek_timestamp<K, V>(
+    pub(crate) async fn peek_timestamp<K, V>(
         &self,
         collection: StashCollection<K, V>,
     ) -> Result<Timestamp, StashError>
@@ -562,10 +566,9 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    // TODO(jkosh44) Only used in tests.
     /// Like update, but starts a savepoint.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn update_savepoint<K, V>(
+    pub(crate) async fn update_savepoint<K, V>(
         &self,
         collection_id: Id,
         entries: &[((K, V), Timestamp, Diff)],
@@ -589,7 +592,7 @@ impl<'a> Transaction<'a> {
         .await
     }
 
-    /// Directly add k, v, ts, diff tuples to a collection.`upper` can be `Some`
+    /// Directly add k, v, ts, diff tuples to a collection. `upper` can be `Some`
     /// if the collection's upper is already known. Caller must have already
     /// called in_savepoint.
     ///
@@ -597,7 +600,7 @@ impl<'a> Transaction<'a> {
     /// allows for arbitrary bytes, non-unit diffs in collections, and doesn't
     /// support transaction safety. Use `TypedCollection`'s methods instead.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn update(
+    async fn update(
         &self,
         collection_id: Id,
         entries: &[((Vec<u8>, Vec<u8>), Timestamp, Diff)],
@@ -671,7 +674,7 @@ impl<'a> Transaction<'a> {
     /// Sets the since of a collection. The current upper can be `Some` if it is
     /// already known.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn compact<'ts>(
+    pub(crate) async fn compact<'ts>(
         &self,
         id: Id,
         new_since: &'ts Antichain<Timestamp>,
@@ -719,7 +722,7 @@ impl<'a> Transaction<'a> {
     /// Sets the upper of a collection. The current upper can be `Some` if it is
     /// already known.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn seal(
+    pub(crate) async fn seal(
         &self,
         id: Id,
         new_upper: Antichain<Timestamp>,
