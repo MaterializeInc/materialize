@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::SshTunnelConfig;
@@ -17,7 +18,7 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{make_tls, PostgresError};
 
@@ -126,12 +127,12 @@ impl Config {
 
     /// Connects to the configured PostgreSQL database.
     pub async fn connect(&self, task_name: &str) -> Result<Client, PostgresError> {
-        self.connect_internal(task_name, |_| ()).await
+        self.connect_traced(task_name, |_| ()).await
     }
 
     /// Starts a replication connection to the configured PostgreSQL database.
     pub async fn connect_replication(&self) -> Result<Client, PostgresError> {
-        self.connect_internal("postgres_connect_replication", |config| {
+        self.connect_traced("postgres_connect_replication", |config| {
             config
                 .replication_mode(ReplicationMode::Logical)
                 .connect_timeout(
@@ -167,6 +168,35 @@ impl Config {
         match (self.inner.get_hosts(), self.inner.get_ports()) {
             ([Host::Tcp(host)], [port]) => Ok((host, *port)),
             _ => bail_generic!("only TCP connections to a single PostgreSQL server are supported"),
+        }
+    }
+
+    async fn connect_traced<F>(
+        &self,
+        task_name: &str,
+        configure: F,
+    ) -> Result<Client, PostgresError>
+    where
+        F: FnOnce(&mut tokio_postgres::Config),
+    {
+        let (host, port) = self.address()?;
+        let address = format!(
+            "{}@{}:{}/{}",
+            self.get_user().display_or("<unknown-user>"),
+            host,
+            port,
+            self.get_dbname().display_or("<unknown-dbname>")
+        );
+        info!(%task_name, %address, "connecting");
+        match self.connect_internal(task_name, configure).await {
+            Ok(t) => {
+                info!(%task_name, %address, "connected");
+                Ok(t)
+            }
+            Err(e) => {
+                warn!(%task_name, %address, "connection failed: {e:#}");
+                Err(e)
+            }
         }
     }
 

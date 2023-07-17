@@ -240,6 +240,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             // Nothing needs to be snapshot.
             if exports_to_snapshot.is_empty() {
+                trace!(%id, "no exports to snapshot");
                 return Ok(());
             }
 
