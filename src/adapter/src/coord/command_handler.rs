@@ -584,6 +584,12 @@ impl Coordinator {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
             Statement::CreateSource(stmt) => {
+                // Check privileges before purifying.
+                if let Err(e) =
+                    rbac::check_purify_create_source(&catalog, ctx.session(), &resolved_ids)
+                {
+                    return ctx.retire(Err(e));
+                }
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
                 let purify_fut = mz_sql::pure::purify_create_source(

@@ -137,6 +137,47 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
     }
 }
 
+/// Checks if a session is authorized to purify a CREATE SOURCE statement. Usually authorization is
+/// checked after planning by [`check_plan`]. However CREATE SOURCE statements are purified
+/// before planning, which may require the use of some connections and secrets.
+pub fn check_purify_create_source(
+    catalog: &impl SessionCatalog,
+    session: &Session,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), AdapterError> {
+    let current_role_id = session.current_role_id();
+    if catalog.try_get_role(current_role_id).is_none() {
+        // PostgreSQL allows users that have their role dropped to perform some actions,
+        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+        // role is dropped.
+        return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
+    };
+    if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
+        return Ok(());
+    }
+    if session.is_superuser() {
+        return Ok(());
+    }
+
+    // Obtain all roles that the current session is a member of.
+    let role_membership = catalog.collect_role_membership(current_role_id);
+
+    // Get required privileges. It's too early to determine cluster or schema related privileges,
+    // that has to happen after planning. We'll check this statement again once it's been planned
+    // with a more comprehensive list of required privileges.
+    let required_privileges =
+        generate_item_usage_privileges(catalog, resolved_ids, *current_role_id).collect();
+    check_object_privileges(
+        catalog,
+        required_privileges,
+        role_membership,
+        *current_role_id,
+    )?;
+
+    Ok(())
+}
+
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     coord: &Coordinator,
@@ -208,9 +249,12 @@ pub fn check_plan(
         resolved_ids,
         *current_role_id,
     );
-    let mut role_memberships = BTreeMap::new();
-    role_memberships.insert(*current_role_id, role_membership);
-    check_object_privileges(catalog, required_privileges, role_memberships)?;
+    check_object_privileges(
+        catalog,
+        required_privileges,
+        role_membership,
+        *current_role_id,
+    )?;
 
     check_superuser_required(plan)?;
 
@@ -1351,8 +1395,11 @@ fn generate_cluster_usage_privileges(
 fn check_object_privileges(
     catalog: &impl SessionCatalog,
     privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
-    mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>>,
+    role_membership: BTreeSet<RoleId>,
+    current_role_id: RoleId,
 ) -> Result<(), UnauthorizedError> {
+    let mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>> = BTreeMap::new();
+    role_memberships.insert(current_role_id, role_membership);
     for (object_id, acl_mode, role_id) in privileges {
         let role_membership = role_memberships
             .entry(role_id)

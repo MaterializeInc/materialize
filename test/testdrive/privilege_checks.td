@@ -210,26 +210,6 @@ $ kafka-ingest format=avro topic=rbac schema=${int-schema} timestamp=1
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
   WITH (SIZE '1')
-contains:permission denied for SCHEMA "materialize.public"
-
-$ postgres-execute connection=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO materialize;
-
-! CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE
-  WITH (SIZE '1')
-contains:permission denied for SYSTEM
-
-$ postgres-execute connection=mz_system
-GRANT CREATECLUSTER ON SYSTEM TO materialize;
-
-! CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE
-  WITH (SIZE '1')
 contains:permission denied for CONNECTION "materialize.public.kafka_conn"
 
 $ postgres-execute connection=mz_system
@@ -244,6 +224,26 @@ contains:permission denied for CONNECTION "materialize.public.csr_conn"
 
 $ postgres-execute connection=mz_system
 GRANT USAGE ON CONNECTION csr_conn TO materialize;
+
+! CREATE SOURCE s
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+  WITH (SIZE '1')
+contains:permission denied for SCHEMA "materialize.public"
+
+$ postgres-execute connection=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO materialize;
+
+! CREATE SOURCE s
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+  WITH (SIZE '1')
+contains:permission denied for SYSTEM
+
+$ postgres-execute connection=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO materialize;
 
 > CREATE SOURCE s
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
