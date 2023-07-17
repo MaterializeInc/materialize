@@ -595,6 +595,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub body_format: Format<T>,
     pub include_headers: bool,
     pub validate_using: Option<Expr<T>>,
+    pub in_cluster: T::ClusterName,
 }
 
 impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
@@ -604,6 +605,10 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
+
+        f.write_str(" IN CLUSTER ");
+        f.write_node(&self.in_cluster);
+
         f.write_str(" FROM WEBHOOK ");
 
         f.write_str("BODY FORMAT ");
