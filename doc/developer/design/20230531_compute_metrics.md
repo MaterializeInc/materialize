@@ -204,11 +204,11 @@ All metrics in this list have an `instance_id` label identifying the compute ins
   * [x] `mz_compute_peeks_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `result`
-    * **Description**: The total number of peeks served, by result type (completed, canceled).
+    * **Description**: The total number of peeks served, by result type (rows, error, canceled).
   * [x] `mz_compute_peek_duration_seconds`
     * **Type**: histogram
     * **Labels**: `instance_id`, `result`
-    * **Description**: A histogram of peek durations since restart, by result type (completed, canceled).
+    * **Description**: A histogram of peek durations since restart, by result type (rows, error, canceled).
 
 ### Replica Metrics
 

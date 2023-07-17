@@ -439,18 +439,11 @@ where
     }
 }
 
-/// Metrics for finished peeks, keyed by peek status.
-///
-/// The peek status is derived from the `PeekResponse` type as follows:
-///  * `Rows` and `Error` both map to `completed`
-///  * `Canceled` maps to `canceled`
-///
-/// This mapping is an attempt to limit the metric cardinality as much as possible while still
-/// allowing to differenciate between peeks that have returned a result and peeks that were
-/// canceled by the user.
+/// Metrics for finished peeks, keyed by peek result.
 #[derive(Debug)]
 pub struct PeekMetrics<M> {
-    completed: M,
+    rows: M,
+    error: M,
     canceled: M,
 }
 
@@ -460,7 +453,8 @@ impl<M> PeekMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
-            completed: build_metric("completed"),
+            rows: build_metric("rows"),
+            error: build_metric("error"),
             canceled: build_metric("canceled"),
         }
     }
@@ -469,7 +463,8 @@ impl<M> PeekMetrics<M> {
         use PeekResponse::*;
 
         match response {
-            Rows(_) | Error(_) => &self.completed,
+            Rows(_) => &self.rows,
+            Error(_) => &self.error,
             Canceled => &self.canceled,
         }
     }
