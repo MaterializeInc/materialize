@@ -31,11 +31,13 @@ class Webhook(Check):
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_webhook_sources = true
 
-                > CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT;
+                > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
-                > CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;
+                > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
 
-                > CREATE SOURCE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES;
+                > CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;
+
+                > CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;
 
                 $ webhook-append database=materialize schema=public name=webhook_text
                 fooä
@@ -113,6 +115,8 @@ class Webhook(Check):
                 \\\\x00\\x00\\x00\\x00
                 \\\\x01
                 \\\\x01\\x02\\x03\\x04
+
+                > DROP CLUSTER webhook_cluster CASCADE;
            """
             )
         )

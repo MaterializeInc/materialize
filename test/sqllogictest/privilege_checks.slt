@@ -279,16 +279,6 @@ CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
-simple conn=joe,user=joe
-CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT;
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=child,user=child
-CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT;
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
@@ -319,16 +309,6 @@ CREATE SOURCE s3 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
-CREATE SOURCE webhook_text_a FROM WEBHOOK BODY FORMAT TEXT;
-----
-COMPLETE 0
-
-simple conn=child,user=child
-CREATE SOURCE webhook_text_b FROM WEBHOOK BODY FORMAT TEXT;
-----
-COMPLETE 0
-
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
 ----
@@ -341,6 +321,16 @@ db error: ERROR: permission denied for CLUSTER "source_cluster"
 
 simple conn=child,user=child
 CREATE SOURCE s2 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
+----
+db error: ERROR: permission denied for CLUSTER "source_cluster"
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for CLUSTER "source_cluster"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
 ----
 db error: ERROR: permission denied for CLUSTER "source_cluster"
 
@@ -359,10 +349,30 @@ CREATE SOURCE s4 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATECLUSTER ON SYSTEM FROM joe;

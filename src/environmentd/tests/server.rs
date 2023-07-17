@@ -1650,7 +1650,13 @@ fn smoketest_webhook_source() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
             &[],
         )
         .expect("failed to create source");
@@ -1738,10 +1744,18 @@ fn test_invalid_webhook_body() {
     let mut client = server.connect(postgres::NoTls).unwrap();
     let http_client = Client::new();
 
+    // Create a cluster we can install webhook sources on.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+
     // Create a webhook source with a body format of text.
     client
         .execute(
-            "CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT",
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT",
             &[],
         )
         .expect("failed to create source");
@@ -1764,7 +1778,7 @@ fn test_invalid_webhook_body() {
     // Create a webhook source with a body format of JSON.
     client
         .execute(
-            "CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON",
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
             &[],
         )
         .expect("failed to create source");
@@ -1784,7 +1798,7 @@ fn test_invalid_webhook_body() {
     // Create a webhook source with a body format of bytes.
     client
         .execute(
-            "CREATE SOURCE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES",
+            "CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES",
             &[],
         )
         .expect("failed to create source");
@@ -1817,7 +1831,13 @@ fn test_webhook_duplicate_headers() {
     // Create a webhook source that includes headers.
     client
         .execute(
-            "CREATE SOURCE webhook_text FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS",
             &[],
         )
         .expect("failed to create source");
