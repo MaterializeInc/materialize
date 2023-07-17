@@ -7,19 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use mz_ore::metric;
-use mz_ore::metrics::raw::{HistogramVec, IntCounterVec};
+use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
-use mz_ore::stats::histogram_seconds_buckets;
-use mz_sql::ast::{statement_kind_label_value, StatementKind};
-use mz_sql::session::vars::IsolationLevel;
 
 #[derive(Clone, Debug)]
 pub struct MetricsConfig {
     connection_status: IntCounterVec,
-    time_to_first_row_seconds: HistogramVec,
 }
 
 impl MetricsConfig {
@@ -29,12 +23,6 @@ impl MetricsConfig {
                 name: "mz_connection_status",
                 help: "Count of completed network connections, by status",
                 var_labels: ["source", "status"],
-            }),
-            time_to_first_row_seconds: registry.register(metric! {
-                name: "mz_time_to_first_row_seconds",
-                help: "Latency of an execute for a successful query from pgwire's perspective",
-                var_labels: ["source", "kind", "isolation_level"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0)
             }),
         }
     }
@@ -62,24 +50,6 @@ impl Metrics {
         self.inner
             .connection_status
             .with_label_values(&[self.source_label(), Self::status_label(is_ok)])
-    }
-
-    pub fn time_to_first_row(
-        &self,
-        statement_kind: Option<StatementKind>,
-        isolation_level: IsolationLevel,
-        latency: Duration,
-    ) {
-        self.inner
-            .time_to_first_row_seconds
-            .with_label_values(&[
-                self.source_label(),
-                statement_kind
-                    .map(statement_kind_label_value)
-                    .unwrap_or("none"),
-                isolation_level.as_str(),
-            ])
-            .observe(latency.as_secs_f64());
     }
 
     fn status_label(is_ok: bool) -> &'static str {

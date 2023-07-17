@@ -36,7 +36,7 @@ use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, RecordFirstRowStream};
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -797,12 +797,12 @@ pub struct InProgressRows {
     /// The current batch of rows.
     pub current: Option<Vec<Row>>,
     /// A stream from which to fetch more row batches.
-    pub remaining: RowBatchStream,
+    pub remaining: RecordFirstRowStream,
 }
 
 impl InProgressRows {
     /// Creates a new InProgressRows from a batch stream.
-    pub fn new(remaining: RowBatchStream) -> Self {
+    pub fn new(remaining: RecordFirstRowStream) -> Self {
         Self {
             current: None,
             remaining,

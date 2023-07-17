@@ -10,8 +10,9 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
-use std::pin;
+use std::pin::{self, Pin};
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -28,7 +29,9 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, INTROSPECTION_USER};
 use mz_sql_parser::parser::ParserStatementError;
+use prometheus::Histogram;
 use serde_json::json;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
@@ -745,5 +748,67 @@ impl Timeout {
         for pending_timeout in timeouts {
             self.tx.send(pending_timeout).expect("rx is in this struct");
         }
+    }
+}
+
+/// A wrapper around an UnboundedReceiver of PeekResponseUnary that records when it sees the
+/// first row data in the given histogram
+#[derive(Debug)]
+pub struct RecordFirstRowStream {
+    pub rows: UnboundedReceiver<PeekResponseUnary>,
+    pub execute_started: Instant,
+    pub time_to_first_row_seconds: Histogram,
+    saw_rows: bool,
+}
+
+impl Future for RecordFirstRowStream {
+    type Output = Option<PeekResponseUnary>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let ret = self.as_mut().rows.poll_recv(cx);
+        if let Poll::Ready(msg) = &ret {
+            match &msg {
+                Some(PeekResponseUnary::Rows(_)) => {
+                    if !self.saw_rows {
+                        self.saw_rows = true;
+                        self.time_to_first_row_seconds
+                            .observe(self.execute_started.elapsed().as_secs_f64())
+                    }
+                }
+                Some(PeekResponseUnary::Canceled) | Some(PeekResponseUnary::Error(_)) | None => (),
+            }
+        }
+
+        ret
+    }
+}
+
+impl RecordFirstRowStream {
+    /// Create a new [`RecordFirstRowStream`]
+    pub fn new(
+        rows: UnboundedReceiver<PeekResponseUnary>,
+        execute_started: Instant,
+        client: &SessionClient,
+    ) -> Self {
+        let isolation_level = *client
+            .session
+            .as_ref()
+            .expect("session invariant")
+            .vars()
+            .transaction_isolation();
+        Self {
+            rows,
+            execute_started,
+            time_to_first_row_seconds: client
+                .inner()
+                .metrics()
+                .time_to_first_row_seconds
+                .with_label_values(&[isolation_level.as_str()]),
+            saw_rows: false,
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
+        self.await
     }
 }

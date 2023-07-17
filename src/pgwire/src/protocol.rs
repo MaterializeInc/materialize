@@ -11,13 +11,15 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
 };
 use mz_adapter::{
     AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
@@ -29,21 +31,21 @@ use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{FetchDirection, Ident, Raw, Statement, StatementKind};
+use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, IsolationLevel, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
-use tokio::time::{self, Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::{self};
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
-use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -85,8 +87,6 @@ pub struct RunParams<'a, A> {
     pub internal: bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    /// Metrics
-    pub metrics: Metrics,
 }
 
 /// Runs a pgwire connection to completion.
@@ -109,7 +109,6 @@ pub async fn run<'a, A>(
         frontegg,
         internal,
         active_connection_count,
-        metrics,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -322,7 +321,6 @@ where
     let machine = StateMachine {
         conn,
         adapter_client,
-        metrics,
     };
 
     select! {
@@ -427,7 +425,6 @@ enum State {
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
-    metrics: Metrics,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -579,7 +576,6 @@ where
     }
 
     async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
-        let statement_kind = StatementKind::from(&stmt);
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         let param_types = vec![];
@@ -620,7 +616,6 @@ where
             }
         }
 
-        let isolation_level = *self.adapter_client.session().vars().transaction_isolation();
         let execute_started = Instant::now();
         let result = match self
             .adapter_client
@@ -637,9 +632,7 @@ where
                     portal_exec_message,
                     None,
                     ExecuteTimeout::None,
-                    Some(statement_kind),
-                    isolation_level,
-                    Some(execute_started),
+                    execute_started,
                 )
                 .await
             }
@@ -955,10 +948,8 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
     ) -> BoxFuture<'_, Result<State, io::Error>> {
-        let execute_started = Instant::now();
         async move {
             let aborted_txn = self.is_aborted_txn();
-            let isolation_level = *self.adapter_client.session().vars().transaction_isolation();
 
             // Check if the portal has been started and can be continued.
             let portal = match self
@@ -984,7 +975,6 @@ where
             }
 
             let row_desc = portal.desc.relation_desc.clone();
-            let statement_kind = portal.stmt.as_ref().map(StatementKind::from);
             match &mut portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one. Postgres does this both here and
@@ -992,7 +982,7 @@ where
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
                     self.start_transaction(Some(1));
-
+                    let execute_started = Instant::now();
                     match self
                         .adapter_client
                         .execute(portal_name.clone(), self.conn.wait_closed())
@@ -1008,9 +998,7 @@ where
                                 get_response,
                                 fetch_portal_name,
                                 timeout,
-                                statement_kind,
-                                isolation_level,
-                                Some(execute_started),
+                                execute_started,
                             )
                             .await
                         }
@@ -1031,9 +1019,6 @@ where
                         get_response,
                         fetch_portal_name,
                         timeout,
-                        statement_kind,
-                        isolation_level,
-                        None, // don't need metrics because we've already started returning results
                     )
                     .await
                 }
@@ -1259,7 +1244,7 @@ where
         &'s mut self,
         parent: &'p tracing::Span,
         mut rows: RowsFuture,
-    ) -> Result<RowBatchStream, io::Error>
+    ) -> Result<UnboundedReceiver<PeekResponseUnary>, io::Error>
     where
         'p: 's,
     {
@@ -1298,9 +1283,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-        statement_kind: Option<StatementKind>,
-        isolation_level: IsolationLevel,
-        execute_started: Option<Instant>,
+        execute_started: Instant,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
 
@@ -1357,17 +1340,19 @@ where
 
                 let span = tracing::debug_span!(parent: &span, "send_execute_response");
                 let rows = self.row_future_to_stream(&span, rx).await?;
+
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(rows),
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        rows,
+                        execute_started,
+                        &self.adapter_client,
+                    )),
                     max_rows,
                     get_response,
                     fetch_portal_name,
                     timeout,
-                    statement_kind,
-                    isolation_level,
-                    execute_started,
                 )
                 .instrument(span)
                 .await
@@ -1412,14 +1397,15 @@ where
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(rx),
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        rx,
+                        execute_started,
+                        &self.adapter_client,
+                    )),
                     max_rows,
                     get_response,
                     fetch_portal_name,
                     timeout,
-                    statement_kind,
-                    isolation_level,
-                    execute_started,
                 )
                 .await
             }
@@ -1444,10 +1430,7 @@ where
                 self.copy_rows(
                     format,
                     row_desc,
-                    rows,
-                    statement_kind,
-                    isolation_level,
-                    execute_started,
+                    RecordFirstRowStream::new(rows, execute_started, &self.adapter_client),
                 )
                 .await
             }
@@ -1542,9 +1525,6 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-        statement_kind: Option<StatementKind>,
-        isolation_level: IsolationLevel,
-        mut execute_started: Option<Instant>,
     ) -> Result<State, io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
@@ -1563,9 +1543,10 @@ where
 
         let (mut wait_once, mut deadline) = match timeout {
             ExecuteTimeout::None => (false, None),
-            ExecuteTimeout::Seconds(t) => {
-                (false, Some(Instant::now() + Duration::from_secs_f64(t)))
-            }
+            ExecuteTimeout::Seconds(t) => (
+                false,
+                Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs_f64(t)),
+            ),
             ExecuteTimeout::WaitOnce => (true, None),
         };
 
@@ -1585,7 +1566,6 @@ where
             ExecuteCount::All => usize::MAX,
             ExecuteCount::Count(count) => count,
         };
-        let mut saw_any_rows = false;
 
         // Send rows while the client still wants them and there are still rows to send.
         loop {
@@ -1601,7 +1581,7 @@ where
                 let cancel_fut = self.adapter_client.canceled();
                 let notice_fut = self.adapter_client.session().recv_notice();
                 tokio::select! {
-                    _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                    _ = time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     notice = notice_fut => {
                         FetchResult::Notice(notice)
                     }
@@ -1618,17 +1598,6 @@ where
             match batch {
                 FetchResult::Rows(None) => break,
                 FetchResult::Rows(Some(mut batch_rows)) => {
-                    if !saw_any_rows {
-                        saw_any_rows = true;
-                        if let Some(execute_started) = execute_started.take() {
-                            // Not ideal but also includes the time to send notices back to the client, if applicable
-                            self.metrics.time_to_first_row(
-                                statement_kind.clone(),
-                                isolation_level.clone(),
-                                execute_started.elapsed(),
-                            );
-                        }
-                    }
                     // Verify the first row is of the expected type. This is often good enough to
                     // find problems. Notably it failed to find #6304 when "FETCH 2" was used in a
                     // test, instead we had to use "FETCH 1" twice.
@@ -1666,7 +1635,7 @@ where
                     // deadline == None). The second time this fn is called it should behave the
                     // same a 0s timeout.
                     if wait_once && !batch_rows.is_empty() {
-                        deadline = Some(Instant::now());
+                        deadline = Some(tokio::time::Instant::now());
                         wait_once = false;
                     }
 
@@ -1735,10 +1704,7 @@ where
         &mut self,
         format: CopyFormat,
         row_desc: RelationDesc,
-        mut stream: RowBatchStream,
-        statement_kind: Option<StatementKind>,
-        isolation_level: IsolationLevel,
-        mut execute_started: Option<Instant>,
+        mut stream: RecordFirstRowStream,
     ) -> Result<State, io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
@@ -1808,11 +1774,6 @@ where
                             .await;
                     }
                     Some(PeekResponseUnary::Rows(rows)) => {
-                        if count == 0 {
-                            if let Some(execute_started) = execute_started.take() {
-                                self.metrics.time_to_first_row(statement_kind, isolation_level, execute_started.elapsed());
-                            }
-                        }
                         count += rows.len();
                         for row in rows {
                             encode_fn(row, typ, &mut out)?;
