@@ -268,9 +268,10 @@ impl Diagnostics {
 /// # let client: mz_persist_client::PersistClient = unimplemented!();
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
+/// # let diagnostics = mz_persist_client::Diagnostics::new("", "");
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id, "desc",
-///     Arc::new(StringSchema),Arc::new(StringSchema))).await
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id,
+///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics)).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
