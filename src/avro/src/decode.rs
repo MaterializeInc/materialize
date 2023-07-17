@@ -1155,8 +1155,12 @@ pub mod public_decoders {
                     let mut buf = vec![];
                     buf.resize_with(len, Default::default);
                     r.read_exact(&mut buf)?;
-                    serde_json::from_slice(&buf)
-                        .map_err(|e| AvroError::Decode(DecodeError::BadJson(e.classify())))?
+                    serde_json::from_slice(&buf).map_err(|e| {
+                        AvroError::Decode(DecodeError::BadJson {
+                            category: e.classify(),
+                            bytes: buf.to_owned(),
+                        })
+                    })?
                 }
             };
             Ok(Value::Json(val))
