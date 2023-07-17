@@ -1158,7 +1158,7 @@ pub mod public_decoders {
                     serde_json::from_slice(&buf).map_err(|e| {
                         AvroError::Decode(DecodeError::BadJson {
                             category: e.classify(),
-                            string: buf.to_owned(),
+                            bytes: buf.to_owned(),
                         })
                     })?
                 }

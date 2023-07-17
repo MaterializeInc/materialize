@@ -451,7 +451,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
 
                         DecodeError::BadJson {
                             category: e.classify(),
-                            string: bytes,
+                            bytes,
                         }
                     })?;
             }
@@ -462,7 +462,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
                     .pack_slice(self.buf)
                     .map_err(|e| DecodeError::BadJson {
                         category: e.classify(),
-                        string: self.buf.to_owned(),
+                        bytes: self.buf.to_owned(),
                     })?;
             }
         }

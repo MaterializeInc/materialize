@@ -95,7 +95,7 @@ pub enum DecodeError {
         /// Ideally the original bytes,
         /// but might be a re-serialization of a deserialized value,
         /// if we no longer have access to the original.
-        string: Vec<u8>,
+        bytes: Vec<u8>,
     },
     BadUuid(uuid::Error),
     MismatchedBlockHeader {
@@ -175,9 +175,9 @@ impl DecodeError {
             DecodeError::StringUtf8Error => write!(f, "String was not valid UTF-8"),
             DecodeError::UuidUtf8Error => write!(f, "UUID was not valid UTF-8"),
             DecodeError::IntConversionError => write!(f, "Integer conversion failed"),
-            DecodeError::BadJson { category, string } => {
+            DecodeError::BadJson { category, bytes } => {
                 write!(f, "Json decoding failed: {:?}", category)?;
-                write!(f, " (got {})", String::from_utf8_lossy(string))
+                write!(f, " (got {})", String::from_utf8_lossy(bytes))
             }
             DecodeError::BadUuid(inner) => write!(f, "UUID decoding failed: {}", inner),
             DecodeError::MismatchedBlockHeader { expected, actual } => write!(
