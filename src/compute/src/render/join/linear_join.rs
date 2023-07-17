@@ -36,8 +36,8 @@ use crate::typedefs::RowSpine;
 #[derive(Clone, Copy, Default)]
 pub enum LinearJoinImpl {
     #[default]
-    DifferentialDataflow,
     Materialize,
+    DifferentialDataflow,
 }
 
 impl LinearJoinImpl {

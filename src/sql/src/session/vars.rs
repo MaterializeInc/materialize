@@ -994,7 +994,7 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_mz_join_core"),
-    value: &false,
+    value: &true,
     description:
         "Feature flag indicating whether compute rendering should use Materialize's custom linear \
          join implementation rather than the one from Differential Dataflow. (Materialize).",
