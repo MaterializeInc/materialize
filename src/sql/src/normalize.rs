@@ -88,15 +88,17 @@ pub fn unresolved_schema_name(
 ///
 /// Qualified operators outside of the pg_catalog schema are rejected.
 pub fn op(op: &Op) -> Result<&str, PlanError> {
-    if !op.namespace.is_empty()
-        && (op.namespace.len() != 1
-            || op.namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
-    {
-        sql_bail!(
-            "operator does not exist: {}.{}",
-            op.namespace.iter().map(|n| n.to_string()).join("."),
-            op.op,
-        )
+    if let Some(namespace) = &op.namespace {
+        if namespace.len() != 0
+            && (namespace.len() != 1
+                || namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
+        {
+            sql_bail!(
+                "operator does not exist: {}.{}",
+                namespace.iter().map(|n| n.to_string()).join("."),
+                op.op,
+            )
+        }
     }
     Ok(&op.op)
 }

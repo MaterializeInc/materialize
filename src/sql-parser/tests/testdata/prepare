@@ -18,7 +18,7 @@ PREPARE a AS SELECT 1 + $1
 ----
 PREPARE a AS SELECT 1 + $1
 =>
-Prepare(PrepareStatement { name: Ident("a"), stmt: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Parameter(1)) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }) })
+Prepare(PrepareStatement { name: Ident("a"), stmt: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Parameter(1)) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }) })
 
 parse-statement
 EXECUTE a
@@ -32,7 +32,7 @@ EXECUTE a (a, 'b', 1 + 2)
 ----
 EXECUTE a (a, 'b', 1 + 2)
 =>
-Execute(ExecuteStatement { name: Ident("a"), params: [Identifier([Ident("a")]), Value(String("b")), Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }] })
+Execute(ExecuteStatement { name: Ident("a"), params: [Identifier([Ident("a")]), Value(String("b")), Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }] })
 
 parse-statement
 DEALLOCATE a

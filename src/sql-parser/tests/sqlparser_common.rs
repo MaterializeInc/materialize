@@ -234,6 +234,7 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("+ a / b COLLATE coll", "(+a) / (b COLLATE coll)"),
         ("- ts AT TIME ZONE 'tz'", "(-ts) AT TIME ZONE 'tz'"),
         ("a[b].c::d", "((a[b]).c)::d"),
+        ("2 OPERATOR(*) 2 + 2", "2 OPERATOR(*) (2 + 2)"),
     ] {
         let left = parser::parse_expr(actual)?;
         let mut right = parser::parse_expr(expected)?;

@@ -127,12 +127,12 @@ query TT
 SHOW CREATE VIEW ADDER
 ----
 materialize.public.adder
-CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
+CREATE VIEW "materialize"."public"."adder" AS SELECT 2 OPERATOR(+) 2
 
 simple conn=mz_introspection,user=mz_introspection
 SHOW CREATE VIEW ADDER
 ----
-materialize.public.adder,CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
+materialize.public.adder,CREATE VIEW "materialize"."public"."adder" AS SELECT 2 OPERATOR(+) 2
 COMPLETE 1
 
 statement ok
@@ -142,7 +142,7 @@ query TT
 SHOW CREATE VIEW MULTIPLIER
 ----
 materialize.public.multiplier
-CREATE VIEW "materialize"."public"."multiplier" AS SELECT 2 * 2
+CREATE VIEW "materialize"."public"."multiplier" AS SELECT 2 OPERATOR(*) 2
 
 statement ok
 CREATE VIEW PG_MULTIPLIER AS SELECT 2 OPERATOR(pg_catalog.*) 2;
@@ -155,3 +155,9 @@ CREATE VIEW "materialize"."public"."pg_multiplier" AS SELECT 2 OPERATOR(pg_catal
 
 query error Expected operator, found number "5."
 CREATE VIEW INVALID_FIVE AS select 2 OPERATOR(5.*) 2;
+
+query II
+SELECT 2 OPERATOR(*) 2 + 2, 2 * 2 + 2
+----
+8
+6
