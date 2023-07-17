@@ -287,7 +287,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                                         .remap_collection_id
                                                         .to_string(),
                                                     handle_purpose: format!(
-                                                        "resumption data {}",
+                                                        "resumption data for {}",
                                                         id
                                                     ),
                                                 },

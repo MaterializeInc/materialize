@@ -126,6 +126,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             &storage_state.source_uppers[&description.remap_collection_id],
         ),
         params,
+        remap_collection_id: description.remap_collection_id.clone(),
     };
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the

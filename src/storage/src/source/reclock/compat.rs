@@ -76,6 +76,7 @@ where
         //
         // TODO(guswynn): use the type-system to prevent misuse here.
         remap_relation_desc: RelationDesc,
+        remap_collection_id: GlobalId,
     ) -> anyhow::Result<Self> {
         let remap_shard = metadata.remap_shard.ok_or_else(|| {
             anyhow!("cannot create remap PersistHandle for collection without remap shard")
@@ -92,8 +93,8 @@ where
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
                 Diagnostics {
-                    shard_name: id.to_string(),
-                    handle_purpose: format!("reclock {}", id),
+                    shard_name: remap_collection_id.to_string(),
+                    handle_purpose: format!("reclock for {}", id),
                 },
             )
             .await
