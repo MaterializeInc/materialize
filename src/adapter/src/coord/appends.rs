@@ -117,7 +117,7 @@ impl PendingWriteTxn {
 /// deferring work.
 #[macro_export]
 macro_rules! guard_write_critical_section {
-    ($coord:expr, $ctx:expr, $plan_to_defer:expr, $source_ids:expr) => {
+    ($coord:expr, $ctx:expr, $plan_to_defer:expr, $dependency_ids:expr) => {
         if !$ctx.session().has_write_lock() {
             if $coord
                 .try_grant_session_write_lock($ctx.session_mut())
@@ -128,7 +128,7 @@ macro_rules! guard_write_critical_section {
                     plan: $plan_to_defer,
                     validity: PlanValidity {
                         transient_revision: $coord.catalog().transient_revision(),
-                        source_ids: $source_ids,
+                        dependency_ids: $dependency_ids,
                         cluster_id: None,
                         replica_id: None,
                     },
