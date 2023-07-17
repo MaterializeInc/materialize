@@ -515,7 +515,7 @@ mod raw_persist_benchmark {
                     id,
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
-                    Diagnostics::new("", "open loop"),
+                    Diagnostics::from_purpose("open loop"),
                 )
                 .await?;
 
@@ -550,7 +550,7 @@ mod raw_persist_benchmark {
                     id,
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
-                    Diagnostics::new("", "open loop"),
+                    Diagnostics::from_purpose("open loop"),
                 )
                 .await?;
 
@@ -599,7 +599,7 @@ mod raw_persist_benchmark {
                     id,
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
-                    Diagnostics::new("", "open loop"),
+                    Diagnostics::from_purpose("open loop"),
                 )
                 .await?;
 

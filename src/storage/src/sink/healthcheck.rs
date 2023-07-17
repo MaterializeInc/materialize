@@ -517,7 +517,7 @@ mod tests {
                 shard_id,
                 Arc::new(MZ_SINK_STATUS_HISTORY_DESC.clone()),
                 Arc::new(UnitSchema),
-                Diagnostics::new("", "tests::dump_storage_collection"),
+                Diagnostics::from_purpose("tests::dump_storage_collection"),
             )
             .await
             .unwrap();

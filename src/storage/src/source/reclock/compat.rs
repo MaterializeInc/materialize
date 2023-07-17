@@ -91,7 +91,10 @@ where
                 remap_shard,
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
-                Diagnostics::new(&id.to_string(), &format!("reclock {}", id)),
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: format!("reclock {}", id),
+                },
             )
             .await
             .context("error opening persist shard")?;

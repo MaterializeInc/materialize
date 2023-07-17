@@ -69,7 +69,7 @@ async fn bench_writes_one_iter(
             ShardId::new(),
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
-            Diagnostics::new("", "bench"),
+            Diagnostics::from_purpose("bench"),
         )
         .await?;
 
@@ -123,7 +123,7 @@ async fn bench_write_to_listen_one_iter(
             ShardId::new(),
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
-            Diagnostics::new("", "bench"),
+            Diagnostics::from_purpose("bench"),
         )
         .await?;
 
@@ -214,7 +214,7 @@ pub fn bench_snapshot(
                     shard_id,
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
-                    Diagnostics::new("", "bench"),
+                    Diagnostics::from_purpose("bench"),
                 )
                 .await
                 .expect("failed to open shard");
@@ -239,7 +239,7 @@ async fn bench_snapshot_one_iter(
             *shard_id,
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
-            Diagnostics::new("", "bench"),
+            Diagnostics::from_purpose("bench"),
         )
         .await?;
 

@@ -273,8 +273,10 @@ where
                     shard_id,
                     key_schema,
                     val_schema,
-                    Diagnostics::new(&name_owned,
-                                     &format!("shard_source({})", name_owned)),
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source({})", name_owned),
+                    }
                 )
                 .await
                 .expect("could not open persist shard");
@@ -635,10 +637,10 @@ where
                     shard_id,
                     key_schema,
                     val_schema,
-                    Diagnostics::new(
-                        &name_owned,
-                        &format!("shard_source_fetch batch fetcher {}", name_owned),
-                    ),
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+                    },
                 )
                 .await
         };
@@ -818,7 +820,7 @@ mod tests {
                 shard_id,
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                Diagnostics::new("tests", "tests"),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("invalid usage");

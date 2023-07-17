@@ -1914,7 +1914,10 @@ where
                 metadata.data_shard,
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
-                Diagnostics::new(&id.to_string(), &format!("snapshot {}", id)),
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: format!("snapshot {}", id),
+                },
             )
             .await
             .expect("invalid persist usage");
@@ -2542,7 +2545,10 @@ where
         WriteHandle<SourceData, (), T, Diff>,
         SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
     ) {
-        let diagnostics = Diagnostics::new(&id.to_string(), &format!("controller data for {}", id));
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
         let write = persist_client
             .open_writer(
                 shard,
@@ -2978,7 +2984,7 @@ where
                         Arc::new(RelationDesc::empty()),
                         Arc::new(UnitSchema),
                         // TODO: thread the global ID into the shard finalization WAL
-                        Diagnostics::new("unknown", "finalizing shards"),
+                        Diagnostics::from_purpose("finalizing shards"),
                     )
                     .await
                     .expect("invalid persist usage");
@@ -2992,7 +2998,7 @@ where
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
                             // TODO: thread the global ID into the shard finalization WAL
-                            Diagnostics::new("unknown", "finalizing shards"),
+                            Diagnostics::from_purpose("finalizing shards"),
                         )
                         .await
                         .expect("invalid persist usage");

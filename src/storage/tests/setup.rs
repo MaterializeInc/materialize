@@ -332,7 +332,7 @@ where
                                 // schema.
                                 Arc::new(RelationDesc::empty()),
                                 Arc::new(UnitSchema),
-                                Diagnostics::new("", "tests::check_loop"),
+                                Diagnostics::from_purpose("tests::check_loop"),
                             )
                             .await
                             .unwrap();

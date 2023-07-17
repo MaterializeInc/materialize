@@ -339,10 +339,13 @@ where
                 shard_id,
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
-                Diagnostics::new(
-                    &sink_id.to_string(),
-                    &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
-                ),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!(
+                        "compute::persist_sink::mint_batch_descriptions {}",
+                        sink_id
+                    ),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -620,10 +623,10 @@ where
                 shard_id,
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
-                Diagnostics::new(
-                    &sink_id.to_string(),
-                    &format!("compute::persist_sink::write_batches {}", sink_id),
-                ),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!("compute::persist_sink::write_batches {}", sink_id),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -979,10 +982,10 @@ where
                 shard_id,
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
-                    Diagnostics::new(&sink_id.to_string(),
-                                     &format!("persist_sink::append_batches {}", sink_id)
-                    )
-
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!("persist_sink::append_batches {}", sink_id),
+                },
             )
             .await
             .expect("could not open persist shard");

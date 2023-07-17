@@ -43,10 +43,10 @@ pub async fn write_to_persist(
             status_shard,
             Arc::new(relation_desc.clone()),
             Arc::new(UnitSchema),
-            Diagnostics::new(
-                &collection_id.to_string(),
-                &format!("healthcheck::write_to_persist {}", collection_id),
-            ),
+            Diagnostics {
+                shard_name: collection_id.to_string(),
+                handle_purpose: format!("healthcheck::write_to_persist {}", collection_id),
+            },
         )
         .await
         .expect(

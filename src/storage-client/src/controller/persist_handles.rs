@@ -607,7 +607,7 @@ mod tests {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics::new("test", "test"),
+                Diagnostics::for_tests(),
             )
             .await
             .unwrap();
@@ -616,7 +616,7 @@ mod tests {
                 shard_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
-                Diagnostics::new("test", "test"),
+                Diagnostics::for_tests(),
             )
             .await
             .unwrap();

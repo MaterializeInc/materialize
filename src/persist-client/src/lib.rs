@@ -232,21 +232,23 @@ impl ShardId {
 /// e.g. for logging, metric labels, etc.
 #[derive(Clone, Debug)]
 pub struct Diagnostics {
-    shard_name: String,
-    handle_purpose: String,
+    /// A user-friendly name for the shard.
+    pub shard_name: String,
+    /// A purpose for the handle.
+    pub handle_purpose: String,
 }
 
 impl Diagnostics {
-    /// Create a new `Diagnostics`.
-    pub fn new(shard_name: &str, handle_purpose: &str) -> Self {
+    /// Create a new `Diagnostics` from `handle_purpose`.
+    pub fn from_purpose(handle_purpose: &str) -> Self {
         Self {
-            shard_name: shard_name.to_string(),
+            shard_name: "unknown".to_string(),
             handle_purpose: handle_purpose.to_string(),
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_tests() -> Self {
+    /// Create a new `Diagnostics` for testing.
+    pub fn for_tests() -> Self {
         Self {
             shard_name: "test-shard-name".to_string(),
             handle_purpose: "test-purpose".to_string(),
@@ -268,7 +270,7 @@ impl Diagnostics {
 /// # let client: mz_persist_client::PersistClient = unimplemented!();
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
-/// # let diagnostics = mz_persist_client::Diagnostics::new("", "");
+/// # let diagnostics = mz_persist_client::Diagnostics { shard_name: "".into(), handle_purpose: "".into() };
 /// # async {
 /// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id,
 ///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics)).await

@@ -141,7 +141,7 @@ impl Transactor {
                 shard_id,
                 Arc::new(MaelstromKeySchema),
                 Arc::new(MaelstromValSchema),
-                Diagnostics::new("", "maelstrom long-lived"),
+                Diagnostics::from_purpose("maelstrom long-lived"),
             )
             .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
@@ -150,7 +150,7 @@ impl Transactor {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics::new("", "maelstrom since"),
+                Diagnostics::from_purpose("maelstrom since"),
             )
             .await?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
@@ -271,7 +271,7 @@ impl Transactor {
                     self.shard_id,
                     Arc::new(MaelstromKeySchema),
                     Arc::new(MaelstromValSchema),
-                    Diagnostics::new("", "maelstrom short-lived"),
+                    Diagnostics::from_purpose("maelstrom short-lived"),
                 )
                 .await
                 .expect("codecs should match");
@@ -303,7 +303,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::new("", "maelstrom since"),
+                            Diagnostics::from_purpose("maelstrom since"),
                         )
                         .await?;
                     continue;
@@ -337,7 +337,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::new("", "maelstrom since"),
+                            Diagnostics::from_purpose("maelstrom since"),
                         )
                         .await?;
                     continue;

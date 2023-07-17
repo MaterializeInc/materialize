@@ -76,6 +76,7 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
 }
 
 async fn reclock_resume_uppers<C, IntoTime>(
+    id: &GlobalId,
     persist_clients: &PersistClientCache,
     ingestion_description: &IngestionDescription<CollectionMetadata>,
     as_of: Antichain<IntoTime>,
@@ -133,10 +134,10 @@ where
                             metadata.remap_shard.clone().unwrap(),
                             Arc::new(ingestion_description.desc.connection.timestamp_desc()),
                             Arc::new(UnitSchema),
-                            Diagnostics::new(
-                                &ingestion_description.remap_collection_id.to_string(),
-                                &format!("reclock for {}", ingestion_description),
-                            ),
+                            Diagnostics {
+                                shard_name: ingestion_description.remap_collection_id.to_string(),
+                                handle_purpose: format!("reclock for {}", id),
+                            },
                         )
                         .await
                         .expect("shard unavailable");
@@ -245,10 +246,10 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     *data_shard,
                                     Arc::new(relation_desc.clone()),
                                     Arc::new(UnitSchema),
-                                    Diagnostics::new(
-                                        &id.to_string(),
-                                        &format!("resumption data {}", id),
-                                    ),
+                                    Diagnostics {
+                                        shard_name: id.to_string(),
+                                        handle_purpose: format!("resumption data {}", id),
+                                    },
                                 )
                                 .await
                                 .unwrap();
@@ -281,12 +282,15 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                                         .timestamp_desc(),
                                                 ),
                                                 Arc::new(UnitSchema),
-                                                Diagnostics::new(
-                                                    &ingestion_description
+                                                Diagnostics {
+                                                    shard_name: ingestion_description
                                                         .remap_collection_id
                                                         .to_string(),
-                                                    &format!("resumption data {}", id),
-                                                ),
+                                                    handle_purpose: format!(
+                                                        "resumption data {}",
+                                                        id
+                                                    ),
+                                                },
                                             )
                                             .await
                                             .unwrap();
@@ -328,6 +332,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         let source_resume_uppers = match ingestion_description.desc.connection {
                             GenericSourceConnection::Kafka(_) => {
                                 let uppers = reclock_resume_uppers::<KafkaSourceConnection, _>(
+                                    &id,
                                     &persist_clients,
                                     &ingestion_description,
                                     as_of.clone(),
@@ -338,6 +343,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             }
                             GenericSourceConnection::Postgres(_) => {
                                 let uppers = reclock_resume_uppers::<PostgresSourceConnection, _>(
+                                    &id,
                                     &persist_clients,
                                     &ingestion_description,
                                     as_of.clone(),
@@ -349,6 +355,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             GenericSourceConnection::LoadGenerator(_) => {
                                 let uppers =
                                     reclock_resume_uppers::<LoadGeneratorSourceConnection, _>(
+                                        &id,
                                         &persist_clients,
                                         &ingestion_description,
                                         as_of.clone(),
@@ -360,6 +367,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             GenericSourceConnection::TestScript(_) => {
                                 let uppers =
                                     reclock_resume_uppers::<TestScriptSourceConnection, _>(
+                                        &id,
                                         &persist_clients,
                                         &ingestion_description,
                                         as_of.clone(),

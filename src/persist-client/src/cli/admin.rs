@@ -439,7 +439,7 @@ async fn make_machine(
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
         Arc::new(IsolatedRuntime::new()),
-        Diagnostics::new("unknown", "admin"),
+        Diagnostics::from_purpose("admin"),
     )
     .await?;
 

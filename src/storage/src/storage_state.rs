@@ -385,7 +385,10 @@ impl SinkHandle {
                     shard_id,
                     Arc::new(from_relation_desc),
                     Arc::new(UnitSchema),
-                    Diagnostics::new(&sink_id.to_string(), &format!("sink::since {}", sink_id)),
+                    Diagnostics {
+                        shard_name: sink_id.to_string(),
+                        handle_purpose: format!("sink::since {}", sink_id),
+                    },
                 )
                 .await
                 .expect("opening reader for shard");

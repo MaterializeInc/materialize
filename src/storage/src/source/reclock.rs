@@ -802,7 +802,7 @@ mod tests {
                 remap_shard,
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
-                Diagnostics::new("", "test_since_hold"),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1090,7 +1090,7 @@ mod tests {
                 remap_shard,
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
-                Diagnostics::new("", "test_since_hold"),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1287,7 +1287,7 @@ mod tests {
                 remap_shard,
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
-                Diagnostics::new("", "test_since_hold"),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1479,7 +1479,7 @@ mod tests {
                 binding_shard,
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
-                Diagnostics::new("", "test_since_hold"),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
