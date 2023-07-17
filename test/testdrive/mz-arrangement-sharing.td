@@ -567,6 +567,7 @@ ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
 > SET cluster=default
+> DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
