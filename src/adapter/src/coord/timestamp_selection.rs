@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -541,6 +541,10 @@ pub struct TimestampExplanation<T> {
     pub determination: TimestampDetermination<T>,
     /// Details about each source.
     pub sources: Vec<TimestampSource<T>>,
+    /// Wall time of first statement executed in this transaction
+    pub session_wall_time: DateTime<Utc>,
+    /// Cached value of determination.respond_immediately()
+    pub respond_immediately: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -641,9 +645,15 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
         writeln!(
             f,
             "        can respond immediately: {}",
-            self.determination.respond_immediately()
+            self.respond_immediately
         )?;
         writeln!(f, "                       timeline: {:?}", &timeline)?;
+        writeln!(
+            f,
+            "              session wall time: {:13} ({})",
+            self.session_wall_time.naive_local().timestamp_millis(),
+            self.session_wall_time.format("%Y-%m-%d %H:%M:%S%.3f"),
+        )?;
 
         for source in &self.sources {
             writeln!(f, "")?;

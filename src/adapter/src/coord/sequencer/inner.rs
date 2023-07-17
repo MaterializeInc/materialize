@@ -3006,9 +3006,12 @@ impl Coordinator {
                 }
             }
         }
+        let respond_immediately = determination.respond_immediately();
         TimestampExplanation {
             determination,
             sources,
+            session_wall_time: session.pcx().wall_time,
+            respond_immediately,
         }
     }
 
