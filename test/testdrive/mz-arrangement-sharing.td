@@ -10,6 +10,7 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_with_mutually_recursive = true
 
+> SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
 > CREATE TABLE u (c int, d int)
@@ -567,6 +568,7 @@ ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
 > SET cluster=default
+> DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -796,9 +798,9 @@ ReduceInaccumulable
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'debug'
 
-> CREATE CLUSTER REPLICA default.r2 SIZE = '2', INTROSPECTION DEBUGGING = true;
+> CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
-> SET cluster_replica = r2;
+> SET cluster_replica = replica;
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange Timely(Reachability)"
@@ -820,3 +822,5 @@ ALTER SYSTEM SET log_filter = 'debug'
 "ArrangeByKey Timely(MessagesSent)"
 "ArrangeByKey Timely(Operates)"
 "ArrangeByKey Timely(Parks)"
+
+> DROP CLUSTER REPLICA default.replica
