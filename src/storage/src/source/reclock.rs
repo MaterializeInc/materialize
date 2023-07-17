@@ -696,6 +696,7 @@ mod tests {
             0,
             1,
             PROGRESS_DESC.clone(),
+            GlobalId::Explain,
         )
         .await
         .unwrap();
