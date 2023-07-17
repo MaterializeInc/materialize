@@ -92,7 +92,6 @@ impl SshTunnelConfig {
                 return Err(e);
             }
         };
-        info!(%tunnel_id, %local_port, "connected to ssh tunnel");
         let local_port = match port_forward(&mut session, remote_host, remote_port).await {
             Ok(local_port) => local_port,
             Err(e) => {
@@ -100,6 +99,7 @@ impl SshTunnelConfig {
                 return Err(e);
             }
         };
+        info!(%tunnel_id, %local_port, "connected to ssh tunnel");
         let local_port = Arc::new(AtomicU16::new(local_port));
 
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
@@ -139,6 +139,13 @@ impl SshTunnelConfig {
             local_port,
             _join_handle: join_handle.abort_on_drop(),
         })
+    }
+
+    /// Validates the SSH configuration by establishing a connection to the intermediate SSH
+    /// bastion host. It does not set up a port forwarding tunnel.
+    pub async fn validate(&self) -> Result<(), anyhow::Error> {
+        connect(self).await?;
+        Ok(())
     }
 }
 

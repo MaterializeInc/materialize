@@ -184,6 +184,7 @@ impl AwsConfig {
     #[allow(clippy::unused_async)]
     pub(crate) async fn validate(
         &self,
+        _id: GlobalId,
         _connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         Err(anyhow!("Validating SSH connections is not supported yet"))

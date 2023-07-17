@@ -462,6 +462,7 @@ impl Coordinator {
         CreateConnectionValidationReady {
             mut ctx,
             result,
+            connection_gid,
             mut plan_validity,
             otel_ctx,
         }: CreateConnectionValidationReady,
@@ -474,18 +475,22 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            ctx.retire(Err(e));
-            return;
+            let _ = self.secrets_controller.delete(connection_gid).await;
+            return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
-            Err(e) => return ctx.retire(Err(e)),
+            Err(e) => {
+                let _ = self.secrets_controller.delete(connection_gid).await;
+                return ctx.retire(Err(e));
+            }
         };
 
         let result = self
             .sequence_create_connection_stage_finish(
                 ctx.session_mut(),
+                connection_gid,
                 plan,
                 ResolvedIds(plan_validity.dependency_ids),
             )
