@@ -31,7 +31,7 @@ use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tracing::{debug, instrument};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
@@ -54,7 +54,7 @@ pub struct PersistClientCache {
     pub(crate) metrics: Arc<Metrics>,
     blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob + Send + Sync>)>>,
     consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,
-    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
     _pubsub_receiver_task: JoinHandle<()>,
@@ -93,7 +93,7 @@ impl PersistClientCache {
             metrics,
             blob_by_uri: Mutex::new(BTreeMap::new()),
             consensus_by_uri: Mutex::new(BTreeMap::new()),
-            cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
+            isolated_runtime: Arc::new(IsolatedRuntime::new()),
             state_cache,
             pubsub_sender: pubsub_client.sender,
             _pubsub_receiver_task,
@@ -129,7 +129,7 @@ impl PersistClientCache {
             blob,
             consensus,
             Arc::clone(&self.metrics),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             Arc::clone(&self.state_cache),
             Arc::clone(&self.pubsub_sender),
         )

@@ -97,7 +97,7 @@ use timely::progress::Timestamp;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
@@ -253,7 +253,7 @@ pub struct PersistClient {
     blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
-    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    isolated_runtime: Arc<IsolatedRuntime>,
     shared_states: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
 }
@@ -269,7 +269,7 @@ impl PersistClient {
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, ExternalError> {
@@ -280,7 +280,7 @@ impl PersistClient {
             blob,
             consensus,
             metrics,
-            cpu_heavy_runtime,
+            isolated_runtime,
             shared_states,
             pubsub_sender,
         })
@@ -365,9 +365,10 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
@@ -520,9 +521,10 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
             .register_critical_reader::<O>(&reader_id, purpose)
@@ -574,9 +576,10 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
         let schemas = Schemas {
             key: key_schema,
@@ -586,7 +589,7 @@ impl PersistClient {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
-                Arc::clone(&self.cpu_heavy_runtime),
+                Arc::clone(&self.isolated_runtime),
                 writer_id.clone(),
                 schemas.clone(),
                 gc.clone(),
@@ -609,7 +612,7 @@ impl PersistClient {
             gc,
             compact,
             Arc::clone(&self.blob),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             writer_id,
             schemas,
             shard_upper.0,

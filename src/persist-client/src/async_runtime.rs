@@ -15,27 +15,36 @@ use mz_ore::task::RuntimeExt;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
 
-/// A runtime for running CPU-heavy asynchronous tasks.
+/// An isolated runtime for asynchronous tasks, particularly work
+/// that may be CPU intensive such as encoding/decoding and shard
+/// maintenance.
+///
+/// Using a separate runtime allows Persist to isolate its expensive
+/// workloads on its own OS threads as an insurance policy against
+/// tasks that erroneously fail to yield for a long time. By using
+/// separate OS threads, the scheduler is able to context switch
+/// out of any problematic tasks, preserving liveness for the rest
+/// of the process.
 #[derive(Debug)]
-pub struct CpuHeavyRuntime {
+pub struct IsolatedRuntime {
     inner: Option<Runtime>,
 }
 
-impl CpuHeavyRuntime {
-    /// Creates a new CPU heavy runtime.
-    pub fn new() -> CpuHeavyRuntime {
+impl IsolatedRuntime {
+    /// Creates a new isolated runtime.
+    pub fn new() -> IsolatedRuntime {
         // TODO: choose a more principled `worker_limit`. Right now we use the
         // Tokio default, which is presently the number of cores on the machine.
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("known to be valid");
-        CpuHeavyRuntime {
+        IsolatedRuntime {
             inner: Some(runtime),
         }
     }
 
-    /// Spawns a CPU-heavy task onto this runtime.
+    /// Spawns a task onto this runtime.
     pub fn spawn_named<N, S, F>(&self, name: N, fut: F) -> JoinHandle<F::Output>
     where
         S: AsRef<str>,
@@ -50,11 +59,11 @@ impl CpuHeavyRuntime {
     }
 }
 
-impl Drop for CpuHeavyRuntime {
+impl Drop for IsolatedRuntime {
     fn drop(&mut self) {
         // We don't need to worry about `shutdown_background` leaking
         // blocking tasks (i.e., tasks spawned with `spawn_blocking`) because
-        // the `CpuHeavyRuntime` wrapper prevents access to `spawn_blocking`.
+        // the `IsolatedRuntime` wrapper prevents access to `spawn_blocking`.
         self.inner
             .take()
             .expect("cannot drop twice")

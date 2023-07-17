@@ -28,7 +28,7 @@ use mz_persist_types::codec_impls::TodoSchema;
 use prometheus::proto::{MetricFamily, MetricType};
 use tracing::{info, warn};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -234,7 +234,7 @@ pub async fn force_compaction(
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
                     Arc::clone(&machine.applier.shard_metrics),
-                    Arc::new(CpuHeavyRuntime::new()),
+                    Arc::new(IsolatedRuntime::new()),
                     req,
                     schemas,
                 )
@@ -438,6 +438,7 @@ async fn make_machine(
         state_versions,
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
+        Arc::new(IsolatedRuntime::new()),
     )
     .await?;
 
