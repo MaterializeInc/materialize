@@ -61,6 +61,27 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
     restart_mz(c)
 
 
+def workflow_validate_connection(c: Composition) -> None:
+    c.up("materialized", "ssh-bastion-host", "postgres")
+
+    c.run("testdrive", "setup.td")
+
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+
+    c.run("testdrive", "--no-reset", "validate-failures.td")
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    c.run("testdrive", "--no-reset", "validate-success.td")
+
+
 def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
@@ -302,6 +323,7 @@ def workflow_default(c: Composition) -> None:
     # and kafka implementations.
     workflow_basic_ssh_features(c, redpanda=False)
     workflow_basic_ssh_features(c, redpanda=True)
+    workflow_validate_connection(c)
     # https://github.com/MaterializeInc/materialize/issues/19252
     # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
     # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
