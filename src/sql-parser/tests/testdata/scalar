@@ -28,17 +28,17 @@ Parameter(1)
 parse-scalar
 $91 + $42
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Parameter(91), expr2: Some(Parameter(42)) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Parameter(91), expr2: Some(Parameter(42)) }
 
 parse-scalar
 NOT salary = ''
 ----
-Not { expr: Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
+Not { expr: Op { op: Op { namespace: None, op: "=" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
 
 parse-scalar
 salary <> 'Not Provided' AND salary <> ''
 ----
-And { left: Op { op: Op { namespace: [], op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String("Not Provided"))) }, right: Op { op: Op { namespace: [], op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
+And { left: Op { op: Op { namespace: None, op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String("Not Provided"))) }, right: Op { op: Op { namespace: None, op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
 
 parse-scalar
 name LIKE '%a'
@@ -133,12 +133,12 @@ IsExpr { expr: Identifier([Ident("name")]), construct: Unknown, negated: true }
 parse-scalar
 1 + 1 IS DISTINCT FROM 1 + 2
 ----
-IsExpr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: false }
+IsExpr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: false }
 
 parse-scalar
 1 + 1 IS NOT DISTINCT FROM 1 + 2
 ----
-IsExpr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: true }
+IsExpr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: true }
 
 parse-scalar
 1 + 1 IS DISTINCT NOT FROM 1 + 2
@@ -150,32 +150,32 @@ error: Expected FROM, found NOT
 parse-scalar
 a ~ 'foo'
 ----
-Op { op: Op { namespace: [], op: "~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a ~* 'foo'
 ----
-Op { op: Op { namespace: [], op: "~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !~ 'foo'
 ----
-Op { op: Op { namespace: [], op: "!~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "!~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !~* 'foo'
 ----
-Op { op: Op { namespace: [], op: "!~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "!~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !x 'foo'
 ----
-Op { op: Op { namespace: [], op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] } }) }
+Op { op: Op { namespace: None, op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] } }) }
 
 parse-scalar
 a !x
 ----
-Op { op: Op { namespace: [], op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("x")])) }
+Op { op: Op { namespace: None, op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("x")])) }
 
 # Casts
 
@@ -551,7 +551,7 @@ Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1")
 parse-scalar
 (SELECT 1) + (SELECT 2)
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
 
 parse-scalar roundtrip
 1 < 2
@@ -596,7 +596,7 @@ parse-scalar roundtrip
 parse-scalar roundtrip
 1 OPERATOR(+) 2
 ----
-1 + 2
+1 OPERATOR(+) 2
 
 parse-scalar roundtrip
 1 OPERATOR(pg_catalog.+) 2
@@ -604,14 +604,34 @@ parse-scalar roundtrip
 1 OPERATOR(pg_catalog.+) 2
 
 parse-scalar
+1 OPERATOR(+) 2
+----
+Op { op: Op { namespace: Some([]), op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar
+1 OPERATOR(*) 2
+----
+Op { op: Op { namespace: Some([]), op: "*" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar roundtrip
+1 OPERATOR(*) 2
+----
+1 OPERATOR(*) 2
+
+parse-scalar
+1 OPERATOR(pg_catalog.+) 2
+----
+Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar
 1 < ANY (SELECT 2)
 ----
-AnySubquery { left: Value(Number("1")), op: Op { namespace: [], op: "<" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }
+AnySubquery { left: Value(Number("1")), op: Op { namespace: None, op: "<" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }
 
 parse-scalar
 1 < ANY (fn())
 ----
-AnyExpr { left: Value(Number("1")), op: Op { namespace: [], op: "<" }, right: Function(Function { name: Name(UnresolvedItemName([Ident("fn")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }
+AnyExpr { left: Value(Number("1")), op: Op { namespace: None, op: "<" }, right: Function(Function { name: Name(UnresolvedItemName([Ident("fn")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }
 
 parse-scalar
 LIST[]
@@ -626,7 +646,7 @@ List([Value(Number("1")), Value(String("foo"))])
 parse-scalar
 LIST[LIST[1 + 1, 2], a || b]
 ----
-List([List([Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, Value(Number("2"))]), Op { op: Op { namespace: [], op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }])
+List([List([Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, Value(Number("2"))]), Op { op: Op { namespace: None, op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }])
 
 parse-scalar
 LIST[1,2,3][1]
@@ -706,99 +726,99 @@ ARRAY[1, 2, 3][-1]
 parse-scalar
 a -> b
 ----
-Op { op: Op { namespace: [], op: "->" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "->" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ->> b
 ----
-Op { op: Op { namespace: [], op: "->>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "->>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #> b
 ----
-Op { op: Op { namespace: [], op: "#>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "#>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #>> b
 ----
-Op { op: Op { namespace: [], op: "#>>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "#>>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @> b
 ----
-Op { op: Op { namespace: [], op: "@>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "@>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a <@ b
 ----
-Op { op: Op { namespace: [], op: "<@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "<@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ? b
 ----
-Op { op: Op { namespace: [], op: "?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ?| b
 ----
-Op { op: Op { namespace: [], op: "?|" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "?|" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ?& b
 ----
-Op { op: Op { namespace: [], op: "?&" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "?&" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a || b
 ----
-Op { op: Op { namespace: [], op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #- b
 ----
-Op { op: Op { namespace: [], op: "#-" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "#-" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @? b
 ----
-Op { op: Op { namespace: [], op: "@?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "@?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @@ b
 ----
-Op { op: Op { namespace: [], op: "@@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "@@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 # Strange operator constructions.
 
 parse-scalar
 1*-1
 ----
-Op { op: Op { namespace: [], op: "*" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
+Op { op: Op { namespace: None, op: "*" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
 
 parse-scalar
 1+-1
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
 
 parse-scalar
 1+-00.00
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: [], op: "-" }, expr1: Value(Number("00.00")), expr2: None }) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: None, op: "-" }, expr1: Value(Number("00.00")), expr2: None }) }
 
 parse-scalar
 1+-a
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: [], op: "-" }, expr1: Identifier([Ident("a")]), expr2: None }) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: None, op: "-" }, expr1: Identifier([Ident("a")]), expr2: None }) }
 
 parse-scalar
 1@+2
 ----
-Op { op: Op { namespace: [], op: "@+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+Op { op: Op { namespace: None, op: "@+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
 
 parse-scalar
 1</*embedded comment*/2
 ----
-Op { op: Op { namespace: [], op: "<" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+Op { op: Op { namespace: None, op: "<" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
 
 parse-scalar
 (x).a
