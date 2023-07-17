@@ -75,8 +75,9 @@ FROM (
 ------------------
  {"k1": 1, "k2": -1}
 ```
-Notice there are multiple values that could potentially correspond to the key `k2`.
-In this case, we use a `FILTER` to look at values that are not `NULL` and order by a timestamp column to get the most recent such value.
+In this example, there are multiple values associated with the `k2` key.
+
+The `FILTER` clause in the statement above returns values that are not `NULL` and orders them by the timestamp column to return the most recent associated value.
 
 ## See also
 
