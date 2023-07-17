@@ -20,4 +20,5 @@ message ProtoSubpattern {
 message ProtoMatcher {
     string pattern = 1;
     bool case_insensitive = 2;
+    reserved 3; // This was matcher_impl, which is not serialized anymore since cc8bcb13e32a87a60e42d3c85f7d37c9cc75a2b5
 }
