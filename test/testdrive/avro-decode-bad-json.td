@@ -16,7 +16,7 @@ $ set reader={"type": "record", "name": "value", "fields": [ { "name": "f1", "ty
 
 $ kafka-create-topic topic=avro-bad-json
 
-$ kafka-ingest format=avro topic=avro-types-uuid schema=${writer} timestamp=1
+$ kafka-ingest format=avro topic=avro-bad-json schema=${writer} timestamp=1
 {"f1": "__debezium_unavailable_value"}
 
 > CREATE CONNECTION kafka_conn
