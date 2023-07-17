@@ -133,7 +133,10 @@ where
                             metadata.remap_shard.clone().unwrap(),
                             Arc::new(ingestion_description.desc.connection.timestamp_desc()),
                             Arc::new(UnitSchema),
-                            Diagnostics::new("unknown", "reclock"),
+                            Diagnostics::new(
+                                &ingestion_description.remap_collection_id.to_string(),
+                                &format!("reclock for {}", ingestion_description),
+                            ),
                         )
                         .await
                         .expect("shard unavailable");
@@ -279,7 +282,9 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                                 ),
                                                 Arc::new(UnitSchema),
                                                 Diagnostics::new(
-                                                    &id.to_string(),
+                                                    &ingestion_description
+                                                        .remap_collection_id
+                                                        .to_string(),
                                                     &format!("resumption data {}", id),
                                                 ),
                                             )
