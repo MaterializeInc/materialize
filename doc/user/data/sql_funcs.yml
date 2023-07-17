@@ -553,7 +553,7 @@
     url: "/docs/sql/types/jsonb/#jsonb_array_length"
 
   - signature: 'jsonb_build_array(x: ...) -> jsonb'
-    description: Outputs each element of `x` as a `jsonb` array. Elements can be of heterogenous
+    description: Output each element of `x` as a `jsonb` array. Elements can be of heterogenous
       types.
     url: "/docs/sql/types/jsonb/#jsonb_build_array"
 
