@@ -746,16 +746,6 @@
   - signature: 'is_rbac_enabled() -> boolean'
     description: Reports whether RBAC is enabled for the current session.
 
-- type: Access privilege inquiry
-  description: |
-    Functions that return information about access privileges.
-  functions:
-    - signature: 'has_table_privilege([role: text or oid, ]relation: text or oid, privileges: text) -> bool'
-      description: >-
-        Reports whether the role with the specified role name or `oid` has the
-        specified privileges on the relation with the specified relation name
-        or `oid`. If the role is omitted, the `current_role` is assumed.
-
 - type: PostgreSQL compatibility
   description: |
     Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools.
