@@ -248,8 +248,8 @@ impl Diagnostics {
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
         Self {
-            shard_name: "test".to_string(),
-            handle_purpose: "test".to_string(),
+            shard_name: "test-shard-name".to_string(),
+            handle_purpose: "test-purpose".to_string(),
         }
     }
 }
