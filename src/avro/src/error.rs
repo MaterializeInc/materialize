@@ -91,7 +91,11 @@ pub enum DecodeError {
     IntDecodeOverflow,
     BadJson {
         category: serde_json::error::Category,
-        original_bytes: Option<Vec<u8>>,
+        /// A string representation of what we attempted to decode.
+        /// Ideally the original bytes,
+        /// but might be a re-serialization of a deserialized value,
+        /// if we no longer have access to the original.
+        string: Vec<u8>,
     },
     BadUuid(uuid::Error),
     MismatchedBlockHeader {
@@ -171,16 +175,9 @@ impl DecodeError {
             DecodeError::StringUtf8Error => write!(f, "String was not valid UTF-8"),
             DecodeError::UuidUtf8Error => write!(f, "UUID was not valid UTF-8"),
             DecodeError::IntConversionError => write!(f, "Integer conversion failed"),
-            DecodeError::BadJson {
-                category,
-                original_bytes,
-            } => {
+            DecodeError::BadJson { category, string } => {
                 write!(f, "Json decoding failed: {:?}", category)?;
-                if let Some(original_bytes) = original_bytes {
-                    write!(f, " (got {})", String::from_utf8_lossy(original_bytes))
-                } else {
-                    Ok(())
-                }
+                write!(f, " (got {})", String::from_utf8_lossy(string))
             }
             DecodeError::BadUuid(inner) => write!(f, "UUID decoding failed: {}", inner),
             DecodeError::MismatchedBlockHeader { expected, actual } => write!(

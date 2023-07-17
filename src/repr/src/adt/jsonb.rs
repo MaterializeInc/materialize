@@ -262,7 +262,7 @@ impl<'a, 'row> JsonbPacker<'a, 'row> {
 
     /// Parses and packs a JSON-formatted string.
     ///
-    /// Errors if the string is not valid or JSON or if any of the contained
+    /// Errors if the string is not valid JSON or if any of the contained
     /// integers cannot be represented exactly as an [`f64`].
     pub fn pack_str(self, s: &str) -> Result<(), serde_json::Error> {
         let mut commands = vec![];
