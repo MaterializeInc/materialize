@@ -42,6 +42,11 @@ The rule is that only parameters configured in the `WITH` block go inside the
 parens; parameters that have dedicated syntax, like schemas, tablespaces, and
 clusters, get dedicated `ALTER ... SET` syntax too.
 
+We could offer an alternative syntax using `IN`:
+```sql
+ALTER SOURCE src IN CLUSTER clstr;
+```
+
 ## Detailed description
 
 The `ALTER SOURCE` and `ALTER SINK` statements will learn a new option `SET CLUSTER clstr`:
@@ -54,10 +59,11 @@ When the command updates the cluster, Materialize will immediately drop the
 existing source or sink and recreate it in the target cluster.
 
 > **Warning**
-> 
+>
 > In the initial implementation, changing the cluster associated will result in
-> downtime while the source or sink recreate.
-> 
+> downtime while the source or sink recreate. During this time, the source or
+> sink will not produce new data.
+>
 > We hope to change the behavior in a future release so that no downtime is
 > incurred, but this will require smarter source and sink scheduling.
 
@@ -76,13 +82,27 @@ following:
 
 ```sql
 ALTER SOURCE src SET CLUSTER cluster;
-ERROR: cannot source source cluster to cluster with more than one replica 
+ERROR: cannot alter source cluster to cluster with more than one replica
 ```
+
+### Linked clusters
+
+Sources and sinks can have linked clusters, which are clusters owned by the
+source or sink. Altering clusters of sources and sinks will cause any previously
+linked cluster to be dropped.
+
+We do not support moving a source or sink back to a linked cluster.
 
 ## Alternatives
 
-We could wait to improve the API until we have unified clusters.
+* We could wait to improve the API until we have unified clusters.
+
+* We could support moving a source or sink to a linked cluster when either a size
+  value was previously specified, or explicitly set on the `ALTER` command.
 
 ## Open questions
 
 * Is the syntax accepted?
+
+* Should we support `ALTER SOURCE src RESET CLUSTER`? I'm not sure what the
+  semantics should be.
