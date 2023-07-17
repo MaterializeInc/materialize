@@ -814,7 +814,7 @@ impl Coordinator {
 
             let (body_ty, header_ty, validate_using) = match entry.item() {
                 CatalogItem::Source(Source {
-                    data_source: DataSourceDesc::Webhook { validate_using },
+                    data_source: DataSourceDesc::Webhook { validate_using, .. },
                     desc,
                     ..
                 }) => {
