@@ -486,6 +486,42 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
     }
 }
 
+/// A unary function we've added special-case handling for; including:
+/// - A three-argument function, taking and returning [ResultSpec]s. This
+///   overrides the default function-handling logic entirely.
+/// - Metadata on whether / not this function is pushdownable. See [Trace].
+struct SpecialUnary {
+    map_fn: for<'a, 'b> fn(&'b ColumnSpecs<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
+    pushdownable: bool,
+}
+
+impl SpecialUnary {
+    /// Returns the special-case handling for a particular function, if it exists.
+    fn for_func(func: &UnaryFunc) -> Option<SpecialUnary> {
+        match func {
+            UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => Some(SpecialUnary {
+                map_fn: |specs, range| {
+                    // Using `true` for `is_monotone` is correct for this except
+                    // that it also might return NULL for anything in the range,
+                    // so union them.
+                    let expr = MirScalarExpr::CallUnary {
+                        func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
+                            crate::func::TryParseMonotonicIso8601Timestamp,
+                        ),
+                        expr: Box::new(MirScalarExpr::Column(0)),
+                    };
+                    let spec = range.flat_map(true, |datum| {
+                        specs.eval_result(datum.and_then(|d| expr.eval(&[d], specs.arena)))
+                    });
+                    spec.union(ResultSpec::null())
+                },
+                pushdownable: true,
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// A binary function we've added special-case handling for; including:
 /// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
 ///   default function-handling logic entirely.
@@ -739,19 +775,23 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
-        let is_monotone = func.is_monotone();
-        let mut expr = MirScalarExpr::CallUnary {
-            func: func.clone(),
-            expr: Box::new(Self::placeholder(summary.col_type.clone())),
+        let mapped_spec = if let Some(special) = SpecialUnary::for_func(func) {
+            (special.map_fn)(self, summary.range)
+        } else {
+            let is_monotone = func.is_monotone();
+            let mut expr = MirScalarExpr::CallUnary {
+                func: func.clone(),
+                expr: Box::new(Self::placeholder(summary.col_type.clone())),
+            };
+            summary.range.flat_map(is_monotone, |datum| {
+                Self::set_argument(&mut expr, 0, datum);
+                self.eval_result(expr.eval(&[], self.arena))
+            })
         };
-        let mapped_spec = summary.range.flat_map(is_monotone, |datum| {
-            Self::set_argument(&mut expr, 0, datum);
-            self.eval_result(expr.eval(&[], self.arena))
-        });
+
         let col_type = func.output_type(summary.col_type);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
-
         ColumnSpec { col_type, range }
     }
 
@@ -888,7 +928,11 @@ impl Interpreter for Trace {
     }
 
     fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr && func.is_monotone()
+        let pushdownable = match SpecialUnary::for_func(func) {
+            None => func.is_monotone(),
+            Some(special) => special.pushdownable,
+        };
+        expr && pushdownable
     }
 
     fn binary(
@@ -973,6 +1017,7 @@ mod tests {
             UnaryFunc::Not(Not),
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::IsFalse(IsFalse),
+            UnaryFunc::TryParseMonotonicIso8601Timestamp(TryParseMonotonicIso8601Timestamp),
         ]
     };
 
@@ -989,6 +1034,7 @@ mod tests {
             ExtractDate(_) => arg.scalar_type.base_eq(&ScalarType::Date),
             Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
             IsNull(_) => true,
+            TryParseMonotonicIso8601Timestamp(_) => arg.scalar_type.base_eq(&ScalarType::String),
             _ => false,
         }
     }

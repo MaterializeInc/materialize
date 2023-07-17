@@ -214,3 +214,28 @@ Source materialize.public.events_timestamped
   pushdown=((2021 = extract_year_ts(#1)))
 
 EOF
+
+# Verify that try_parse_monotonic_iso8601_timestamp gets pushdown (the whole
+# point of that func)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_try_parse_monotonic_iso8601_timestamp = true;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN WITH(filter_pushdown)
+SELECT content, inserted_at
+FROM events_timestamped
+WHERE mz_now() < try_parse_monotonic_iso8601_timestamp(content);
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0)))
+      Get materialize.public.events_timestamped
+
+Source materialize.public.events_timestamped
+  filter=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0))))
+  pushdown=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0))))
+
+EOF

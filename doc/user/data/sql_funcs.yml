@@ -388,6 +388,12 @@
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
 
+  - signature: 'try_parse_monotonic_iso8601_timestamp(s: str) -> timestamp'
+    description: >-
+      Parses a specific subset of ISO8601 timestamps, returning `NULL` instead of
+      error on failure: `YYYY-MM-DDThh:mm:ss.sssZ`
+    url: pushdown
+
   - signature: 'upper(s: str) -> str'
     description: Convert `s` to uppercase.
 

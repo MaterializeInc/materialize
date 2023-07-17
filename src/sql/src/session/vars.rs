@@ -1193,6 +1193,10 @@ feature_flags!(
         enable_webhook_sources,
         "creating or pushing data to webhook sources"
     ),
+    (
+        enable_try_parse_monotonic_iso8601_timestamp,
+        "the try_parse_monotonic_iso8601_timestamp function"
+    ),
 );
 
 /// Represents the input to a variable.

@@ -3354,6 +3354,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
         },
+        "try_parse_monotonic_iso8601_timestamp" => Scalar {
+            params!(String) => Operation::unary(move |ecx, e| {
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP)?;
+                Ok(e.call_unary(UnaryFunc::TryParseMonotonicIso8601Timestamp(func::TryParseMonotonicIso8601Timestamp)))
+            }) => Timestamp, oid::FUNC_TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP;
+        },
         "unnest" => Table {
             vec![ArrayAny] => Operation::unary(move |ecx, e| {
                 let el_typ = ecx.scalar_type(&e).unwrap_array_element_type().clone();
