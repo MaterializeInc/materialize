@@ -655,10 +655,11 @@ impl CatalogState {
         view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&view.create_sql)
+        let create_stmt = mz_sql::parse::parse(&view.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
-            .into_element();
-        let query = match create_sql {
+            .into_element()
+            .ast;
+        let query = match create_stmt {
             Statement::CreateView(stmt) => stmt.definition.query,
             _ => unreachable!(),
         };
@@ -694,10 +695,11 @@ impl CatalogState {
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&mview.create_sql)
+        let create_stmt = mz_sql::parse::parse(&mview.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
-            .into_element();
-        let query = match create_sql {
+            .into_element()
+            .ast;
+        let query = match create_stmt {
             Statement::CreateMaterializedView(stmt) => stmt.query,
             _ => unreachable!(),
         };
@@ -788,6 +790,7 @@ impl CatalogState {
         let key_sqls = match mz_sql::parse::parse(&index.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
             .into_element()
+            .ast
         {
             Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
                 key_parts.expect("key_parts is filled in during planning")

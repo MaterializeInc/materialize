@@ -45,7 +45,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{PreparedStatement, Session, TransactionStatus};
+use crate::session::{Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac, ExecuteContext};
 
@@ -127,6 +127,7 @@ impl Coordinator {
             Command::Declare {
                 name,
                 stmt,
+                inner_sql: sql,
                 param_types,
                 session,
                 tx,
@@ -138,18 +139,19 @@ impl Coordinator {
                     session,
                     Default::default(),
                 );
-                self.declare(ctx, name, stmt, param_types);
+                self.declare(ctx, name, stmt, sql, param_types);
             }
 
             Command::Prepare {
                 name,
                 stmt,
+                sql,
                 param_types,
                 session,
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.handle_prepare(tx, session, name, stmt, param_types);
+                self.handle_prepare(tx, session, name, stmt, sql, param_types);
             }
 
             Command::CancelRequest {
@@ -638,6 +640,7 @@ impl Coordinator {
         mut session: Session,
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
@@ -658,7 +661,10 @@ impl Coordinator {
                 Ok(desc) => {
                     session.set_prepared_statement(
                         name,
-                        PreparedStatement::new(stmt, desc, catalog.transient_revision()),
+                        stmt,
+                        sql,
+                        desc,
+                        catalog.transient_revision(),
                     );
                     Ok(())
                 }

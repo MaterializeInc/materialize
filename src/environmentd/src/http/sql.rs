@@ -34,6 +34,7 @@ use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
+use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
@@ -714,10 +715,10 @@ impl ResultSender for WebSocket {
 async fn execute_stmt_group<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
-    stmt_group: Vec<(Statement<Raw>, Vec<Option<String>>)>,
+    stmt_group: Vec<(Statement<Raw>, String, Vec<Option<String>>)>,
 ) -> Result<Result<(), ()>, anyhow::Error> {
     let num_stmts = stmt_group.len();
-    for (stmt, params) in stmt_group {
+    for (stmt, sql, params) in stmt_group {
         assert!(num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
         );
@@ -739,7 +740,7 @@ async fn execute_stmt_group<S: ResultSender>(
             let _ = sender.add_result(|| client.canceled(), err.into()).await?;
             return Ok(Err(()));
         }
-        let res = execute_stmt(client, sender, stmt, params).await?;
+        let res = execute_stmt(client, sender, stmt, sql, params).await?;
         let is_err = sender.add_result(|| client.canceled(), res).await?;
         if is_err.is_err() {
             // Mirror StateMachine::error, which sometimes will clean up the
@@ -813,10 +814,10 @@ async fn execute_request<S: ResultSender>(
         Ok(())
     }
 
-    fn parse(
+    fn parse<'a>(
         client: &mut SessionClient,
-        query: &str,
-    ) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
+        query: &'a str,
+    ) -> Result<Vec<StatementParseResult<'a>>, anyhow::Error> {
         match client.parse(query) {
             Ok(result) => result.map_err(|e| anyhow!(e.error)),
             Err(e) => Err(anyhow!(e)),
@@ -829,9 +830,9 @@ async fn execute_request<S: ResultSender>(
         SqlRequest::Simple { query } => {
             let stmts = parse(client, &query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
-            for stmt in stmts {
+            for StatementParseResult { ast: stmt, sql } in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
-                stmt_group.push((stmt, vec![]));
+                stmt_group.push((stmt, sql.to_string(), vec![]));
             }
             stmt_groups.push(stmt_group);
         }
@@ -846,10 +847,10 @@ async fn execute_request<S: ResultSender>(
                     );
                 }
 
-                let stmt = stmts.pop().unwrap();
+                let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
                 check_prohibited_stmts(sender, &stmt)?;
 
-                stmt_groups.push(vec![(stmt, params)]);
+                stmt_groups.push(vec![(stmt, sql.to_string(), params)]);
             }
         }
     }
@@ -880,11 +881,12 @@ async fn execute_stmt<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
     stmt: Statement<Raw>,
+    sql: String,
     raw_params: Vec<Option<String>>,
 ) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
-        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
         .await
     {
         return Ok(SqlResult::err(client, e).into());

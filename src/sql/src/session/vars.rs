@@ -1269,7 +1269,7 @@ impl OwnedVarInput {
 
 /// Session variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
@@ -1761,7 +1761,7 @@ impl DropConnection {
 
 /// On disk variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {

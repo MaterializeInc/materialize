@@ -493,7 +493,20 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Registers the prepared statement under `name`.
-    pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
+    pub fn set_prepared_statement(
+        &mut self,
+        name: String,
+        stmt: Option<Statement<Raw>>,
+        // TODO[btv] - This will be used by statement logging
+        _sql: String,
+        desc: StatementDesc,
+        catalog_revision: u64,
+    ) {
+        let statement = PreparedStatement {
+            stmt,
+            desc,
+            catalog_revision,
+        };
         self.prepared_statements.insert(name, statement);
     }
 
@@ -735,19 +748,6 @@ pub struct PreparedStatement {
 }
 
 impl PreparedStatement {
-    /// Constructs a new prepared statement.
-    pub fn new(
-        stmt: Option<Statement<Raw>>,
-        desc: StatementDesc,
-        catalog_revision: u64,
-    ) -> PreparedStatement {
-        PreparedStatement {
-            stmt,
-            desc,
-            catalog_revision,
-        }
-    }
-
     /// Returns the AST associated with this prepared statement,
     /// if the prepared statement was not the empty query.
     pub fn stmt(&self) -> Option<&Statement<Raw>> {

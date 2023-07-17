@@ -30,11 +30,11 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
+use crate::session::{EndTransactionAction, Session, TransactionStatus};
 use crate::util::send_immediate_rows;
 use crate::{rbac, ExecuteContext};
 
-// DO NOT make this visible in anyway, i.e. do not add any version of
+// DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
 // private module to prevent anyone from calling them directly. All
 // sequencing should be done through the `sequence_plan` method.
@@ -396,7 +396,7 @@ impl Coordinator {
             }
             Plan::Declare(plan) => {
                 let param_types = vec![];
-                self.declare(ctx, plan.name, plan.stmt, param_types);
+                self.declare(ctx, plan.name, plan.stmt, plan.sql, param_types);
             }
             Plan::Fetch(FetchPlan {
                 name,
@@ -426,11 +426,10 @@ impl Coordinator {
                 } else {
                     ctx.session_mut().set_prepared_statement(
                         plan.name,
-                        PreparedStatement::new(
-                            Some(plan.stmt),
-                            plan.desc,
-                            self.catalog().transient_revision(),
-                        ),
+                        Some(plan.stmt),
+                        plan.sql,
+                        plan.desc,
+                        self.catalog().transient_revision(),
                     );
                     ctx.retire(Ok(ExecuteResponse::Prepare));
                 }

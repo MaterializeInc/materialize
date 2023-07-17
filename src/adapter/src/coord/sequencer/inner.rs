@@ -112,7 +112,7 @@ use crate::util::{
 };
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
-/// Attempts to execute an expression. If an error is returned then the error is sent
+/// Attempts to evaluate an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {
     ($expr:expr, $ctx:expr) => {
@@ -3785,6 +3785,7 @@ impl Coordinator {
             let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
+                .ast
             {
                 Statement::CreateSource(stmt) => stmt,
                 _ => unreachable!("proved type is source"),

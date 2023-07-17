@@ -2882,6 +2882,7 @@ pub enum IfExistsBehavior {
 pub struct DeclareStatement<T: AstInfo> {
     pub name: Ident,
     pub stmt: Box<T::NestedStatement>,
+    pub sql: String,
 }
 
 impl<T: AstInfo> AstDisplay for DeclareStatement<T> {
@@ -2982,6 +2983,7 @@ impl_display!(FetchDirection);
 pub struct PrepareStatement<T: AstInfo> {
     pub name: Ident,
     pub stmt: Box<T::NestedStatement>,
+    pub sql: String,
 }
 
 impl<T: AstInfo> AstDisplay for PrepareStatement<T> {

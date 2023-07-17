@@ -937,6 +937,7 @@ pub struct RotateKeysPlan {
 pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
+    pub sql: String,
 }
 
 #[derive(Debug)]
@@ -955,6 +956,7 @@ pub struct ClosePlan {
 pub struct PreparePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
+    pub sql: String,
     pub desc: StatementDesc,
 }
 
