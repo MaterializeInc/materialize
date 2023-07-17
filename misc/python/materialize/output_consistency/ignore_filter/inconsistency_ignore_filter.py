@@ -11,7 +11,6 @@ from typing import List, Set
 from attr import dataclass
 
 from materialize.output_consistency.data_value.data_value import DataValue
-from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
 )
@@ -186,14 +185,6 @@ class PreExecutionInconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return YesIgnore("#19511")
 
-        if db_function.function_name_in_lower_case in {"regexp_match"}:
-            if len(expression.args) == 3 and isinstance(
-                expression.args[2], EnumConstant
-            ):
-                # This is a regexp_match function call with case-insensitive configuration.
-                # https://github.com/MaterializeInc/materialize/issues/18494
-                return YesIgnore("#18494")
-
         if db_function.function_name_in_lower_case in {
             "array_agg",
             "string_agg",
@@ -210,10 +201,6 @@ class PreExecutionInconsistencyIgnoreFilter:
         expression: ExpressionWithArgs,
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
-        # https://github.com/MaterializeInc/materialize/issues/18494
-        if db_operation.pattern in {"$ ~* $", "$ !~* $"}:
-            return YesIgnore("#18494")
-
         return NoIgnore()
 
 
