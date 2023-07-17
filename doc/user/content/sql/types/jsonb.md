@@ -193,7 +193,7 @@ Note the extra double quotes on the right-hand side of the comparison.
 
 The type of JSON element you're accessing dictates the RHS's type.
 
-- Use a `string` to access the value for a specific key:
+- Use a `string` to return the value for a specific key:
 
   ```sql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'1' AS field_jsonb;
@@ -204,7 +204,7 @@ The type of JSON element you're accessing dictates the RHS's type.
    2
   ```
 
-- Use an `int` to access the value in an array at a specific index:
+- Use an `int` to return the value in an array at a specific index:
 
   ```sql
   SELECT '["1", "a", 2]'::jsonb->1 AS field_jsonb;
@@ -233,7 +233,7 @@ Note that all returned values are `jsonb`.
 
 The type of JSON element you're accessing dictates the RHS's type.
 
-- Use a `string` to access the value for a specific key:
+- Use a `string` to return the value for a specific key:
 
   ```sql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->>'1' AS field_text;
@@ -244,7 +244,7 @@ The type of JSON element you're accessing dictates the RHS's type.
    2
   ```
 
-- Use an `int` to access the value in an array at a specific index:
+- Use an `int` to return the value in an array at a specific index:
 
   ```sql
   SELECT '["1", "a", 2]'::jsonb->>1 AS field_text;
