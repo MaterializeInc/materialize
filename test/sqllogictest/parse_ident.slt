@@ -27,7 +27,7 @@ SELECT parse_ident('foo.boo')::text;
 ----
 {foo,boo}
 
-query error db error: ERROR: string is not a valid identifier: "foo.boo\[\]"
+query error string is not a valid identifier: "foo.boo\[\]"
 SELECT parse_ident('foo.boo[]');
 
 query T
@@ -47,7 +47,7 @@ SELECT parse_ident(' aaa . ');
 query error string is not a valid identifier: "aaa.a%b"
 SELECT parse_ident('aaa.a%b');
 
-query error db error: ERROR: string is not a valid identifier: "X\rXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+query error string is not a valid identifier: "X\rXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 SELECT parse_ident(E'X\rXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX');
 
 query II
@@ -88,10 +88,10 @@ SELECT parse_ident('xxx.1020');
 
 # Non-PG tests
 
-query error db error: ERROR: string is not a valid identifier: ""
+query error string is not a valid identifier: ""
 SELECT parse_ident('');
 
-query error db error: ERROR: string is not a valid identifier: "\$abc"
+query error string is not a valid identifier: "\$abc"
 SELECT parse_ident('$abc');
 
 query T
@@ -99,7 +99,7 @@ SELECT parse_ident('"$abc"');
 ----
 {$abc}
 
-query error db error: ERROR: string is not a valid identifier: "abc\.\$def"
+query error string is not a valid identifier: "abc\.\$def"
 SELECT parse_ident('abc.$def');
 
 query T
@@ -107,7 +107,7 @@ SELECT parse_ident('abc."$def"');
 ----
 {abc,$def}
 
-query error db error: ERROR: string is not a valid identifier: "abc\.def \$"
+query error string is not a valid identifier: "abc\.def \$"
 SELECT parse_ident('abc.def $');
 
 query T
@@ -205,7 +205,7 @@ SELECT parse_ident('a.b.c.d.e.f');
 ----
 {a,b,c,d,e,f}
 
-query error db error: ERROR: string is not a valid identifier: "a\\0b"
+query error string is not a valid identifier: "a\\0b"
 SELECT parse_ident('a\0b');
 
 query T
@@ -213,10 +213,10 @@ SELECT parse_ident('"a\0b"');
 ----
 {"a\\0b"}
 
-query error db error: ERROR: string is not a valid identifier: "a b"
+query error string is not a valid identifier: "a b"
 SELECT parse_ident('a b');
 
-query error db error: ERROR: string is not a valid identifier: "a\.b c"
+query error string is not a valid identifier: "a\.b c"
 SELECT parse_ident('a.b c');
 
 simple
@@ -266,7 +266,7 @@ SELECT mz_internal.mz_normalize_object_name('Dbz.Schemax.Tabley.Cola')::text;
 query error db error: ERROR: improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
 SELECT mz_internal.mz_normalize_object_name('"Dbz"."SchemaX"."TableY".Cola')::text;
 
-query error db error: ERROR: string is not a valid identifier: ""
+query error string is not a valid identifier: ""
 SELECT mz_internal.mz_normalize_object_name('');
 
 query error string is not a valid identifier: " "

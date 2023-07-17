@@ -126,6 +126,66 @@ $ webhook-append database=materialize schema=public name=webhook_bytes
 null
 123
 
+> CREATE SOURCE webhook_bytes_with_validation FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING ( headers->'signature' = 'test' )
+
+$ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=test
+123
+
+$ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=invalid status=400
+456
+
+> CREATE SOURCE webhook_bytes_with_hmac FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING (
+    decode(headers->'x-signature', 'base64') = hmac('body=' || convert_from(body, 'utf-8'), 'test_key', 'sha256')
+  )
+
+$ webhook-append name=webhook_bytes_with_hmac x-signature=HA0rQdPkCiNNNAladA0eTI8x5WZp5z8rBawQHiywznI=
+hello world
+
+$ webhook-append name=webhook_bytes_with_hmac x-signature=1cDmmXBhApqXZebb2u6WtdwHc2UtkMf7N11Zjk66wzo=
+another_request
+
+$ webhook-append name=webhook_bytes_with_hmac status=400
+did_not_include_necessary_header
+
+> SELECT * FROM webhook_bytes_with_hmac;
+"hello world"
+"another_request"
+
+> CREATE SOURCE webhook_buildkite FROM WEBHOOK
+  BODY FORMAT TEXT
+  VALIDATE USING (
+    decode(split_part(headers->'x-buildkite-signature', 'signature::', 2), 'hex')
+      =
+    hmac(split_part(split_part(headers->'x-buildkite-signature', 'timestamp::', 2), ',', 1) || '.' || convert_from(body, 'utf-8'), 'test_key', 'sha256')
+  )
+
+$ webhook-append name=webhook_buildkite x-buildkite-signature=timestamp::42,signature::b610a43432fe965eb8e2a3ce4939a6bafaad3f35583c596e2f7271125a346d95
+i hope this works
+
+> SELECT * FROM webhook_buildkite;
+"i hope this works"
+
+> CREATE SOURCE webhook_hex FROM WEBHOOK
+  BODY FORMAT TEXT
+  VALIDATE USING ( decode(convert_from(body, 'utf-8'), 'hex') = '\x42' )
+
+$ webhook-append name=webhook_hex status=400
+# 'z' is an invalid character in hex which causes an evaluation failure.
+z
+
+# Create a source that will panic when we run validation. Validation panicking should not take down
+# all of environmentd, we should catch the panic.
+> CREATE SOURCE webhook_validation_panic FROM WEBHOOK
+  BODY FORMAT TEXT
+  VALIDATE USING ( mz_internal.mz_panic(headers::text) IS null );
+
+$ webhook-append name=webhook_validation_panic status=503
+abc
+
 # Turn off the feature.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_webhook_sources = false

@@ -153,6 +153,32 @@ fn datadriven() {
         let input = tc.input.trim();
         match parser::parse_expr(input) {
             Ok(s) => {
+                match parser::parse_expr(&s.to_string()) {
+                    Ok(parsed) => {
+                        // TODO: We always coerce the double colon operator into a Cast expr instead
+                        // of keeping it as an Op (see parse_pg_cast). Expr::Cast always prints
+                        // itself as double colon. We're thus unable to perfectly roundtrip
+                        // `CAST(..)`. We could fix this by keeping "::" as a binary operator and
+                        // teaching func.rs how to handle it, similar to how that file handles "~~"
+                        // (without the parser converting that operator directly into an
+                        // Expr::Like).
+                        if !matches!(parsed, Expr::Cast { .. }) {
+                            if parsed != s {
+                                panic!(
+                                    "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n",
+                                    s, parsed
+                                );
+                            }
+                        }
+                    }
+                    // TODO: Some functions (EXTRACT) have special syntax: `extract('year' FROM d)`.
+                    // We drop this syntax and convert them into regular functions that don't know
+                    // they are special when printing. It'd be great to change this so we can
+                    // reparse test these!
+                    Err(_) if matches!(s, Expr::Function(_)) => {}
+                    Err(err) => panic!("reparse failed: {s}: {err}\n{s:?}"),
+                }
+
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", s)
                 } else {
@@ -208,6 +234,7 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("+ a / b COLLATE coll", "(+a) / (b COLLATE coll)"),
         ("- ts AT TIME ZONE 'tz'", "(-ts) AT TIME ZONE 'tz'"),
         ("a[b].c::d", "((a[b]).c)::d"),
+        ("2 OPERATOR(*) 2 + 2", "2 OPERATOR(*) (2 + 2)"),
     ] {
         let left = parser::parse_expr(actual)?;
         let mut right = parser::parse_expr(expected)?;

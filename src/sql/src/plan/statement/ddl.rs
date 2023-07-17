@@ -397,7 +397,23 @@ pub fn plan_create_webhook_source(
         if_not_exists,
         body_format,
         include_headers,
+        validate_using,
     } = stmt;
+
+    let validate_using = validate_using
+        .map(|expr| query::plan_webhook_validate_using(scx, expr))
+        .transpose()?;
+    if let Some(expr) = &validate_using {
+        // If the validation expression doesn't reference any part of the request, then we should
+        // return an error because it's almost definitely wrong.
+        if !expr.contains_column() {
+            return Err(PlanError::WebhookValidationDoesNotUseColumns);
+        }
+        // Validation expressions cannot contain unmaterializable functions, e.g. now().
+        if expr.contains_unmaterializable() {
+            return Err(PlanError::WebhookValidationNonDeterministic);
+        }
+    }
 
     let body_scalar_type = match body_format {
         Format::Bytes => ScalarType::Bytes,
@@ -457,6 +473,7 @@ pub fn plan_create_webhook_source(
         desc,
         create_sql,
         timeline,
+        validate_using,
     }))
 }
 

@@ -12,7 +12,11 @@ SQL standard [`information_schema`](https://www.postgresql.org/docs/current/info
 schema, which is automatically available in all databases:
 
   * [`columns`](https://www.postgresql.org/docs/current/infoschema-columns.html)
+  * [`routines`](https://www.postgresql.org/docs/current/infoschema-routines.html)
+  * [`schemata`](https://www.postgresql.org/docs/current/infoschema-schemata.html)
   * [`tables`](https://www.postgresql.org/docs/current/infoschema-tables.html)
+  * [`triggers`](https://www.postgresql.org/docs/current/infoschema-triggers.html)
+  * [`views`](https://www.postgresql.org/docs/current/infoschema-views.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in the SQL standard, or if they do include the column the

@@ -11,7 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::DurationRound;
 use mz_controller::clusters::ClusterEvent;
@@ -29,13 +29,12 @@ use tracing::{event, warn, Instrument, Level};
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
-use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message, PeekStage,
     PeekStageFinish, PendingReadTxn, PlanValidity, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
+use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -461,30 +460,21 @@ impl Coordinator {
     async fn message_create_connection_validation_ready(
         &mut self,
         CreateConnectionValidationReady {
-            ctx,
+            mut ctx,
             result,
-            params,
-            original_stmt,
-            resolved_ids,
+            mut plan_validity,
             otel_ctx,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
 
         // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in. If any have gone missing, we
-        // revalidate the original statement. This will either produce a nice
-        // "unknown secret" error, or pick up a new connector that has
-        // replaced the dropped connector.
+        // `DROP SECRET` may have sneaked in.
         //
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if !resolved_ids
-            .0
-            .iter()
-            .all(|id| self.catalog().try_get_entry(id).is_some())
-        {
-            self.handle_execute_inner(original_stmt, params, ctx).await;
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            ctx.retire(Err(e));
             return;
         }
 
@@ -493,8 +483,14 @@ impl Coordinator {
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        self.sequence_plan(ctx, Plan::CreateConnection(plan), resolved_ids)
+        let result = self
+            .sequence_create_connection_stage_finish(
+                ctx.session_mut(),
+                plan,
+                ResolvedIds(plan_validity.dependency_ids),
+            )
             .await;
+        ctx.retire(result);
     }
 
     #[tracing::instrument(level = "debug", skip(self, ctx))]
@@ -648,9 +644,9 @@ impl Coordinator {
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
-        for read_txn in pending_read_txns {
+        for mut read_txn in pending_read_txns {
             if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.timestamp_context()
+                read_txn.txn.timestamp_context()
             {
                 let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
@@ -661,6 +657,7 @@ impl Coordinator {
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
+                    read_txn.num_requeues += 1;
                     deferred_txns.push(read_txn);
                 }
             } else {
@@ -673,8 +670,20 @@ impl Coordinator {
                 .confirm_leadership()
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
+            let now = Instant::now();
             for ready_txn in ready_txns {
-                if let Some((ctx, result)) = ready_txn.finish() {
+                self.metrics
+                    .linearize_message_seconds
+                    .with_label_values(&[
+                        ready_txn.txn.label(),
+                        if ready_txn.num_requeues == 0 {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ])
+                    .observe((now - ready_txn.created).as_secs_f64());
+                if let Some((ctx, result)) = ready_txn.txn.finish() {
                     ctx.retire(result);
                 }
             }

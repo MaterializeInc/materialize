@@ -243,7 +243,6 @@ fn test_source_sink_size_required() {
 
 // Test the POST and WS server endpoints.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
     // text or binary websocket messages that are the input. Output is
@@ -343,7 +342,6 @@ fn test_http_sql() {
 
 // Test that the server properly handles cancellation requests.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -455,19 +453,16 @@ fn test_cancellation_cancels_dataflows(query: &str) {
 
 // Test that dataflow uninstalls cancelled peeks.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_dataflow_removal() {
     test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_select() {
     test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_insert_select() {
     test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
@@ -562,13 +557,11 @@ fn test_closing_connection_cancels_dataflows(query: String) {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_long_select() {
     test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_insert_select() {
     test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
@@ -916,7 +909,6 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
@@ -948,7 +940,6 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -1076,7 +1067,6 @@ fn test_max_statement_batch_size() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_mz_system_user_admin() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1696,6 +1686,20 @@ fn smoketest_webhook_source() {
             .expect("failed to POST event");
         assert!(resp.status().is_success());
     }
+    let total_requests_metric = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|metric| metric.get_name() == "mz_http_requests_total")
+        .unwrap();
+    let total_requests_metric = &total_requests_metric.get_metric()[0];
+    assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
+
+    let path_label = &total_requests_metric.get_label()[0];
+    assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
+
+    let status_label = &total_requests_metric.get_label()[1];
+    assert_eq!(status_label.get_value(), "200");
 
     // Wait for the events to be persisted.
     mz_ore::retry::Retry::default()
@@ -1832,41 +1836,7 @@ fn test_webhook_duplicate_headers() {
         .header("dUpE", "final")
         .send()
         .expect("failed to POST event");
-    assert!(resp.status().is_success());
-
-    // Wait for the events to be persisted.
-    mz_ore::retry::Retry::default()
-        .max_tries(10)
-        .retry(|_| {
-            let cnt: i64 = client
-                .query_one("SELECT COUNT(*) FROM webhook_text", &[])
-                .expect("failed to get count")
-                .get(0);
-
-            if cnt == 0 {
-                Err(anyhow::anyhow!("no rows present"))
-            } else {
-                Ok(())
-            }
-        })
-        .expect("failed to read events!");
-
-    // Query for a row where our final header was applied.
-    let body: String = client
-        .query_one(
-            "SELECT body FROM webhook_text WHERE headers -> 'dupe' = 'final'",
-            &[],
-        )
-        .expect("failed to read row")
-        .get("body");
-    assert_eq!(body, "test");
-
-    // Assert only one row was inserted.
-    let cnt: i64 = client
-        .query_one("SELECT COUNT(*) FROM webhook_text", &[])
-        .expect("failed to get count")
-        .get(0);
-    assert_eq!(cnt, 1);
+    assert_eq!(resp.status().as_u16(), 401);
 }
 
 // Test that websockets observe cancellation and leave the transaction in an idle state.
@@ -1934,4 +1904,67 @@ fn test_github_20262() {
             assert_eq!(text, next);
         }
     }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_http_metrics() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr(),
+    ))
+    .unwrap();
+
+    let json = r#"{ "query": "SHOW application_name;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = Client::new()
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .unwrap();
+    assert!(response.status().is_success());
+
+    let json = r#"{ "query": "invalid sql 123;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = Client::new().post(http_url).json(&json).send().unwrap();
+    assert!(response.status().is_client_error());
+
+    let metrics = server.metrics_registry.gather();
+    let http_metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|metric| metric.get_name().starts_with("mz_http"))
+        .collect();
+
+    // Make sure the duration metric exists.
+    let duration_count = http_metrics
+        .iter()
+        .filter(|metric| metric.get_name() == "mz_http_request_duration_seconds")
+        .count();
+    assert_eq!(duration_count, 1);
+    // Make sure the active count metric exists.
+    let active_count = http_metrics
+        .iter()
+        .filter(|metric| metric.get_name() == "mz_http_requests_active")
+        .count();
+    assert_eq!(active_count, 1);
+
+    // Make sure our metrics capture the one successful query and the one failure.
+    let mut request_metrics: Vec<_> = http_metrics
+        .into_iter()
+        .filter(|metric| metric.get_name() == "mz_http_requests_total")
+        .collect();
+    assert_eq!(request_metrics.len(), 1);
+
+    let request_metric = request_metrics.pop().unwrap();
+    let success_metric = &request_metric.get_metric()[0];
+    assert_eq!(success_metric.get_counter().get_value(), 1.0);
+    assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
+    assert_eq!(success_metric.get_label()[1].get_value(), "200");
+
+    let failure_metric = &request_metric.get_metric()[1];
+    assert_eq!(failure_metric.get_counter().get_value(), 1.0);
+    assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
+    assert_eq!(failure_metric.get_label()[1].get_value(), "400");
 }

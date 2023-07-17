@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
@@ -24,6 +25,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, error, warn, Instrument, Span};
 
+use crate::async_runtime::IsolatedRuntime;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_persist::location::{Blob, SeqNo};
@@ -113,7 +115,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
-    pub fn new(mut machine: Machine<K, V, T, D>) -> Self {
+    pub fn new(machine: Machine<K, V, T, D>, isolated_runtime: Arc<IsolatedRuntime>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
             mpsc::unbounded_channel::<(GcReq, oneshot::Sender<RoutineMaintenance>)>();
 
@@ -152,10 +154,18 @@ where
 
                 let start = Instant::now();
                 machine.applier.metrics.gc.started.inc();
-                let (mut maintenance, _stats) =
-                    Self::gc_and_truncate(&mut machine, consolidated_req)
-                        .instrument(gc_span)
-                        .await;
+                let (mut maintenance, _stats) = {
+                    let name = format!("gc_and_truncate ({})", &consolidated_req.shard_id);
+                    let mut machine = machine.clone();
+                    isolated_runtime
+                        .spawn_named(|| name, async move {
+                            Self::gc_and_truncate(&mut machine, consolidated_req)
+                                .instrument(gc_span)
+                                .await
+                        })
+                        .await
+                        .expect("gc_and_truncate failed")
+                };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();
                 machine

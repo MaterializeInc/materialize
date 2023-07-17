@@ -30,7 +30,7 @@ use mz_proto::RustType;
 use prost::Message;
 use serde_json::json;
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
@@ -615,7 +615,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new());
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),
@@ -626,7 +626,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         blob,
         consensus,
         metrics,
-        cpu_heavy_runtime,
+        isolated_runtime,
         state_cache,
         Arc::new(NoopPubSubSender),
     )?);

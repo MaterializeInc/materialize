@@ -1,0 +1,258 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Disabled by default
+statement error the try_parse_monotonic_iso8601_timestamp function is not supported
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z');
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_try_parse_monotonic_iso8601_timestamp = true;
+----
+COMPLETE 0
+
+# Real-world example
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z');
+----
+2015-09-18 23:56:04.123
+
+# Minimum accepted timestamp
+query T
+select try_parse_monotonic_iso8601_timestamp('0000-01-01T00:00:00.000Z');
+----
+0001-01-01 00:00:00 BC
+
+# Minimum AD timestamp
+query T
+select try_parse_monotonic_iso8601_timestamp('0001-01-01T00:00:00.000Z');
+----
+0001-01-01 00:00:00
+
+# Maximum accepted timestamp
+query T
+select try_parse_monotonic_iso8601_timestamp('9999-12-31T23:59:59.999Z');
+----
+9999-12-31 23:59:59.999
+
+# NULL
+query T
+select try_parse_monotonic_iso8601_timestamp(NULL);
+----
+NULL
+
+# Negative timestamp
+query T
+select try_parse_monotonic_iso8601_timestamp('-2015-09-18T23:56:04.123Z');
+----
+NULL
+
+# Missing microseconds
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04Z');
+----
+NULL
+
+# Wrong timezone
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123-05');
+----
+NULL
+
+# Extra stuff on the end
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Znope');
+----
+NULL
+
+# Alternate ISO8601 format (missing separators)
+query T
+select try_parse_monotonic_iso8601_timestamp('20150918T235604.123Z');
+----
+NULL
+
+# Leading whitespace
+query T
+select try_parse_monotonic_iso8601_timestamp(' 2015-09-18T23:56:04.123Z');
+----
+NULL
+
+# Trailing whitespace
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z ');
+----
+NULL
+
+# Not a timestamp
+query T
+select try_parse_monotonic_iso8601_timestamp('nope');
+----
+NULL
+
+# Year: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('215-09-18T23:56:04.123Z');
+----
+NULL
+
+# Year: too many digits
+query T
+select try_parse_monotonic_iso8601_timestamp('20015-09-18T23:56:04.123Z');
+----
+NULL
+
+# Month: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-9-18T23:56:04.123Z');
+----
+NULL
+
+# Month: too small
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-00-18T23:56:04.123Z');
+----
+NULL
+
+# Month: too big
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-13-18T23:56:04.123Z');
+----
+NULL
+
+# Days: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-8T23:56:04.123Z');
+----
+NULL
+
+# Days: too small
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-00T23:56:04.123Z');
+----
+NULL
+
+# Days: too big (sept has 30 days)
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-31T23:56:04.123Z');
+----
+NULL
+
+# Hours: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T4:56:04.123Z');
+----
+NULL
+
+# Hours: too big
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T24:56:04.123Z');
+----
+NULL
+
+# Hours: alternate midnight
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T24:00:00.000Z');
+----
+NULL
+
+# Minutes: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:6:04.123Z');
+----
+NULL
+
+# Minutes: too big
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:60:04.123Z');
+----
+NULL
+
+# Seconds: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:4.123Z');
+----
+NULL
+
+# Seconds: too big
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:60.123Z');
+----
+NULL
+
+# Microseconds: not enough digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.12Z');
+----
+NULL
+
+# Microseconds: too many digits
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.1234Z');
+----
+NULL
+
+# Dash 0: wrong separator
+query T
+select try_parse_monotonic_iso8601_timestamp('2015_09-18T23:56:04.123Z');
+----
+NULL
+
+# Dash 1: wrong separator
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09_18T23:56:04.123Z');
+----
+NULL
+
+# T: wrong separator (lower case)
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18t23:56:04.123Z');
+----
+NULL
+
+# Colon 0: wrong separator
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23-56:04.123Z');
+----
+NULL
+
+# Colon 1: wrong separator
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56-04.123Z');
+----
+NULL
+
+# Dot: wrong separator
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04:123Z');
+----
+NULL
+
+# Z: wrong timezone (lower case)
+query T
+select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123z');
+----
+NULL
+
+# Regression test for a bug caught during code review of the PR adding this
+# func. We insert 3 things in a single persist batch where the least and
+# greatest values are valid, but the middle one isn't (so it gets mapped to
+# null). The bug was that the interpret would incorrectly conclude that none of
+# the values in the batch could be NULL.
+
+statement ok
+CREATE TABLE events (ts text);
+
+statement ok
+INSERT INTO events VALUES ('2015-09-18T23:56:04.123Z'), ('2015-09-18T23:56:04.124Znope'), ('2015-09-18T23:56:04.125Z');
+
+query T
+SELECT ts FROM events WHERE try_parse_monotonic_iso8601_timestamp(ts) IS NULL;
+----
+2015-09-18T23:56:04.124Znope

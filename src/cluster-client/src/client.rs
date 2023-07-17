@@ -208,6 +208,7 @@ mod tests {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn cluster_startup_epoch_protobuf_roundtrip(expect in any::<ClusterStartupEpoch>() ) {
             let actual = protobuf_roundtrip::<_, ProtoClusterStartupEpoch>(&expect);
             assert!(actual.is_ok());

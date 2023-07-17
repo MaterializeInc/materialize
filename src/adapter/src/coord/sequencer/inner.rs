@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
@@ -30,6 +30,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -94,10 +95,10 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
-    peek, Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
-    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    PlanValidity, RealTimeRecencyContext, SinkConnectionReady, TargetCluster,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
+    PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
+    PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
+    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -193,7 +194,7 @@ impl Coordinator {
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
-                        DataSourceDesc::Webhook => {
+                        DataSourceDesc::Webhook { .. } => {
                             // TODO(parkmycar): Eventually webhook sources should take this path,
                             // definitely once they get installed on clusterd.
                             //
@@ -262,12 +263,13 @@ impl Coordinator {
             create_sql,
             desc,
             timeline,
+            validate_using,
         } = plan;
 
         let source_id = self.catalog_mut().allocate_user_id().await?;
         let source = catalog::Source {
             create_sql,
-            data_source: DataSourceDesc::Webhook,
+            data_source: DataSourceDesc::Webhook { validate_using },
             desc: desc.clone(),
             timeline,
             resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -323,6 +325,52 @@ impl Coordinator {
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_connection(
+        &mut self,
+        mut ctx: ExecuteContext,
+        plan: CreateConnectionPlan,
+        resolved_ids: ResolvedIds,
+    ) {
+        if plan.validate {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let transient_revision = self.catalog().transient_revision();
+            let conn_id = ctx.session().conn_id().clone();
+            let connection_context = self.connection_context.clone();
+            let otel_ctx = OpenTelemetryContext::obtain();
+            task::spawn(|| format!("validate_connection:{conn_id}"), async move {
+                let connection = &plan.connection.connection;
+                let result = match connection.validate(&connection_context).await {
+                    Ok(()) => Ok(plan),
+                    Err(err) => Err(err.into()),
+                };
+
+                // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                let result = internal_cmd_tx.send(Message::CreateConnectionValidationReady(
+                    CreateConnectionValidationReady {
+                        ctx,
+                        result,
+                        plan_validity: PlanValidity {
+                            transient_revision,
+                            dependency_ids: resolved_ids.0,
+                            cluster_id: None,
+                            replica_id: None,
+                        },
+                        otel_ctx,
+                    },
+                ));
+                if let Err(e) = result {
+                    tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
+            });
+        } else {
+            let result = self
+                .sequence_create_connection_stage_finish(ctx.session_mut(), plan, resolved_ids)
+                .await;
+            ctx.retire(result);
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
         plan: CreateConnectionPlan,
@@ -1746,13 +1794,17 @@ impl Coordinator {
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
-                    .send(PendingReadTxn::Read {
-                        txn: PendingTxn {
-                            ctx,
-                            response,
-                            action,
+                    .send(PendingReadTxn {
+                        txn: PendingRead::Read {
+                            txn: PendingTxn {
+                                ctx,
+                                response,
+                                action,
+                            },
+                            timestamp_context: determination.timestamp_context,
                         },
-                        timestamp_context: determination.timestamp_context,
+                        created: Instant::now(),
+                        num_requeues: 0,
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
@@ -1950,7 +2002,7 @@ impl Coordinator {
 
         let validity = PlanValidity {
             transient_revision: catalog.transient_revision(),
-            source_ids: source_ids.clone(),
+            dependency_ids: source_ids.clone(),
             cluster_id: Some(cluster.id()),
             replica_id: target_replica,
         };
@@ -2237,7 +2289,7 @@ impl Coordinator {
                         determine_bundle,
                         when,
                         cluster_id,
-                        timeline_context,
+                        &timeline_context,
                         real_time_recency_ts,
                     )?;
                     // We only need read holds if the read depends on a timestamp. We don't set the
@@ -2437,7 +2489,7 @@ impl Coordinator {
             .sufficient_collections(&depends_on);
         let timeline = self.validate_timeline_context(id_bundle.iter())?;
         let as_of = self
-            .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
+            .determine_timestamp(session, &id_bundle, &when, cluster_id, &timeline, None)?
             .timestamp_context
             .timestamp_or_default();
 
@@ -2825,7 +2877,7 @@ impl Coordinator {
             Some(fut) => {
                 let validity = PlanValidity {
                     transient_revision: self.catalog().transient_revision(),
-                    source_ids,
+                    dependency_ids: source_ids,
                     cluster_id: Some(cluster_id),
                     replica_id: None,
                 };
@@ -2954,9 +3006,12 @@ impl Coordinator {
                 }
             }
         }
+        let respond_immediately = determination.respond_immediately();
         TimestampExplanation {
             determination,
             sources,
+            session_wall_time: session.pcx().wall_time,
+            respond_immediately,
         }
     }
 
@@ -3488,9 +3543,13 @@ impl Coordinator {
             if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
             {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let result = strict_serializable_reads_tx.send(PendingReadTxn::ReadThenWrite {
-                    tx,
-                    timestamp: (read_ts, timeline),
+                let result = strict_serializable_reads_tx.send(PendingReadTxn {
+                    txn: PendingRead::ReadThenWrite {
+                        tx,
+                        timestamp: (read_ts, timeline),
+                    },
+                    created: Instant::now(),
+                    num_requeues: 0,
                 });
                 // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
                 if let Err(e) = result {
@@ -3672,7 +3731,7 @@ impl Coordinator {
             DataSourceDesc::Ingestion(ingestion) => ingestion,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook
+            | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }

@@ -2000,7 +2000,10 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP requests.
-    Webhook,
+    Webhook {
+        /// An optional expression which is used to validate each request received by this webhook.
+        validate_using: Option<MirScalarExpr>,
+    },
 }
 
 impl DataSourceDesc {
@@ -2110,7 +2113,7 @@ impl Source {
     /// Returns whether this source ingests data from an external source.
     pub fn is_external(&self) -> bool {
         match self.data_source {
-            DataSourceDesc::Ingestion(_) | DataSourceDesc::Webhook => true,
+            DataSourceDesc::Ingestion(_) | DataSourceDesc::Webhook { .. } => true,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => false,
@@ -2124,7 +2127,7 @@ impl Source {
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
-            DataSourceDesc::Webhook => "webhook",
+            DataSourceDesc::Webhook { .. } => "webhook",
         }
     }
 
@@ -2162,7 +2165,7 @@ impl Source {
                 }
             },
             DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Webhook
+            | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
         }
@@ -2173,7 +2176,7 @@ impl Source {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
             DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Webhook
+            | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
         }
@@ -2195,7 +2198,7 @@ impl Source {
                 // persist shard).
                 std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
             }
-            DataSourceDesc::Webhook => 1,
+            DataSourceDesc::Webhook { .. } => 1,
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
             DataSourceDesc::Source
@@ -2204,12 +2207,6 @@ impl Source {
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress => 0,
         }
-    }
-
-    /// Returns if this source is a webhook source, which indicates `environmentd` is responsible
-    /// for receiving and pushing data to storage.
-    pub fn is_webhook(&self) -> bool {
-        matches!(self.data_source, DataSourceDesc::Webhook)
     }
 }
 
@@ -2384,7 +2381,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
                 DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Webhook
+                | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => Ok(None),
             },
@@ -2557,7 +2554,7 @@ impl CatalogItem {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
                 DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Webhook
+                | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => None,
             },
@@ -2715,17 +2712,6 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
-    /// Reports whether this catalog entry is a source that is used for a webhook.
-    pub fn is_webhook(&self) -> bool {
-        matches!(
-            self.item(),
-            CatalogItem::Source(Source {
-                data_source: DataSourceDesc::Webhook,
-                ..
-            })
-        )
-    }
-
     /// Reports whether this catalog entry is a source. Note that this includes
     /// subsources.
     pub fn is_source(&self) -> bool {
@@ -2755,7 +2741,7 @@ impl CatalogEntry {
                     .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
                 DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Webhook
+                | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => BTreeSet::new(),
             },
@@ -2779,7 +2765,7 @@ impl CatalogEntry {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook
+                | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Source => None,
             },
             CatalogItem::Table(_)
@@ -4141,6 +4127,7 @@ impl Catalog {
             CatalogType::Numeric => CatalogType::Numeric,
             CatalogType::Oid => CatalogType::Oid,
             CatalogType::PgLegacyChar => CatalogType::PgLegacyChar,
+            CatalogType::PgLegacyName => CatalogType::PgLegacyName,
             CatalogType::Pseudo => CatalogType::Pseudo,
             CatalogType::RegClass => CatalogType::RegClass,
             CatalogType::RegProc => CatalogType::RegProc,
@@ -7247,11 +7234,6 @@ impl Catalog {
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
-
-    pub async fn consolidate(&self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
-        Ok(self.storage().await.consolidate(collections).await?)
-    }
-
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
     }
@@ -7449,10 +7431,11 @@ impl Catalog {
                 create_sql,
                 desc,
                 timeline,
+                validate_using,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql,
-                data_source: DataSourceDesc::Webhook,
+                data_source: DataSourceDesc::Webhook { validate_using },
                 desc,
                 timeline,
                 resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -8791,6 +8774,7 @@ mod tests {
     /// search paths, so do not require schema qualification on system objects such
     /// as types.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_minimal_qualification() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             struct TestCase {
@@ -8863,6 +8847,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
         {
@@ -8898,6 +8883,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_effective_search_path() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             let mz_catalog_schema = (
@@ -9043,6 +9029,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_builtin_migration() {
         enum ItemNamespace {
             System,
@@ -9697,6 +9684,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| {
             let catalog = catalog.for_system_session();
@@ -9864,6 +9852,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
         let debug_stash_factory = DebugStashFactory::new().await;
         let stash = debug_stash_factory.open_debug().await;
@@ -9883,6 +9872,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
         let debug_stash_factory = DebugStashFactory::new().await;
         let stash = debug_stash_factory.open_debug().await;

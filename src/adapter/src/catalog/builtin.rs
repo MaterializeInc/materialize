@@ -559,6 +559,28 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_NAME: BuiltinType<NameReference> = BuiltinType {
+    name: "name",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_NAME_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::PgLegacyName,
+        array_id: None,
+    },
+};
+
+pub const TYPE_NAME_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_name",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_NAME_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_NAME.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
     name: "numeric",
     schema: PG_CATALOG_SCHEMA,
@@ -2343,6 +2365,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     false AS relhasrules,
     -- MZ doesn't support creating triggers so relhastriggers is filled with false
     false AS relhastriggers,
+    -- MZ doesn't support table inheritance or partitions so relhassubclass is filled with false
+    false AS relhassubclass,
     -- MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
     false AS relrowsecurity,
     false AS relforcerowsecurity,
@@ -2428,6 +2452,8 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     d.name as datname,
     role_owner.oid as datdba,
     6 as encoding,
+    -- Materialize doesn't support database cloning.
+    FALSE AS datistemplate,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
@@ -2470,6 +2496,24 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
+};
+
+pub const PG_INDEXES: BuiltinView = BuiltinView {
+    name: "pg_indexes",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_indexes AS SELECT
+    current_database() as table_catalog,
+    s.name AS schemaname,
+    r.name AS tablename,
+    i.name AS indexname,
+    NULL::text AS tablespace,
+    -- TODO(jkosh44) Fill in with actual index definition.
+    NULL::text AS indexdef
+FROM mz_catalog.mz_indexes i
+JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
@@ -3222,6 +3266,33 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
+    name: "routines",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.routines AS SELECT
+    current_database() as routine_catalog,
+    s.name AS routine_schema,
+    f.name AS routine_name,
+    'FUNCTION' AS routine_type,
+    NULL::text AS routine_definition
+FROM mz_catalog.mz_functions f
+JOIN mz_catalog.mz_schemas s ON s.id = f.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_SCHEMATA: BuiltinView = BuiltinView {
+    name: "schemata",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.schemata AS
+SELECT
+    current_database() as catalog_name,
+    s.name AS schema_name
+FROM mz_catalog.mz_schemas s
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
@@ -3236,6 +3307,41 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     END AS table_type
 FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
+    name: "triggers",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.triggers AS SELECT
+    NULL::text as trigger_catalog,
+    NULL::text AS trigger_schema,
+    NULL::text AS trigger_name,
+    NULL::text AS event_manipulation,
+    NULL::text AS event_object_catalog,
+    NULL::text AS event_object_schema,
+    NULL::text AS event_object_table,
+    NULL::integer AS action_order,
+    NULL::text AS action_condition,
+    NULL::text AS action_statement,
+    NULL::text AS action_orientation,
+    NULL::text AS action_timing,
+    NULL::text AS action_reference_old_table,
+    NULL::text AS action_reference_new_table
+WHERE FALSE",
+};
+
+pub const INFORMATION_SCHEMA_VIEWS: BuiltinView = BuiltinView {
+    name: "views",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.views AS SELECT
+    current_database() as table_catalog,
+    s.name AS table_schema,
+    v.name AS table_name,
+    v.definition AS view_definition
+FROM mz_catalog.mz_views v
+JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
@@ -3865,6 +3971,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_JSONB_ARRAY),
         Builtin::Type(&TYPE_LIST),
         Builtin::Type(&TYPE_MAP),
+        Builtin::Type(&TYPE_NAME),
+        Builtin::Type(&TYPE_NAME_ARRAY),
         Builtin::Type(&TYPE_NUMERIC),
         Builtin::Type(&TYPE_NUMERIC_ARRAY),
         Builtin::Type(&TYPE_OID),
@@ -4087,8 +4195,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_EVENT_TRIGGER),
         Builtin::View(&PG_LANGUAGE),
         Builtin::View(&PG_SHDESCRIPTION),
+        Builtin::View(&PG_INDEXES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
+        Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
+        Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
+        Builtin::View(&INFORMATION_SCHEMA_VIEWS),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
@@ -4201,6 +4314,7 @@ mod tests {
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -4552,6 +4666,7 @@ mod tests {
 
     // Execute all builtin functions with all combinations of arguments from interesting datums.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_smoketest_all_builtins() {
         fn inner(catalog: Catalog) {
             let conn_catalog = catalog.for_system_session();
@@ -4568,7 +4683,7 @@ mod tests {
             };
             let pcx = PlanContext::zero();
             let scx = StatementContext::new(Some(&pcx), &conn_catalog);
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
             let ecx = ExprContext {
                 qcx: &qcx,
                 name: "smoketest",
@@ -4792,6 +4907,7 @@ mod tests {
 
     // Make sure pg views don't use types that only exist in Materialize.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -4848,7 +4964,8 @@ mod tests {
                         | ScalarType::RegType
                         | ScalarType::RegClass
                         | ScalarType::Int2Vector
-                        | ScalarType::Range { .. } => {}
+                        | ScalarType::Range { .. }
+                        | ScalarType::PgLegacyName => {}
                     }
                 }
             }

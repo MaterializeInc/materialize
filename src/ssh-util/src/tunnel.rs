@@ -92,8 +92,9 @@ impl SshTunnelConfig {
                 return Err(e);
             }
         };
-        let local_port = Arc::new(AtomicU16::new(local_port));
+        info!(%tunnel_id, %local_port, "connected to ssh tunnel");
 
+        let local_port = Arc::new(AtomicU16::new(local_port));
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();

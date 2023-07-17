@@ -13,6 +13,7 @@ config-version: 2
 
 profile: 'canary_environment'
 
+macro-paths: ["macros"]
 model-paths: ["models"]
 test-paths: ["tests"]
 
@@ -20,3 +21,10 @@ target-path: "target"  # directory which will store compiled SQL files
 clean-targets:         # directories to be removed by `dbt clean`
   - "target"
   - "dbt_packages"
+
+models:
+  canary_environment:
+    loadgen:
+      schema: loadgen
+    tpch:
+      schema: tpch

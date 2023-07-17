@@ -80,6 +80,7 @@ const MAX_STRING_BYTES: usize = 1024 * 1024 * 100;
 )]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
+    CurrentSchema,
     CurrentSchemasWithSystem,
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
@@ -102,7 +103,14 @@ impl UnmaterializableFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
             UnmaterializableFunc::CurrentDatabase => ScalarType::String.nullable(false),
-            // TODO: The `CurrentSchemas` functions should should return name[].
+            // TODO: The `CurrentSchema` function should return `name`. This is
+            // tricky in Materialize because `name` truncates to 63 characters
+            // but Materialize does not have a limit on identifier length.
+            UnmaterializableFunc::CurrentSchema => ScalarType::String.nullable(true),
+            // TODO: The `CurrentSchemas` function should return `name[]`. This
+            // is tricky in Materialize because `name` truncates to 63
+            // characters but Materialize does not have a limit on identifier
+            // length.
             UnmaterializableFunc::CurrentSchemasWithSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
@@ -135,6 +143,7 @@ impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UnmaterializableFunc::CurrentDatabase => f.write_str("current_database"),
+            UnmaterializableFunc::CurrentSchema => f.write_str("current_schema"),
             UnmaterializableFunc::CurrentSchemasWithSystem => f.write_str("current_schemas(true)"),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 f.write_str("current_schemas(false)")
@@ -162,6 +171,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
         use crate::scalar::proto_unmaterializable_func::Kind::*;
         let kind = match self {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
+            UnmaterializableFunc::CurrentSchema => CurrentSchema(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
             UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
@@ -187,6 +197,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
         if let Some(kind) = proto.kind {
             match kind {
                 CurrentDatabase(()) => Ok(UnmaterializableFunc::CurrentDatabase),
+                CurrentSchema(()) => Ok(UnmaterializableFunc::CurrentSchema),
                 CurrentSchemasWithSystem(()) => Ok(UnmaterializableFunc::CurrentSchemasWithSystem),
                 CurrentSchemasWithoutSystem(()) => {
                     Ok(UnmaterializableFunc::CurrentSchemasWithoutSystem)
@@ -2165,7 +2176,6 @@ pub enum BinaryFunc {
     DateTruncInterval,
     TimezoneTimestamp,
     TimezoneTimestampTz,
-    TimezoneTime { wall_time: NaiveDateTime },
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
@@ -2406,10 +2416,8 @@ impl BinaryFunc {
             BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str())
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
             BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
-                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into()).try_into()?)
+                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
             }),
-            BinaryFunc::TimezoneTime { wall_time } => parse_timezone(a.unwrap_str())
-                .map(|tz| timezone_time(tz, b.unwrap_time(), wall_time).into()),
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
@@ -2592,7 +2600,7 @@ impl BinaryFunc {
                 ScalarType::TimestampTz.nullable(in_nullable)
             }
 
-            TimezoneTime { .. } | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+            TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
             SubTime => ScalarType::Interval.nullable(in_nullable),
 
@@ -2817,7 +2825,6 @@ impl BinaryFunc {
             | DateTruncInterval
             | TimezoneTimestamp
             | TimezoneTimestampTz
-            | TimezoneTime { .. }
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
@@ -3041,7 +3048,6 @@ impl BinaryFunc {
             | DateTruncTimestampTz
             | TimezoneTimestamp
             | TimezoneTimestampTz
-            | TimezoneTime { .. }
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
@@ -3232,7 +3238,6 @@ impl BinaryFunc {
             | BinaryFunc::DateTruncInterval => (false, false),
             BinaryFunc::TimezoneTimestamp
             | BinaryFunc::TimezoneTimestampTz
-            | BinaryFunc::TimezoneTime { .. }
             | BinaryFunc::TimezoneIntervalTimestamp
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime => (false, false),
@@ -3431,7 +3436,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
             BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
-            BinaryFunc::TimezoneTime { .. } => f.write_str("timezonet"),
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
@@ -3640,9 +3644,6 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::DateTruncInterval).boxed(),
             Just(BinaryFunc::TimezoneTimestamp).boxed(),
             Just(BinaryFunc::TimezoneTimestampTz).boxed(),
-            any_naive_datetime()
-                .prop_map(|wall_time| BinaryFunc::TimezoneTime { wall_time })
-                .boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestamp).boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestampTz).boxed(),
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
@@ -3843,7 +3844,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::DateTruncInterval => DateTruncInterval(()),
             BinaryFunc::TimezoneTimestamp => TimezoneTimestamp(()),
             BinaryFunc::TimezoneTimestampTz => TimezoneTimestampTz(()),
-            BinaryFunc::TimezoneTime { wall_time } => TimezoneTime(wall_time.into_proto()),
             BinaryFunc::TimezoneIntervalTimestamp => TimezoneIntervalTimestamp(()),
             BinaryFunc::TimezoneIntervalTimestampTz => TimezoneIntervalTimestampTz(()),
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
@@ -4042,9 +4042,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 DateTruncInterval(()) => Ok(BinaryFunc::DateTruncInterval),
                 TimezoneTimestamp(()) => Ok(BinaryFunc::TimezoneTimestamp),
                 TimezoneTimestampTz(()) => Ok(BinaryFunc::TimezoneTimestampTz),
-                TimezoneTime(wall_time) => Ok(BinaryFunc::TimezoneTime {
-                    wall_time: wall_time.into_rust()?,
-                }),
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
@@ -4409,6 +4406,7 @@ derive_unary!(
     CastTimestampTzToMzTimestamp,
     CastStringToBool,
     CastStringToPgLegacyChar,
+    CastStringToPgLegacyName,
     CastStringToBytes,
     CastStringToInt16,
     CastStringToInt32,
@@ -4568,7 +4566,8 @@ derive_unary!(
     MzAclItemGrantee,
     MzAclItemPrivileges,
     MzValidatePrivileges,
-    QuoteIdent
+    QuoteIdent,
+    TryParseMonotonicIso8601Timestamp
 );
 
 impl UnaryFunc {
@@ -4750,6 +4749,9 @@ impl Arbitrary for UnaryFunc {
             CastNumericToString::arbitrary().prop_map_into().boxed(),
             CastStringToBool::arbitrary().prop_map_into().boxed(),
             CastStringToPgLegacyChar::arbitrary()
+                .prop_map_into()
+                .boxed(),
+            CastStringToPgLegacyName::arbitrary()
                 .prop_map_into()
                 .boxed(),
             CastStringToBytes::arbitrary().prop_map_into().boxed(),
@@ -5106,6 +5108,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastNumericToString(_) => CastNumericToString(()),
             UnaryFunc::CastStringToBool(_) => CastStringToBool(()),
             UnaryFunc::CastStringToPgLegacyChar(_) => CastStringToPgLegacyChar(()),
+            UnaryFunc::CastStringToPgLegacyName(_) => CastStringToPgLegacyName(()),
             UnaryFunc::CastStringToBytes(_) => CastStringToBytes(()),
             UnaryFunc::CastStringToInt16(_) => CastStringToInt16(()),
             UnaryFunc::CastStringToInt32(_) => CastStringToInt32(()),
@@ -5321,6 +5324,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
             UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
             UnaryFunc::QuoteIdent(_) => QuoteIdent(()),
+            UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => {
+                TryParseMonotonicIso8601Timestamp(())
+            }
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5473,6 +5479,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastNumericToString(()) => Ok(impls::CastNumericToString.into()),
                 CastStringToBool(()) => Ok(impls::CastStringToBool.into()),
                 CastStringToPgLegacyChar(()) => Ok(impls::CastStringToPgLegacyChar.into()),
+                CastStringToPgLegacyName(()) => Ok(impls::CastStringToPgLegacyName.into()),
                 CastStringToBytes(()) => Ok(impls::CastStringToBytes.into()),
                 CastStringToInt16(()) => Ok(impls::CastStringToInt16.into()),
                 CastStringToInt32(()) => Ok(impls::CastStringToInt32.into()),
@@ -5743,6 +5750,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
                 MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
                 QuoteIdent(_) => Ok(impls::QuoteIdent.into()),
+                TryParseMonotonicIso8601Timestamp(_) => {
+                    Ok(impls::TryParseMonotonicIso8601Timestamp.into())
+                }
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
@@ -6333,7 +6343,7 @@ where
         TimestampTz => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
         Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
         Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
-        String | VarChar { .. } => Ok(strconv::format_string(buf, d.unwrap_str())),
+        String | VarChar { .. } | PgLegacyName => Ok(strconv::format_string(buf, d.unwrap_str())),
         Char { length } => Ok(strconv::format_string(
             buf,
             &mz_repr::adt::char::format_str_pad(d.unwrap_str(), *length),
@@ -7211,6 +7221,7 @@ pub enum VariadicFunc {
     ArrayFill {
         elem_type: ScalarType,
     },
+    TimezoneTime,
 }
 
 impl VariadicFunc {
@@ -7294,6 +7305,14 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
+            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str()).map(|tz| {
+                timezone_time(
+                    tz,
+                    ds[1].unwrap_time(),
+                    &ds[1].unwrap_timestamptz().naive_utc(),
+                )
+                .into()
+            }),
         }
     }
 
@@ -7335,7 +7354,8 @@ impl VariadicFunc {
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
-            | VariadicFunc::ArrayFill { .. } => false,
+            | VariadicFunc::ArrayFill { .. }
+            | VariadicFunc::TimezoneTime => false,
         }
     }
 
@@ -7418,6 +7438,7 @@ impl VariadicFunc {
             ArrayFill { elem_type } => {
                 ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
+            TimezoneTime => ScalarType::Time.nullable(in_nullable),
         }
     }
 
@@ -7483,7 +7504,8 @@ impl VariadicFunc {
             | Or
             | MakeMzAclItem
             | ArrayPosition
-            | ArrayFill { .. } => false,
+            | ArrayFill { .. }
+            | TimezoneTime => false,
             Coalesce
             | Greatest
             | Least
@@ -7584,7 +7606,8 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestamp
             | VariadicFunc::DateDiffTimestampTz
             | VariadicFunc::DateDiffDate
-            | VariadicFunc::DateDiffTime => false,
+            | VariadicFunc::DateDiffTime
+            | VariadicFunc::TimezoneTime => false,
         }
     }
 }
@@ -7637,6 +7660,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
+            VariadicFunc::TimezoneTime => f.write_str("timezonet"),
         }
     }
 }
@@ -7750,6 +7774,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
             VariadicFunc::ArrayPosition => ArrayPosition(()),
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
+            VariadicFunc::TimezoneTime => TimezoneTime(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7809,6 +7834,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 ArrayFill(elem_type) => Ok(VariadicFunc::ArrayFill {
                     elem_type: elem_type.into_rust()?,
                 }),
+                TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
             }
         } else {
             Err(TryFromProtoError::missing_field(
@@ -7886,6 +7912,7 @@ mod test {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
             assert!(actual.is_ok());
@@ -7893,6 +7920,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
             assert!(actual.is_ok());
@@ -7900,6 +7928,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
             assert!(actual.is_ok());
@@ -7907,6 +7936,7 @@ mod test {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());

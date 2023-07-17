@@ -9,7 +9,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::stats::histogram_seconds_buckets;
+use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
@@ -22,10 +22,12 @@ pub struct Metrics {
     pub active_subscribes: IntGaugeVec,
     pub queue_busy_seconds: HistogramVec,
     pub determine_timestamp: IntCounterVec,
+    pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: HistogramVec,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounterVec,
+    pub linearize_message_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -56,6 +58,12 @@ impl Metrics {
                 help: "The total number of calls to determine_timestamp.",
                 var_labels:["respond_immediately", "isolation_level", "compute_instance"],
             )),
+            timestamp_difference_for_strict_serializable_ms: registry.register(metric!(
+                name: "mz_timestamp_difference_for_strict_serializable_ms",
+                help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
+                var_labels:["compute_instance"],
+                buckets: histogram_milliseconds_buckets(1., 8000.),
+            )),
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",
                 help: "The total number of adapter commands issued of the given type since process start.",
@@ -74,6 +82,12 @@ impl Metrics {
             canceled_peeks: registry.register(metric!(
                 name: "mz_canceled_peeks_total",
                 help: "The total number of canceled peeks since process start.",
+            )),
+            linearize_message_seconds: registry.register(metric!(
+                name: "mz_linearize_message_seconds",
+                help: "The number of seconds it takes to linearize strict serializable messages",
+                var_labels: ["type", "immediately_handled"],
+                buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
         }
     }

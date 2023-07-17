@@ -53,6 +53,30 @@ SELECT current_schemas(true)
 ----
 {mz_catalog,pg_catalog}
 
+# Ensure both `current_schemas` and `current_schema` work when the specified
+# cluster is invalid.
+
+statement ok
+SET cluster = noexist
+
+query T
+SELECT current_schema()
+----
+NULL
+
+query T
+SELECT current_schemas(false)
+----
+{}
+
+query T
+SELECT current_schemas(true)
+----
+{mz_catalog,pg_catalog}
+
+statement ok
+SET cluster = default
+
 statement error no schema has been selected to create in
 CREATE TABLE t (i INT)
 

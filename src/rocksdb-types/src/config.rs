@@ -488,6 +488,15 @@ pub mod defaults {
 
     /// The default max duration for retrying the retry-able errors in rocksdb.
     pub const DEFAULT_RETRY_DURATION: Duration = Duration::from_secs(1);
+
+    /// The default for spilling from memory to rocksdb is 2 write buffers. Some initial tests
+    /// found that 2 write buffers were the minimum memory usage of rocksdb when processing small
+    /// amounts of data.
+    ///
+    /// The calculation is based on the `MEMTABLE_BUDGET`, and is inverting the logic here:
+    /// <https://github.com/facebook/rocksdb/blob/bc0db33483d5e79b281ba3137ebf286b2d1efd8d/options/options.cc#L632-L637>
+    pub const DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD: usize =
+        DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET / 4 * 2;
 }
 
 #[cfg(test)]

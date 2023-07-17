@@ -21,6 +21,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::pg_legacy_name::PgLegacyName;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -31,7 +32,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
+use crate::scalar::func::{array_create_scalar, format, EagerUnaryFunc, LazyUnaryFunc};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -49,6 +50,14 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastPgLegacyCharToString)]
     fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
         PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_name"]
+    #[preserves_uniqueness = true]
+    fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
+        PgLegacyName(strconv::parse_pg_legacy_name(a))
     }
 );
 
@@ -202,6 +211,23 @@ sqlfunc!(
         a: &'a str,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         strconv::parse_timestamp(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
+    // TODO: Pretty sure this preserves uniqueness, but not 100%.
+    //
+    // Ironically, even though this has "monotonic" in the name, it's not quite
+    // eligible for `#[is_monotone = true]` because any input could also be
+    // mapped to null. So, handle it via SpecialUnary in the interpreter.
+    fn try_parse_monotonic_iso8601_timestamp<'a>(
+        a: &'a str,
+    ) -> Option<CheckedTimestamp<NaiveDateTime>> {
+        let ts = format::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = CheckedTimestamp::from_timestamplike(ts)
+            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
+        Some(ts)
     }
 );
 

@@ -105,6 +105,7 @@ use tokio::sync::Mutex;
 // catalog.
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn datadriven() {
     datadriven::walk_async("tests/testdata/sql", |mut f| async {
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that
@@ -177,10 +178,7 @@ async fn datadriven() {
                             let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
                             let pcx = &PlanContext::zero();
                             let scx = StatementContext::new(Some(pcx), &catalog);
-                            let qcx = QueryContext::root(
-                                &scx,
-                                QueryLifetime::OneShot(scx.pcx().unwrap()),
-                            );
+                            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
                             let q = parsed[0].clone();
                             let q = match q {
                                 Statement::Select(s) => s.query,

@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // too slow
     async fn machine() {
         use crate::internal::machine::datadriven as machine_dd;
 

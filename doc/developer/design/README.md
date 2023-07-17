@@ -109,7 +109,10 @@ short.
    small set of people who have a vested interest in the area the design
    touches. If it's not clear who that is, ask your TL, EM, or in #eng-general.
 4. Announce that the design doc is ready for review in #eng-announce, if you
-   think it's helpful to surface the design to a larger set of people.
+   think it's helpful to surface the design to a larger set of people. This
+   step is optional. We have an automation that posts new ready-for-review
+   design docs to #eng-design-docs and in many cases that will be sufficient
+   to inform any interested parties.
 
 ### Iteration
 

@@ -966,23 +966,6 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if let BinaryFunc::TimezoneTime { wall_time } = func {
-                            if expr1.is_literal() {
-                                let tz = expr1.as_literal_str().unwrap();
-                                *e = match parse_timezone(tz) {
-                                    Ok(tz) => MirScalarExpr::CallUnary {
-                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
-                                            tz,
-                                            wall_time: *wall_time,
-                                        }),
-                                        expr: Box::new(expr2.take()),
-                                    },
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err),
-                                        e.typ(column_types).scalar_type,
-                                    ),
-                                }
-                            }
                         } else if matches!(*func, BinaryFunc::Eq | BinaryFunc::NotEq)
                             && expr2 < expr1
                         {
@@ -1157,6 +1140,28 @@ impl MirScalarExpr {
                             // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
+                        } else if let VariadicFunc::TimezoneTime = func {
+                            if exprs[0].is_literal() && exprs[2].is_literal_ok() {
+                                let tz = exprs[0].as_literal_str().unwrap();
+                                *e = match parse_timezone(tz) {
+                                    Ok(tz) => MirScalarExpr::CallUnary {
+                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
+                                            tz,
+                                            wall_time: exprs[2]
+                                                .as_literal()
+                                                .unwrap()
+                                                .unwrap()
+                                                .unwrap_timestamptz()
+                                                .naive_utc(),
+                                        }),
+                                        expr: Box::new(exprs[1].take()),
+                                    },
+                                    Err(err) => MirScalarExpr::literal(
+                                        Err(err),
+                                        e.typ(column_types).scalar_type,
+                                    ),
+                                }
+                            }
                         }
                     }
                     MirScalarExpr::If { cond, then, els } => {
@@ -2823,6 +2828,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2930,6 +2936,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2948,6 +2955,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

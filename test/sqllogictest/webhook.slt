@@ -97,3 +97,59 @@ statement ok
 CREATE SOURCE IF NOT EXISTS webhook_text_include_headers FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
+
+# Make sure we can parse a relatively complex validation expression.
+statement ok
+CREATE SOURCE webhook_bad_validation_expr FROM WEBHOOK
+    BODY FORMAT TEXT
+    VALIDATE USING (
+        decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || '.' || convert_from(body, 'utf-8'), 'key', 'sha256')
+    )
+
+statement ok
+CREATE SOURCE webhook_buildkite FROM WEBHOOK
+  BODY FORMAT JSON
+  VALIDATE USING (
+    decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
+      split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || convert_from(body, 'utf-8'),
+      'test_key',
+      'sha256'
+    )
+  )
+
+statement error column "field_that_does_not_exist" does not exist
+CREATE SOURCE webhook_bad_validation_expr FROM WEBHOOK
+    BODY FORMAT TEXT
+    VALIDATE USING (
+        decode(headers->'signature', 'base64') = hmac(field_that_does_not_exist, 'key', 'sha256')
+    )
+
+statement error VALIDATE USING must have type boolean, not type text
+CREATE SOURCE webhook_validation_returns_non_bool FROM WEBHOOK
+    BODY FORMAT TEXT
+    VALIDATE USING ( 'foo' || 'bar' )
+
+statement error expression provided in VALIDATE USING does not reference any columns
+CREATE SOURCE webhook_json_with_validation FROM WEBHOOK
+    BODY FORMAT JSON
+    VALIDATE USING ( 'a' = 'test' )
+
+statement error VALIDATE USING does not allow subqueries
+CREATE SOURCE webhook_validation_with_subquery FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING ( headers->'signature' IN (select * from mz_tables) );
+
+statement error expression provided in VALIDATE USING is not deterministic
+CREATE SOURCE webhook_validation_with_now FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING ( headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS') );
+
+statement error expression provided in VALIDATE USING is not deterministic
+CREATE SOURCE webhook_validation_with_now FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING ( headers->'signature' = mz_now()::text );
+
+statement error expression provided in VALIDATE USING is not deterministic
+CREATE SOURCE webhook_validation_with_now FROM WEBHOOK
+  BODY FORMAT BYTES
+  VALIDATE USING ( headers->'signature' = current_timestamp()::text );

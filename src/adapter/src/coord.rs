@@ -71,7 +71,7 @@ use std::net::Ipv4Addr;
 use std::ops::Neg;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -243,7 +243,15 @@ pub type CreateSourceStatementReady = BackgroundWorkResult<(
     CreateSourceStatement<Aug>,
 )>;
 
-pub type CreateConnectionValidationReady = BackgroundWorkResult<CreateConnectionPlan>;
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct CreateConnectionValidationReady {
+    #[derivative(Debug = "ignore")]
+    pub ctx: ExecuteContext,
+    pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub plan_validity: PlanValidity,
+    pub otel_ctx: OpenTelemetryContext,
+}
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -388,7 +396,7 @@ pub struct PlanValidity {
     /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
     /// Objects on which the plan depends.
-    source_ids: BTreeSet<GlobalId>,
+    dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
 }
@@ -416,7 +424,7 @@ impl PlanValidity {
         // - Ids do not mutate.
         // - Ids are not reused.
         // - If an id was dropped, this will detect it and error.
-        for id in &self.source_ids {
+        for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan);
             }
@@ -542,8 +550,21 @@ impl From<PendingTxnResponse> for ExecuteResponse {
 }
 
 #[derive(Debug)]
+/// A pending read transaction waiting to be linearized along with metadata about it's state
+pub struct PendingReadTxn {
+    /// The transaction type
+    txn: PendingRead,
+    /// When we created this pending txn, when the transaction ends. Only used for metrics.
+    created: Instant,
+    /// Number of times we requeued the processing of this pending read txn.
+    /// Requeueing is necessary if the time we executed the query is after the current oracle time;
+    /// see [`Coordinator::message_linearize_reads`] for more details.
+    num_requeues: u64,
+}
+
+#[derive(Debug)]
 /// A pending read transaction waiting to be linearized.
-pub enum PendingReadTxn {
+enum PendingRead {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
@@ -558,14 +579,14 @@ pub enum PendingReadTxn {
     },
 }
 
-impl PendingReadTxn {
+impl PendingRead {
     /// Return the timestamp context of the pending read transaction.
     pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
         match &self {
-            PendingReadTxn::Read {
+            PendingRead::Read {
                 timestamp_context, ..
             } => timestamp_context.clone(),
-            PendingReadTxn::ReadThenWrite {
+            PendingRead::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
             } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
@@ -578,7 +599,7 @@ impl PendingReadTxn {
     /// (execution context and result)
     pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
-            PendingReadTxn::Read {
+            PendingRead::Read {
                 txn:
                     PendingTxn {
                         mut ctx,
@@ -596,11 +617,18 @@ impl PendingReadTxn {
 
                 Some((ctx, response))
             }
-            PendingReadTxn::ReadThenWrite { tx, .. } => {
+            PendingRead::ReadThenWrite { tx, .. } => {
                 // Ignore errors if the caller has hung up.
                 let _ = tx.send(());
                 None
             }
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            PendingRead::Read { .. } => "read",
+            PendingRead::ReadThenWrite { .. } => "read_then_write",
         }
     }
 }
@@ -1026,7 +1054,9 @@ impl Coordinator {
                 ),
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
-                DataSourceDesc::Webhook => (DataSource::Webhook, source_status_collection_id),
+                DataSourceDesc::Webhook { .. } => {
+                    (DataSource::Webhook, source_status_collection_id)
+                }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Introspection(introspection) => {
                     (DataSource::Introspection(*introspection), None)

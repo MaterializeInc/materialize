@@ -1369,19 +1369,20 @@ impl<'a> Parser<'a> {
     ///   * `OPERATOR("foo"."bar"."baz".@>)`
     fn parse_operator(&mut self) -> Result<Op, ParserError> {
         let mut namespace = vec![];
-        loop {
+        let op = loop {
             match self.next_token() {
                 Some(Token::Keyword(kw)) => namespace.push(kw.into()),
                 Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
-                Some(Token::Op(op)) => return Ok(Op { namespace, op }),
-                Some(Token::Star) => {
-                    let op = String::from("*");
-                    return Ok(Op { namespace, op });
-                }
+                Some(Token::Op(op)) => break op,
+                Some(Token::Star) => break "*".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
             }
             self.expect_token(&Token::Dot)?;
-        }
+        };
+        Ok(Op {
+            namespace: Some(namespace),
+            op,
+        })
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -2232,57 +2233,58 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_connection_option(&mut self) -> Result<KafkaConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL])? {
-            BROKER => {
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::Broker,
-                    value: Some(self.parse_kafka_broker()?),
-                });
-            }
-            BROKERS => {
-                let _ = self.consume_token(&Token::Eq);
-                let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
-                let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
-                self.expect_token(&match delimiter {
-                    Token::LParen => Token::RParen,
-                    Token::LBracket => Token::RBracket,
-                    _ => unreachable!(),
-                })?;
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::Brokers,
-                    value: Some(WithOptionValue::Sequence(brokers)),
-                });
-            }
-            PROGRESS => {
-                self.expect_keyword(TOPIC)?;
-                KafkaConnectionOptionName::ProgressTopic
-            }
-            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
-                MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
-                PASSWORD => KafkaConnectionOptionName::SaslPassword,
-                USERNAME => KafkaConnectionOptionName::SaslUsername,
-                _ => unreachable!(),
-            },
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::SshTunnel,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => KafkaConnectionOptionName::SslKey,
-                CERTIFICATE => {
-                    if self.parse_keyword(AUTHORITY) {
-                        KafkaConnectionOptionName::SslCertificateAuthority
-                    } else {
-                        KafkaConnectionOptionName::SslCertificate
-                    }
+        let name =
+            match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL, SSH])? {
+                BROKER => {
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::Broker,
+                        value: Some(self.parse_kafka_broker()?),
+                    });
                 }
+                BROKERS => {
+                    let _ = self.consume_token(&Token::Eq);
+                    let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
+                    let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
+                    self.expect_token(&match delimiter {
+                        Token::LParen => Token::RParen,
+                        Token::LBracket => Token::RBracket,
+                        _ => unreachable!(),
+                    })?;
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::Brokers,
+                        value: Some(WithOptionValue::Sequence(brokers)),
+                    });
+                }
+                PROGRESS => {
+                    self.expect_keyword(TOPIC)?;
+                    KafkaConnectionOptionName::ProgressTopic
+                }
+                SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                    MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
+                    PASSWORD => KafkaConnectionOptionName::SaslPassword,
+                    USERNAME => KafkaConnectionOptionName::SaslUsername,
+                    _ => unreachable!(),
+                },
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::SshTunnel,
+                        value: Some(self.parse_object_option_value()?),
+                    });
+                }
+                SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                    KEY => KafkaConnectionOptionName::SslKey,
+                    CERTIFICATE => {
+                        if self.parse_keyword(AUTHORITY) {
+                            KafkaConnectionOptionName::SslCertificateAuthority
+                        } else {
+                            KafkaConnectionOptionName::SslCertificate
+                        }
+                    }
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
+            };
         Ok(KafkaConnectionOption {
             name,
             value: self.parse_optional_option_value()?,
@@ -2806,12 +2808,22 @@ impl<'a> Parser<'a> {
         };
         let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
 
+        let validate_using = if self.parse_keywords(&[VALIDATE, USING]) {
+            self.expect_token(&Token::LParen)?;
+            let validate_using = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            Some(validate_using)
+        } else {
+            None
+        };
+
         Ok(Statement::CreateWebhookSource(
             CreateWebhookSourceStatement {
                 name,
                 if_not_exists,
                 body_format,
                 include_headers,
+                validate_using,
             },
         ))
     }
