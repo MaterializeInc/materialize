@@ -15,6 +15,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastLossy;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
@@ -47,14 +48,14 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     pub fn from_timeline_context(
         ts: T,
         transaction_timeline: Option<Timeline>,
-        timeline_context: TimelineContext,
+        timeline_context: &TimelineContext,
     ) -> TimestampContext<T> {
         match timeline_context {
             TimelineContext::TimelineDependent(timeline) => {
                 if let Some(transaction_timeline) = transaction_timeline {
-                    assert_eq!(timeline, transaction_timeline);
+                    assert_eq!(timeline, &transaction_timeline);
                 }
-                Self::TimelineTimestamp(timeline, ts)
+                Self::TimelineTimestamp(timeline.clone(), ts)
             }
             TimelineContext::TimestampDependent => {
                 // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
@@ -218,8 +219,9 @@ pub trait TimestampProvider {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
-        timeline_context: TimelineContext,
+        timeline_context: &TimelineContext,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
+        isolation_level: &IsolationLevel,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -237,8 +239,7 @@ pub trait TimestampProvider {
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
-        let isolation_level = session.vars().transaction_isolation();
-        let timeline = match &timeline_context {
+        let timeline = match timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
             // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
@@ -427,9 +428,10 @@ impl Coordinator {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
-        timeline_context: TimelineContext,
+        timeline_context: &TimelineContext,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
+        let isolation_level = session.vars().transaction_isolation();
         let det = self.determine_timestamp_for(
             self.catalog().state(),
             session,
@@ -438,8 +440,8 @@ impl Coordinator {
             compute_instance,
             timeline_context,
             real_time_recency_ts,
+            isolation_level,
         )?;
-        let isolation_level = session.vars().transaction_isolation();
         self.metrics
             .determine_timestamp
             .with_label_values(&[
@@ -451,6 +453,31 @@ impl Coordinator {
                 &compute_instance.to_string(),
             ])
             .inc();
+        if !det.respond_immediately()
+            && isolation_level == &IsolationLevel::StrictSerializable
+            && real_time_recency_ts.is_none()
+        {
+            if let Some(strict) = det.timestamp_context.timestamp() {
+                let serializable_det = self.determine_timestamp_for(
+                    self.catalog().state(),
+                    session,
+                    id_bundle,
+                    when,
+                    compute_instance,
+                    timeline_context,
+                    real_time_recency_ts,
+                    &IsolationLevel::Serializable,
+                )?;
+                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
+                    self.metrics
+                        .timestamp_difference_for_strict_serializable_ms
+                        .with_label_values(&[&compute_instance.to_string()])
+                        .observe(f64::cast_lossy(u64::from(
+                            strict.saturating_sub(*serializable),
+                        )));
+                }
+            }
+        }
         Ok(det)
     }
 

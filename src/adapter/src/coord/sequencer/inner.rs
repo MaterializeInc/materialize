@@ -2289,7 +2289,7 @@ impl Coordinator {
                         determine_bundle,
                         when,
                         cluster_id,
-                        timeline_context,
+                        &timeline_context,
                         real_time_recency_ts,
                     )?;
                     // We only need read holds if the read depends on a timestamp. We don't set the
@@ -2489,7 +2489,7 @@ impl Coordinator {
             .sufficient_collections(&depends_on);
         let timeline = self.validate_timeline_context(id_bundle.iter())?;
         let as_of = self
-            .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
+            .determine_timestamp(session, &id_bundle, &when, cluster_id, &timeline, None)?
             .timestamp_context
             .timestamp_or_default();
 
