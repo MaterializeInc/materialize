@@ -57,17 +57,18 @@ impl Coordinator {
         catalog: &Catalog,
         name: String,
         stmt: Statement<Raw>,
-        // TODO[btv] - This will be used by statement logging
-        _sql: String,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let logging = session.mint_logging(sql);
         session.set_portal(
             name,
             desc,
             Some(stmt),
+            logging,
             params,
             result_formats,
             catalog.transient_revision(),

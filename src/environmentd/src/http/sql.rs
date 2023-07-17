@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -947,10 +948,12 @@ async fn execute_stmt<S: ResultSender>(
     let desc = prep_stmt.desc().clone();
     let revision = prep_stmt.catalog_revision;
     let stmt = prep_stmt.stmt().cloned();
+    let logging = Arc::clone(prep_stmt.logging());
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
         stmt,
+        logging,
         params,
         result_formats,
         revision,

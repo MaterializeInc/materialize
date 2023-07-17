@@ -430,6 +430,7 @@ impl Coordinator {
                         plan.sql,
                         plan.desc,
                         self.catalog().transient_revision(),
+                        self.now(),
                     );
                     ctx.retire(Ok(ExecuteResponse::Prepare));
                 }

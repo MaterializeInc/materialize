@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
@@ -4402,7 +4403,8 @@ impl Coordinator {
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
+        let logging = Arc::clone(ps.logging());
+        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
     }
 
     pub(super) async fn sequence_grant_privileges(

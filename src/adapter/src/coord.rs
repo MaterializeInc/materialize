@@ -141,6 +141,7 @@ use crate::{flags, AdapterNotice};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
+pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 

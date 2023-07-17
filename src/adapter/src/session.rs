@@ -14,6 +14,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -32,12 +33,15 @@ pub use mz_sql::session::vars::{
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
+use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
+use uuid::Uuid;
 
 use crate::client::{ConnectionId, RecordFirstRowStream};
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
 use crate::AdapterNotice;
@@ -55,9 +59,13 @@ struct RoleMetadata {
 }
 
 /// A session holds per-connection state.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
     conn_id: ConnectionId,
+    /// A globally unique identifier for the session. Not to be confused
+    /// with `conn_id`, which may be reused.
+    uuid: Uuid,
     /// The time when the session's connection was initiated.
     connect_time: EpochMillis,
     prepared_statements: BTreeMap<String, PreparedStatement>,
@@ -84,6 +92,19 @@ pub struct Session<T = mz_repr::Timestamp> {
     secret_key: u32,
     external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
     external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
+    // Token allowing us to access `Arc<QCell<StatementLogging>>`
+    // metadata. We want these to be reference-counted, because the same
+    // statement might be referenced from multiple portals simultaneously.
+    //
+    // However, they can't be `Rc<RefCell<StatementLogging>>`, because
+    // the `Session` is sent around to different threads.
+    //
+    // On the other hand, they don't need to be
+    // `Arc<Mutex<StatementLogging>>`, because they will always be
+    // accessed from the same thread that the `Session` is currently
+    // on. We express this by gating access with this token.
+    #[derivative(Debug = "ignore")]
+    qcell_owner: QCellOwner,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -96,6 +117,41 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, conn_id, user, connect_time)
+    }
+
+    /// Creates new statement logging metadata for a one-off
+    /// statement.
+    // Normally, such logging information would be created as part of
+    // allocating a new prepared statement, and a refcounted handle
+    // would be copied from that prepared statement to portals during
+    // binding. However, we also support (via `Command::declare`)
+    // binding a statement directly to a portal without creating an
+    // intermediate prepared statement. Thus, for those cases, a
+    // mechanism for generating the logging metadata directly is needed.
+    pub(crate) fn mint_logging(&self, sql: String) -> Arc<QCell<PreparedStatementLoggingInfo>> {
+        Arc::new(QCell::new(
+            &self.qcell_owner,
+            PreparedStatementLoggingInfo::StillToLog {
+                sql,
+                session_id: self.uuid,
+                prepared_at: Utc::now()
+                    .timestamp_millis()
+                    .try_into()
+                    .expect("sane system time"),
+                name: "".to_string(),
+                accounted: false,
+            },
+        ))
+    }
+
+    pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
+        self.qcell_owner.rw(&*cell)
+    }
+
+    /// Returns a unique ID for the session.
+    /// Not to be confused with `connection_id`, which can be reused.
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
     }
 
     /// Creates a new dummy session.
@@ -130,6 +186,7 @@ impl<T: TimestampManipulation> Session<T> {
         }
         Session {
             conn_id,
+            uuid: Uuid::new_v4(),
             connect_time,
             transaction: TransactionStatus::Default,
             pcx: None,
@@ -143,6 +200,7 @@ impl<T: TimestampManipulation> Session<T> {
             secret_key: rand::thread_rng().gen(),
             external_metadata_tx,
             external_metadata_rx,
+            qcell_owner: QCellOwner::new(),
         }
     }
 
@@ -498,14 +556,25 @@ impl<T: TimestampManipulation> Session<T> {
         name: String,
         stmt: Option<Statement<Raw>>,
         // TODO[btv] - This will be used by statement logging
-        _sql: String,
+        sql: String,
         desc: StatementDesc,
         catalog_revision: u64,
+        now: EpochMillis,
     ) {
         let statement = PreparedStatement {
             stmt,
             desc,
             catalog_revision,
+            logging: Arc::new(QCell::new(
+                &self.qcell_owner,
+                PreparedStatementLoggingInfo::StillToLog {
+                    sql,
+                    name: name.clone(),
+                    prepared_at: now,
+                    session_id: self.uuid,
+                    accounted: false,
+                },
+            )),
         };
         self.prepared_statements.insert(name, statement);
     }
@@ -560,6 +629,7 @@ impl<T: TimestampManipulation> Session<T> {
         portal_name: String,
         desc: StatementDesc,
         stmt: Option<Statement<Raw>>,
+        logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<mz_pgrepr::Format>,
         catalog_revision: u64,
@@ -580,6 +650,7 @@ impl<T: TimestampManipulation> Session<T> {
                 },
                 result_formats: result_formats.into_iter().map(Into::into).collect(),
                 state: PortalState::NotStarted,
+                logging,
             },
         );
         Ok(())
@@ -610,6 +681,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn create_new_portal(
         &mut self,
         stmt: Option<Statement<Raw>>,
+        logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
@@ -629,6 +701,7 @@ impl<T: TimestampManipulation> Session<T> {
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
+                        logging,
                     });
                     return Ok(name);
                 }
@@ -739,12 +812,15 @@ impl<T: TimestampManipulation> Session<T> {
 }
 
 /// A prepared statement.
-#[derive(Debug, Clone)]
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct PreparedStatement {
     stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
     pub catalog_revision: u64,
+    #[derivative(Debug = "ignore")]
+    logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
 
 impl PreparedStatement {
@@ -757,6 +833,11 @@ impl PreparedStatement {
     /// Returns the description of the prepared statement.
     pub fn desc(&self) -> &StatementDesc {
         &self.desc
+    }
+
+    /// Returns a handle to the metadata for statement logging.
+    pub fn logging(&self) -> &Arc<QCell<PreparedStatementLoggingInfo>> {
+        &self.logging
     }
 }
 
@@ -774,6 +855,9 @@ pub struct Portal {
     pub parameters: Params,
     /// The desired output format for each column in the result set.
     pub result_formats: Vec<mz_pgrepr::Format>,
+    /// A handle to metadata needed for statement logging.
+    #[derivative(Debug = "ignore")]
+    pub logging: Arc<QCell<PreparedStatementLoggingInfo>>,
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,

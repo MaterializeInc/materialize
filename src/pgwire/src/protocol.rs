@@ -925,11 +925,13 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
+        let logging = Arc::clone(stmt.logging());
         let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
             stmt,
+            logging,
             params,
             result_formats,
             revision,

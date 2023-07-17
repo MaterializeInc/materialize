@@ -401,6 +401,15 @@ impl Coordinator {
             None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
         };
 
+        let logging = Arc::clone(&portal.logging);
+
+        self.begin_statement_execution(ctx.session_mut(), &logging);
+
+        let portal = ctx
+            .session()
+            .get_portal_unverified(&portal_name)
+            .expect("known to exist");
+
         let session_type = metrics::session_type_label_value(ctx.session().user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
         self.metrics
@@ -644,6 +653,7 @@ impl Coordinator {
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
+        let now = self.now();
         mz_ore::task::spawn(|| "coord::handle_prepare", async move {
             // Note: This failpoint is used to simulate a request outliving the external connection
             // that made it.
@@ -665,6 +675,7 @@ impl Coordinator {
                         sql,
                         desc,
                         catalog.transient_revision(),
+                        now,
                     );
                     Ok(())
                 }
