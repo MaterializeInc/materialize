@@ -183,66 +183,66 @@ SELECT array_fill(null::int, array[3])
 
 # Prohibited types
 
-query error db error: ERROR: array_fill with arrays not yet supported
+query error array_fill with arrays not yet supported
 SELECT array_fill(ARRAY[1], array[3, 2])
 
-query error db error: ERROR: array_fill with arrays not yet supported
+query error array_fill with arrays not yet supported
 SELECT array_fill(ARRAY[1], array[3, 2], array[2, 3])
 
-query error db error: ERROR: array_fill on integer list not yet supported
+query error array_fill on integer list not yet supported
 SELECT array_fill(LIST[1], array[3, 2])
 
-query error db error: ERROR: array_fill on integer list not yet supported
+query error array_fill on integer list not yet supported
 SELECT array_fill(LIST[1], array[3, 2], array[2, 3])
 
-query error db error: ERROR: array_fill on character not yet supported
+query error array_fill on character not yet supported
 SELECT array_fill('c'::char, array[3, 2])
 
-query error db error: ERROR: array_fill on character not yet supported
+query error array_fill on character not yet supported
 SELECT array_fill('c'::char, array[3, 2], array[2, 3])
 
-query error db error: ERROR: array_fill on map\[text=>integer\] not yet supported
+query error array_fill on map\[text=>integer\] not yet supported
 SELECT array_fill('{}'::map[text=>int], array[3, 2])
 
-query error db error: ERROR: array_fill on map\[text=>integer\] not yet supported
+query error array_fill on map\[text=>integer\] not yet supported
 SELECT array_fill('{}'::map[text=>int], array[3, 2], array[2, 3])
 
 # Null errors
 
-query error db error: ERROR: dimension array or low bound array must not be null
+query error dimension array or low bound array must not be null
 SELECT array_fill(1, null);
 
-query error db error: ERROR: dimension array or low bound array must not be null
+query error dimension array or low bound array must not be null
 SELECT array_fill(null::int, null);
 
-query error db error: ERROR: dimension array or low bound array must not be null
+query error dimension array or low bound array must not be null
 SELECT array_fill(1, ARRAY[8], null);
 
-query error db error: ERROR: dimension array or low bound array must not be null
+query error dimension array or low bound array must not be null
 SELECT array_fill(1, null, ARRAY[8]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(1, ARRAY[null::int]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(null::int, ARRAY[null::int], ARRAY[8]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(1, ARRAY[8], ARRAY[null::int]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(1, ARRAY[null::int], ARRAY[null::int]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(1, ARRAY[6, null::int]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(null::int, ARRAY[6, null::int], ARRAY[8]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(1, ARRAY[8], ARRAY[6, null::int]);
 
-query error db error: ERROR: dimension values must not be null
+query error dimension values must not be null
 SELECT array_fill(1, ARRAY[6, null::int], ARRAY[6, null::int]);
 
 # Multi-dimensional w/ 0
@@ -273,31 +273,31 @@ SELECT array_fill(1, ARRAY[4, 0, 3]);
 
 # Too large of array
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(2, ARRAY[-1]);
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(2, ARRAY[-1]);
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(1, ARRAY[4, -199]);
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(1, ARRAY[-199, 4]);
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(1, ARRAY[4, 3, -199]);
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(1, ARRAY[4, -199, 3]);
 
-query error db error: ERROR: array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(134217728 bytes\)
 SELECT array_fill(8, ARRAY[-1, -1, -1, -1]);
 
-query error db error: ERROR: number of array dimensions \(10\) exceeds the maximum allowed \(6\)
+query error number of array dimensions \(10\) exceeds the maximum allowed \(6\)
 SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1]);
 
-query error db error: ERROR: number of array dimensions \(10\) exceeds the maximum allowed \(6\)
+query error number of array dimensions \(10\) exceeds the maximum allowed \(6\)
 SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1], ARRAY[1,1,1,1,1,1,1,1,1,1]);
 
 # But large arrays are still ok
@@ -320,7 +320,7 @@ SELECT array_length(a, 1), array_length(a, 2) FROM (
 
 # Concatenating arrays
 
-query error db error: ERROR: cannot concatenate incompatible arrays
+query error cannot concatenate incompatible arrays
 SELECT array_fill(1, ARRAY[2], ARRAY[1] || array_fill(1, ARRAY[3, 2], ARRAY[4, 1]));
 
 # RHS is element of LHS

@@ -137,10 +137,15 @@ pub enum Outcome<'a> {
         cause: Box<Outcome<'a>>,
         location: Location,
     },
+    Warning {
+        cause: Box<Outcome<'a>>,
+        location: Location,
+    },
     Success,
 }
 
-const NUM_OUTCOMES: usize = 11;
+const NUM_OUTCOMES: usize = 12;
+const WARNING_OUTCOME: usize = NUM_OUTCOMES - 2;
 const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
 
 impl<'a> Outcome<'a> {
@@ -154,14 +159,19 @@ impl<'a> Outcome<'a> {
             Outcome::WrongColumnCount { .. } => 5,
             Outcome::WrongColumnNames { .. } => 6,
             Outcome::OutputFailure { .. } => 7,
-            Outcome::Bail { .. } => 8,
-            Outcome::InconsistentViewOutcome { .. } => 9,
-            Outcome::Success => 10,
+            Outcome::InconsistentViewOutcome { .. } => 8,
+            Outcome::Bail { .. } => 9,
+            Outcome::Warning { .. } => 10,
+            Outcome::Success => 11,
         }
     }
 
     fn success(&self) -> bool {
         matches!(self, Outcome::Success)
+    }
+
+    fn failure(&self) -> bool {
+        !matches!(self, Outcome::Success) && !matches!(self, Outcome::Warning { .. })
     }
 
     /// Returns an error message that will match self. Appropriate for
@@ -262,7 +272,6 @@ impl fmt::Display for Outcome<'_> {
                 "OutputFailure:{}{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
-            Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             InconsistentViewOutcome {
                 query_outcome,
                 view_outcome,
@@ -272,6 +281,8 @@ impl fmt::Display for Outcome<'_> {
                 "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
                 location, INDENT, query_outcome, INDENT, view_outcome, INDENT
             ),
+            Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
+            Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
             Success => f.write_str("Success"),
         }
     }
@@ -289,7 +300,7 @@ impl ops::AddAssign<Outcomes> for Outcomes {
 }
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
+        self.0[SUCCESS_OUTCOME] + self.0[WARNING_OUTCOME] < self.0.iter().sum::<usize>()
     }
 
     pub fn as_json(&self) -> serde_json::Value {
@@ -302,9 +313,10 @@ impl Outcomes {
             "wrong_column_count": self.0[5],
             "wrong_column_names": self.0[6],
             "output_failure": self.0[7],
-            "bail": self.0[8],
-            "inconsistent_view_outcome": self.0[9],
-            "success": self.0[10],
+            "inconsistent_view_outcome": self.0[8],
+            "bail": self.0[9],
+            "warning": self.0[10],
+            "success": self.0[11],
         })
     }
 
@@ -327,7 +339,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
         write!(
             f,
             "{}:",
-            if self.inner.0[SUCCESS_OUTCOME] == total {
+            if self.inner.0[SUCCESS_OUTCOME] + self.inner.0[WARNING_OUTCOME] == total {
                 "PASS"
             } else if self.no_fail {
                 "FAIL-IGNORE"
@@ -345,8 +357,9 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "wrong-column-count",
                 "wrong-column-names",
                 "output-failure",
-                "bail",
                 "inconsistent-view-outcome",
+                "bail",
+                "warning",
                 "success",
                 "total",
             ]
@@ -1527,18 +1540,32 @@ impl<'a> RunnerInner<'a> {
                         // outcome for view-based execution exploiting analysis of the
                         // number of attributes. This two-level strategy can avoid errors
                         // produced by column ambiguity in the `SELECT`.
-                        let view_outcome = self
-                            .execute_view(sql, num_attributes, output, location.clone())
-                            .await?;
+                        let view_outcome = if num_attributes.is_some() {
+                            self.execute_view(sql, num_attributes, output, location.clone())
+                                .await?
+                        } else {
+                            view_outcome
+                        };
 
                         if std::mem::discriminant::<Outcome>(&query_outcome)
                             != std::mem::discriminant::<Outcome>(&view_outcome)
                         {
-                            return Ok(Outcome::InconsistentViewOutcome {
+                            let inconsistent_view_outcome = Outcome::InconsistentViewOutcome {
                                 query_outcome: Box::new(query_outcome),
                                 view_outcome: Box::new(view_outcome),
                                 location: location.clone(),
-                            });
+                            };
+                            // Determine if this inconsistent view outcome should be reported
+                            // as an error or only as a warning.
+                            let outcome = if should_warn(&inconsistent_view_outcome) {
+                                Outcome::Warning {
+                                    cause: Box::new(inconsistent_view_outcome),
+                                    location: location.clone(),
+                                }
+                            } else {
+                                inconsistent_view_outcome
+                            };
+                            return Ok(outcome);
                         }
                     }
                 }
@@ -1669,6 +1696,50 @@ fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
     writeln!(stdout, "{}", crate::util::indent(sql, 4))
 }
 
+/// Regular expressions for matching error messages that should force a plan failure
+/// in an inconsistent view outcome into a warning if the corresponding query succeeds.
+const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
+    // The following are unfixable errors in indexed views given our
+    // current constraints.
+    "cannot materialize call to",
+    "SHOW commands are not allowed in views",
+    "cannot create view with unstable dependencies",
+    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects",
+    "no schema has been selected to create in",
+    r#"system schema '\w+' cannot be modified"#,
+    r#"permission denied for (SCHEMA|CLUSTER) "(\w+\.)?\w+""#,
+    // NOTE(vmarcos): Column ambiguity that could not be eliminated by our
+    // currently implemented syntactic rewrites is considered unfixable.
+    // In addition, if some column cannot be dealt with, e.g., in `ORDER BY`
+    // references, we treat this condition as unfixable as well.
+    r#"column "[\w\?]+" specified more than once"#,
+    r#"column "(\w+\.)?\w+" does not exist"#,
+];
+
+/// Evaluates if the given outcome should be returned directly or if it should
+/// be wrapped as a warning. Note that this function should be used for outcomes
+/// that can be judged in a context-independent manner, i.e., the outcome itself
+/// provides enough information as to whether a warning should be emitted or not.
+fn should_warn(outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::InconsistentViewOutcome {
+            query_outcome,
+            view_outcome,
+            ..
+        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
+            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+                INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
+                    Regex::new(s)
+                        .expect("unexpected error in regular expression parsing")
+                        .is_match(&format!("{:#}", error))
+                })
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 pub async fn run_string(
     runner: &mut Runner<'_>,
     source: &str,
@@ -1697,7 +1768,7 @@ pub async fn run_string(
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
-        // Print failures in verbose mode.
+        // Print warnings and failures in verbose mode.
         if runner.config.verbosity >= 1 && !outcome.success() {
             if runner.config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
@@ -1722,7 +1793,7 @@ pub async fn run_string(
             break;
         }
 
-        if runner.config.fail_fast && !outcome.success() {
+        if runner.config.fail_fast && outcome.failure() {
             break;
         }
     }
