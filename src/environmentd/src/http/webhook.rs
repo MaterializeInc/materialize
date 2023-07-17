@@ -10,6 +10,7 @@
 //! Helpers for handling events from a Webhook source.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use mz_adapter::{AdapterError, AppendWebhookResponse, AppendWebhookValidation};
 use mz_expr::EvalError;
@@ -39,6 +40,20 @@ pub async fn handle_webhook(
     let client = client.await.context("receiving client")?;
     let conn_id = client.new_conn_id().context("allocate connection id")?;
 
+    // Collect headers into a map, while converting them into strings.
+    let mut headers_s = BTreeMap::new();
+    for (name, val) in headers.iter() {
+        if let Ok(val_s) = val.to_str().map(|s| s.to_string()) {
+            // If a header is included more than once, bail returning an error to the user.
+            let existing = headers_s.insert(name.as_str().to_string(), val_s);
+            if existing.is_some() {
+                let msg = format!("{} provided more than once", name.as_str());
+                return Err(WebhookError::InvalidHeaders(msg));
+            }
+        }
+    }
+    let headers = Arc::new(headers_s);
+
     // Get an appender for the provided object, if that object exists.
     let AppendWebhookResponse {
         tx,
@@ -55,7 +70,7 @@ pub async fn handle_webhook(
     }
 
     // Pack our body and headers into a Row.
-    let row = pack_row(body, headers, body_ty, header_ty)?;
+    let row = pack_row(body, &headers, body_ty, header_ty)?;
 
     // Send the row to get appended.
     tx.append(vec![(row, 1)]).await?;
@@ -66,15 +81,9 @@ pub async fn handle_webhook(
 async fn validate_request(
     validate_expr: AppendWebhookValidation,
     body: Bytes,
-    headers: &http::HeaderMap,
+    headers: &Arc<BTreeMap<String, String>>,
 ) -> Result<(), WebhookError> {
-    // Convert our headers into a map for validation.
-    let mut headers_s = BTreeMap::new();
-    for (name, val) in headers.iter() {
-        if let Ok(val_s) = val.to_str() {
-            headers_s.insert(name.as_str().to_string(), val_s.to_string());
-        }
-    }
+    let headers = Arc::clone(headers);
 
     // Run our validation on a separate thread, waiting for it's completion.
     let valid = mz_ore::task::spawn_blocking(
@@ -84,7 +93,7 @@ async fn validate_request(
             let mut row = Row::with_capacity(1);
             let mut packer = row.packer();
             packer.push_dict(
-                headers_s
+                headers
                     .iter()
                     .map(|(name, val)| (name.as_str(), Datum::String(val))),
             );
@@ -117,7 +126,7 @@ async fn validate_request(
 /// Given the body and headers of a request, pack them into a [`Row`].
 fn pack_row(
     body: Bytes,
-    headers: http::HeaderMap,
+    headers: &BTreeMap<String, String>,
     body_ty: ColumnType,
     header_ty: Option<ColumnType>,
 ) -> Result<Row, WebhookError> {
@@ -154,19 +163,12 @@ fn pack_row(
         }
     }
 
+    // Pack the headers into our row, if required.
     if header_ty.is_some() {
-        // Pack our headers into a row, if we're supposed to.
-        let mut headers_s = BTreeMap::new();
-        for (name, val) in headers.iter() {
-            if let Ok(val_s) = val.to_str() {
-                headers_s.insert(name.as_str(), val_s);
-            }
-        }
-
         packer.push_dict(
-            headers_s
+            headers
                 .iter()
-                .map(|(name, val)| (*name, Datum::String(*val))),
+                .map(|(name, val)| (name.as_str(), Datum::String(val))),
         );
     }
 
@@ -186,6 +188,8 @@ pub enum WebhookError {
     NotFound(String),
     #[error("this feature is currently unsupported: {0}")]
     Unsupported(&'static str),
+    #[error("headers of request were invalid: {0}")]
+    InvalidHeaders(String),
     #[error("failed to deserialize body as {ty:?}: {msg}")]
     InvalidBody { ty: ScalarType, msg: String },
     #[error("failed to validate the request: {0}")]
@@ -239,6 +243,9 @@ impl IntoResponse for WebhookError {
             | e @ WebhookError::ValidationFailed(_) => {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
             }
+            e @ WebhookError::InvalidHeaders(_) => {
+                (StatusCode::UNAUTHORIZED, e.to_string()).into_response()
+            }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
             }
@@ -256,9 +263,11 @@ impl IntoResponse for WebhookError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use axum::response::IntoResponse;
     use bytes::Bytes;
-    use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+    use http::StatusCode;
     use mz_adapter::AdapterError;
     use mz_repr::{ColumnType, GlobalId, ScalarType};
     use mz_storage_client::controller::StorageError;
@@ -296,52 +305,33 @@ mod tests {
     #[mz_ore::test]
     fn test_pack_invalid_column_type() {
         let body = Bytes::from(vec![42, 42, 42, 42]);
-        let headers: HeaderMap<HeaderValue> = HeaderMap::default();
+        let headers = BTreeMap::default();
 
         // Int64 is an invalid column type for a webhook source.
         let body_ty = ColumnType {
             scalar_type: ScalarType::Int64,
             nullable: false,
         };
-        assert!(pack_row(body, headers, body_ty, None).is_err());
-    }
-
-    fn headermap_strat() -> impl Strategy<Value = HeaderMap> {
-        // TODO(parkmycar): We can probably be better about generating a random but valid
-        // HeaderMap. This will do for now though.
-        let name_strat = proptest::string::string_regex("[a-zA-Z0-9]+").unwrap();
-        let val_strat = proptest::string::string_regex("[a-zA-Z0-9]*").unwrap();
-
-        proptest::collection::vec((name_strat, val_strat), 0..32).prop_map(|pairs| {
-            pairs
-                .into_iter()
-                .map(|(key, val)| {
-                    (
-                        HeaderName::from_bytes(key.as_bytes()).unwrap(),
-                        HeaderValue::from_str(&val).unwrap(),
-                    )
-                })
-                .collect()
-        })
+        assert!(pack_row(body, &headers, body_ty, None).is_err());
     }
 
     proptest! {
         #[mz_ore::test]
         fn proptest_pack_row_never_panics(
             body: Vec<u8>,
-            headers in headermap_strat(),
+            headers: BTreeMap<String, String>,
             body_ty: ColumnType,
             header_ty: Option<ColumnType>
         ) {
             let body = Bytes::from(body);
             // Call this method to make sure it doesn't panic.
-            let _ = pack_row(body, headers, body_ty, header_ty);
+            let _ = pack_row(body, &headers, body_ty, header_ty);
         }
 
         #[mz_ore::test]
         fn proptest_pack_row_succeeds_for_bytes(
             body: Vec<u8>,
-            headers in headermap_strat(),
+            headers: BTreeMap<String, String>,
             include_headers: bool,
         ) {
             let body = Bytes::from(body);
@@ -355,13 +345,13 @@ mod tests {
                 nullable: false,
             });
 
-            prop_assert!(pack_row(body, headers, body_ty, header_ty).is_ok());
+            prop_assert!(pack_row(body, &headers, body_ty, header_ty).is_ok());
         }
 
         #[mz_ore::test]
         fn proptest_pack_row_succeeds_for_strings(
             body: String,
-            headers in headermap_strat(),
+            headers: BTreeMap<String, String>,
             include_headers: bool,
         ) {
             let body = Bytes::from(body);
@@ -375,7 +365,7 @@ mod tests {
                 nullable: false,
             });
 
-            prop_assert!(pack_row(body, headers, body_ty, header_ty).is_ok());
+            prop_assert!(pack_row(body, &headers, body_ty, header_ty).is_ok());
         }
     }
 }

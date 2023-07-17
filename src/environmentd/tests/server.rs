@@ -1836,41 +1836,7 @@ fn test_webhook_duplicate_headers() {
         .header("dUpE", "final")
         .send()
         .expect("failed to POST event");
-    assert!(resp.status().is_success());
-
-    // Wait for the events to be persisted.
-    mz_ore::retry::Retry::default()
-        .max_tries(10)
-        .retry(|_| {
-            let cnt: i64 = client
-                .query_one("SELECT COUNT(*) FROM webhook_text", &[])
-                .expect("failed to get count")
-                .get(0);
-
-            if cnt == 0 {
-                Err(anyhow::anyhow!("no rows present"))
-            } else {
-                Ok(())
-            }
-        })
-        .expect("failed to read events!");
-
-    // Query for a row where our final header was applied.
-    let body: String = client
-        .query_one(
-            "SELECT body FROM webhook_text WHERE headers -> 'dupe' = 'final'",
-            &[],
-        )
-        .expect("failed to read row")
-        .get("body");
-    assert_eq!(body, "test");
-
-    // Assert only one row was inserted.
-    let cnt: i64 = client
-        .query_one("SELECT COUNT(*) FROM webhook_text", &[])
-        .expect("failed to get count")
-        .get(0);
-    assert_eq!(cnt, 1);
+    assert_eq!(resp.status().as_u16(), 401);
 }
 
 // Test that websockets observe cancellation and leave the transaction in an idle state.
