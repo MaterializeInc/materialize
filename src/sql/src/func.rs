@@ -30,7 +30,7 @@ use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
     ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc, ValueWindowFunc, VariadicFunc,
 };
-use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
+use crate::plan::query::{self, ExprContext, QueryContext};
 use crate::plan::scope::Scope;
 use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
@@ -2540,14 +2540,15 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
             params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz => Timestamp, 1159;
             // PG defines this as `text timetz`
-            params!(String, Time) => Operation::binary(|ecx, lhs, rhs| {
-                match ecx.qcx.lifetime {
-                    QueryLifetime::OneShot(pcx) => {
-                        let wall_time = pcx.wall_time.naive_utc();
-                        Ok(lhs.call_binary(rhs, BinaryFunc::TimezoneTime{wall_time}))
-                    },
-                    QueryLifetime::Static => sql_bail!("timezone cannot be used in static queries"),
-                }
+            params!(String, Time) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::TimezoneTime,
+                    exprs: vec![
+                        lhs,
+                        rhs,
+                        HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::CurrentTimestamp),
+                    ],
+                })
             }) => Time, 2037;
             params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp => TimestampTz, 2070;
             params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz => Timestamp, 1026;

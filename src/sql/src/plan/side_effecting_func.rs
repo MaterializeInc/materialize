@@ -47,7 +47,7 @@ use crate::plan::query::{self, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::StatementContext;
 use crate::plan::typeconv::CastContext;
-use crate::plan::{self, HirScalarExpr, Params};
+use crate::plan::{HirScalarExpr, Params};
 use crate::plan::{PlanError, QueryContext};
 
 /// A side-effecting function is a function whose evaluation triggers side
@@ -197,8 +197,7 @@ fn extract_sef_call(
 
     // Plan and coerce all argument expressions.
     let mut args_out = vec![];
-    let pcx = plan::PlanContext::zero();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(&pcx));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = ExprContext {
         qcx: &qcx,
         name: sef_impl.name,

@@ -176,7 +176,7 @@ pub fn plan_insert_query(
     source: InsertSource<Aug>,
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<(GlobalId, HirRelationExpr, PlannedQuery<Vec<HirScalarExpr>>), PlanError> {
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
@@ -531,7 +531,7 @@ pub fn plan_delete_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut delete_stmt)?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     plan_mutation_query_inner(
         qcx,
         delete_stmt.table_name,
@@ -548,7 +548,7 @@ pub fn plan_update_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut update_stmt)?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
     plan_mutation_query_inner(
         qcx,
@@ -826,7 +826,7 @@ pub fn plan_up_to(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -854,7 +854,7 @@ pub fn plan_as_of(
             AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
-                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
                 transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
                     qcx: &qcx,
@@ -885,7 +885,7 @@ pub fn plan_secret_as(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
     transform_ast::transform(scx, &mut expr)?;
 
@@ -956,7 +956,7 @@ pub fn plan_default_expr(
     expr: &Expr<Aug>,
     target_ty: &ScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
@@ -984,7 +984,7 @@ pub fn plan_params<'a>(
         );
     }
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let scope = Scope::empty();
     let rel_type = RelationType::empty();
 
@@ -5403,9 +5403,9 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
 /// allowed to reason about the time at which it is running, e.g., by calling
 /// the `now()` function.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum QueryLifetime<'a> {
+pub enum QueryLifetime {
     /// The query's result will be computed at one point in time.
-    OneShot(&'a PlanContext),
+    OneShot,
     /// The query's result will be maintained indefinitely.
     Static,
 }
@@ -5423,7 +5423,7 @@ pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
     pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
-    pub lifetime: QueryLifetime<'a>,
+    pub lifetime: QueryLifetime,
     /// The scopes of the outer relation expression.
     pub outer_scopes: Vec<Scope>,
     /// The type of the outer relation expressions.
@@ -5440,7 +5440,7 @@ impl CheckedRecursion for QueryContext<'_> {
 }
 
 impl<'a> QueryContext<'a> {
-    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime<'a>) -> QueryContext<'a> {
+    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime) -> QueryContext<'a> {
         QueryContext {
             scx,
             lifetime,
