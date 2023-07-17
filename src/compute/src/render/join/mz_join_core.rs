@@ -57,6 +57,8 @@ use timely::progress::timestamp::Timestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 
+use crate::render::context::ShutdownToken;
+
 /// Joins two arranged collections with the same key type.
 ///
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
@@ -65,6 +67,7 @@ use timely::PartialOrder;
 pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2, YFn>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
+    shutdown_token: ShutdownToken,
     mut result: L,
     yield_fn: YFn,
 ) -> Collection<G, I::Item, Diff>
@@ -175,6 +178,23 @@ where
                 let mut input2_buffer = Vec::new();
 
                 move |input1, input2, output| {
+                    // If the dataflow is shutting down, discard all existing and future work.
+                    if shutdown_token.in_shutdown() {
+                        // Discard data at the inputs.
+                        input1.for_each(|_cap, _data| ());
+                        input2.for_each(|_cap, _data| ());
+
+                        // Discard queued work.
+                        todo1 = Default::default();
+                        todo2 = Default::default();
+
+                        // Stop holding on to input traces.
+                        trace1_option = None;
+                        trace2_option = None;
+
+                        return;
+                    }
+
                     // 1. Consuming input.
                     //
                     // The join computation repeatedly accepts batches of updates from each of its inputs.
