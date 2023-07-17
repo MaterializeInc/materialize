@@ -2346,6 +2346,30 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 END"
             ) => String, 1642;
         },
+        // The privilege param is validated but ignored. That's because we haven't implemented
+        // noinherit roles, so it has no effect on the result.
+        "pg_has_role" => Scalar {
+            params!(String, String, String) => sql_impl_func("pg_has_role(mz_internal.mz_role_oid($1), mz_internal.mz_role_oid($2), $3)") => Bool, 2705;
+            params!(String, Oid, String) => sql_impl_func("pg_has_role(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2706;
+            params!(Oid, String, String) => sql_impl_func("pg_has_role($1, mz_internal.mz_role_oid($2), $3)") => Bool, 2707;
+            params!(Oid, Oid, String) => sql_impl_func(
+                "CASE
+                -- We need to validate the privilege to return a proper error before anything
+                -- else.
+                WHEN NOT mz_internal.mz_validate_role_privilege($3)
+                OR $1 IS NULL
+                OR $2 IS NULL
+                OR $3 IS NULL
+                THEN NULL
+                WHEN $1 NOT IN (SELECT oid FROM mz_roles)
+                OR $2 NOT IN (SELECT oid FROM mz_roles)
+                THEN false
+                ELSE $2::text IN (SELECT UNNEST(mz_internal.mz_role_oid_memberships() -> $1::text))
+                END",
+            ) => Bool, 2708;
+            params!(String, String) => sql_impl_func("pg_has_role(current_user, $1, $2)") => Bool, 2709;
+            params!(Oid, String) => sql_impl_func("pg_has_role(current_user, $1, $2)") => Bool, 2710;
+        },
         // pg_is_in_recovery indicates whether a recovery is still in progress. Materialize does
         // not have a concept of recovery, so we default to always returning false.
         "pg_is_in_recovery" => Scalar {
@@ -3569,6 +3593,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
+        "mz_role_oid_memberships" => Scalar {
+            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+        },
         // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
         "mz_database_oid" => Scalar {
             params!(String) => sql_impl_func("
@@ -3630,6 +3657,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         },
         "mz_validate_privileges" => Scalar {
             params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID;
+        },
+        "mz_validate_role_privilege" => Scalar {
+            params!(String) => UnaryFunc::MzValidateRolePrivilege(func::MzValidateRolePrivilege) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
         }
     }
 });

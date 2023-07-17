@@ -96,6 +96,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty is_rbac_enabled = 16;
         google.protobuf.Empty session_user = 17;
         google.protobuf.Empty current_schema = 18;
+        google.protobuf.Empty mz_role_oid_memberships = 19;
     }
 }
 
@@ -424,6 +425,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty quote_ident = 297;
         google.protobuf.Empty cast_string_to_pg_legacy_name = 298;
         google.protobuf.Empty try_parse_monotonic_iso8601_timestamp = 299;
+        google.protobuf.Empty mz_validate_role_privilege = 300;
     }
 }
 

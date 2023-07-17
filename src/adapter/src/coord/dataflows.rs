@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
+use maplit::btreeset;
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
@@ -32,6 +33,7 @@ use mz_expr::{
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
 use timely::progress::Antichain;
@@ -805,6 +807,36 @@ fn eval_unmaterializable_func(
             EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
             EvalTime::NotAvailable => coord_bail!("cannot call mz_now in this context"),
         },
+        UnmaterializableFunc::MzRoleOidMemberships => {
+            let role_memberships = role_oid_memberships(state);
+            let mut role_memberships: Vec<(_, Vec<_>)> = role_memberships
+                .into_iter()
+                .map(|(role_id, role_membership)| {
+                    (
+                        role_id.to_string(),
+                        role_membership
+                            .into_iter()
+                            .map(|role_id| role_id.to_string())
+                            .collect(),
+                    )
+                })
+                .collect();
+            role_memberships.sort();
+            let mut row = Row::default();
+            row.packer().push_dict_with(|row| {
+                for (role_id, role_membership) in &role_memberships {
+                    row.push(Datum::from(role_id.as_str()));
+                    row.push_array(
+                        &[ArrayDimension {
+                            lower_bound: 1,
+                            length: role_membership.len(),
+                        }],
+                        role_membership.iter().map(|role_id| Datum::from(role_id.as_str())),
+                    ).expect("role_membership is 1 dimensional, and its length is used for the array length");
+                }
+            });
+            Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+        }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {
             let uptime = state.config().start_instant.elapsed();
@@ -835,6 +867,42 @@ fn eval_unmaterializable_func(
             );
             pack(Datum::from(&*version))
         }
+    }
+}
+
+fn role_oid_memberships<'a>(catalog: &'a CatalogState) -> BTreeMap<u32, BTreeSet<u32>> {
+    let mut role_memberships = BTreeMap::new();
+    for role_id in catalog.get_roles() {
+        let role = catalog.get_role(role_id);
+        if !role_memberships.contains_key(&role.oid) {
+            role_oid_memberships_inner(catalog, role_id, &mut role_memberships);
+        }
+    }
+    role_memberships
+}
+
+fn role_oid_memberships_inner<'a>(
+    catalog: &'a CatalogState,
+    role_id: &RoleId,
+    role_memberships: &mut BTreeMap<u32, BTreeSet<u32>>,
+) {
+    let role = catalog.get_role(role_id);
+    role_memberships.insert(role.oid, btreeset! {role.oid});
+    for parent_role_id in role.membership.map.keys() {
+        let parent_role = catalog.get_role(parent_role_id);
+        if !role_memberships.contains_key(&parent_role.oid) {
+            role_oid_memberships_inner(catalog, parent_role_id, role_memberships);
+        }
+        let parent_membership: BTreeSet<_> = role_memberships
+            .get(&parent_role.oid)
+            .expect("inserted in recursive call above")
+            .into_iter()
+            .cloned()
+            .collect();
+        role_memberships
+            .get_mut(&role.oid)
+            .expect("inserted above")
+            .extend(parent_membership);
     }
 }
 
