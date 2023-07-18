@@ -787,15 +787,10 @@ impl RecordFirstRowStream {
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
         let msg = self.rows.recv().await;
-        match &msg {
-            Some(PeekResponseUnary::Rows(_)) => {
-                if !self.saw_rows {
-                    self.saw_rows = true;
-                    self.time_to_first_row_seconds
-                        .observe(self.execute_started.elapsed().as_secs_f64())
-                }
-            }
-            Some(PeekResponseUnary::Canceled) | Some(PeekResponseUnary::Error(_)) | None => (),
+        if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) 
+            self.saw_rows = true;
+            self.time_to_first_row_seconds
+                .observe(self.execute_started.elapsed().as_secs_f64());
         }
         msg
     }
