@@ -40,7 +40,7 @@ This is because `now()` and `mz_now()` change every millisecond, so if this mate
 
 <!-- This example also appears in temporal-filters -->
 It is common for real-time applications to be concerned with only a recent period of time.
-In this case, we will filter a table to only include only records from the last 30 seconds.
+In this case, we will filter a table to only include records from the last 30 seconds.
 
 ```sql
 -- Create a table of timestamped events.
