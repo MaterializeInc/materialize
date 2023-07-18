@@ -1712,7 +1712,7 @@ macro_rules! privilege_fn {
                 )
                 END
             ",
-            $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl, RoleId::Public.to_string(),
+            $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl, RoleId::Public,
         )
     };
 }
@@ -3218,7 +3218,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     false
                 )
                 END
-            ", RoleId::Public.to_string())) => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_OID_TEXT_TEXT_OID;
+            ", RoleId::Public)) => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_OID_TEXT_TEXT_OID;
             params!(String, String) => sql_impl_func("has_cluster_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID;
         },
         "has_connection_privilege" => Scalar {
@@ -3264,7 +3264,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     false
                 )
                 END
-            ", RoleId::Public.to_string())) => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
+            ", RoleId::Public)) => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
             params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
         },
         "has_type_privilege" => Scalar {
