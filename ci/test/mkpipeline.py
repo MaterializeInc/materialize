@@ -88,6 +88,8 @@ so it is executed.""",
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline, args.coverage)
 
+    prioritize_pipeline(pipeline)
+
     # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
     # if we trim away all the JUnit report-generating steps.
     Path("junit-dummy.xml").write_text("")
@@ -137,6 +139,20 @@ class PipelineStep:
         for image in self.image_dependencies:
             inputs.update(image.inputs(transitive=True))
         return inputs
+
+
+def prioritize_pipeline(pipeline: Any) -> None:
+    """Prioritize builds against main or release branches"""
+
+    tag = os.environ["BUILDKITE_TAG"]
+    priority = None
+
+    if tag.startswith("v"):
+        priority = 10
+
+    if priority is not None:
+        for config in pipeline["steps"]:
+            config["priority"] = config.get("priority", 0) + priority
 
 
 def trim_pipeline(pipeline: Any, coverage: bool) -> None:
