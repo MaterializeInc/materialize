@@ -44,7 +44,8 @@ pub async fn write_to_persist(
             Arc::new(relation_desc.clone()),
             Arc::new(UnitSchema),
             Diagnostics {
-                shard_name: status_shard.to_string(),
+                // TODO: plumb through the GlobalId of the status collection
+                shard_name: format!("status({})", collection_id),
                 handle_purpose: format!("healthcheck::write_to_persist {}", collection_id),
             },
         )
