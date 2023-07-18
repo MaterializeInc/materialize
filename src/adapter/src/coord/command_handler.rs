@@ -584,6 +584,12 @@ impl Coordinator {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
             stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
+                // Checks if the session is authorized to purify a statement. Usually
+                // authorization is checked after planning, however purification happens before
+                // planning, which may require the use of some connections and secrets.
+                if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
+                    return ctx.retire(Err(e));
+                }
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
                 let purify_fut = mz_sql::pure::purify_statement(

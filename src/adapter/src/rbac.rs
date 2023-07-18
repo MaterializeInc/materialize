@@ -52,6 +52,34 @@ use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
 use crate::AdapterError;
 
+/// Common checks that need to be performed before we can start checking a role's privileges.
+macro_rules! rbac_preamble {
+    ($catalog:expr, $session:expr) => {
+        // PostgreSQL allows users that have their role dropped to perform some actions,
+        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+        // role is dropped.
+        let current_role_id = $session.current_role_id();
+        if $catalog.try_get_role(current_role_id).is_none() {
+            return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
+        };
+        let session_role_id = $session.session_role_id();
+        if $catalog.try_get_role(session_role_id).is_none() {
+            return Err(AdapterError::ConcurrentRoleDrop(session_role_id.clone()));
+        };
+
+        // Skip RBAC checks if RBAC is disabled.
+        if !is_rbac_enabled_for_session($catalog.system_vars(), $session) {
+            return Ok(());
+        }
+
+        // Skip RBAC checks if the session is a superuser.
+        if $session.is_superuser() {
+            return Ok(());
+        }
+    };
+}
+
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -137,6 +165,39 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
     }
 }
 
+/// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
+pub fn check_item_usage(
+    catalog: &impl SessionCatalog,
+    session: &Session,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), AdapterError> {
+    rbac_preamble!(catalog, session);
+
+    // Obtain all roles that the current session is a member of.
+    let current_role_id = session.current_role_id();
+    let role_membership = catalog.collect_role_membership(current_role_id);
+
+    // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
+    // need to filter those out.
+    let existing_resolved_ids = resolved_ids
+        .0
+        .iter()
+        .filter(|id| catalog.try_get_item(id).is_some())
+        .cloned()
+        .collect();
+    let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
+    let required_privileges =
+        generate_item_usage_privileges(catalog, &existing_resolved_ids, *current_role_id).collect();
+    check_object_privileges(
+        catalog,
+        required_privileges,
+        role_membership,
+        *current_role_id,
+    )?;
+
+    Ok(())
+}
+
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     coord: &Coordinator,
@@ -146,33 +207,12 @@ pub fn check_plan(
     target_cluster_id: Option<ClusterId>,
     resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
-    let current_role_id = session.current_role_id();
-    if catalog.try_get_role(current_role_id).is_none() {
-        // PostgreSQL allows users that have their role dropped to perform some actions,
-        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
-        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
-        // role is dropped.
-        return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
-    };
+    rbac_preamble!(catalog, session);
 
-    let session_role_id = session.session_role_id();
-    if catalog.try_get_role(session_role_id).is_none() {
-        // PostgreSQL allows users that have their role dropped to perform some actions,
-        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
-        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
-        // role is dropped.
-        return Err(AdapterError::ConcurrentRoleDrop(session_role_id.clone()));
-    };
-
-    if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
-        return Ok(());
-    }
-
-    if session.is_superuser() {
-        return Ok(());
-    }
+    check_item_usage(catalog, session, resolved_ids)?;
 
     // Obtain all roles that the current session is a member of.
+    let current_role_id = session.current_role_id();
     let role_membership = catalog.collect_role_membership(current_role_id);
 
     // Validate that the current session has the required role membership to execute the provided
@@ -208,9 +248,12 @@ pub fn check_plan(
         resolved_ids,
         *current_role_id,
     );
-    let mut role_memberships = BTreeMap::new();
-    role_memberships.insert(*current_role_id, role_membership);
-    check_object_privileges(catalog, required_privileges, role_memberships)?;
+    check_object_privileges(
+        catalog,
+        required_privileges,
+        role_membership,
+        *current_role_id,
+    )?;
 
     check_superuser_required(plan)?;
 
@@ -509,17 +552,11 @@ fn generate_required_privileges(
             connection: _,
             validate: _,
         }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
-            privileges
+            )]
         }
         Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
@@ -580,13 +617,7 @@ fn generate_required_privileges(
             if_not_exists: _,
             timeline: _,
             cluster_config,
-        }) => generate_required_source_privileges(
-            catalog,
-            name,
-            cluster_config,
-            resolved_ids,
-            role_id,
-        ),
+        }) => generate_required_source_privileges(name, cluster_config, role_id),
         Plan::CreateSources(plans) => plans
             .iter()
             .flat_map(
@@ -600,25 +631,9 @@ fn generate_required_privileges(
                              timeline: _,
                              cluster_config,
                          },
-                     resolved_ids,
+                     resolved_ids: _,
                  }| {
-                    // Sub-sources depend on not-yet created sources, so we need to filter those out.
-                    let existing_resolved_ids = ResolvedIds(
-                        resolved_ids
-                            .0
-                            .iter()
-                            .filter(|id| catalog.try_get_item(id).is_some())
-                            .cloned()
-                            .collect(),
-                    );
-                    generate_required_source_privileges(
-                        catalog,
-                        name,
-                        cluster_config,
-                        &existing_resolved_ids,
-                        role_id,
-                    )
-                    .into_iter()
+                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
                 },
             )
             .collect(),
@@ -640,16 +655,9 @@ fn generate_required_privileges(
                              timeline: _,
                              cluster_config,
                          },
-                     resolved_ids,
+                     resolved_ids: _,
                  }| {
-                    generate_required_source_privileges(
-                        catalog,
-                        name,
-                        cluster_config,
-                        resolved_ids,
-                        role_id,
-                    )
-                    .into_iter()
+                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
                 },
             )
             .collect(),
@@ -674,11 +682,6 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
             privileges.extend_from_slice(&generate_read_privileges(
                 catalog,
                 iter::once(sink.from),
@@ -697,17 +700,11 @@ fn generate_required_privileges(
             table: _,
             if_not_exists: _,
         }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
-            privileges
+            )]
         }
         Plan::CreateView(CreateViewPlan {
             name,
@@ -717,17 +714,11 @@ fn generate_required_privileges(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
-            privileges
+            )]
         }
         Plan::CreateMaterializedView(CreateMaterializedViewPlan {
             name,
@@ -737,7 +728,7 @@ fn generate_required_privileges(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => {
-            let mut privileges = vec![
+            vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),
                     AclMode::CREATE,
@@ -748,13 +739,7 @@ fn generate_required_privileges(
                     AclMode::CREATE,
                     role_id,
                 ),
-            ];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
-            privileges
+            ]
         }
         Plan::CreateIndex(CreateIndexPlan {
             name,
@@ -762,7 +747,7 @@ fn generate_required_privileges(
             options: _,
             if_not_exists: _,
         }) => {
-            let mut privileges = vec![
+            vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),
                     AclMode::CREATE,
@@ -773,26 +758,14 @@ fn generate_required_privileges(
                     AclMode::CREATE,
                     role_id,
                 ),
-            ];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
-            privileges
+            ]
         }
         Plan::CreateType(CreateTypePlan { name, typ: _ }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(
-                catalog,
-                resolved_ids,
-                role_id,
-            ));
-            privileges
+            )]
         }
         Plan::DropObjects(DropObjectsPlan {
             referenced_ids,
@@ -932,21 +905,6 @@ fn generate_required_privileges(
                 &mut seen,
             ));
 
-            // Collect additional USAGE privileges, like those in the returning clause.
-            let seen = privileges
-                .iter()
-                .filter_map(|(id, _, _)| match id {
-                    SystemObjectId::Object(ObjectId::Item(id)) => Some(*id),
-                    _ => None,
-                })
-                .collect();
-            privileges.extend(generate_item_usage_privileges_inner(
-                catalog,
-                resolved_ids,
-                role_id,
-                seen,
-            ));
-
             if let Some(privilege) =
                 generate_cluster_usage_privileges(values, target_cluster_id, role_id)
             {
@@ -1010,21 +968,6 @@ fn generate_required_privileges(
                 selection.depends_on().into_iter(),
                 role_id,
                 &mut seen,
-            ));
-
-            // Collect additional USAGE privileges, like those in the returning clause.
-            let seen = privileges
-                .iter()
-                .filter_map(|(id, _, _)| match id {
-                    SystemObjectId::Object(ObjectId::Item(id)) => Some(*id),
-                    _ => None,
-                })
-                .collect();
-            privileges.extend(generate_item_usage_privileges_inner(
-                catalog,
-                resolved_ids,
-                role_id,
-                seen,
             ));
 
             if let Some(privilege) =
@@ -1234,10 +1177,8 @@ fn generate_required_privileges(
 }
 
 fn generate_required_source_privileges(
-    catalog: &impl SessionCatalog,
     name: &QualifiedItemName,
     cluster_config: &SourceSinkClusterConfig,
-    resolved_ids: &ResolvedIds,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = vec![(
@@ -1249,11 +1190,6 @@ fn generate_required_source_privileges(
         Some(id) => privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id)),
         None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
     }
-    privileges.extend(generate_item_usage_privileges(
-        catalog,
-        resolved_ids,
-        role_id,
-    ));
     privileges
 }
 
@@ -1371,8 +1307,11 @@ fn generate_cluster_usage_privileges(
 fn check_object_privileges(
     catalog: &impl SessionCatalog,
     privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
-    mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>>,
+    role_membership: BTreeSet<RoleId>,
+    current_role_id: RoleId,
 ) -> Result<(), UnauthorizedError> {
+    let mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>> = BTreeMap::new();
+    role_memberships.insert(current_role_id, role_membership);
     for (object_id, acl_mode, role_id) in privileges {
         let role_membership = role_memberships
             .entry(role_id)
