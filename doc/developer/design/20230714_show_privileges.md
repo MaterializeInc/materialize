@@ -29,7 +29,7 @@ We will add the following SQL commands:
 
 - `SHOW PRIVILEGES`: shows the privileges of the current user.
 - `SHOW DEFAULT PRIVILEGES`: shows default privileges.
-- `SHOW ROLE MEMBERSHIP`
+- `SHOW ROLE MEMBERSHIPS`
 
 We will also add an `owner` column to the existing show commands.
 
@@ -161,11 +161,11 @@ SHOW DEFAULT PRIVILEGES ON TABLES;
  PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
 ```
 
-### `SHOW ROLE MEMBERSHIP`
+### `SHOW ROLE MEMBERSHIPS`
 
 Will show the role membership of the current session.
 
-The syntax will be: `SHOW ROLE MEMBERSHIP`.
+The syntax will be: `SHOW ROLE MEMBERSHIPS`.
 
 The output will include the following columns:
 
@@ -174,7 +174,7 @@ The output will include the following columns:
 Here is an example query:
 
 ```sql
-SHOW ROLE MEMBERSHIP;
+SHOW ROLE MEMBERSHIPS;
 
  name
 ----------------
