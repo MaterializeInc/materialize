@@ -538,7 +538,8 @@
 - type: JSON
   functions:
   - signature: jsonb_agg(expression) -> jsonb
-    description: Aggregate values (including nulls) as a jsonb array. ([docs](/sql/functions/jsonb_agg))
+    description: Aggregate values (including nulls) as a jsonb array.
+    url:  /docs/sql/functions/jsonb_agg
 
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'
     description: "`j`'s elements if `j` is an array."
