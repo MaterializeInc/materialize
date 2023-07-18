@@ -36,7 +36,7 @@ This is because `now()` and `mz_now()` change every millisecond, so if this mate
 
 ## Examples
 
-### Consider Recent Data with a Temporal Filter
+### Temporal filters
 
 <!-- This example also appears in temporal-filters -->
 It is common for real-time applications to be concerned with only a recent period of time.
