@@ -103,7 +103,7 @@ files=$(cat \
         <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | LC_ALL=C sort -z \
-    | xargs -0 sha1sum)
+    | xargs -0 "$shasum")
 files+="
 rust-version:$rust_version
 rust-date:$rust_date

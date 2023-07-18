@@ -127,7 +127,9 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.7.0/parca-debuginfo_0.7.0_Linux_$($ARCH_GCC | sed "s/aarch64/arm64/").tar.gz \
+    | tar xz -C /usr/local/bin parca-debuginfo
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
