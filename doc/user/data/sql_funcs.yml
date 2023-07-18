@@ -572,7 +572,8 @@
     url: "/docs/sql/types/jsonb/#jsonb_each_text"
 
   - signature: jsonb_object_agg(keys, values) -> jsonb
-    description: Aggregate keys and values (including nulls) as a `jsonb` object. ([docs](/sql/functions/jsonb_object_agg))
+    description: Aggregate keys and values (including nulls) as a `jsonb` object.
+    url: "/docs/sql/functions/jsonb_object_agg"
 
   - signature: 'jsonb_object_keys(j: jsonb) -> Col<string>'
     description: "`j`'s outermost keys if `j` is an object."
