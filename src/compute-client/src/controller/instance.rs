@@ -783,7 +783,7 @@ where
                 .metrics
                 .observe_peek_response(&response, duration);
 
-            // Enqueue the response to the cancelation.
+            // Enqueue the response to the cancellation.
             self.compute
                 .ready_responses
                 .push_back(ComputeControllerResponse::PeekResponse(
