@@ -770,22 +770,34 @@ impl RecordFirstRowStream {
         execute_started: Instant,
         client: &SessionClient,
     ) -> Self {
+        let histogram = Self::histogram(client);
+        Self {
+            rows,
+            execute_started,
+            time_to_first_row_seconds: histogram,
+            saw_rows: false,
+        }
+    }
+
+    fn histogram(client: &SessionClient) -> Histogram {
         let isolation_level = *client
             .session
             .as_ref()
             .expect("session invariant")
             .vars()
             .transaction_isolation();
-        Self {
-            rows,
-            execute_started,
-            time_to_first_row_seconds: client
-                .inner()
-                .metrics()
-                .time_to_first_row_seconds
-                .with_label_values(&[isolation_level.as_str()]),
-            saw_rows: false,
-        }
+
+        client
+            .inner()
+            .metrics()
+            .time_to_first_row_seconds
+            .with_label_values(&[isolation_level.as_str()])
+    }
+
+    /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
+    /// a UnboundedReceiver, you can tell it when to record an observation.
+    pub fn record(execute_started: Instant, client: &SessionClient) {
+        Self::histogram(client).observe(execute_started.elapsed().as_secs_f64());
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
