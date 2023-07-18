@@ -714,7 +714,10 @@ r1
 r2
 r3
 r4
-COMPLETE 4
+mz_system
+materialize
+mz_introspection
+COMPLETE 7
 
 statement ok
 DROP ROLE r1, r2, r3, r4
