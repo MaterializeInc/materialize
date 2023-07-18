@@ -80,7 +80,7 @@ Back in the first session, watch the record expire after 30 seconds. Press `Ctrl
 
 You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
 
-### Ad-hoc queries with now() and mz_now()
+### Query timestamp introspection
 
 If you haven't already done so in the previous example, create a table called `events` and add a few records.
 
