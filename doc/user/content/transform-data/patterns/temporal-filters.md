@@ -231,7 +231,7 @@ According to the temporal filter, the record is included for results as of virtu
 Let's say another record comes in with a timestamp of `11:00:00`, but `mz_now()` has marched forward to `12:00:01`.
 Unfortunately, this record does not pass the filter and is excluded from processing altogether.
 
-All this to say, if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
+In conclusion: if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
 This is often referred to as a **grace period**.
 
 ## Temporal filter pushdown
