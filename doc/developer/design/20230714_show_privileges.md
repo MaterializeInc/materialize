@@ -175,7 +175,7 @@ Here is an example query:
 ```sql
 SHOW ROLE MEMBERSHIP;
 
- name       
+ name
 ----------------
  data_scientist
  dev
