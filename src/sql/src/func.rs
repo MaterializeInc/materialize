@@ -1705,7 +1705,7 @@ macro_rules! privilege_fn {
                             LEFT JOIN mz_roles ON
                                     mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
                         WHERE
-                            mz_roles.oid = $1
+                            mz_internal.mz_aclitem_grantee(privilege) = 'p' OR pg_has_role($1, mz_roles.oid, 'USAGE')
                     ),
                     false
                 )
@@ -3212,7 +3212,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                             LEFT JOIN mz_roles ON
                                     mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
                         WHERE
-                            mz_roles.oid = $1
+                            mz_internal.mz_aclitem_grantee(privilege) = 'p' OR pg_has_role($1, mz_roles.oid, 'USAGE')
                     ),
                     false
                 )
@@ -3258,7 +3258,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         LEFT JOIN mz_roles ON
                                 mz_internal.mz_aclitem_grantee(privileges) = mz_roles.id
                         WHERE
-                            mz_roles.oid = $1
+                            mz_internal.mz_aclitem_grantee(privileges) = 'p' OR pg_has_role($1, mz_roles.oid, 'USAGE')
                     ),
                     false
                 )
