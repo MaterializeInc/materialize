@@ -242,7 +242,7 @@ All of the queries in the previous examples only return results based on recentl
 Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query.
 Here are the key benefits of this optimization:
 - For ad-hoc `SELECT` queries, temporal filter pushdown can substantially improve query latency.
-- When a materialized view is created or its cluster restarts, temporal filter pushdown can substantially reduce the time it takes to start serving results.
+- When a materialized view is created or the cluster maintaining it restarts, temporal filter pushdown can substantially reduce the time it takes to start serving results.
 
 The columns filtered should correlate with the insertion or update time of the row.
 In the examples above, the `event_ts` value in each event correlates with the time the event was inserted, so filters that reference these columns should be pushed down to the storage layer.
