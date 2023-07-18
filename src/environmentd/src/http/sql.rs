@@ -1045,7 +1045,7 @@ async fn execute_stmt<S: ResultSender>(
         } => {
             let rows = match sender.await_rows(client.canceled(), rows).await? {
                 PeekResponseUnary::Rows(rows) => {
-                    client.inner().metrics().time_to_first_row_seconds.with_label_values(&[isolation_level.as_str()]).observe(execute_started.elapsed().as_secs_f64());
+                    RecordFirstRowStream::record(execute_started, client);
                     rows
                 },
                 PeekResponseUnary::Error(e) => {
