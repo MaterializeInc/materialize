@@ -42,7 +42,7 @@ You can only use `mz_now()` to establish a temporal filter under the following c
 These examples create real objects.
 After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
 
-### Sliding Window
+### Sliding window
 
 <!-- This example also appears in now_and_mz_now -->
 It is common for real-time applications to be concerned with only a recent period of time.
