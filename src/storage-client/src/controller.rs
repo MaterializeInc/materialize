@@ -847,8 +847,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The state for the storage controller.
     /// TODO(benesch): why is this a separate struct?
     state: StorageControllerState<T>,
-    /// Mechanism for finalizing shards of Webhook sources.
-    internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -857,6 +855,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     persist: Arc<PersistClientCache>,
     /// Metrics of the Storage controller
     metrics: StorageControllerMetrics,
+    /// Mechanism for the storage controller to send itself feedback, potentially emulating the
+    /// responses we expect from clusters.
+    ///
+    /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
+    /// installed on a `clusterd` this can likely be refactored away.
+    internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
 }
 
 #[derive(Debug)]

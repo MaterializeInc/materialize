@@ -63,6 +63,10 @@ impl CollectionManager {
             oneshot::Sender<Result<(), StorageError>>,
         )>(256);
 
+        // Allows callers to wait until we finish any in-progress work.
+        //
+        // For example, after unregistering a collection a user might wait on a barrier to be sure
+        // any in-progress work with that collection has completed.
         let barrier: Arc<Mutex<Vec<oneshot::Sender<_>>>> = Arc::new(Mutex::new(Vec::new()));
         let barrier_outer = Arc::clone(&barrier);
 
@@ -233,6 +237,10 @@ impl CollectionManager {
     }
 
     /// Unregisters the collection as one that `CollectionManager` will maintain.
+    ///
+    /// Note: After unregistering a collection there could be in-progress work that started before
+    /// the call to unregister. Callers should obtain a `CollectionManager::barrier` and wait for
+    /// its completion before assuming we are no longer interacting with a collection.
     pub(super) fn unregsiter_collection(&self, id: GlobalId) -> bool {
         self.collections
             .lock()
