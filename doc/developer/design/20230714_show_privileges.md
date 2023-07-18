@@ -119,11 +119,7 @@ The syntax will be `SHOW DEFAULT PRIVILEGES [ON <object-type>]`.
 
 - `ON <object-type>` will filter the output to only include objects of type `<object-type>`. Valid
   values are:
-  - `TABLES`
-  - `VIEWS`
-  - `MATERIALIZED VIEWS`
-  - `SOURCES`
-  - `SINKS`
+  - `TABLES` (includes views, materialized views, and sources)
   - `TYPES`
   - `CLUSTERS`
   - `SECRETS`
@@ -148,7 +144,7 @@ SHOW DEFAULT PRIVILEGES;
  role   | database    | schema | object_type | grantee   | privileges
 --------+-------------+--------+-------------+-----------+----------------
  PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
- joe    | materialize | NULL   | view        | PUBLIC    | SELECT
+ joe    | materialize | NULL   | table       | PUBLIC    | SELECT
  qa     | materialize | public | type        | scientist | USAGE
  PUBLIC | NULL        | NULL   | cluster     | mike      | CREATE
 ```
@@ -159,6 +155,7 @@ SHOW DEFAULT PRIVILEGES ON TABLES;
  role   | database    | schema | object_type | grantee   | privileges
 --------+-------------+--------+-------------+-----------+----------------
  PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
+ joe    | materialize | NULL   | table       | PUBLIC    | SELECT
 ```
 
 ### `SHOW ROLE MEMBERSHIPS`
