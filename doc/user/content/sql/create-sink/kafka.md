@@ -467,7 +467,7 @@ CREATE SINK avro_sink
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
   KEY (key_col)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM;
+  ENVELOPE UPSERT;
 ```
 
 {{< /tab >}}
@@ -480,7 +480,7 @@ CREATE SINK json_sink
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_json_topic')
   KEY (key_col)
   FORMAT JSON
-  ENVELOPE DEBEZIUM;
+  ENVELOPE UPSERT;
 ```
 
 {{< /tab >}}
@@ -499,19 +499,6 @@ CREATE SINK avro_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
-
-{{< /tab >}}
-{{< tab "JSON">}}
-
-```sql
-CREATE SINK json_sink
-  IN CLUSTER my_io_cluster
-  FROM <source, table or mview>
-  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_json_topic')
-  FORMAT JSON
-  ENVELOPE DEBEZIUM;
-```
-
 {{< /tab >}}
 {{< /tabs >}}
 
