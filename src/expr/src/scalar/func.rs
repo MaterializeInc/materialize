@@ -88,9 +88,6 @@ pub enum UnmaterializableFunc {
     IsRbacEnabled,
     MzEnvironmentId,
     MzNow,
-    // Technically this doesn't have to be an unmaterializable function. It can be implemented
-    // fully in SQL by aggregating the mz_role_members catalog table. Unfortunately, we lack the
-    // proper map aggregation functionality.
     MzRoleOidMemberships,
     MzSessionId,
     MzUptime,
