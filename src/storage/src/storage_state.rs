@@ -851,7 +851,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 pg,
                 rocksdb,
                 storage_dataflow_max_inflight_bytes,
-                auto_spill_config
+                auto_spill_config,
             } => self.storage_state.dataflow_parameters.update(
                 pg,
                 rocksdb,
@@ -1171,7 +1171,7 @@ impl StorageState {
                         rocksdb: params.upsert_rocksdb_tuning_config,
                         storage_dataflow_max_inflight_bytes: params
                             .storage_dataflow_max_inflight_bytes,
-                        auto_spill_config:params.upsert_auto_spill_config,
+                        auto_spill_config: params.upsert_auto_spill_config,
                     })
                 }
             }

@@ -250,6 +250,27 @@ where
     }
 }
 
+/// Helper method for `upsert_inner` used to stage `data` updates
+/// from the input timely edge.
+fn stage_input<T, O>(
+    stash: &mut Vec<(T, UpsertKey, Reverse<O>, Option<UpsertValue>)>,
+    data: &mut Vec<((UpsertKey, Option<UpsertValue>, O), T, Diff)>,
+    input_upper: &Antichain<T>,
+    resume_upper: &Antichain<T>,
+) where
+    T: PartialOrder,
+    O: Ord,
+{
+    if PartialOrder::less_equal(input_upper, resume_upper) {
+        data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
+    }
+
+    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+        assert!(diff > 0, "invalid upsert input");
+        (time, key, Reverse(order), value)
+    }));
+}
+
 fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     mut key_indices: Vec<usize>,
@@ -325,14 +346,7 @@ where
                 input_event = input.next_mut() => {
                     match input_event {
                         Some(AsyncEvent::Data(_cap, data)) => {
-                            if PartialOrder::less_equal(&input_upper, &resume_upper) {
-                                data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
-                            }
-
-                            stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-                                assert!(diff > 0, "invalid upsert input");
-                                (time, key, Reverse(order), value)
-                            }));
+                            stage_input(&mut stash, data, &input_upper, &resume_upper);
                         }
                         Some(AsyncEvent::Progress(upper)) => {
                             input_upper = upper;
@@ -441,14 +455,7 @@ where
         } {
             match event {
                 AsyncEvent::Data(_cap, data) => {
-                    if PartialOrder::less_equal(&input_upper, &resume_upper) {
-                        data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
-                    }
-
-                    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-                        assert!(diff > 0, "invalid upsert input");
-                        (time, key, Reverse(order), value)
-                    }));
+                    stage_input(&mut stash, data, &input_upper, &resume_upper);
                 }
                 AsyncEvent::Progress(upper) => {
                     // Ignore progress updates before the `resume_upper`, which is our initial
