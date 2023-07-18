@@ -32,7 +32,7 @@ However, there are currently no valid operators for the [`mz_timestamp` type](/s
 
 You can only use `mz_now()` to establish a temporal filter under the following conditions:
 
-- `mz_now` appears in a `WHERE` or `HAVING` clause.
+- `mz_now()` appears in a `WHERE` or `HAVING` clause.
 - The clause must compare `mz_now()` to a [`numeric`](/sql/types/numeric) or [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`
 - The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN...AND...`).
     At the moment, you can't use the `!=` operator with `mz_now()`.
