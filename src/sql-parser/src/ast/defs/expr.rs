@@ -608,23 +608,23 @@ impl<T: AstInfo> Expr<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Op {
     /// Any namespaces that preceded the operator.
-    pub namespace: Vec<Ident>,
+    pub namespace: Option<Vec<Ident>>,
     /// The operator itself.
     pub op: String,
 }
 
 impl AstDisplay for Op {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        if self.namespace.is_empty() {
-            f.write_str(&self.op)
-        } else {
+        if let Some(namespace) = &self.namespace {
             f.write_str("OPERATOR(");
-            for name in &self.namespace {
+            for name in namespace {
                 f.write_node(name);
                 f.write_str(".");
             }
             f.write_str(&self.op);
             f.write_str(")");
+        } else {
+            f.write_str(&self.op)
         }
     }
 }
@@ -637,7 +637,7 @@ impl Op {
         S: Into<String>,
     {
         Op {
-            namespace: vec![],
+            namespace: None,
             op: op.into(),
         }
     }

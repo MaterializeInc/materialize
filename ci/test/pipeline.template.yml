@@ -185,8 +185,8 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: upsert
-    label: Upsert
+  - id: upsert-compaction-disabled
+    label: Upsert (compaction disabled)
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/upsert]
@@ -194,6 +194,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upsert
+          args: [--compaction-disabled]
     agents:
       queue: linux-x86_64
 

@@ -545,10 +545,25 @@ CREATE ROLE other
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+CREATE ROLE child
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT joe TO child
+----
+COMPLETE 0
+
 ## Table
 
 query B
 SELECT has_table_privilege('joe', 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 't', 'SELECT')
 ----
 false
 
@@ -578,6 +593,11 @@ t  materialize=arwd/materialize
 
 query B
 SELECT has_table_privilege('joe', 't', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('child', 't', 'SELECT')
 ----
 true
 
@@ -636,22 +656,27 @@ t  materialize=arwd/materialize
 query B
 SELECT has_table_privilege('joe', 't', 'SELECT')
 ----
-false
+true
+
+query B
+SELECT has_table_privilege('child', 't', 'SELECT')
+----
+true
 
 query B
 SELECT has_table_privilege('joe', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 't', 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -670,6 +695,9 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE INSERT, UPDATE ON TABLE t FROM PUBLIC
 
 query TT
@@ -678,6 +706,34 @@ SELECT name, privilege FROM item_privileges WHERE name = 't'
 t  =r/materialize
 t  materialize=arwd/materialize
 
+statement ok
+REVOKE SELECT ON TABLE t FROM PUBLIC
+
+query B
+SELECT has_table_privilege('joe', 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
 statement error invalid privilege types USAGE, CREATE for TABLE
 GRANT USAGE, CREATE ON TABLE t TO joe
 
@@ -685,6 +741,11 @@ GRANT USAGE, CREATE ON TABLE t TO joe
 
 query B
 SELECT has_table_privilege('joe', 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 'v', 'SELECT')
 ----
 false
 
@@ -714,6 +775,11 @@ v  materialize=r/materialize
 
 query B
 SELECT has_table_privilege('joe', 'v', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('child', 'v', 'SELECT')
 ----
 true
 
@@ -772,22 +838,27 @@ v  materialize=r/materialize
 query B
 SELECT has_table_privilege('joe', 'v', 'SELECT')
 ----
-false
+true
+
+query B
+SELECT has_table_privilege('child', 'v', 'SELECT')
+----
+true
 
 query B
 SELECT has_table_privilege('joe', (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'v', 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -806,12 +877,40 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE SELECT ON TABLE v FROM PUBLIC
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'v'
 ----
 v  materialize=r/materialize
+
+query B
+SELECT has_table_privilege('joe', 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+false
 
 statement error invalid privilege types USAGE, CREATE for VIEW
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE v TO joe
@@ -820,6 +919,11 @@ GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE v TO joe
 
 query B
 SELECT has_table_privilege('joe', 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 'mv', 'SELECT')
 ----
 false
 
@@ -849,6 +953,11 @@ mv  materialize=r/materialize
 
 query B
 SELECT has_table_privilege('joe', 'mv', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('child', 'mv', 'SELECT')
 ----
 true
 
@@ -907,22 +1016,27 @@ mv  materialize=r/materialize
 query B
 SELECT has_table_privilege('joe', 'mv', 'SELECT')
 ----
-false
+true
+
+query B
+SELECT has_table_privilege('child', 'mv', 'SELECT')
+----
+true
 
 query B
 SELECT has_table_privilege('joe', (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'mv', 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -941,12 +1055,40 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE SELECT ON TABLE mv FROM PUBLIC
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 ----
 mv  materialize=r/materialize
+
+query B
+SELECT has_table_privilege('joe', 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+false
 
 statement error invalid privilege types USAGE, CREATE for MATERIALIZED VIEW
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE mv TO joe
@@ -955,6 +1097,11 @@ GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE mv TO joe
 
 query B
 SELECT has_table_privilege('joe', 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 's', 'SELECT')
 ----
 false
 
@@ -984,6 +1131,11 @@ s  materialize=r/materialize
 
 query B
 SELECT has_table_privilege('joe', 's', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('child', 's', 'SELECT')
 ----
 true
 
@@ -1042,22 +1194,27 @@ s  materialize=r/materialize
 query B
 SELECT has_table_privilege('joe', 's', 'SELECT')
 ----
-false
+true
+
+query B
+SELECT has_table_privilege('child', 's', 'SELECT')
+----
+true
 
 query B
 SELECT has_table_privilege('joe', (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 's', 'SELECT')
 ----
-false
+true
 
 query B
 SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1076,6 +1233,9 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE SELECT ON TABLE s FROM PUBLIC
 
 query TT
@@ -1083,13 +1243,46 @@ SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  materialize=r/materialize
 
+query B
+SELECT has_table_privilege('joe', 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('child', 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+false
+
 statement error invalid privilege types USAGE, CREATE for SOURCE
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE s TO joe
 
 ## Type
 
+statement ok
+REVOKE USAGE on TYPE ty FROM PUBLIC
+
 query B
 SELECT has_type_privilege('joe', 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('child', 'ty', 'USAGE')
 ----
 false
 
@@ -1110,37 +1303,50 @@ false
 
 statement ok
 GRANT USAGE on TYPE ty TO joe
-
-query B
-SELECT has_type_privilege('joe', 'ty', 'USAGE')
-----
-true
-
-query B
-SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
-----
-true
-
-query B
-SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
-----
-true
-
-query B
-SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
-----
-true
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'ty'
 ----
-ty  =U/materialize
 ty  joe=U/materialize
 ty  materialize=U/materialize
+
+query B
+SELECT has_type_privilege('joe', 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('child', 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
 GRANT USAGE on TYPE ty TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  joe=U/materialize
+ty  materialize=U/materialize
+
+statement ok
+GRANT USAGE on TYPE ty TO PUBLIC
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'ty'
@@ -1160,31 +1366,36 @@ DROP ROLE joe
 statement ok
 REVOKE USAGE on TYPE ty FROM joe
 
-query B
-SELECT has_type_privilege('joe', 'ty', 'SELECT')
-----
-false
-
-query B
-SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
-----
-false
-
-query B
-SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
-----
-false
-
-query B
-SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
-----
-false
-
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'ty'
 ----
 ty  =U/materialize
 ty  materialize=U/materialize
+
+query B
+SELECT has_type_privilege('joe', 'ty', 'SELECT')
+----
+true
+
+query B
+SELECT has_type_privilege('child', 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1203,12 +1414,40 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE USAGE ON TYPE ty FROM PUBLIC
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'ty'
 ----
 ty  materialize=U/materialize
+
+query B
+SELECT has_type_privilege('joe', 'ty', 'SELECT')
+----
+false
+
+query B
+SELECT has_type_privilege('child', 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('joe', (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'ty', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
+----
+false
 
 statement ok
 GRANT USAGE on TYPE ty TO PUBLIC
@@ -1230,6 +1469,11 @@ SELECT has_secret_privilege('joe', 'se', 'USAGE')
 false
 
 query B
+SELECT has_secret_privilege('child', 'se', 'USAGE')
+----
+false
+
+query B
 SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
 ----
 false
@@ -1247,8 +1491,19 @@ false
 statement ok
 GRANT USAGE on SECRET se TO joe
 
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  joe=U/materialize
+se  materialize=U/materialize
+
 query B
 SELECT has_secret_privilege('joe', 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('child', 'se', 'USAGE')
 ----
 true
 
@@ -1266,12 +1521,6 @@ query B
 SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
 ----
 true
-
-query TT
-SELECT name, privilege FROM item_privileges WHERE name = 'se'
-----
-se  joe=U/materialize
-se  materialize=U/materialize
 
 ### Duplicate grants have no effect
 statement ok
@@ -1304,31 +1553,36 @@ DROP ROLE joe
 statement ok
 REVOKE USAGE on SECRET se FROM joe
 
-query B
-SELECT has_secret_privilege('joe', 'se', 'USAGE')
-----
-false
-
-query B
-SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
-----
-false
-
-query B
-SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'se', 'USAGE')
-----
-false
-
-query B
-SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
-----
-false
-
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'se'
 ----
 se  =U/materialize
 se  materialize=U/materialize
+
+query B
+SELECT has_secret_privilege('joe', 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('child', 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'se', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1347,12 +1601,40 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE USAGE ON SECRET se FROM PUBLIC
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'se'
 ----
 se  materialize=U/materialize
+
+query B
+SELECT has_secret_privilege('joe', 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('child', 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('joe', (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'se', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_secrets WHERE name = 'se'), 'USAGE')
+----
+false
 
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE, CREATE for SECRET
 GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON SECRET se TO joe
@@ -1361,6 +1643,11 @@ GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON SECRET se TO joe
 
 query B
 SELECT has_connection_privilege('joe', 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('child', 'conn', 'USAGE')
 ----
 false
 
@@ -1390,6 +1677,11 @@ conn  materialize=U/materialize
 
 query B
 SELECT has_connection_privilege('joe', 'conn', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('child', 'conn', 'USAGE')
 ----
 true
 
@@ -1448,22 +1740,27 @@ conn  materialize=U/materialize
 query B
 SELECT has_connection_privilege('joe', 'conn', 'USAGE')
 ----
-false
+true
+
+query B
+SELECT has_connection_privilege('child', 'conn', 'USAGE')
+----
+true
 
 query B
 SELECT has_connection_privilege('joe', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
 ----
-false
+true
 
 query B
 SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'conn', 'USAGE')
 ----
-false
+true
 
 query B
 SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1482,12 +1779,40 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE USAGE ON CONNECTION conn FROM PUBLIC
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 ----
 conn  materialize=U/materialize
+
+query B
+SELECT has_connection_privilege('joe', 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('child', 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('joe', (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'conn', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_connections WHERE name = 'conn'), 'USAGE')
+----
+false
 
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE, CREATE for CONNECTION
 GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON CONNECTION conn TO joe
@@ -1496,6 +1821,11 @@ GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON CONNECTION conn TO joe
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
+----
+false
+
+query B
+SELECT has_cluster_privilege('child', 'c', 'USAGE')
 ----
 false
 
@@ -1516,6 +1846,11 @@ c  mz_introspection=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
+----
+true
+
+query B
+SELECT has_cluster_privilege('child', 'c', 'USAGE')
 ----
 true
 
@@ -1567,12 +1902,17 @@ c  mz_introspection=U/materialize
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
 ----
-false
+true
+
+query B
+SELECT has_cluster_privilege('child', 'c', 'USAGE')
+----
+true
 
 query B
 SELECT has_cluster_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'c', 'USAGE')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1592,6 +1932,9 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE CREATE, USAGE ON CLUSTER c FROM PUBLIC
 
 query TT
@@ -1600,6 +1943,21 @@ SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 c  materialize=UC/materialize
 c  mz_introspection=U/materialize
 
+query B
+SELECT has_cluster_privilege('joe', 'c', 'USAGE')
+----
+false
+
+query B
+SELECT has_cluster_privilege('child', 'c', 'USAGE')
+----
+false
+
+query B
+SELECT has_cluster_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'c', 'USAGE')
+----
+false
+
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for CLUSTER
 GRANT INSERT, SELECT, UPDATE, DELETE ON CLUSTER c TO joe
 
@@ -1607,6 +1965,11 @@ GRANT INSERT, SELECT, UPDATE, DELETE ON CLUSTER c TO joe
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('child', 'd', 'USAGE')
 ----
 false
 
@@ -1637,6 +2000,11 @@ d  mz_introspection=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
+----
+true
+
+query B
+SELECT has_database_privilege('child', 'd', 'USAGE')
 ----
 true
 
@@ -1698,22 +2066,27 @@ d  mz_introspection=U/materialize
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
 ----
-false
+true
+
+query B
+SELECT has_database_privilege('child', 'd', 'USAGE')
+----
+true
 
 query B
 SELECT has_database_privilege('joe', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
 ----
-false
+true
 
 query B
 SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'd', 'USAGE')
 ----
-false
+true
 
 query B
 SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1733,6 +2106,9 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE CREATE, USAGE ON DATABASE d FROM PUBLIC
 
 query TT
@@ -1741,6 +2117,31 @@ SELECT name, privilege FROM database_privileges WHERE name = 'd'
 d  materialize=UC/materialize
 d  mz_introspection=U/materialize
 
+query B
+SELECT has_database_privilege('joe', 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('child', 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege('joe', (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'd', 'USAGE')
+----
+false
+
+query B
+SELECT has_database_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_databases WHERE name = 'd'), 'USAGE')
+----
+false
+
 statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for DATABASE
 GRANT INSERT, SELECT, UPDATE, DELETE ON DATABASE d TO joe
 
@@ -1748,6 +2149,11 @@ GRANT INSERT, SELECT, UPDATE, DELETE ON DATABASE d TO joe
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('child', 'sch', 'USAGE')
 ----
 false
 
@@ -1778,6 +2184,11 @@ sch  mz_introspection=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
+----
+true
+
+query B
+SELECT has_schema_privilege('child', 'sch', 'USAGE')
 ----
 true
 
@@ -1839,22 +2250,27 @@ sch  mz_introspection=U/materialize
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
 ----
-false
+true
+
+query B
+SELECT has_schema_privilege('child', 'sch', 'USAGE')
+----
+true
 
 query B
 SELECT has_schema_privilege('joe', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
 ----
-false
+true
 
 query B
 SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'sch', 'USAGE')
 ----
-false
+true
 
 query B
 SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1874,6 +2290,9 @@ statement ok
 CREATE ROLE joe
 
 statement ok
+GRANT joe TO child
+
+statement ok
 REVOKE CREATE, USAGE ON SCHEMA sch FROM PUBLIC
 
 query TT
@@ -1881,6 +2300,31 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
 sch  mz_introspection=U/materialize
+
+query B
+SELECT has_schema_privilege('joe', 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('child', 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege('joe', (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'sch', 'USAGE')
+----
+false
+
+query B
+SELECT has_schema_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_schemas WHERE name = 'sch'), 'USAGE')
+----
+false
 
 ## System
 
@@ -1891,6 +2335,11 @@ COMPLETE 0
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
+----
+false
+
+query B
+SELECT has_system_privilege('child', 'CREATEDB')
 ----
 false
 
@@ -1912,6 +2361,11 @@ mz_system=RBN/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
+----
+true
+
+query B
+SELECT has_system_privilege('child', 'CREATEDB')
 ----
 true
 
@@ -1961,12 +2415,17 @@ mz_system=RBN/mz_system
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
 ----
-false
+true
+
+query B
+SELECT has_system_privilege('child', 'CREATEDB')
+----
+true
 
 query B
 SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
 ----
-false
+true
 
 ### Duplicate revokes have no effect
 simple conn=mz_system,user=mz_system
@@ -1986,6 +2445,9 @@ DROP ROLE joe
 statement ok
 CREATE ROLE joe
 
+statement ok
+GRANT joe TO child
+
 simple conn=mz_system,user=mz_system
 REVOKE CREATEROLE, CREATECLUSTER ON SYSTEM FROM PUBLIC
 ----
@@ -1995,6 +2457,21 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 mz_system=RBN/mz_system
+
+query B
+SELECT has_system_privilege('joe', 'CREATEDB')
+----
+false
+
+query B
+SELECT has_system_privilege('child', 'CREATEDB')
+----
+false
+
+query B
+SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
+----
+false
 
 ## Test misc error scenarios
 
@@ -2999,6 +3476,11 @@ true
 
 ### Type
 
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON TYPE ty FROM PUBLIC
+----
+COMPLETE 0
+
 query B
 SELECT has_type_privilege('materialize', 'ty', 'USAGE')
 ----
@@ -3043,6 +3525,11 @@ query B
 SELECT has_type_privilege((SELECT oid FROM mz_types WHERE name = 'ty'), 'USAGE')
 ----
 true
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO PUBLIC
+----
+COMPLETE 0
 
 # Test multi-object GRANT/REVOKE
 
@@ -3277,6 +3764,11 @@ false
 
 ## Types
 
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL TYPES FROM PUBLIC
+----
+COMPLETE 0
+
 query B
 SELECT has_type_privilege('ty1', 'USAGE')
 ----
@@ -3346,6 +3838,11 @@ query B
 SELECT has_type_privilege('ty4', 'USAGE')
 ----
 false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL TYPES TO PUBLIC
+----
+COMPLETE 0
 
 ## Secrets
 
@@ -3567,6 +4064,11 @@ false
 
 ## Types
 
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL TYPES FROM PUBLIC
+----
+COMPLETE 0
+
 query B
 SELECT has_type_privilege('ty1', 'USAGE')
 ----
@@ -3636,6 +4138,11 @@ query B
 SELECT has_type_privilege('ty4', 'USAGE')
 ----
 false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL TYPES TO PUBLIC
+----
+COMPLETE 0
 
 ## Secrets
 
@@ -3899,6 +4406,11 @@ false
 
 ## Types
 
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL TYPES FROM PUBLIC
+----
+COMPLETE 0
+
 query B
 SELECT has_type_privilege('ty1', 'USAGE')
 ----
@@ -3968,6 +4480,11 @@ query B
 SELECT has_type_privilege('ty4', 'USAGE')
 ----
 false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL TYPES TO PUBLIC
+----
+COMPLETE 0
 
 ## Secrets
 

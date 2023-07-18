@@ -38,6 +38,26 @@ query TTT
 SELECT * FROM role_members
 ----
 
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+false
+
 statement ok
 GRANT group1 TO joe
 
@@ -45,6 +65,26 @@ query TTT
 SELECT * FROM role_members
 ----
 group1  joe  mz_system
+
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+true
 
 # Dropping a role also removes it from role_members
 simple conn=mz_system,user=mz_system
@@ -59,6 +99,11 @@ SELECT * FROM mz_role_members
 statement ok
 CREATE ROLE group1
 
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+false
+
 statement ok
 GRANT group1 TO joe
 
@@ -66,6 +111,11 @@ query TTT
 SELECT * FROM role_members
 ----
 group1  joe  mz_system
+
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
 
 # Dropped roles have their membership revoked
 
@@ -98,6 +148,21 @@ SELECT * FROM role_members
 group1  joe  mz_system
 group2  joe  mz_system
 
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+false
+
 statement ok
 GRANT group2 TO group1
 
@@ -107,6 +172,21 @@ SELECT * FROM role_members
 group1  joe     mz_system
 group2  joe     mz_system
 group2  group1  mz_system
+
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+true
 
 # Redundant grants don't error or show up multiple times in mz_role_membership or change the grantor
 simple conn=mz_system,user=mz_system
@@ -137,6 +217,36 @@ SELECT * FROM role_members
 ----
 group2  joe     mz_system
 group2  group1  mz_system
+
+query B
+SELECT pg_has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group1', 'joe', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('group2', 'joe', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group2', 'group1', 'USAGE')
+----
+false
 
 # Redundant revokes don't error
 
@@ -374,6 +484,182 @@ LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
 
 statement ok
 DROP ROLE group1, group2, joe, mike
+
+
+# Test recursive check of pg_has_role
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE other;
+----
+COMPLETE 0
+
+
+simple conn=mz_system,user=mz_system
+GRANT group1 to joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT group2 to group1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT group1 to other;
+----
+COMPLETE 0
+
+query B
+SELECT pg_has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('group1', 'joe', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('group2', 'joe', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group2', 'group1', 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+DROP ROLE group1, group2, joe, other;
+----
+COMPLETE 0
+
+# Test two input variant of pg_has_role.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group1;
+----
+COMPLETE 0
+
+query B
+SELECT pg_has_role('group1', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group1', 'MEMBER')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT group1 TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT pg_has_role('group1', 'USAGE')
+----
+true
+
+query B
+SELECT pg_has_role('group1', 'MEMBER')
+----
+true
+
+simple conn=mz_system,user=mz_system
+REVOKE group1 FROM materialize
+----
+COMPLETE 0
+
+query B
+SELECT pg_has_role('group1', 'USAGE')
+----
+false
+
+query B
+SELECT pg_has_role('group1', 'MEMBER')
+----
+false
+
+simple conn=mz_system,user=mz_system
+DROP ROLE group1
+----
+COMPLETE 0
+
+# Test pg_has_role error scenarios.
+
+## If any input is NULL then the result is NULL.
+
+query B
+SELECT pg_has_role(NULL, 'materialize', 'USAGE')
+----
+NULL
+
+query B
+SELECT pg_has_role('materialize', NULL, 'MEMBER')
+----
+NULL
+
+query B
+SELECT pg_has_role('materialize', 'materialize', NULL)
+----
+NULL
+
+## If any of the text inputs are invalid then the query should error.
+
+query error role "fake-role" does not exist
+SELECT pg_has_role('fake-role', 'materialize', 'USAGE')
+
+query error role "fake-role" does not exist
+SELECT pg_has_role('materialize', 'fake-role', 'USAGE')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT pg_has_role('materialize', 'materialize', 'fake privilege')
+
+## If any of the oid inputs are invalid then the query should be false.
+
+query B
+SELECT pg_has_role(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'materialize', 'MEMBER')
+----
+false
+
+query B
+SELECT pg_has_role('materialize', ((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'USAGE')
+----
+false
+
+## Public role isn't accepted
+
+query error role "public" does not exist
+SELECT pg_has_role('materialize', 'public', 'USAGE')
+
+query error role "public" does not exist
+SELECT pg_has_role('public', 'materialize', 'USAGE')
 
 # Disable RBAC checks
 

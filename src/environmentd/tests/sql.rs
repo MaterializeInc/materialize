@@ -1260,6 +1260,7 @@ largest not in advance of upper:<TIMESTAMP>
                           since:[<TIMESTAMP>]
         can respond immediately: true
                        timeline: Some(EpochMilliseconds)
+              session wall time:<TIMESTAMP>
 
 source materialize.public.t1 (u1, storage):
                   read frontier:[<TIMESTAMP>]

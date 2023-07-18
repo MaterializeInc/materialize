@@ -90,6 +90,7 @@ use mz_ore::task::RuntimeExt;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp, TimestampManipulation};
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
@@ -327,11 +328,11 @@ where
                         let (mut data_write_handle, data_read_handle) = persist_client
                             .open::<SourceData, (), Timestamp, Diff>(
                                 data_shard.clone(),
-                                "tests::check_loop",
                                 // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
                                 // schema.
                                 Arc::new(RelationDesc::empty()),
                                 Arc::new(UnitSchema),
+                                Diagnostics::from_purpose("tests::check_loop"),
                             )
                             .await
                             .unwrap();

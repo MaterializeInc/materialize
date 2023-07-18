@@ -44,8 +44,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-
-use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
+use mz_sql_parser::ast::{
+    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
+    TransactionIsolationLevel, TransactionMode, WithOptionValue,
+};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -141,6 +143,12 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    PurifiedAlterSource {
+        // The `ALTER SOURCE` plan
+        alter_source: AlterSourcePlan,
+        // The plan to create any subsources added in the `ALTER SOURCE` statement.
+        subsources: Vec<CreateSourcePlans>,
+    },
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
@@ -339,7 +347,7 @@ impl Plan {
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
-            Plan::AlterSource(_) => "alter source",
+            Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
@@ -855,7 +863,14 @@ pub struct AlterSinkPlan {
 #[derive(Debug)]
 pub enum AlterSourceAction {
     Resize(AlterOptionParameter),
-    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+    DropSubsourceExports {
+        to_drop: BTreeSet<GlobalId>,
+    },
+    AddSubsourceExports {
+        subsources: Vec<CreateSourceSubsource<Aug>>,
+        details: Option<WithOptionValue<Aug>>,
+        options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+    },
 }
 
 #[derive(Debug)]

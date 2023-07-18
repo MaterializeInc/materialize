@@ -9,7 +9,6 @@
 
 //! A durable, truncatable log of versions of [State].
 
-use std::borrow::Borrow;
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -21,13 +20,11 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
 use mz_persist::location::{
     Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
-use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
@@ -968,6 +965,11 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
+        use std::borrow::Borrow;
+
+        use mz_ore::collections::HashSet;
+        use timely::PartialOrder;
+
         x.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
                 self.full_batches.insert(x.clone());

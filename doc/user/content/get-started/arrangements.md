@@ -98,7 +98,7 @@ background compaction of historical data.
 ## Analyzing arrangements
 
 Materialize provides various tools that allow you to analyze arrangements,
-although they are post hoc tools best used for debugging, rather than planning
+although they are post-hoc tools best used for debugging, rather than planning
 tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/troubleshooting/)
 and [`EXPLAIN`](/sql/explain/) for more details.
 
@@ -116,7 +116,7 @@ If Materialize cannot detect a primary key, the default key is the full set of
 columns, in order to ensure good data distribution. Creating an unmaterialized
 view and then specifying a custom index makes the key smaller.
 
-For more infromation on when and how to create indexes, see
+For more information on when and how to create indexes, see
 [Optimization](../../ops/optimization/).
 For more in-depth details on joins, see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
 

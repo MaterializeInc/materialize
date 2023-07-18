@@ -40,7 +40,7 @@ use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -1350,7 +1350,7 @@ where
 
                 let (write, since_handle) = this
                     .open_data_handles(
-                        format!("controller data {}", id).as_str(),
+                        &id,
                         metadata.data_shard,
                         description.since.as_ref(),
                         metadata.relation_desc.clone(),
@@ -1912,9 +1912,12 @@ where
         let mut read_handle = persist_client
             .open_leased_reader::<SourceData, (), _, _>(
                 metadata.data_shard,
-                &format!("snapshot {}", id),
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: format!("snapshot {}", id),
+                },
             )
             .await
             .expect("invalid persist usage");
@@ -2533,7 +2536,7 @@ where
     /// current epoch.
     async fn open_data_handles(
         &self,
-        purpose: &str,
+        id: &GlobalId,
         shard: ShardId,
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
@@ -2542,12 +2545,16 @@ where
         WriteHandle<SourceData, (), T, Diff>,
         SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
     ) {
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
         let write = persist_client
             .open_writer(
                 shard,
-                purpose,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
+                diagnostics.clone(),
             )
             .await
             .expect("invalid persist usage");
@@ -2557,7 +2564,7 @@ where
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, purpose)
+                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, diagnostics)
                 .await
                 .expect("invalid persist usage");
 
@@ -2925,7 +2932,7 @@ where
             // already updated all the persistent state (in stash).
             let (write, since_handle) = self
                 .open_data_handles(
-                    format!("controller data for {id}").as_str(),
+                    &id,
                     data_shard,
                     collection_desc.since.as_ref(),
                     relation_desc,
@@ -2974,9 +2981,10 @@ where
                 let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
                     .open_leased_reader(
                         shard_id,
-                        "finalizing shards",
                         Arc::new(RelationDesc::empty()),
                         Arc::new(UnitSchema),
+                        // TODO: thread the global ID into the shard finalization WAL
+                        Diagnostics::from_purpose("finalizing shards"),
                     )
                     .await
                     .expect("invalid persist usage");
@@ -2987,9 +2995,10 @@ where
                     let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
                         .open_writer(
                             shard_id,
-                            "finalizing shards",
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
+                            // TODO: thread the global ID into the shard finalization WAL
+                            Diagnostics::from_purpose("finalizing shards"),
                         )
                         .await
                         .expect("invalid persist usage");
@@ -3032,7 +3041,7 @@ where
     fn check_alter_collection_inner(
         &self,
         id: GlobalId,
-        ingestion: IngestionDescription,
+        mut ingestion: IngestionDescription,
     ) -> Result<(), StorageError> {
         // Check that the client exists.
         self.state.clients.get(&ingestion.instance_id).ok_or(
@@ -3042,9 +3051,6 @@ where
             },
         )?;
 
-        // Describe the ingestion in terms of collection metadata.
-        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
-
         // Take a cloned copy of the description because we are going to treat it as a "scratch
         // space".
         let mut collection_description = self.collection(id)?.description.clone();
@@ -3052,6 +3058,16 @@ where
         // Get the previous storage dependencies; we need these to understand if something has
         // changed in what we depend upon.
         let prev_storage_dependencies = collection_description.get_storage_dependencies();
+
+        // We cannot know the metadata of exports yet to be created, so we have
+        // to remove them. However, we know that adding source exports is
+        // compatible, so still OK to proceed.
+        ingestion
+            .source_exports
+            .retain(|id, _| self.collection(*id).is_ok());
+
+        // Describe the ingestion in terms of collection metadata.
+        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
 
         // Check compatibility between current and new ingestions and install new ingestion in
         // collection description.

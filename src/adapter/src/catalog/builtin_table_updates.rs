@@ -1307,6 +1307,7 @@ impl CatalogState {
                 default_privilege_object
                     .object_type
                     .to_string()
+                    .to_lowercase()
                     .as_str()
                     .into(),
                 grantee.to_string().as_str().into(),

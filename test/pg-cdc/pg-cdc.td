@@ -275,7 +275,7 @@ true
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -615,13 +615,27 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-> CREATE SOURCE enum_source
+! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
     TEXT COLUMNS [
       enum_table.a,
       public.another_enum_table."колона",
       pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+contains:TEXT COLUMNS can only refer to tables being added to source
+
+> CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона"
     ]
   )
   FOR TABLES (

@@ -582,7 +582,7 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{RelationDesc, Row};
 
@@ -604,15 +604,19 @@ mod tests {
         .unwrap();
         let shard_id = ShardId::new();
         let since_handle = client
-            .open_critical_since(shard_id, PersistClient::CONTROLLER_CRITICAL_SINCE, "test")
+            .open_critical_since(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics::for_tests(),
+            )
             .await
             .unwrap();
         let mut write_handle = client
             .open_writer::<SourceData, (), u64, i64>(
                 shard_id,
-                "test",
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .unwrap();

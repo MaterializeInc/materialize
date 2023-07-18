@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroI64;
+use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -743,6 +744,7 @@ where
                 target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: Some(otel_ctx.clone()),
+                requested_at: Instant::now(),
             },
         );
 
@@ -763,27 +765,30 @@ where
 
     /// Cancels existing peek requests.
     pub fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) {
-        // Enqueue the response to the cancelation.
         for uuid in &uuids {
-            let otel_ctx = self
-                .compute
-                .peeks
-                .get_mut(uuid)
-                // Canceled peeks should not be further responded to.
-                .map(|pending| pending.otel_ctx.take())
-                .unwrap_or_else(|| {
-                    tracing::warn!("did not find pending peek for {}", uuid);
-                    None
-                });
-            if let Some(ctx) = otel_ctx {
-                self.compute
-                    .ready_responses
-                    .push_back(ComputeControllerResponse::PeekResponse(
-                        *uuid,
-                        PeekResponse::Canceled,
-                        ctx,
-                    ));
-            }
+            let Some(peek) = self.compute.peeks.get_mut(uuid) else {
+                tracing::warn!("did not find pending peek for {uuid}");
+                continue;
+            };
+
+            // Canceled peeks should not be further responded to.
+            let Some(otel_ctx) = peek.otel_ctx.take() else {
+                tracing::warn!("peek {uuid} has already been served");
+                continue;
+            };
+
+            let response = PeekResponse::Canceled;
+            let duration = peek.requested_at.elapsed();
+            self.compute
+                .metrics
+                .observe_peek_response(&response, duration);
+
+            // Enqueue the response to the cancellation.
+            self.compute
+                .ready_responses
+                .push_back(ComputeControllerResponse::PeekResponse(
+                    *uuid, response, otel_ctx,
+                ));
         }
 
         self.compute.send(ComputeCommand::CancelPeeks { uuids });
@@ -1160,10 +1165,15 @@ where
         // Additionally, we just use the `otel_ctx` from the first worker to
         // respond.
         let replica_targeted = peek.target_replica.unwrap_or(replica_id) == replica_id;
-        let controller_response = if replica_targeted {
-            peek.otel_ctx
-                .take()
-                .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx))
+        let controller_response = if replica_targeted && peek.otel_ctx.take().is_some() {
+            let duration = peek.requested_at.elapsed();
+            self.compute
+                .metrics
+                .observe_peek_response(&response, duration);
+
+            Some(ComputeControllerResponse::PeekResponse(
+                uuid, response, otel_ctx,
+            ))
         } else {
             None
         };
@@ -1268,6 +1278,10 @@ struct PendingPeek<T> {
     /// This value is `Some` as long as we have not yet passed a response up the chain, and `None`
     /// afterwards.
     otel_ctx: Option<OpenTelemetryContext>,
+    /// The time at which the peek was requested.
+    ///
+    /// Used to track peek durations.
+    requested_at: Instant,
 }
 
 impl<T> PendingPeek<T> {

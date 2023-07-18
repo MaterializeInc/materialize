@@ -394,7 +394,7 @@ SHOW COLUMNS FROM mytable WHERE 1 = 2
 ----
 SHOW COLUMNS FROM mytable WHERE 1 = 2
 =>
-Show(ShowColumns(ShowColumnsStatement { table_name: Name(UnresolvedItemName([Ident("mytable")])), filter: Some(Where(Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) })) }))
+Show(ShowColumns(ShowColumnsStatement { table_name: Name(UnresolvedItemName([Ident("mytable")])), filter: Some(Where(Op { op: Op { namespace: None, op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) })) }))
 
 parse-statement
 SHOW FIELDS FROM mytable

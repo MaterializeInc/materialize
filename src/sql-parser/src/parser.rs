@@ -1369,19 +1369,20 @@ impl<'a> Parser<'a> {
     ///   * `OPERATOR("foo"."bar"."baz".@>)`
     fn parse_operator(&mut self) -> Result<Op, ParserError> {
         let mut namespace = vec![];
-        loop {
+        let op = loop {
             match self.next_token() {
                 Some(Token::Keyword(kw)) => namespace.push(kw.into()),
                 Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
-                Some(Token::Op(op)) => return Ok(Op { namespace, op }),
-                Some(Token::Star) => {
-                    let op = String::from("*");
-                    return Ok(Op { namespace, op });
-                }
+                Some(Token::Op(op)) => break op,
+                Some(Token::Star) => break "*".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
             }
             self.expect_token(&Token::Dot)?;
-        }
+        };
+        Ok(Op {
+            namespace: Some(namespace),
+            op,
+        })
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -4170,9 +4171,41 @@ impl<'a> Parser<'a> {
 
         Ok(
             match self
-                .expect_one_of_keywords(&[DROP, RESET, SET, RENAME, OWNER])
+                .expect_one_of_keywords(&[ADD, DROP, RESET, SET, RENAME, OWNER])
                 .map_no_statement_parser_err()?
             {
+                ADD => {
+                    self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
+                        .map_parser_err(StatementKind::AlterSource)?;
+
+                    // TODO: Add IF NOT EXISTS?
+                    let subsources = self
+                        .parse_comma_separated(Parser::parse_subsource_references)
+                        .map_parser_err(StatementKind::AlterSource)?;
+
+                    let options = if self.parse_keyword(WITH) {
+                        self.expect_token(&Token::LParen)
+                            .map_parser_err(StatementKind::AlterSource)?;
+                        let options = self
+                            .parse_comma_separated(Parser::parse_alter_source_add_subsource_option)
+                            .map_parser_err(StatementKind::AlterSource)?;
+                        self.expect_token(&Token::RParen)
+                            .map_parser_err(StatementKind::AlterSource)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name,
+                        if_exists,
+                        action: AlterSourceAction::AddSubsources {
+                            subsources,
+                            details: None,
+                            options,
+                        },
+                    })
+                }
                 DROP => {
                     self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
                         .map_parser_err(StatementKind::AlterSource)?;
@@ -4257,6 +4290,35 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
         )
+    }
+
+    fn parse_alter_source_add_subsource_option(
+        &mut self,
+    ) -> Result<AlterSourceAddSubsourceOption<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[TEXT])? {
+            TEXT => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(AlterSourceAddSubsourceOption {
+                    name: AlterSourceAddSubsourceOptionName::TextColumns,
+                    value,
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserStatementError> {

@@ -157,9 +157,21 @@ def workflow_rehydration(c: Composition) -> None:
         "clusterd1",
     ]
 
-    for (style, clusterd) in [
+    for (style, mz, clusterd) in [
         (
             "with DISK",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    "disk_cluster_replicas_default": "true",
+                    "enable_unmanaged_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                },
+                environment_extra=materialized_environment_extra,
+            ),
             Clusterd(
                 name="clusterd1",
                 options=[
@@ -169,6 +181,18 @@ def workflow_rehydration(c: Composition) -> None:
         ),
         (
             "without DISK",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    "disk_cluster_replicas_default": "true",
+                    "enable_unmanaged_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                },
+                environment_extra=materialized_environment_extra,
+            ),
             Clusterd(
                 name="clusterd1",
             ),
@@ -176,6 +200,7 @@ def workflow_rehydration(c: Composition) -> None:
     ]:
 
         with c.override(
+            mz,
             clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
         ):

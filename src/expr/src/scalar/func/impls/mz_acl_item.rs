@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::EvalError;
+use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 
 sqlfunc!(
@@ -37,5 +38,20 @@ sqlfunc!(
         AclMode::parse_multiple_privileges(&privileges)
             .map(|_| true)
             .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_validate_role_privilege"]
+    fn mz_validate_role_privilege(privilege: String) -> Result<bool, EvalError> {
+        let privilege_upper = privilege.to_uppercase();
+        if privilege_upper != "MEMBER" && privilege_upper != "USAGE" {
+            Err(EvalError::InvalidPrivileges(format!(
+                "{}",
+                privilege.quoted()
+            )))
+        } else {
+            Ok(true)
+        }
     }
 );

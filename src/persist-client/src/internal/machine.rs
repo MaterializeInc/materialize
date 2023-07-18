@@ -31,6 +31,7 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
@@ -51,11 +52,12 @@ use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
 use crate::rpc::PubSubSender;
 use crate::write::WriterId;
-use crate::{PersistConfig, ShardId};
+use crate::{Diagnostics, PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
     pub(crate) applier: Applier<K, V, T, D>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 }
 
 // Impl Clone regardless of the type params.
@@ -63,6 +65,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             applier: self.applier.clone(),
+            isolated_runtime: Arc::clone(&self.isolated_runtime),
         }
     }
 }
@@ -81,6 +84,8 @@ where
         state_versions: Arc<StateVersions>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        diagnostics: Diagnostics,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(
             cfg,
@@ -89,9 +94,13 @@ where
             state_versions,
             shared_states,
             pubsub_sender,
+            diagnostics,
         )
         .await?;
-        Ok(Machine { applier })
+        Ok(Machine {
+            applier,
+            isolated_runtime,
+        })
     }
 
     pub fn shard_id(&self) -> ShardId {
@@ -1125,10 +1134,12 @@ pub mod datadriven {
                 Arc::clone(&state_versions),
                 Arc::clone(&client.shared_states),
                 Arc::new(NoopPubSubSender),
+                Arc::clone(&client.isolated_runtime),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codecs should match");
-            let gc = GarbageCollector::new(machine.clone());
+            let gc = GarbageCollector::new(machine.clone(), Arc::clone(&client.isolated_runtime));
             MachineState {
                 shard_id,
                 client,
@@ -1369,7 +1380,7 @@ pub mod datadriven {
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
-            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            Arc::clone(&datadriven.client.isolated_runtime),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
             since,
@@ -1534,7 +1545,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
-            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            Arc::clone(&datadriven.client.isolated_runtime),
             req,
             schemas,
         )
@@ -1634,9 +1645,9 @@ pub mod datadriven {
             .client
             .open_leased_reader::<String, (), u64, i64>(
                 datadriven.shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("invalid shard types");

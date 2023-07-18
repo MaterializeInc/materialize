@@ -95,6 +95,9 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, the maximum number of pending
     /// compaction requests to queue.
     pub compaction_queue_size: usize,
+    /// In Compactor::compact_and_apply_background, how many updates to encode or
+    /// decode before voluntarily yielding the task.
+    pub compaction_yield_after_n_updates: usize,
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
@@ -169,6 +172,7 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
+            compaction_yield_after_n_updates: 100_000,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,

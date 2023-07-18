@@ -21,7 +21,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::critical::SinceHandle;
@@ -29,7 +29,7 @@ use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -139,9 +139,9 @@ impl Transactor {
         let (mut write, mut read) = client
             .open(
                 shard_id,
-                "maelstrom long-lived",
                 Arc::new(MaelstromKeySchema),
                 Arc::new(MaelstromValSchema),
+                Diagnostics::from_purpose("maelstrom long-lived"),
             )
             .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
@@ -150,7 +150,7 @@ impl Transactor {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                "maelstrom since",
+                Diagnostics::from_purpose("maelstrom since"),
             )
             .await?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
@@ -269,9 +269,9 @@ impl Transactor {
                 .client
                 .open_leased_reader(
                     self.shard_id,
-                    "maelstrom short-lived",
                     Arc::new(MaelstromKeySchema),
                     Arc::new(MaelstromValSchema),
+                    Diagnostics::from_purpose("maelstrom short-lived"),
                 )
                 .await
                 .expect("codecs should match");
@@ -303,7 +303,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            "maelstrom since",
+                            Diagnostics::from_purpose("maelstrom since"),
                         )
                         .await?;
                     continue;
@@ -337,7 +337,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            "maelstrom since",
+                            Diagnostics::from_purpose("maelstrom since"),
                         )
                         .await?;
                     continue;
@@ -671,7 +671,7 @@ impl Service for TransactorService {
             Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.
-        let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+        let isolated_runtime = Arc::new(IsolatedRuntime::new());
         let pubsub_sender = PubSubClientConnection::noop().sender;
         let shared_states = Arc::new(StateCache::new(
             &config,
@@ -683,7 +683,7 @@ impl Service for TransactorService {
             blob,
             consensus,
             metrics,
-            cpu_heavy_runtime,
+            isolated_runtime,
             shared_states,
             pubsub_sender,
         )?;

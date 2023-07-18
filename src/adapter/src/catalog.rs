@@ -673,6 +673,10 @@ impl CatalogState {
         self.roles_by_id.get(id).expect("catalog out of sync")
     }
 
+    pub fn get_roles(&self) -> impl Iterator<Item = &RoleId> {
+        self.roles_by_id.keys()
+    }
+
     fn try_get_role_by_name(&self, role_name: &str) -> Option<&Role> {
         self.roles_by_name
             .get(role_name)
@@ -683,7 +687,7 @@ impl CatalogState {
         self.roles_by_id.get_mut(id).expect("catalog out of sync")
     }
 
-    fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
+    pub(crate) fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         let mut membership = BTreeSet::new();
         let mut queue = VecDeque::from(vec![id]);
         while let Some(cur_id) = queue.pop_front() {

@@ -2408,7 +2408,9 @@ impl fmt::Display for EvalError {
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
             EvalError::InvalidRange(e) => e.fmt(f),
             EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
-            EvalError::InvalidPrivileges(msg) => write!(f, "{msg}"),
+            EvalError::InvalidPrivileges(privilege) => {
+                write!(f, "unrecognized privilege type: {privilege}")
+            }
             EvalError::LetRecLimitExceeded(max_iters) => {
                 write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
                        max_iters)

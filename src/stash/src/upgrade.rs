@@ -45,11 +45,6 @@ use crate::{
     COLLECTION_CONFIG, USER_VERSION_KEY,
 };
 
-pub mod json_to_proto;
-pub mod legacy_types;
-
-pub(crate) mod v13_to_v14;
-pub(crate) mod v14_to_v15;
 pub(crate) mod v15_to_v16;
 pub(crate) mod v16_to_v17;
 pub(crate) mod v17_to_v18;

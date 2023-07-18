@@ -39,7 +39,7 @@ use crate::internal::encoding::{Schemas, SerdeWriterEnrichedHollowBatch};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Upper};
-use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig, ShardId};
+use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -135,7 +135,7 @@ where
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) compact: Option<Compactor<K, V, T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
-    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) schemas: Schemas<K, V>,
 
@@ -160,7 +160,7 @@ where
         gc: GarbageCollector<K, V, T, D>,
         compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
         upper: Antichain<T>,
@@ -173,7 +173,7 @@ where
             gc: gc.clone(),
             compact,
             blob,
-            cpu_heavy_runtime,
+            isolated_runtime,
             writer_id: writer_id.clone(),
             schemas,
             upper,
@@ -550,7 +550,7 @@ where
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             self.machine.shard_id().clone(),
             self.cfg.build_version.clone(),
             Antichain::from_elem(T::minimum()),

@@ -19,6 +19,7 @@ use mz_expr::func;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
+use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
 
@@ -1705,13 +1706,13 @@ macro_rules! privilege_fn {
                             LEFT JOIN mz_roles ON
                                     mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
                         WHERE
-                            mz_roles.oid = $1
+                            mz_internal.mz_aclitem_grantee(privilege) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
                     ),
                     false
                 )
                 END
             ",
-            $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl
+            $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl, RoleId::Public,
         )
     };
 }
@@ -2345,6 +2346,30 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                    ) \
                 END"
             ) => String, 1642;
+        },
+        // The privilege param is validated but ignored. That's because we haven't implemented
+        // noinherit roles, so it has no effect on the result.
+        "pg_has_role" => Scalar {
+            params!(String, String, String) => sql_impl_func("pg_has_role(mz_internal.mz_role_oid($1), mz_internal.mz_role_oid($2), $3)") => Bool, 2705;
+            params!(String, Oid, String) => sql_impl_func("pg_has_role(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2706;
+            params!(Oid, String, String) => sql_impl_func("pg_has_role($1, mz_internal.mz_role_oid($2), $3)") => Bool, 2707;
+            params!(Oid, Oid, String) => sql_impl_func(
+                "CASE
+                -- We need to validate the privilege to return a proper error before anything
+                -- else.
+                WHEN NOT mz_internal.mz_validate_role_privilege($3)
+                OR $1 IS NULL
+                OR $2 IS NULL
+                OR $3 IS NULL
+                THEN NULL
+                WHEN $1 NOT IN (SELECT oid FROM mz_roles)
+                OR $2 NOT IN (SELECT oid FROM mz_roles)
+                THEN false
+                ELSE $2::text IN (SELECT UNNEST(mz_internal.mz_role_oid_memberships() -> $1::text))
+                END",
+            ) => Bool, 2708;
+            params!(String, String) => sql_impl_func("pg_has_role(current_user, $1, $2)") => Bool, 2709;
+            params!(Oid, String) => sql_impl_func("pg_has_role(current_user, $1, $2)") => Bool, 2710;
         },
         // pg_is_in_recovery indicates whether a recovery is still in progress. Materialize does
         // not have a concept of recovery, so we default to always returning false.
@@ -3122,12 +3147,22 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     Some(ncols) => ncols,
                 };
                 let ncols = usize::try_from(ncols).expect("known to be greater than zero");
+
+                // Prevent OOMing if the user requests some extremely large number of columns.
+                let mut column_names = Vec::new();
+                if let Err(_) = column_names.try_reserve(ncols) {
+                    sql_bail!("csv_extract number of columns too large");
+                };
+                for i in 1..=ncols {
+                    column_names.push(format!("column{}", i).into());
+                }
+
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::CsvExtract(ncols),
                         exprs: vec![input],
                     },
-                    column_names: (1..=ncols).map(|i| format!("column{}", i).into()).collect(),
+                    column_names,
                 })
             }) => ReturnType::set_of(RecordAny), oid::FUNC_CSV_EXTRACT_OID;
         },
@@ -3144,7 +3179,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         // OID, and clusters do not have OIDs.
         "has_cluster_privilege" => Scalar {
             params!(String, String, String) => sql_impl_func("has_cluster_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_TEXT_OID;
-            params!(Oid, String, String) => sql_impl_func("
+            params!(Oid, String, String) => sql_impl_func(&format!("
                 CASE
                 -- We need to validate the name and privileges to return a proper error before
                 -- anything else.
@@ -3178,12 +3213,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                             LEFT JOIN mz_roles ON
                                     mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
                         WHERE
-                            mz_roles.oid = $1
+                            mz_internal.mz_aclitem_grantee(privilege) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
                     ),
                     false
                 )
                 END
-            ") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_OID_TEXT_TEXT_OID;
+            ", RoleId::Public)) => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_OID_TEXT_TEXT_OID;
             params!(String, String) => sql_impl_func("has_cluster_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID;
         },
         "has_connection_privilege" => Scalar {
@@ -3204,7 +3239,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "has_system_privilege" => Scalar {
             params!(String, String) => sql_impl_func("has_system_privilege(mz_internal.mz_role_oid($1), $2)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_TEXT_OID;
-            params!(Oid, String) => sql_impl_func("
+            params!(Oid, String) => sql_impl_func(&format!("
                 CASE
                 -- We need to validate the privileges to return a proper error before
                 -- anything else.
@@ -3224,12 +3259,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         LEFT JOIN mz_roles ON
                                 mz_internal.mz_aclitem_grantee(privileges) = mz_roles.id
                         WHERE
-                            mz_roles.oid = $1
+                            mz_internal.mz_aclitem_grantee(privileges) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
                     ),
                     false
                 )
                 END
-            ") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
+            ", RoleId::Public)) => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_OID_TEXT_OID;
             params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
         },
         "has_type_privilege" => Scalar {
@@ -3343,6 +3378,12 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     column_names: vec![]
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
+        },
+        "try_parse_monotonic_iso8601_timestamp" => Scalar {
+            params!(String) => Operation::unary(move |ecx, e| {
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP)?;
+                Ok(e.call_unary(UnaryFunc::TryParseMonotonicIso8601Timestamp(func::TryParseMonotonicIso8601Timestamp)))
+            }) => Timestamp, oid::FUNC_TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP;
         },
         "unnest" => Table {
             vec![ArrayAny] => Operation::unary(move |ecx, e| {
@@ -3553,6 +3594,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
+        "mz_role_oid_memberships" => Scalar {
+            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+        },
         // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
         "mz_database_oid" => Scalar {
             params!(String) => sql_impl_func("
@@ -3614,6 +3658,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         },
         "mz_validate_privileges" => Scalar {
             params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID;
+        },
+        "mz_validate_role_privilege" => Scalar {
+            params!(String) => UnaryFunc::MzValidateRolePrivilege(func::MzValidateRolePrivilege) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
         }
     }
 });

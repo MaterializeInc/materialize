@@ -2817,6 +2817,7 @@ impl<'a> ScalarType {
                 Datum::String("'"),
                 Datum::String("\""),
                 Datum::String("."),
+                Datum::String("2015-09-18T23:56:04.123Z"),
                 Datum::String(&"x".repeat(100)),
                 // Valid timezone.
                 Datum::String("JAPAN"),

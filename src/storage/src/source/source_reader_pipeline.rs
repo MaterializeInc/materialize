@@ -141,6 +141,8 @@ pub struct RawSourceCreationConfig {
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
     /// Configuration parameters, possibly from LaunchDarkly
     pub params: SourceCreationParams,
+    /// The ID of this source remap/progress collection.
+    pub remap_collection_id: GlobalId,
 }
 
 impl RawSourceCreationConfig {
@@ -693,6 +695,7 @@ where
         source_statistics: _,
         shared_remap_upper,
         params: _,
+        remap_collection_id,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -722,6 +725,7 @@ where
             worker_id,
             worker_count,
             remap_relation_desc,
+            remap_collection_id,
         )
         .await
         .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {}", name, e.display_with_causes()));
@@ -849,6 +853,7 @@ where
         source_statistics: _,
         shared_remap_upper: _,
         params: _,
+        remap_collection_id: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();

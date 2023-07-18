@@ -20,8 +20,8 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
-    PlanKind, RaisePlan, RotateKeysPlan,
+    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, CreateSourcePlans,
+    FetchPlan, Plan, PlanKind, RaisePlan, RotateKeysPlan,
 };
 use tracing::{event, Level};
 
@@ -112,7 +112,11 @@ impl Coordinator {
                 let result = self
                     .sequence_create_source(
                         ctx.session_mut(),
-                        vec![(source_id, plan, resolved_ids)],
+                        vec![CreateSourcePlans {
+                            source_id,
+                            plan,
+                            resolved_ids,
+                        }],
                     )
                     .await;
                 ctx.retire(result);
@@ -122,10 +126,6 @@ impl Coordinator {
                     resolved_ids.0.is_empty(),
                     "each plan has separate resolved_ids"
                 );
-                let plans = plans
-                    .into_iter()
-                    .map(|plan| (plan.source_id, plan.plan, plan.resolved_ids))
-                    .collect();
                 let result = self.sequence_create_source(ctx.session_mut(), plans).await;
                 ctx.retire(result);
             }
@@ -352,9 +352,17 @@ impl Coordinator {
                 let result = self.sequence_alter_sink(ctx.session(), plan).await;
                 ctx.retire(result);
             }
-            Plan::AlterSource(plan) => {
-                let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
+            Plan::PurifiedAlterSource {
+                alter_source,
+                subsources,
+            } => {
+                let result = self
+                    .sequence_alter_source(ctx.session_mut(), alter_source, subsources)
+                    .await;
                 ctx.retire(result);
+            }
+            Plan::AlterSource(_) => {
+                unreachable!("ALTER SOURCE must be purified")
             }
             Plan::AlterSystemSet(plan) => {
                 let result = self.sequence_alter_system_set(ctx.session(), plan).await;

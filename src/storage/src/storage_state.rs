@@ -90,7 +90,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::ShardId;
+use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{
@@ -383,9 +383,12 @@ impl SinkHandle {
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
                 .open_leased_reader(
                     shard_id,
-                    &format!("sink::since {}", sink_id),
                     Arc::new(from_relation_desc),
                     Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: sink_id.to_string(),
+                        handle_purpose: format!("sink::since {}", sink_id),
+                    },
                 )
                 .await
                 .expect("opening reader for shard");
@@ -720,10 +723,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 source_resume_uppers,
             } => {
                 info!(
-                    "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
+                    ?as_of,
+                    ?resume_uppers,
+                    "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                    as_of
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
@@ -843,10 +847,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
             }
-            InternalStorageCommand::UpdateConfiguration(pg, rocksdb, auto_spill_config) => self
-                .storage_state
-                .dataflow_parameters
-                .update(pg, rocksdb, auto_spill_config),
+            InternalStorageCommand::UpdateConfiguration {
+                pg,
+                rocksdb,
+                storage_dataflow_max_inflight_bytes,
+                auto_spill_config,
+            } => self.storage_state.dataflow_parameters.update(
+                pg,
+                rocksdb,
+                auto_spill_config,
+                storage_dataflow_max_inflight_bytes,
+            ),
         }
     }
 
@@ -1155,11 +1166,13 @@ impl StorageState {
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
-                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
-                        params.pg_replication_timeouts,
-                        params.upsert_rocksdb_tuning_config,
-                        params.upsert_auto_spill_config,
-                    ))
+                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
+                        pg: params.pg_replication_timeouts,
+                        rocksdb: params.upsert_rocksdb_tuning_config,
+                        storage_dataflow_max_inflight_bytes: params
+                            .storage_dataflow_max_inflight_bytes,
+                        auto_spill_config: params.upsert_auto_spill_config,
+                    })
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {

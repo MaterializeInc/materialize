@@ -227,7 +227,7 @@ With auction data streaming in, you can now explore the unique value of Material
       GROUP BY auctions.item;
     ```
 
-    This view joins data from `auctions` and `bids` to get the average price of bids that arrived befored their auctions closed.
+    This view joins data from `auctions` and `bids` to get the average price of bids that arrived before their auctions closed.
 
     Note that, as in other SQL databases, a view in Materialize is simply an alias for the embedded `SELECT` statement. Materialize computes the results of the query only when the view is called.
 

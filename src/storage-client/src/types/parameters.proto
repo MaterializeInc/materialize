@@ -26,6 +26,7 @@ message ProtoStorageParameters {
     uint64 keep_n_sink_status_history_entries = 7;
     mz_tracing.params.ProtoTracingParameters tracing = 8;
     ProtoUpsertAutoSpillConfig upsert_auto_spill_config = 9;
+    optional uint64 storage_dataflow_max_inflight_bytes = 10;
 }
 
 

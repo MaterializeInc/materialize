@@ -32,7 +32,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
+use crate::scalar::func::{array_create_scalar, format, EagerUnaryFunc, LazyUnaryFunc};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -211,6 +211,23 @@ sqlfunc!(
         a: &'a str,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         strconv::parse_timestamp(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
+    // TODO: Pretty sure this preserves uniqueness, but not 100%.
+    //
+    // Ironically, even though this has "monotonic" in the name, it's not quite
+    // eligible for `#[is_monotone = true]` because any input could also be
+    // mapped to null. So, handle it via SpecialUnary in the interpreter.
+    fn try_parse_monotonic_iso8601_timestamp<'a>(
+        a: &'a str,
+    ) -> Option<CheckedTimestamp<NaiveDateTime>> {
+        let ts = format::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = CheckedTimestamp::from_timestamplike(ts)
+            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
+        Some(ts)
     }
 );
 

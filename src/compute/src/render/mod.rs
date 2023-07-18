@@ -217,6 +217,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     let flow_control = FlowControl {
                         progress_stream: flow_control_input,
                         max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
+                        summary: mz_repr::Timestamp::minimum().step_forward(),
                     };
 
                     // Note: For correctness, we require that sources only emit times advanced by
