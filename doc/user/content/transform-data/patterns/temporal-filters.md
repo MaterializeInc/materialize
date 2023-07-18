@@ -264,4 +264,4 @@ Source materialize.public.events
   pushdown=((mz_now() <= timestamp_to_mz_timestamp((#1 + 00:00:30))))
 ```
 
-The filter in our query appears in the `pushdown=` list at the bottom of the output, so our filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
+The filter in our query appears in the `pushdown=` list at the bottom of the output, so the filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
