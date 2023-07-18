@@ -584,10 +584,10 @@ impl Coordinator {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
             Statement::CreateSource(stmt) => {
-                // Check privileges before purifying.
-                if let Err(e) =
-                    rbac::check_purify_create_source(&catalog, ctx.session(), &resolved_ids)
-                {
+                // Checks if the session is authorized to purify a CREATE SOURCE statement. Usually
+                // authorization is checked after planning, however purification happens before
+                // planning, which may require the use of some connections and secrets.
+                if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
                     return ctx.retire(Err(e));
                 }
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
