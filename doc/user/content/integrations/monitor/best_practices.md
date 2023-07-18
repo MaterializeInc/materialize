@@ -7,8 +7,6 @@ menu:
     name: 
 ---
 
-# Monitoring best practices
-
 This page highlights some of the steps you can take to diagnose and prevent
 `oomkilled` errors in Materialize.
 
@@ -68,7 +66,7 @@ The query above represents the replica sizes and the corresponding compute
 resources they have access to. Based on your average data output, you can use
 this table to determine the correct size for your replicas.
 
-The `mz_interal` system catalog returns metadata about Materialize itself and
+The [`mz_interal` system catalog](https://materialize.com/docs/sql/system-catalog/mz_internal/) returns metadata about Materialize itself and
 the values and structure are subject to change.
 
 ## Incorrect indexing
@@ -96,7 +94,7 @@ and processes a large backlog of data.
 To ensure your data hydration process does not consume all the available memory
 in your cluster, consider the following recommendations:
 
-- A
+[//]: # "TODO(tr0njavolta) "Some recommendations"
 
 ## Increased data
 
@@ -109,5 +107,6 @@ mind.
 We've provided some guies to help you add Materialize to your current monitoring
 solution:
 
+[//]: # "TODO(tr0njavolta) "Add links"
 - Datadog
 - Grafana
