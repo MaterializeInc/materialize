@@ -9,7 +9,11 @@
 
 mode cockroach
 
-# Disabled by default
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_try_parse_monotonic_iso8601_timestamp = false;
+----
+COMPLETE 0
+
 statement error the try_parse_monotonic_iso8601_timestamp function is not supported
 select try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z');
 
