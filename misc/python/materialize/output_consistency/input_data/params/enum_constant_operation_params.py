@@ -38,6 +38,11 @@ TYPE_FORMAT_PARAM = EnumConstantOperationParam(
     add_quotes=True,
 )
 
+ISO8601_TIMESTAMP_PARAM = EnumConstantOperationParam(
+    {"0000-01-01T00:00:00.000Z", "2015-09-18T23:56:04.123Z", "invalid_timestamp"},
+    add_quotes=True,
+)
+
 REGEX_PARAM = EnumConstantOperationParam({".*", "A+", "[ab]"}, add_quotes=True)
 
 REGEX_FLAG_PARAM = EnumConstantOperationParam({"i"}, add_quotes=True, optional=True)
