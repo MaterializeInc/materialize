@@ -88,13 +88,13 @@ class DefaultPrivileges(Check):
                   LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
                   LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
                   ORDER BY role_name, grantee_name;
-                PUBLIC <null> <null> CLUSTER mz_introspection U
-                PUBLIC <null> <null> DATABASE mz_introspection U
-                PUBLIC <null> <null> SCHEMA mz_introspection U
-                PUBLIC <null> <null> TYPE PUBLIC U
-                materialize defpriv_db defpriv_schema TABLE defpriv_role1 arwd
-                materialize defpriv_db defpriv_schema TABLE defpriv_role2 arwd
-                materialize defpriv_db defpriv_schema TABLE defpriv_role3 arwd
+                PUBLIC <null> <null> cluster mz_introspection U
+                PUBLIC <null> <null> database mz_introspection U
+                PUBLIC <null> <null> schema mz_introspection U
+                PUBLIC <null> <null> type PUBLIC U
+                materialize defpriv_db defpriv_schema table defpriv_role1 arwd
+                materialize defpriv_db defpriv_schema table defpriv_role2 arwd
+                materialize defpriv_db defpriv_schema table defpriv_role3 arwd
 
                 > SELECT name, unnest(privileges)::text FROM mz_tables WHERE name LIKE 'defpriv_table%'
                 defpriv_table1 materialize=arwd/materialize
