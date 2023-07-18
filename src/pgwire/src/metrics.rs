@@ -40,16 +40,24 @@ impl Metrics {
 
         // pre-initialize labels we are planning to use to ensure they are all
         // always emitted as time series
-        self_.connection_status("success");
-        self_.connection_status("error");
+        self_.connection_status(false);
+        self_.connection_status(true);
 
         self_
     }
 
-    pub fn connection_status(&self, status: &str) -> IntCounter {
+    pub fn connection_status(&self, is_ok: bool) -> IntCounter {
         self.inner
             .connection_status
-            .with_label_values(&[self.source_label(), status])
+            .with_label_values(&[self.source_label(), Self::status_label(is_ok)])
+    }
+
+    fn status_label(is_ok: bool) -> &'static str {
+        if is_ok {
+            "success"
+        } else {
+            "error"
+        }
     }
 
     fn source_label(&self) -> &'static str {

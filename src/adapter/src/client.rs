@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
-use std::pin;
+use std::pin::{self};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,9 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, INTROSPECTION_USER};
 use mz_sql_parser::parser::ParserStatementError;
+use prometheus::Histogram;
 use serde_json::json;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
@@ -213,7 +215,7 @@ impl Client {
             .execute(EMPTY_PORTAL.into(), futures::future::pending())
             .await?
         {
-            ExecuteResponse::SendingRows { future, span: _ } => match future.await {
+            (ExecuteResponse::SendingRows { future, span: _ }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
@@ -410,17 +412,20 @@ impl SessionClient {
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.send_with_cancel(
-            |tx, session| Command::Execute {
-                portal_name,
-                session,
-                tx,
-                span: tracing::Span::current(),
-            },
-            cancel_future,
-        )
-        .await
+    ) -> Result<(ExecuteResponse, Instant), AdapterError> {
+        let execute_started = Instant::now();
+        let response = self
+            .send_with_cancel(
+                |tx, session| Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    span: tracing::Span::current(),
+                },
+                cancel_future,
+            )
+            .await?;
+        Ok((response, execute_started))
     }
 
     fn now(&self) -> EpochMillis {
@@ -745,5 +750,63 @@ impl Timeout {
         for pending_timeout in timeouts {
             self.tx.send(pending_timeout).expect("rx is in this struct");
         }
+    }
+}
+
+/// A wrapper around an UnboundedReceiver of PeekResponseUnary that records when it sees the
+/// first row data in the given histogram
+#[derive(Debug)]
+pub struct RecordFirstRowStream {
+    pub rows: UnboundedReceiver<PeekResponseUnary>,
+    pub execute_started: Instant,
+    pub time_to_first_row_seconds: Histogram,
+    saw_rows: bool,
+}
+
+impl RecordFirstRowStream {
+    /// Create a new [`RecordFirstRowStream`]
+    pub fn new(
+        rows: UnboundedReceiver<PeekResponseUnary>,
+        execute_started: Instant,
+        client: &SessionClient,
+    ) -> Self {
+        let histogram = Self::histogram(client);
+        Self {
+            rows,
+            execute_started,
+            time_to_first_row_seconds: histogram,
+            saw_rows: false,
+        }
+    }
+
+    fn histogram(client: &SessionClient) -> Histogram {
+        let isolation_level = *client
+            .session
+            .as_ref()
+            .expect("session invariant")
+            .vars()
+            .transaction_isolation();
+
+        client
+            .inner()
+            .metrics()
+            .time_to_first_row_seconds
+            .with_label_values(&[isolation_level.as_str()])
+    }
+
+    /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
+    /// a UnboundedReceiver, you can tell it when to record an observation.
+    pub fn record(execute_started: Instant, client: &SessionClient) {
+        Self::histogram(client).observe(execute_started.elapsed().as_secs_f64());
+    }
+
+    pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
+        let msg = self.rows.recv().await;
+        if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
+            self.saw_rows = true;
+            self.time_to_first_row_seconds
+                .observe(self.execute_started.elapsed().as_secs_f64());
+        }
+        msg
     }
 }

@@ -21,7 +21,8 @@ use futures::future::BoxFuture;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
+use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
     SessionClient,
@@ -304,7 +305,7 @@ enum StatementResult {
     Subscribe {
         desc: RelationDesc,
         tag: String,
-        rx: RowBatchStream,
+        rx: RecordFirstRowStream,
     },
 }
 
@@ -962,7 +963,7 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client
+    let (res, execute_started) = match client
         .execute(EMPTY_PORTAL.into(), futures::future::pending())
         .await
     {
@@ -1043,7 +1044,10 @@ async fn execute_stmt<S: ResultSender>(
             span: _,
         } => {
             let rows = match sender.await_rows(client.canceled(), rows).await? {
-                PeekResponseUnary::Rows(rows) => rows,
+                PeekResponseUnary::Rows(rows) => {
+                    RecordFirstRowStream::record(execute_started, client);
+                    rows
+                },
                 PeekResponseUnary::Error(e) => {
                     return Ok(SqlResult::err(client, e).into());
                 }
@@ -1066,7 +1070,7 @@ async fn execute_stmt<S: ResultSender>(
             StatementResult::Subscribe {
                 tag: "SUBSCRIBE".into(),
                 desc: desc.relation_desc.unwrap(),
-                rx,
+                rx: RecordFirstRowStream::new(rx, execute_started, client),
             }
         },
         res @ (ExecuteResponse::Fetch { .. }

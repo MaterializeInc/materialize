@@ -11,13 +11,15 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
 };
 use mz_adapter::{
     AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
@@ -36,7 +38,8 @@ use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
-use tokio::time::{self, Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::{self};
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
@@ -618,7 +621,7 @@ where
             .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
             .await
         {
-            Ok(response) => {
+            Ok((response, execute_started)) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
@@ -628,6 +631,7 @@ where
                     portal_exec_message,
                     None,
                     ExecuteTimeout::None,
+                    execute_started,
                 )
                 .await
             }
@@ -970,7 +974,6 @@ where
             }
 
             let row_desc = portal.desc.relation_desc.clone();
-
             match &mut portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one. Postgres does this both here and
@@ -978,13 +981,12 @@ where
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
                     self.start_transaction(Some(1));
-
                     match self
                         .adapter_client
                         .execute(portal_name.clone(), self.conn.wait_closed())
                         .await
                     {
-                        Ok(response) => {
+                        Ok((response, execute_started)) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
@@ -994,6 +996,7 @@ where
                                 get_response,
                                 fetch_portal_name,
                                 timeout,
+                                execute_started,
                             )
                             .await
                         }
@@ -1239,7 +1242,7 @@ where
         &'s mut self,
         parent: &'p tracing::Span,
         mut rows: RowsFuture,
-    ) -> Result<RowBatchStream, io::Error>
+    ) -> Result<UnboundedReceiver<PeekResponseUnary>, io::Error>
     where
         'p: 's,
     {
@@ -1278,6 +1281,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
+        execute_started: Instant,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
 
@@ -1334,10 +1338,15 @@ where
 
                 let span = tracing::debug_span!(parent: &span, "send_execute_response");
                 let rows = self.row_future_to_stream(&span, rx).await?;
+
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(rows),
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        rows,
+                        execute_started,
+                        &self.adapter_client,
+                    )),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1382,11 +1391,15 @@ where
                     self.conn.flush().await?;
                 }
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::Tailing");
+                    row_desc.expect("missing row description for ExecuteResponse::Subscribing");
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(rx),
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        rx,
+                        execute_started,
+                        &self.adapter_client,
+                    )),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1412,7 +1425,12 @@ where
                             .await;
                     }
                 };
-                self.copy_rows(format, row_desc, rows).await
+                self.copy_rows(
+                    format,
+                    row_desc,
+                    RecordFirstRowStream::new(rows, execute_started, &self.adapter_client),
+                )
+                .await
             }
             ExecuteResponse::CopyFrom {
                 id,
@@ -1523,9 +1541,10 @@ where
 
         let (mut wait_once, mut deadline) = match timeout {
             ExecuteTimeout::None => (false, None),
-            ExecuteTimeout::Seconds(t) => {
-                (false, Some(Instant::now() + Duration::from_secs_f64(t)))
-            }
+            ExecuteTimeout::Seconds(t) => (
+                false,
+                Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs_f64(t)),
+            ),
             ExecuteTimeout::WaitOnce => (true, None),
         };
 
@@ -1560,7 +1579,7 @@ where
                 let cancel_fut = self.adapter_client.canceled();
                 let notice_fut = self.adapter_client.session().recv_notice();
                 tokio::select! {
-                    _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                    _ = time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     notice = notice_fut => {
                         FetchResult::Notice(notice)
                     }
@@ -1614,11 +1633,10 @@ where
                     // deadline == None). The second time this fn is called it should behave the
                     // same a 0s timeout.
                     if wait_once && !batch_rows.is_empty() {
-                        deadline = Some(Instant::now());
+                        deadline = Some(tokio::time::Instant::now());
                         wait_once = false;
                     }
 
-                    //  let mut batch_rows = batch_rows;
                     // Drain panics if it's > len, so cap it.
                     let drain_rows = cmp::min(want_rows, batch_rows.len());
                     self.send_all(batch_rows.drain(..drain_rows).map(|row| {
@@ -1684,7 +1702,7 @@ where
         &mut self,
         format: CopyFormat,
         row_desc: RelationDesc,
-        mut stream: RowBatchStream,
+        mut stream: RecordFirstRowStream,
     ) -> Result<State, io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,

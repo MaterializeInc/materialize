@@ -12,6 +12,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
+use mz_sql_parser::ast::statement_kind_label_value;
 use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
@@ -27,6 +28,7 @@ pub struct Metrics {
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounterVec,
     pub linearize_message_seconds: HistogramVec,
+    pub time_to_first_row_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -88,6 +90,12 @@ impl Metrics {
                 var_labels: ["type", "immediately_handled"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            time_to_first_row_seconds: registry.register(metric! {
+                name: "mz_time_to_first_row_seconds",
+                help: "Latency of an execute for a successful query from pgwire's perspective",
+                var_labels: ["isolation_level"],
+                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+            }),
         }
     }
 }
@@ -103,68 +111,7 @@ pub(crate) fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
 where
     T: AstInfo,
 {
-    let kind = StatementKind::from(stmt);
-    match kind {
-        StatementKind::Select => "select",
-        StatementKind::Insert => "insert",
-        StatementKind::Copy => "copy",
-        StatementKind::Update => "update",
-        StatementKind::Delete => "delete",
-        StatementKind::CreateConnection => "create_connection",
-        StatementKind::CreateDatabase => "create_database",
-        StatementKind::CreateSchema => "create_schema",
-        StatementKind::CreateWebhookSource => "create_webhook",
-        StatementKind::CreateSource => "create_source",
-        StatementKind::CreateSubsource => "create_subsource",
-        StatementKind::CreateSink => "create_sink",
-        StatementKind::CreateView => "create_view",
-        StatementKind::CreateMaterializedView => "create_materialized_view",
-        StatementKind::CreateTable => "create_table",
-        StatementKind::CreateIndex => "create_index",
-        StatementKind::CreateType => "create_type",
-        StatementKind::CreateRole => "create_role",
-        StatementKind::CreateCluster => "create_cluster",
-        StatementKind::CreateClusterReplica => "create_cluster_replica",
-        StatementKind::CreateSecret => "create_secret",
-        StatementKind::AlterCluster => "alter_cluster",
-        StatementKind::AlterObjectRename => "alter_object_rename",
-        StatementKind::AlterIndex => "alter_index",
-        StatementKind::AlterRole => "alter_role",
-        StatementKind::AlterSecret => "alter_secret",
-        StatementKind::AlterSink => "alter_sink",
-        StatementKind::AlterSource => "alter_source",
-        StatementKind::AlterSystemSet => "alter_system_set",
-        StatementKind::AlterSystemReset => "alter_system_reset",
-        StatementKind::AlterSystemResetAll => "alter_system_reset_all",
-        StatementKind::AlterOwner => "alter_owner",
-        StatementKind::AlterConnection => "alter_connection",
-        StatementKind::Discard => "discard",
-        StatementKind::DropObjects => "drop_objects",
-        StatementKind::DropOwned => "drop_owned",
-        StatementKind::SetVariable => "set_variable",
-        StatementKind::ResetVariable => "reset_variable",
-        StatementKind::Show => "show",
-        StatementKind::StartTransaction => "start_transaction",
-        StatementKind::SetTransaction => "set_transaction",
-        StatementKind::Commit => "commit",
-        StatementKind::Rollback => "rollback",
-        StatementKind::Subscribe => "subscribe",
-        StatementKind::Explain => "explain",
-        StatementKind::Declare => "declare",
-        StatementKind::Fetch => "fetch",
-        StatementKind::Close => "close",
-        StatementKind::Prepare => "prepare",
-        StatementKind::Execute => "execute",
-        StatementKind::Deallocate => "deallocate",
-        StatementKind::Raise => "raise",
-        StatementKind::GrantRole => "grant_role",
-        StatementKind::RevokeRole => "revoke_role",
-        StatementKind::GrantPrivileges => "grant_privileges",
-        StatementKind::RevokePrivileges => "revoke_privileges",
-        StatementKind::AlterDefaultPrivileges => "alter_default_privileges",
-        StatementKind::ReassignOwned => "reassign_owned",
-        StatementKind::ValidateConnection => "validate_connection",
-    }
+    statement_kind_label_value(StatementKind::from(stmt))
 }
 
 pub(crate) fn subscribe_output_label_value<T>(output: &SubscribeOutput<T>) -> &'static str
