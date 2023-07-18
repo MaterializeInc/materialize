@@ -35,6 +35,7 @@ class QueryTemplate:
         contains_aggregations: bool,
         row_selection: DataRowSelection,
     ) -> None:
+        assert storage_layout != ValueStorageLayout.ANY
         self.expect_error = expect_error
         self.select_expressions: List[Expression] = select_expressions
         self.where_expression = where_expression

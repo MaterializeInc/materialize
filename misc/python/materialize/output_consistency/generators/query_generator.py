@@ -188,7 +188,12 @@ class QueryGenerator:
 
         queries = []
         for expression in expressions:
-            row_selection = self._select_rows(expression.storage_layout)
+            storage_layout = expression.storage_layout
+
+            if storage_layout == ValueStorageLayout.ANY:
+                storage_layout = ValueStorageLayout.VERTICAL
+
+            row_selection = self._select_rows(storage_layout)
 
             ignore_verdict = self.ignore_filter.shall_ignore_expression(
                 expression, row_selection
@@ -202,7 +207,7 @@ class QueryGenerator:
                     expression.is_expect_error,
                     [expression],
                     None,
-                    expression.storage_layout,
+                    storage_layout,
                     False,
                     row_selection,
                 )
@@ -211,7 +216,9 @@ class QueryGenerator:
         return queries
 
     def _select_rows(self, storage_layout: ValueStorageLayout) -> DataRowSelection:
-        if storage_layout == ValueStorageLayout.HORIZONTAL:
+        if storage_layout == ValueStorageLayout.ANY:
+            raise RuntimeError("Unresolved storage layout")
+        elif storage_layout == ValueStorageLayout.HORIZONTAL:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
             if self.randomized_picker.random_boolean(
