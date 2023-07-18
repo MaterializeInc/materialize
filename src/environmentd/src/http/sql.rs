@@ -962,7 +962,7 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client
+    let (res, _execute_started) = match client
         .execute(EMPTY_PORTAL.into(), futures::future::pending())
         .await
     {

@@ -215,7 +215,7 @@ impl Client {
             .execute(EMPTY_PORTAL.into(), futures::future::pending())
             .await?
         {
-            ExecuteResponse::SendingRows { future, span: _ } => match future.await {
+            (ExecuteResponse::SendingRows { future, span: _ }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
@@ -412,17 +412,20 @@ impl SessionClient {
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.send_with_cancel(
-            |tx, session| Command::Execute {
-                portal_name,
-                session,
-                tx,
-                span: tracing::Span::current(),
-            },
-            cancel_future,
-        )
-        .await
+    ) -> Result<(ExecuteResponse, Instant), AdapterError> {
+        let execute_started = Instant::now();
+        let response = self
+            .send_with_cancel(
+                |tx, session| Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    span: tracing::Span::current(),
+                },
+                cancel_future,
+            )
+            .await?;
+        Ok((response, execute_started))
     }
 
     fn now(&self) -> EpochMillis {
@@ -787,7 +790,7 @@ impl RecordFirstRowStream {
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
         let msg = self.rows.recv().await;
-        if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) 
+        if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
                 .observe(self.execute_started.elapsed().as_secs_f64());

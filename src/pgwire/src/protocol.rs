@@ -616,13 +616,12 @@ where
             }
         }
 
-        let execute_started = Instant::now();
         let result = match self
             .adapter_client
             .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
             .await
         {
-            Ok(response) => {
+            Ok((response, execute_started)) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
@@ -982,13 +981,12 @@ where
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
                     self.start_transaction(Some(1));
-                    let execute_started = Instant::now();
                     match self
                         .adapter_client
                         .execute(portal_name.clone(), self.conn.wait_closed())
                         .await
                     {
-                        Ok(response) => {
+                        Ok((response, execute_started)) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
