@@ -10,9 +10,8 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
-use std::pin::{self, Pin};
+use std::pin::{self};
 use std::sync::Arc;
-use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -761,28 +760,6 @@ pub struct RecordFirstRowStream {
     saw_rows: bool,
 }
 
-impl Future for RecordFirstRowStream {
-    type Output = Option<PeekResponseUnary>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        let ret = self.as_mut().rows.poll_recv(cx);
-        if let Poll::Ready(msg) = &ret {
-            match &msg {
-                Some(PeekResponseUnary::Rows(_)) => {
-                    if !self.saw_rows {
-                        self.saw_rows = true;
-                        self.time_to_first_row_seconds
-                            .observe(self.execute_started.elapsed().as_secs_f64())
-                    }
-                }
-                Some(PeekResponseUnary::Canceled) | Some(PeekResponseUnary::Error(_)) | None => (),
-            }
-        }
-
-        ret
-    }
-}
-
 impl RecordFirstRowStream {
     /// Create a new [`RecordFirstRowStream`]
     pub fn new(
@@ -809,6 +786,17 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        self.await
+        let msg = self.rows.recv().await;
+        match &msg {
+            Some(PeekResponseUnary::Rows(_)) => {
+                if !self.saw_rows {
+                    self.saw_rows = true;
+                    self.time_to_first_row_seconds
+                        .observe(self.execute_started.elapsed().as_secs_f64())
+                }
+            }
+            Some(PeekResponseUnary::Canceled) | Some(PeekResponseUnary::Error(_)) | None => (),
+        }
+        msg
     }
 }
