@@ -49,6 +49,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_stats_filter_enabled": "true",
     "persist_stats_collection_enabled": "true",
     "persist_stats_audit_percent": "100",
+    "enable_arrangement_size_logging": "true",
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
