@@ -93,7 +93,7 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             last_statements_desc = self.last_statements.copy()
             last_statements_desc.reverse()
             statements_str = "\n".join(
-                f"* {statement}" for statement in last_statements_desc
+                f"  {statement}" for statement in last_statements_desc
             )
             print(
                 f"Last {len(last_statements_desc)} queries in descending order:\n{statements_str}"
