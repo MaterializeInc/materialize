@@ -47,7 +47,7 @@ These two functions will help implement the `SHOW` commands described below.
 
 Will show all privileges held by the current session.
 
-The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FROM <schema-name>]`.
+The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FROM <schema-name>] [FOR <role>]`.
 
 - `ON <object-type>` will filter the output to only include objects of type `<object-type>`. Valid
   values are:
@@ -63,10 +63,12 @@ The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FROM <schema-name>]`.
     - `DATABASES`
     - `SCHEMAS`
     - `SYSTEM`
-- `FROM <schema-name>` will filter the output to only exclude objects in a schema other `<schema-name>`.
+- `FROM <schema-name>` will filter the output to exclude objects in a schema other `<schema-name>`.
     - If specified, top level objects, such as database, schemas, and clusters are not included.
     - If not specified then objects are limited to the current schema and top level objects are
     - shown.
+- `FOR <role>` will filter the output to only include privileges granted to `<role>` instead of the
+current session.
 
 The output will include the following columns:
 
@@ -162,7 +164,10 @@ SHOW DEFAULT PRIVILEGES ON TABLES;
 
 Will show the role membership of the current session.
 
-The syntax will be: `SHOW ROLE MEMBERSHIPS`.
+The syntax will be: `SHOW ROLE MEMBERSHIPS [FOR <role>]`.
+
+- `FOR <role>` will filter the output to only include roles that `<role>` is a member of instead of
+the current session.
 
 The output will include the following columns:
 
