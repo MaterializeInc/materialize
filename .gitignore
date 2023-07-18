@@ -41,5 +41,5 @@ scratch
 **/flake.lock
 
 /misc/python/materialize/build/
-/misc/python/materialize/mz_test_base.egg-info/
+/misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
