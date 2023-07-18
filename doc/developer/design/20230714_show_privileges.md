@@ -81,9 +81,9 @@ SHOW PRIVILEGES;
 
  name       | object_type | privileges
 ------------+-------------+----------------
- my_table   | TABLE       | SELECT, INSERT
- my_view    | VIEW        | SELECT
- my_cluster | CLUSTER     | CREATE
+ my_table   | table       | SELECT, INSERT
+ my_view    | view        | SELECT
+ my_cluster | cluster     | CREATE
 ```
 
 ```sql
@@ -91,7 +91,7 @@ SHOW PRIVILEGES ON TABLES;
 
  name       | object_type | privileges
 ------------+-------------+----------------
- my_table   | TABLE       | SELECT, INSERT
+ my_table   | table       | SELECT, INSERT
 ```
 
 ```sql
@@ -99,8 +99,8 @@ SHOW PRIVILEGES FROM public;
 
  name       | object_type | privileges
 ------------+-------------+----------------
- my_table   | TABLE       | SELECT, INSERT
- my_view    | VIEW        | SELECT
+ my_table   | table       | SELECT, INSERT
+ my_view    | view        | SELECT
 ```
 
 ```sql
@@ -108,7 +108,7 @@ SHOW PRIVILEGES ON VIEWS FROM public;
 
  name       | object_type | privileges
 ------------+-------------+----------------
- my_view    | VIEW        | SELECT
+ my_view    | view        | SELECT
 ```
 
 ### `SHOW DEFAULT PRIVILEGES`
@@ -147,9 +147,9 @@ SHOW DEFAULT PRIVILEGES;
 
  role   | database    | schema | object_type | grantee   | privileges
 --------+-------------+--------+-------------+-----------+----------------
- PUBLIC | NULL        | NULL   | TABLE       | dev       | INSERT, SELECT
- joe    | materialize | NULL   | VIEW        | PUBLIC    | SELECT
- qa     | materialize | public | TYPE        | scientist | USAGE
+ PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
+ joe    | materialize | NULL   | view        | PUBLIC    | SELECT
+ qa     | materialize | public | type        | scientist | USAGE
 ```
 
 ```sql
@@ -157,7 +157,7 @@ SHOW DEFAULT PRIVILEGES ON TABLES;
 
  role   | database    | schema | object_type | grantee   | privileges
 --------+-------------+--------+-------------+-----------+----------------
- PUBLIC | NULL        | NULL   | TABLE       | dev       | INSERT, SELECT
+ PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
 ```
 
 ### `SHOW ROLE MEMBERSHIP`
