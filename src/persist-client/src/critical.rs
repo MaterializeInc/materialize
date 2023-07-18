@@ -339,7 +339,7 @@ mod tests {
     use serde_json::json;
 
     use crate::tests::new_test_client;
-    use crate::{PersistClient, ShardId};
+    use crate::{Diagnostics, PersistClient, ShardId};
 
     use super::*;
 
@@ -383,7 +383,11 @@ mod tests {
         let shard_id = crate::ShardId::new();
 
         let mut since = client
-            .open_critical_since::<(), (), u64, i64, i64>(shard_id, CriticalReaderId::new(), "")
+            .open_critical_since::<(), (), u64, i64, i64>(
+                shard_id,
+                CriticalReaderId::new(),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("codec mismatch");
 
@@ -412,7 +416,7 @@ mod tests {
             .open_critical_since::<(), (), u64, i64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                "",
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
@@ -432,7 +436,7 @@ mod tests {
             .open_critical_since::<(), (), u64, i64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                "",
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");

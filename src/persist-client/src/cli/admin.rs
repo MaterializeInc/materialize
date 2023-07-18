@@ -39,7 +39,7 @@ use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
-use crate::{Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
+use crate::{Diagnostics, Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
 
 /// Commands for read-write administration of persist state
 #[derive(Debug, clap::Args)]
@@ -439,6 +439,7 @@ async fn make_machine(
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
         Arc::new(IsolatedRuntime::new()),
+        Diagnostics::from_purpose("admin"),
     )
     .await?;
 

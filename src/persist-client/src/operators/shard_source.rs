@@ -42,7 +42,7 @@ use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::stats::PartStats;
-use crate::{PersistLocation, ShardId};
+use crate::{Diagnostics, PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -271,9 +271,12 @@ where
             let read = client
                 .open_leased_reader::<K, V, G::Timestamp, D>(
                     shard_id,
-                    &format!("shard_source({})", name_owned),
                     key_schema,
                     val_schema,
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source({})", name_owned),
+                    }
                 )
                 .await
                 .expect("could not open persist shard");
@@ -621,6 +624,7 @@ where
     );
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
@@ -629,7 +633,15 @@ where
                 .await
                 .expect("location should be valid");
             client
-                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
+                .create_batch_fetcher::<K, V, T, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+                    },
+                )
                 .await
         };
 
@@ -674,7 +686,7 @@ mod tests {
 
     use crate::cache::PersistClientCache;
     use crate::operators::shard_source::shard_source;
-    use crate::{PersistLocation, ShardId};
+    use crate::{Diagnostics, PersistLocation, ShardId};
 
     /// Verifies that a `shard_source` will downgrade it's output frontier to
     /// the `since` of the shard when no explicit `as_of` is given. Even if
@@ -806,9 +818,9 @@ mod tests {
         let mut read_handle = persist_client
             .open_leased_reader::<String, String, u64, u64>(
                 shard_id,
-                "tests",
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("invalid usage");

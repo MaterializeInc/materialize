@@ -22,6 +22,7 @@ use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
@@ -336,9 +337,15 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!(
+                        "compute::persist_sink::mint_batch_descriptions {}",
+                        sink_id
+                    ),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -614,9 +621,12 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("compute::persist_sink::write_batches {}", sink_id),
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!("compute::persist_sink::write_batches {}", sink_id),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -970,9 +980,12 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("persist_sink::append_batches {}", sink_id),
                 Arc::new(target_relation_desc),
-                Arc::new(UnitSchema)
+                Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!("persist_sink::append_batches {}", sink_id),
+                },
             )
             .await
             .expect("could not open persist shard");

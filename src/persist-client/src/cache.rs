@@ -38,7 +38,7 @@ use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsens
 use crate::internal::state::TypedState;
 use crate::internal::watch::StateWatchNotifier;
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
-use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
+use crate::{Diagnostics, PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
 ///
@@ -401,6 +401,7 @@ impl StateCache {
         &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
+        diagnostics: &Diagnostics,
     ) -> Result<Arc<LockingTypedState<K, V, T, D>>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
@@ -442,6 +443,7 @@ impl StateCache {
                                 Arc::clone(&self.metrics),
                                 Arc::clone(&self.cfg),
                                 Arc::clone(&self.pubsub_sender).subscribe(&shard_id),
+                                diagnostics,
                             ));
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
@@ -568,13 +570,14 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         metrics: Arc<Metrics>,
         cfg: Arc<PersistConfig>,
         subscription_token: Arc<ShardSubscriptionToken>,
+        diagnostics: &Diagnostics,
     ) -> Self {
         Self {
             shard_id,
             notifier: StateWatchNotifier::new(Arc::clone(&metrics)),
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
-            shard_metrics: metrics.shards.shard(&shard_id),
+            shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
             metrics,
             _subscription_token: subscription_token,
         }
@@ -757,8 +760,12 @@ mod tests {
         // Panic'ing during init_fn .
         let s = Arc::clone(&states);
         let res = spawn(|| "test", async move {
-            s.get::<(), (), u64, i64, _, _>(s1, || async { panic!("boom") })
-                .await
+            s.get::<(), (), u64, i64, _, _>(
+                s1,
+                || async { panic!("boom") },
+                &Diagnostics::for_tests(),
+            )
+            .await
         })
         .await;
         assert!(res.is_err());
@@ -766,12 +773,16 @@ mod tests {
 
         // Returning an error from init_fn doesn't initialize an entry in the cache.
         let res = states
-            .get::<(), (), u64, i64, _, _>(s1, || async {
-                Err(Box::new(CodecMismatch {
-                    requested: ("".into(), "".into(), "".into(), "".into(), None),
-                    actual: ("".into(), "".into(), "".into(), "".into(), None),
-                }))
-            })
+            .get::<(), (), u64, i64, _, _>(
+                s1,
+                || async {
+                    Err(Box::new(CodecMismatch {
+                        requested: ("".into(), "".into(), "".into(), "".into(), None),
+                        actual: ("".into(), "".into(), "".into(), "".into(), None),
+                    }))
+                },
+                &Diagnostics::for_tests(),
+            )
             .await;
         assert!(res.is_err());
         assert_eq!(states.initialized_count(), 0);
@@ -779,13 +790,17 @@ mod tests {
         // Initialize one shard.
         let did_work = Arc::new(AtomicBool::new(false));
         let s1_state1 = states
-            .get::<(), (), u64, i64, _, _>(s1, || {
-                let did_work = Arc::clone(&did_work);
-                async move {
-                    did_work.store(true, Ordering::SeqCst);
-                    Ok(new_state(s1))
-                }
-            })
+            .get::<(), (), u64, i64, _, _>(
+                s1,
+                || {
+                    let did_work = Arc::clone(&did_work);
+                    async move {
+                        did_work.store(true, Ordering::SeqCst);
+                        Ok(new_state(s1))
+                    }
+                },
+                &Diagnostics::for_tests(),
+            )
             .await
             .expect("should successfully initialize");
         assert_eq!(did_work.load(Ordering::SeqCst), true);
@@ -795,14 +810,18 @@ mod tests {
         // Trying to initialize it again does no work and returns the same state.
         let did_work = Arc::new(AtomicBool::new(false));
         let s1_state2 = states
-            .get::<(), (), u64, i64, _, _>(s1, || {
-                let did_work = Arc::clone(&did_work);
-                async move {
-                    did_work.store(true, Ordering::SeqCst);
-                    did_work.store(true, Ordering::SeqCst);
-                    Ok(new_state(s1))
-                }
-            })
+            .get::<(), (), u64, i64, _, _>(
+                s1,
+                || {
+                    let did_work = Arc::clone(&did_work);
+                    async move {
+                        did_work.store(true, Ordering::SeqCst);
+                        did_work.store(true, Ordering::SeqCst);
+                        Ok(new_state(s1))
+                    }
+                },
+                &Diagnostics::for_tests(),
+            )
             .await
             .expect("should successfully initialize");
         assert_eq!(did_work.load(Ordering::SeqCst), false);
@@ -813,13 +832,17 @@ mod tests {
         // Trying to initialize with different types doesn't work.
         let did_work = Arc::new(AtomicBool::new(false));
         let res = states
-            .get::<String, (), u64, i64, _, _>(s1, || {
-                let did_work = Arc::clone(&did_work);
-                async move {
-                    did_work.store(true, Ordering::SeqCst);
-                    Ok(new_state(s1))
-                }
-            })
+            .get::<String, (), u64, i64, _, _>(
+                s1,
+                || {
+                    let did_work = Arc::clone(&did_work);
+                    async move {
+                        did_work.store(true, Ordering::SeqCst);
+                        Ok(new_state(s1))
+                    }
+                },
+                &Diagnostics::for_tests(),
+            )
             .await;
         assert_eq!(did_work.load(Ordering::SeqCst), false);
         assert_eq!(
@@ -832,13 +855,21 @@ mod tests {
         // We can add a shard of a different type.
         let s2 = ShardId::new();
         let s2_state1 = states
-            .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
+            .get::<String, (), u64, i64, _, _>(
+                s2,
+                || async { Ok(new_state(s2)) },
+                &Diagnostics::for_tests(),
+            )
             .await
             .expect("should successfully initialize");
         assert_eq!(states.initialized_count(), 2);
         assert_eq!(states.strong_count(), 2);
         let s2_state2 = states
-            .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
+            .get::<String, (), u64, i64, _, _>(
+                s2,
+                || async { Ok(new_state(s2)) },
+                &Diagnostics::for_tests(),
+            )
             .await
             .expect("should successfully initialize");
         assert_same(&s2_state1, &s2_state2);
@@ -854,7 +885,11 @@ mod tests {
 
         // But we can re-init that shard if necessary.
         let s1_state1 = states
-            .get::<(), (), u64, i64, _, _>(s1, || async { Ok(new_state(s1)) })
+            .get::<(), (), u64, i64, _, _>(
+                s1,
+                || async { Ok(new_state(s1)) },
+                &Diagnostics::for_tests(),
+            )
             .await
             .expect("should successfully initialize");
         assert_eq!(states.initialized_count(), 2);
@@ -871,17 +906,22 @@ mod tests {
         const COUNT: usize = 1000;
         let id = ShardId::new();
         let cache = StateCache::new_no_metrics();
+        let diagnostics = Diagnostics::for_tests();
 
         let mut futures = (0..COUNT)
             .map(|_| {
-                cache.get::<(), (), u64, i64, _, _>(id, || async {
-                    Ok(TypedState::new(
-                        DUMMY_BUILD_INFO.semver_version(),
-                        id,
-                        "host".into(),
-                        0,
-                    ))
-                })
+                cache.get::<(), (), u64, i64, _, _>(
+                    id,
+                    || async {
+                        Ok(TypedState::new(
+                            DUMMY_BUILD_INFO.semver_version(),
+                            id,
+                            "host".into(),
+                            0,
+                        ))
+                    },
+                    &diagnostics,
+                )
             })
             .collect::<FuturesUnordered<_>>();
 

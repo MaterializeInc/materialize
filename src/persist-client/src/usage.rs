@@ -197,7 +197,7 @@ impl StorageUsageClient {
             .check_ts_codec()
             .expect("ts should be a u64 in all prod shards");
 
-        let shard_metrics = &self.metrics.shards.shard(&shard_id);
+        let shard_metrics = &self.metrics.shards.shard(&shard_id, "unknown");
         shard_metrics
             .gc_live_diffs
             .set(u64::cast_from(states_iter.len()));
@@ -441,7 +441,7 @@ impl StorageUsageClient {
             .inc_by(now.duration_since(start).as_secs_f64());
         start = now;
 
-        let shard_metrics = self.metrics.shards.shard(&shard_id);
+        let shard_metrics = self.metrics.shards.shard(&shard_id, "unknown");
         shard_metrics
             .gc_live_diffs
             .set(u64::cast_from(states_iter.len()));

@@ -193,7 +193,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::Row;
     use mz_storage_client::types::sources::SourceData;
@@ -515,9 +515,9 @@ mod tests {
         let (write_handle, mut read_handle) = persist_client
             .open::<SourceData, (), mz_repr::Timestamp, i64>(
                 shard_id,
-                "tests::dump_storage_collection",
                 Arc::new(MZ_SINK_STATUS_HISTORY_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::from_purpose("tests::dump_storage_collection"),
             )
             .await
             .unwrap();

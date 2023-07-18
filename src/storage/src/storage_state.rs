@@ -90,7 +90,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::ShardId;
+use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{
@@ -383,9 +383,12 @@ impl SinkHandle {
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
                 .open_leased_reader(
                     shard_id,
-                    &format!("sink::since {}", sink_id),
                     Arc::new(from_relation_desc),
                     Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: sink_id.to_string(),
+                        handle_purpose: format!("sink::since {}", sink_id),
+                    },
                 )
                 .await
                 .expect("opening reader for shard");

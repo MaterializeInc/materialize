@@ -52,7 +52,7 @@ use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
 use crate::rpc::PubSubSender;
 use crate::write::WriterId;
-use crate::{PersistConfig, ShardId};
+use crate::{Diagnostics, PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
@@ -85,6 +85,7 @@ where
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
         isolated_runtime: Arc<IsolatedRuntime>,
+        diagnostics: Diagnostics,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(
             cfg,
@@ -93,6 +94,7 @@ where
             state_versions,
             shared_states,
             pubsub_sender,
+            diagnostics,
         )
         .await?;
         Ok(Machine {
@@ -1133,6 +1135,7 @@ pub mod datadriven {
                 Arc::clone(&client.shared_states),
                 Arc::new(NoopPubSubSender),
                 Arc::clone(&client.isolated_runtime),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codecs should match");
@@ -1642,9 +1645,9 @@ pub mod datadriven {
             .client
             .open_leased_reader::<String, (), u64, i64>(
                 datadriven.shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("invalid shard types");

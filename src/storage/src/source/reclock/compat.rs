@@ -24,6 +24,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc};
@@ -75,6 +76,7 @@ where
         //
         // TODO(guswynn): use the type-system to prevent misuse here.
         remap_relation_desc: RelationDesc,
+        remap_collection_id: GlobalId,
     ) -> anyhow::Result<Self> {
         let remap_shard = metadata.remap_shard.ok_or_else(|| {
             anyhow!("cannot create remap PersistHandle for collection without remap shard")
@@ -88,9 +90,12 @@ where
         let (write_handle, mut read_handle) = persist_client
             .open(
                 remap_shard,
-                &format!("reclock {}", id),
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: remap_collection_id.to_string(),
+                    handle_purpose: format!("reclock for {}", id),
+                },
             )
             .await
             .context("error opening persist shard")?;

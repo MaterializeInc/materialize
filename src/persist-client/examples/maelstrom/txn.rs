@@ -29,7 +29,7 @@ use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -139,9 +139,9 @@ impl Transactor {
         let (mut write, mut read) = client
             .open(
                 shard_id,
-                "maelstrom long-lived",
                 Arc::new(MaelstromKeySchema),
                 Arc::new(MaelstromValSchema),
+                Diagnostics::from_purpose("maelstrom long-lived"),
             )
             .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
@@ -150,7 +150,7 @@ impl Transactor {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                "maelstrom since",
+                Diagnostics::from_purpose("maelstrom since"),
             )
             .await?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
@@ -269,9 +269,9 @@ impl Transactor {
                 .client
                 .open_leased_reader(
                     self.shard_id,
-                    "maelstrom short-lived",
                     Arc::new(MaelstromKeySchema),
                     Arc::new(MaelstromValSchema),
+                    Diagnostics::from_purpose("maelstrom short-lived"),
                 )
                 .await
                 .expect("codecs should match");
@@ -303,7 +303,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            "maelstrom since",
+                            Diagnostics::from_purpose("maelstrom since"),
                         )
                         .await?;
                     continue;
@@ -337,7 +337,7 @@ impl Transactor {
                         .open_critical_since(
                             self.shard_id,
                             PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            "maelstrom since",
+                            Diagnostics::from_purpose("maelstrom since"),
                         )
                         .await?;
                     continue;
