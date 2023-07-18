@@ -669,16 +669,9 @@ fn generate_required_privileges(
                              timeline: _,
                              cluster_config,
                          },
-                     resolved_ids,
+                     resolved_ids: _,
                  }| {
-                    generate_required_source_privileges(
-                        catalog,
-                        name,
-                        cluster_config,
-                        resolved_ids,
-                        role_id,
-                    )
-                    .into_iter()
+                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
                 },
             )
             .collect(),
