@@ -9,7 +9,7 @@ menu:
     parent: 'sql-patterns'
 ---
 
-A "temporal filter" is a `WHERE` or `HAVING` clause which uses the [`mz_now`](/sql/functions/now_and_mz_now) function.
+A _temporal filter_ is a `WHERE` or `HAVING` clause which uses the [`mz_now()`](/sql/functions/now_and_mz_now) function.
 This function returns Materialize's current virtual timestamp, which works to keep up with real time as data is processed.
 Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
 
