@@ -56,7 +56,7 @@ ERROR_RE = re.compile(
     # Expected once compute cluster has panicked, only happens in CI
     (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
     # Emitted by webhook source tests that explicitly panic the validation.
-    (?!.*panic\ while\ validating\ webhook\ request')
+    (?!.*webhook\ panic\ test')
     """,
     re.VERBOSE,
 )

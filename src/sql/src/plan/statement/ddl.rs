@@ -113,10 +113,10 @@ use crate::plan::{
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateWebhookSourcePlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
-    FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
+    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
+    View,
 };
 use crate::session::vars;
 
@@ -399,6 +399,7 @@ pub fn plan_create_webhook_source(
         body_format,
         include_headers,
         validate_using,
+        in_cluster,
     } = stmt;
 
     let validate_using = validate_using
@@ -453,6 +454,8 @@ pub fn plan_create_webhook_source(
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
 
+    let cluster_config = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
+
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -468,13 +471,16 @@ pub fn plan_create_webhook_source(
     // such, we always use a default of EpochMilliseconds.
     let timeline = Timeline::EpochMilliseconds;
 
-    Ok(Plan::CreateWebhookSource(CreateWebhookSourcePlan {
+    Ok(Plan::CreateSource(CreateSourcePlan {
         name,
+        source: Source {
+            create_sql,
+            data_source: DataSourceDesc::Webhook { validate_using },
+            desc,
+        },
         if_not_exists,
-        desc,
-        create_sql,
         timeline,
-        validate_using,
+        cluster_config,
     }))
 }
 

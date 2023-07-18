@@ -12,9 +12,13 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
+# Create a cluster to install all of our webhook sources on.
+statement ok
+CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+
 # We shouldn't be able to create a webhook source unless the feature is enabled.
 statement error creating or pushing data to webhook sources is not supported
-CREATE SOURCE webhook_bytes FROM WEBHOOK
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT BYTES
 
 simple conn=mz_system,user=mz_system
@@ -27,7 +31,7 @@ COMPLETE 0
 #
 
 statement ok
-CREATE SOURCE webhook_bytes FROM WEBHOOK
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT BYTES
 
 query TTT
@@ -36,7 +40,7 @@ SHOW COLUMNS FROM webhook_bytes
 body false bytea
 
 statement ok
-CREATE SOURCE webhook_bytes_include_headers FROM WEBHOOK
+CREATE SOURCE webhook_bytes_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT BYTES
     INCLUDE HEADERS
 
@@ -47,7 +51,7 @@ body false bytea
 headers false map
 
 statement ok
-CREATE SOURCE webhook_json FROM WEBHOOK
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT JSON
 
 query TTT
@@ -56,7 +60,7 @@ SHOW COLUMNS FROM webhook_json
 body false jsonb
 
 statement ok
-CREATE SOURCE webhook_json_include_headers FROM WEBHOOK
+CREATE SOURCE webhook_json_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT JSON
     INCLUDE HEADERS
 
@@ -67,7 +71,7 @@ body false jsonb
 headers false map
 
 statement ok
-CREATE SOURCE webhook_text FROM WEBHOOK
+CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
 
 query TTT
@@ -76,7 +80,7 @@ SHOW COLUMNS FROM webhook_text
 body false text
 
 statement ok
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
+CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
@@ -86,28 +90,34 @@ SHOW COLUMNS FROM webhook_text_include_headers
 body false text
 headers false map
 
+# Make sure that webhook_cluster only contains sources.
+statement error cannot create this kind of item in a cluster that contains sources or sinks
+CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
+    SELECT body FROM webhook_text_include_headers
+);
+
 # Should fail because a source with this name already exists.
 statement error source "materialize.public.webhook_text_include_headers" already exists
-CREATE SOURCE webhook_text_include_headers FROM WEBHOOK
+CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
 # Should succeed since we're specifying "if not exists".
 statement ok
-CREATE SOURCE IF NOT EXISTS webhook_text_include_headers FROM WEBHOOK
+CREATE SOURCE IF NOT EXISTS webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
 # Make sure we can parse a relatively complex validation expression.
 statement ok
-CREATE SOURCE webhook_bad_validation_expr FROM WEBHOOK
+CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     VALIDATE USING (
         decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || '.' || convert_from(body, 'utf-8'), 'key', 'sha256')
     )
 
 statement ok
-CREATE SOURCE webhook_buildkite FROM WEBHOOK
+CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON
   VALIDATE USING (
     decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
@@ -118,38 +128,65 @@ CREATE SOURCE webhook_buildkite FROM WEBHOOK
   )
 
 statement error column "field_that_does_not_exist" does not exist
-CREATE SOURCE webhook_bad_validation_expr FROM WEBHOOK
+CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     VALIDATE USING (
         decode(headers->'signature', 'base64') = hmac(field_that_does_not_exist, 'key', 'sha256')
     )
 
 statement error VALIDATE USING must have type boolean, not type text
-CREATE SOURCE webhook_validation_returns_non_bool FROM WEBHOOK
+CREATE SOURCE webhook_validation_returns_non_bool IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     VALIDATE USING ( 'foo' || 'bar' )
 
 statement error expression provided in VALIDATE USING does not reference any columns
-CREATE SOURCE webhook_json_with_validation FROM WEBHOOK
+CREATE SOURCE webhook_json_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT JSON
     VALIDATE USING ( 'a' = 'test' )
 
 statement error VALIDATE USING does not allow subqueries
-CREATE SOURCE webhook_validation_with_subquery FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' IN (select * from mz_tables) );
+  VALIDATE USING ( headers->'signature' IN (select * from mz_tables) )
 
 statement error expression provided in VALIDATE USING is not deterministic
-CREATE SOURCE webhook_validation_with_now FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS') );
+  VALIDATE USING ( headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS') )
 
 statement error expression provided in VALIDATE USING is not deterministic
-CREATE SOURCE webhook_validation_with_now FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = mz_now()::text );
+  VALIDATE USING ( headers->'signature' = mz_now()::text )
 
 statement error expression provided in VALIDATE USING is not deterministic
-CREATE SOURCE webhook_validation_with_now FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = current_timestamp()::text );
+  VALIDATE USING ( headers->'signature' = current_timestamp()::text )
+
+statement error unknown cluster 'i_do_not_exist'
+CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBHOOK
+  BODY FORMAT BYTES;
+
+# Dropping without cascade should fail since there are sources using it.
+statement error cannot drop cluster with active objects
+DROP CLUSTER webhook_cluster;
+
+# Try creating a webhook source in a compute cluster.
+
+statement ok
+CREATE CLUSTER compute_cluster REPLICAS (r1 (SIZE '1'));
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute_cluster AS SELECT name FROM mz_objects;
+
+statement error cannot create source in cluster containing indexes or materialized views
+CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK
+  BODY FORMAT BYTES;
+
+# Cleanup.
+statement ok
+DROP CLUSTER webhook_cluster CASCADE;
+
+statement ok
+DROP CLUSTER compute_cluster CASCADE;

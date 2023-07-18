@@ -106,7 +106,6 @@ pub enum Plan {
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
-    CreateWebhookSource(CreateWebhookSourcePlan),
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
@@ -225,8 +224,9 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
-            StatementKind::CreateWebhookSource => vec![PlanKind::CreateWebhookSource],
-            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+            StatementKind::CreateSource
+            | StatementKind::CreateSubsource
+            | StatementKind::CreateWebhookSource => {
                 vec![PlanKind::CreateSource]
             }
             StatementKind::CreateTable => vec![PlanKind::CreateTable],
@@ -277,7 +277,6 @@ impl Plan {
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
-            Plan::CreateWebhookSource(_) => "create source",
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
@@ -511,20 +510,6 @@ pub enum ReplicaConfig {
         compute: ComputeReplicaConfig,
         disk: bool,
     },
-}
-
-/// TODO(parkmycar): once we install webhook sources on clusterd, this struct should be
-/// delete/merged in favor of [`CreateSourcePlan`].
-///
-/// See <https://github.com/MaterializeInc/materialize/issues/19951>.
-#[derive(Debug)]
-pub struct CreateWebhookSourcePlan {
-    pub name: QualifiedItemName,
-    pub if_not_exists: bool,
-    pub create_sql: String,
-    pub desc: RelationDesc,
-    pub timeline: Timeline,
-    pub validate_using: Option<MirScalarExpr>,
 }
 
 #[derive(Debug)]
@@ -1071,12 +1056,16 @@ pub struct Source {
 
 #[derive(Debug, Clone)]
 pub enum DataSourceDesc {
-    /// Receives data from an external system
+    /// Receives data from an external system.
     Ingestion(Ingestion),
-    /// Receives data from some other source
+    /// Receives data from some other source.
     Source,
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
+    /// Receives data from HTTP post requests.
+    Webhook {
+        validate_using: Option<MirScalarExpr>,
+    },
 }
 
 #[derive(Clone, Debug)]

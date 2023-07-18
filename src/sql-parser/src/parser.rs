@@ -2629,14 +2629,22 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_item_name()?;
 
-        // Webhook Source, which works differently than all other sources.
-        if self.peek_keywords(&[FROM, WEBHOOK]) {
-            return self.parse_create_webhook_source(name, if_not_exists);
-        }
-
         let (col_names, key_constraint) = self.parse_source_columns()?;
+
+        // For webhook sources we require `IN CLUSTER`, so track the position for an error message.
+        let cluster_err = self.expected(self.peek_pos(), "IN CLUSTER", self.peek_token());
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
+
+        // Webhook Source, which works differently than all other sources.
+        if self.peek_keyword(WEBHOOK) {
+            return self.parse_create_webhook_source(
+                name,
+                if_not_exists,
+                (in_cluster, cluster_err),
+            );
+        }
+
         let connection = self.parse_create_source_connection()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
@@ -2792,9 +2800,12 @@ impl<'a> Parser<'a> {
         &mut self,
         name: UnresolvedItemName,
         if_not_exists: bool,
+        in_cluster: (Option<RawClusterName>, Result<(), ParserError>),
     ) -> Result<Statement<Raw>, ParserError> {
-        // Consume these keywords, because earlier we only peeked them.
-        self.expect_keywords(&[FROM, WEBHOOK])?;
+        let in_cluster = in_cluster.0.ok_or_else(|| in_cluster.1.unwrap_err())?;
+
+        // Consume this keyword because we only peeked it earlier.
+        self.expect_keyword(WEBHOOK)?;
 
         self.expect_keywords(&[BODY, FORMAT])?;
 
@@ -2824,6 +2835,7 @@ impl<'a> Parser<'a> {
                 body_format,
                 include_headers,
                 validate_using,
+                in_cluster,
             },
         ))
     }

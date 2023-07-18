@@ -101,12 +101,6 @@ impl Coordinator {
         }
 
         match plan {
-            Plan::CreateWebhookSource(plan) => {
-                let result = self
-                    .sequence_create_webhook_source(ctx.session_mut(), plan)
-                    .await;
-                ctx.retire(result);
-            }
             Plan::CreateSource(plan) => {
                 let source_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                 let result = self

@@ -277,61 +277,81 @@ CREATE TABLE " " (x int)
              ^
 
 parse-statement
-CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
 ----
-CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: true, validate_using: None })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: true, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
-CREATE SOURCE IF NOT EXISTS webhook_text FROM WEBHOOK BODY FORMAT TEXT
+CREATE SOURCE IF NOT EXISTS webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT
 ----
-CREATE SOURCE IF NOT EXISTS webhook_text FROM WEBHOOK BODY FORMAT TEXT
+CREATE SOURCE IF NOT EXISTS webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_text")]), if_not_exists: true, body_format: Text, include_headers: false, validate_using: None })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_text")]), if_not_exists: true, body_format: Text, include_headers: false, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
-CREATE SOURCE webhook_json_no_headers FROM WEBHOOK BODY FORMAT JSON
+CREATE SOURCE webhook_json_no_headers IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON
 ----
-CREATE SOURCE webhook_json_no_headers FROM WEBHOOK BODY FORMAT JSON
+CREATE SOURCE webhook_json_no_headers IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json_no_headers")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: None })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json_no_headers")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
-CREATE SOURCE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
 ----
-CREATE SOURCE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_bytes")]), if_not_exists: false, body_format: Bytes, include_headers: false, validate_using: None })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_bytes")]), if_not_exists: false, body_format: Bytes, include_headers: false, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
-CREATE SOURCE webhook_proto FROM WEBHOOK BODY FORMAT PROTOBUF INCLUDE HEADERS
+CREATE SOURCE webhook_proto IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT PROTOBUF INCLUDE HEADERS
 ----
 error: Expected one of JSON or TEXT or BYTES, found PROTOBUF
-CREATE SOURCE webhook_proto FROM WEBHOOK BODY FORMAT PROTOBUF INCLUDE HEADERS
-                                                     ^
+CREATE SOURCE webhook_proto IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT PROTOBUF INCLUDE HEADERS
+                                                                                ^
 
 parse-statement
-CREATE SOURCE webhook_avro FROM WEBHOOK BODY FORMAT AVRO
+CREATE SOURCE webhook_avro IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT AVRO
 ----
 error: Expected one of JSON or TEXT or BYTES, found AVRO
-CREATE SOURCE webhook_avro FROM WEBHOOK BODY FORMAT AVRO
-                                                    ^
+CREATE SOURCE webhook_avro IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT AVRO
+                                                                               ^
 
 parse-statement
-CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = 'test' )
 ----
-CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = 'test' )
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) }) })
-
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) }), in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
-CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
 ----
-CREATE SOURCE webhook_json FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) }) })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_no_cluster FROM WEBHOOK BODY FORMAT TEXT
+----
+error: Expected IN CLUSTER, found FROM
+CREATE SOURCE webhook_no_cluster FROM WEBHOOK BODY FORMAT TEXT
+                                 ^
+
+parse-statement
+CREATE SOURCE webhook_include_headers_no_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS
+----
+error: Expected IN CLUSTER, found FROM
+CREATE SOURCE webhook_include_headers_no_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS
+                                                 ^
+
+parse-statement
+CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT VALIDATE USING ( headers['signature'] = 'test' )
+----
+error: Expected IN CLUSTER, found FROM
+CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT VALIDATE USING ( headers['signature'] = 'test' )
+                                            ^
 
 parse-statement
 CREATE DATABASE IF NOT EXISTS db

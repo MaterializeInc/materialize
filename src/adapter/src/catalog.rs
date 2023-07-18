@@ -66,7 +66,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateWebhookSourcePlan, Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
+    Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
@@ -2007,6 +2007,8 @@ pub enum DataSourceDesc {
     Webhook {
         /// An optional expression which is used to validate each request received by this webhook.
         validate_using: Option<MirScalarExpr>,
+        /// The cluster which this source is associated with.
+        cluster_id: ClusterId,
     },
 }
 
@@ -2104,6 +2106,19 @@ impl Source {
                         "subsources must not have a host config or cluster_id defined"
                     );
                     DataSourceDesc::Source
+                }
+                mz_sql::plan::DataSourceDesc::Webhook { validate_using } => {
+                    assert!(
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Existing { .. }
+                        ) && cluster_id.is_some(),
+                        "webhook sources must be created on an existing cluster"
+                    );
+                    DataSourceDesc::Webhook {
+                        validate_using,
+                        cluster_id: cluster_id.expect("checked above"),
+                    }
                 }
             },
             desc: plan.source.desc,
@@ -2557,8 +2572,8 @@ impl CatalogItem {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
+                DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
                 DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => None,
             },
@@ -7348,6 +7363,15 @@ impl Catalog {
                     }
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
+                    mz_sql::plan::DataSourceDesc::Webhook { validate_using } => {
+                        let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
+                            unreachable!("webhook sources must use an existing cluster");
+                        };
+                        DataSourceDesc::Webhook {
+                            validate_using,
+                            cluster_id: id,
+                        }
+                    }
                 },
                 desc: source.desc,
                 timeline,
@@ -7431,21 +7455,6 @@ impl Catalog {
                     resolved_ids,
                 })
             }
-            Plan::CreateWebhookSource(CreateWebhookSourcePlan {
-                create_sql,
-                desc,
-                timeline,
-                validate_using,
-                ..
-            }) => CatalogItem::Source(Source {
-                create_sql,
-                data_source: DataSourceDesc::Webhook { validate_using },
-                desc,
-                timeline,
-                resolved_ids: ResolvedIds(BTreeSet::new()),
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
-            }),
             _ => {
                 return Err(Error::new(ErrorKind::Corruption {
                     detail: "catalog entry generated inappropriate plan".to_string(),
