@@ -502,11 +502,12 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 // Set up probes to notify on index frontier advancement.
                 oks.stream().probe_notify_with(probes);
+                // Safety: We're exporting the traces.
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(
-                        oks.trace(self.enable_arrangement_size_logging),
-                        errs.trace(self.enable_arrangement_size_logging),
+                        unsafe { oks.trace(self.enable_arrangement_size_logging) },
+                        unsafe { errs.trace(self.enable_arrangement_size_logging) },
                     )
                     .with_drop(needed_tokens),
                 );
@@ -578,11 +579,12 @@ where
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
+                // Safety: We're exporting the traces.
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(
-                        oks.trace(self.enable_arrangement_size_logging),
-                        errs.trace(self.enable_arrangement_size_logging),
+                        unsafe { oks.trace(self.enable_arrangement_size_logging) },
+                        unsafe { errs.trace(self.enable_arrangement_size_logging) },
                     )
                     .with_drop(needed_tokens),
                 );

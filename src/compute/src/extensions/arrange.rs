@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
-use std::cell::RefCell;
-use std::rc::Rc;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -200,12 +201,10 @@ where
     L: FnMut(&TraceAgent<Tr>) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
-    let logger = if let Some(logger) = scope
+    let Some(logger) = scope
         .log_register()
         .get::<ComputeEvent>("materialize/compute")
-    {
-        logger
-    } else {
+    else {
         return;
     };
     let mut trace = arranged.trace.clone();
@@ -358,7 +357,7 @@ where
     arranged: Arranged<G, Tr>,
     /// Shared boolean to indicate that someone is consuming the trace, and we've installed
     /// the arrangement size logging operator.
-    trace_consumed: Rc<RefCell<bool>>,
+    trace_consumed: Rc<Cell<bool>>,
 }
 
 impl<G, Tr> MzArranged<G, Tr>
@@ -374,7 +373,16 @@ where
     /// ## Safety
     ///
     /// This is unsafe because clients are required to use the trace, otherwise the arrangement size
-    /// logging infrastructure will cause a memory leak.
+    /// logging infrastructure will cause a memory leak. Using the trace means that the compaction
+    /// needs to be advanced, and the client must be interested in all batches until the dataflow is
+    /// shut down.
+    ///
+    /// The logging operator will hold on to a trace and inspect all batches, but allows compaction.
+    /// It'll cause Differential to maintain the trace until the trace is complete, which is why we
+    /// need the caller to be interested in all updates to the trace.
+    ///
+    /// We're using `unsafe` to indicate additional requirements to the caller that we cannot
+    /// express in Rust, but not to indicate memory safety.
     pub unsafe fn inner(&self, enable_arrangement_size_logging: bool) -> Arranged<G, Tr> {
         self.consume_trace(enable_arrangement_size_logging);
         self.arranged.clone()
@@ -383,22 +391,21 @@ where
     /// Obtain a handle to the trace.
     ///
     /// Similarly to `inner`, clients must use the trace, otherwise a memory leak can occur because
-    /// the arrangement size logging operator holds on the the trace.
-    #[must_use]
-    pub fn trace(&self, enable_arrangement_size_logging: bool) -> Tr {
+    /// the arrangement size logging operator holds on the the trace. See [`MzArranged::inner`] for
+    /// details.
+    pub unsafe fn trace(&self, enable_arrangement_size_logging: bool) -> Tr {
         self.consume_trace(enable_arrangement_size_logging);
-
         self.arranged.trace.clone()
     }
 
     /// Indicate that something uses the trace, so we can install the arrangement size logging
-    /// infrastructure. This uses inner mutability to only ever install the operator once for each
+    /// infrastructure. This uses interior mutability to only ever install the operator once for each
     /// trace.
     fn consume_trace(&self, enable_arrangement_size_logging: bool) {
-        let mut trace_consumed = self.trace_consumed.borrow_mut();
-        if enable_arrangement_size_logging && !*trace_consumed {
+        let trace_consumed = self.trace_consumed.get();
+        if enable_arrangement_size_logging && !trace_consumed {
             self.log_arrangement_size();
-            *trace_consumed = true;
+            self.trace_consumed.set(true);
         }
     }
 }
@@ -490,7 +497,7 @@ where
     fn from(arranged: Arranged<G, Tr>) -> Self {
         Self {
             arranged,
-            trace_consumed: Rc::new(RefCell::new(false)),
+            trace_consumed: Rc::new(Cell::new(false)),
         }
     }
 }

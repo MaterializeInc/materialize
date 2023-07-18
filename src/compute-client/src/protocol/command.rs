@@ -360,14 +360,14 @@ pub struct ComputeParameters {
     pub max_result_size: Option<u32>,
     /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: Option<usize>,
+    /// Enable arrangement size logging
+    pub enable_arrangement_size_logging: Option<bool>,
     /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
     pub enable_mz_join_core: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
     pub tracing: TracingParameters,
-    /// Enable arrangement size logging
-    pub enable_arrangement_size_logging: Option<bool>,
 }
 
 impl ComputeParameters {

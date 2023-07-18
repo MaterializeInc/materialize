@@ -345,7 +345,7 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    // Safety: all `join_impl`s holds on to the trace.
+    // Safety: all `join_impl`s hold on to the trace.
     let prev_keyed = unsafe { prev_keyed.inner(enable_arrangement_size_logging) };
     let next_input = unsafe { next_input.inner(enable_arrangement_size_logging) };
 

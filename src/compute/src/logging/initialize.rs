@@ -127,9 +127,9 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             .dataflow_named("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
-                collection
-                    .mz_arrange("Arrange logging err")
-                    .trace(self.compute_state.enable_arrangement_size_logging)
+                let arranged = collection.mz_arrange("Arrange logging err");
+                // Safety: We're exporting the trace.
+                unsafe { arranged.trace(self.compute_state.enable_arrangement_size_logging) }
             });
 
         traces

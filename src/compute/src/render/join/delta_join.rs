@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::extensions::arrange::{ArrangementSize, MzArranged};
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
@@ -30,6 +29,7 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Antichain;
 
+use crate::extensions::arrange::{ArrangementSize, MzArranged};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
 use crate::render::RenderTimestamp;
 

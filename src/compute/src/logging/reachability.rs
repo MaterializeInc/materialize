@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
 
-use crate::compute_state::ComputeState;
 use differential_dataflow::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
@@ -27,6 +26,7 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Filter;
 
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
@@ -149,9 +149,11 @@ pub(super) fn construct<A: Allocate>(
                     },
                 );
 
-                let trace = updates
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
-                    .trace(compute_state.enable_arrangement_size_logging);
+                let arranged =
+                    updates.mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant));
+                // Safety: We're exporting the trace.
+                let trace =
+                    unsafe { arranged.trace(compute_state.enable_arrangement_size_logging) };
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }

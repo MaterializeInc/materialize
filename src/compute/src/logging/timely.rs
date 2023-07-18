@@ -15,7 +15,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::compute_state::ComputeState;
 use differential_dataflow::collection::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
@@ -36,6 +35,7 @@ use timely::logging::{
 };
 use tracing::error;
 
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
@@ -276,7 +276,7 @@ pub(super) fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let trace = collection
+                let arranged = collection
                     .map({
                         let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
@@ -289,8 +289,10 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
-                    .trace(compute_state.enable_arrangement_size_logging);
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant));
+                // Safety: We're exporting the trace.
+                let trace =
+                    unsafe { arranged.trace(compute_state.enable_arrangement_size_logging) };
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }
