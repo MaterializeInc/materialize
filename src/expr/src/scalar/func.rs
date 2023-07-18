@@ -88,6 +88,7 @@ pub enum UnmaterializableFunc {
     IsRbacEnabled,
     MzEnvironmentId,
     MzNow,
+    MzRoleOidMemberships,
     MzSessionId,
     MzUptime,
     MzVersion,
@@ -122,6 +123,11 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::IsRbacEnabled => ScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
             UnmaterializableFunc::MzNow => ScalarType::MzTimestamp.nullable(false),
+            UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map {
+                value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))),
+                custom_id: None,
+            }
+            .nullable(false),
             UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
             UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
             UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
@@ -153,6 +159,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::IsRbacEnabled => f.write_str("is_rbac_enabled"),
             UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
             UnmaterializableFunc::MzNow => f.write_str("mz_now"),
+            UnmaterializableFunc::MzRoleOidMemberships => f.write_str("mz_role_oid_memberships"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
             UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
@@ -180,6 +187,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::IsRbacEnabled => IsRbacEnabled(()),
             UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
             UnmaterializableFunc::MzNow => MzNow(()),
+            UnmaterializableFunc::MzRoleOidMemberships => MzRoleOidMemberships(()),
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
             UnmaterializableFunc::MzUptime => MzUptime(()),
             UnmaterializableFunc::MzVersion => MzVersion(()),
@@ -208,6 +216,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 IsRbacEnabled(()) => Ok(UnmaterializableFunc::IsRbacEnabled),
                 MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzNow(()) => Ok(UnmaterializableFunc::MzNow),
+                MzRoleOidMemberships(()) => Ok(UnmaterializableFunc::MzRoleOidMemberships),
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
                 MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),
                 MzVersion(()) => Ok(UnmaterializableFunc::MzVersion),
@@ -4566,6 +4575,7 @@ derive_unary!(
     MzAclItemGrantee,
     MzAclItemPrivileges,
     MzValidatePrivileges,
+    MzValidateRolePrivilege,
     QuoteIdent,
     TryParseMonotonicIso8601Timestamp
 );
@@ -4970,6 +4980,7 @@ impl Arbitrary for UnaryFunc {
             MzAclItemGrantee::arbitrary().prop_map_into().boxed(),
             MzAclItemPrivileges::arbitrary().prop_map_into().boxed(),
             MzValidatePrivileges::arbitrary().prop_map_into().boxed(),
+            MzValidateRolePrivilege::arbitrary().prop_map_into().boxed(),
             QuoteIdent::arbitrary().prop_map_into().boxed(),
         ])
     }
@@ -5323,6 +5334,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzAclItemGrantee(_) => MzAclItemGrantee(()),
             UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
             UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
+            UnaryFunc::MzValidateRolePrivilege(_) => MzValidateRolePrivilege(()),
             UnaryFunc::QuoteIdent(_) => QuoteIdent(()),
             UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => {
                 TryParseMonotonicIso8601Timestamp(())
@@ -5749,6 +5761,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzAclItemGrantee(_) => Ok(impls::MzAclItemGrantee.into()),
                 MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
                 MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
+                MzValidateRolePrivilege(_) => Ok(impls::MzValidateRolePrivilege.into()),
                 QuoteIdent(_) => Ok(impls::QuoteIdent.into()),
                 TryParseMonotonicIso8601Timestamp(_) => {
                     Ok(impls::TryParseMonotonicIso8601Timestamp.into())

@@ -104,7 +104,7 @@ impl AclMode {
             CREATE_ROLE_STR => Ok(AclMode::CREATE_ROLE),
             CREATE_DB_STR => Ok(AclMode::CREATE_DB),
             CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
-            _ => Err(anyhow!("unrecognized privilege type: {}", s.quoted())),
+            _ => Err(anyhow!("{}", s.quoted())),
         }
     }
 

@@ -894,3 +894,8 @@
         Reports whether the role with the specified role name or OID has the privilege on
         the type with the specified type name or OID. If the role is omitted then
         the `current_role` is assumed.
+    - signature: 'pg_has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the `user` has the privilege for `role`. `privilege` can either be 'MEMBER'
+        or 'USAGE', however currently this value is ignored. The PUBLIC psuedo-role cannot be used
+        for the `user` nor the `role`. If the `user`` is omitted then the `current_role` is assumed.
