@@ -37,7 +37,15 @@ SELECT * FROM information_schema.tables;
 ----
 materialize
 information_schema
+applicable_roles
+VIEW
+materialize
+information_schema
 columns
+VIEW
+materialize
+information_schema
+enabled_roles
 VIEW
 materialize
 information_schema
