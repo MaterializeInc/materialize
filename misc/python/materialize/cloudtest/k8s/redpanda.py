@@ -62,7 +62,9 @@ class RedpandaDeployment(K8sDeployment):
 
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(namespace=namespace, labels={"app": "redpanda"}),
-            spec=V1PodSpec(containers=[container]),
+            spec=V1PodSpec(
+                containers=[container], node_selector={"supporting-services": "true"}
+            ),
         )
 
         selector = V1LabelSelector(match_labels={"app": "redpanda"})

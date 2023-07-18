@@ -65,9 +65,14 @@ class DebeziumDeployment(K8sDeployment):
             name="debezium", image="debezium/connect:1.9.6.Final", env=env, ports=ports
         )
 
+        pod_spec = V1PodSpec(
+            containers=[container],
+            node_selector={"supporting-services": "true"},
+        )
+
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(namespace=namespace, labels={"app": "debezium"}),
-            spec=V1PodSpec(containers=[container]),
+            spec=pod_spec,
         )
 
         selector = V1LabelSelector(match_labels={"app": "debezium"})

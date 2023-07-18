@@ -92,7 +92,11 @@ class CockroachStatefulSet(K8sStatefulSet):
             volume_mounts=volume_mounts,
         )
 
-        pod_spec = V1PodSpec(containers=[container], volumes=volumes)
+        pod_spec = V1PodSpec(
+            containers=[container],
+            volumes=volumes,
+            node_selector={"supporting-services": "true"},
+        )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
         claim_templates = [
             V1PersistentVolumeClaim(

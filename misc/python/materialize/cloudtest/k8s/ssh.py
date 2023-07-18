@@ -45,7 +45,9 @@ class SshDeployment(K8sDeployment):
 
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(labels={"app": "ssh-bastion-host"}),
-            spec=V1PodSpec(containers=[container]),
+            spec=V1PodSpec(
+                containers=[container], node_selector={"supporting-services": "true"}
+            ),
         )
 
         selector = V1LabelSelector(match_labels={"app": "ssh-bastion-host"})

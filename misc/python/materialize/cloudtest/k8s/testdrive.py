@@ -124,7 +124,9 @@ class TestdrivePod(K8sPod, TestdriveBase):
             env=env,
         )
 
-        pod_spec = V1PodSpec(containers=[container])
+        pod_spec = V1PodSpec(
+            containers=[container], node_selector={"supporting-services": "true"}
+        )
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
     def _run_internal(self, command: list[str], input: str | None = None) -> None:
