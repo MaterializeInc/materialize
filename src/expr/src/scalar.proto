@@ -97,6 +97,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty session_user = 17;
         google.protobuf.Empty current_schema = 18;
         google.protobuf.Empty mz_role_oid_memberships = 19;
+        google.protobuf.Empty mz_is_superuser = 20;
     }
 }
 

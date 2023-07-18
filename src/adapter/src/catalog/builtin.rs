@@ -3257,7 +3257,11 @@ SELECT
 FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
-WHERE pg_has_role(current_role, member.oid, 'MEMBER')",
+WHERE
+    (CASE
+        WHEN mz_internal.mz_is_superuser() THEN true
+        ELSE pg_has_role(current_role, member.oid, 'MEMBER')
+    END)",
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -3287,7 +3291,11 @@ pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW information_schema.enabled_roles AS
 SELECT name AS role_name
 FROM mz_roles
-WHERE pg_has_role(current_role, oid, 'USAGE')",
+WHERE
+    (CASE
+        WHEN mz_internal.mz_is_superuser() THEN true
+        ELSE pg_has_role(current_role, oid, 'USAGE')
+    END)",
 };
 
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {

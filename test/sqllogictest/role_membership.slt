@@ -691,6 +691,14 @@ r1,r2,NO
 r2,r3,NO
 COMPLETE 2
 
+simple conn=mz_system,user=mz_system
+SELECT * FROM information_schema.applicable_roles
+----
+r1,r2,NO
+r2,r3,NO
+r4,r3,NO
+COMPLETE 3
+
 simple conn=r1,user=r1
 SELECT * FROM information_schema.enabled_roles
 ----
@@ -698,6 +706,15 @@ r1
 r2
 r3
 COMPLETE 3
+
+simple conn=mz_system,user=mz_system
+SELECT * FROM information_schema.enabled_roles
+----
+r1
+r2
+r3
+r4
+COMPLETE 4
 
 statement ok
 DROP ROLE r1, r2, r3, r4
