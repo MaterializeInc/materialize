@@ -179,6 +179,7 @@ case "$cmd" in
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env NO_COLOR
+            --env POLAR_SIGNALS_API_TOKEN
             --env PYPI_TOKEN
             # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR

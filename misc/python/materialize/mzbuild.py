@@ -295,6 +295,21 @@ class S3UploadDebuginfo(PreImage):
                     Tagging={"TagSet": [{"Key": "ephemeral", "Value": ephemeral_str}]},
                 )
 
+            polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
+            if self.rd.stable and polar_signals_api_token is not None:
+                print("Attempting to upload debug info to polar signals")
+                spawn.runv(
+                    [
+                        "/usr/local/bin/parca-debuginfo",
+                        "upload",
+                        "--store-address=grpc.polarsignals.com:443",
+                        "--no-extract",
+                        self.dbg_path,
+                    ],
+                    cwd=self.rd.root,
+                    env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
+                )
+
     def inputs(self) -> Set[str]:
         return {self.exe_path, self.dbg_path}
 
