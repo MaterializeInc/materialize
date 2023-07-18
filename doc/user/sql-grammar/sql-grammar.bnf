@@ -24,7 +24,16 @@ alter_secret ::=
 alter_sink ::=
   'ALTER' 'SINK' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 alter_source ::=
-  'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
+  'ALTER' 'SOURCE' 'IF EXISTS'? name (
+    alter_source_add_clause
+    | alter_source_drop_clause
+    | alter_source_set_clause
+  )
+alter_source_add_clause ::=
+  'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
+alter_source_drop_clause ::=
+  'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
+alter_source_set_clause ::= 'SET' '(' 'SIZE' value ')'
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
