@@ -784,6 +784,23 @@ impl<'a> Parser<'a> {
                 None
             };
 
+        // According to PostgresSQL documentation: https://www.postgresql.org/docs/current/functions-info.html
+        // current_schema, current_user, current_role, and session_user must be called without trailing parentheses.
+        // Here we prevent user from calling these functions using trailing parentheses.
+        if name.to_string().as_str() == "current_schema"
+            || name.to_string().as_str() == "current_user"
+            || name.to_string().as_str() == "current_role"
+            || name.to_string().as_str() == "session_user"
+        {
+            return Err(self.error(
+                self.peek_prev_pos() - 1,
+                format!(
+                    "Function {} must be called without trailing parantheses.",
+                    name.to_string().as_str()
+                ),
+            ));
+        }
+
         Ok(Function {
             name,
             args,
