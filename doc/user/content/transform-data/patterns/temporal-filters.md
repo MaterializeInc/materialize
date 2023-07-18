@@ -213,7 +213,7 @@ The strategy for this example is to put an initial temporal filter on the input 
 
 From here, you could create a [Kafka sink](/sql/create-sink/) and use Kafka Connect to archive the historical results to a data warehouse (ignoring Kafka tombstone records that represent retracted results).
 
-## "Late Arriving Events" and Grace Period
+## Late arriving events
 
 For various reasons, it's possible for records to arrive out of order.
 For example, network connectivity issues may cause a mobile device to emit data with a timestamp from the relatively distant past.
