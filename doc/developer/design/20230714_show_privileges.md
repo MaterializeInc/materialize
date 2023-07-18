@@ -150,6 +150,7 @@ SHOW DEFAULT PRIVILEGES;
  PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
  joe    | materialize | NULL   | view        | PUBLIC    | SELECT
  qa     | materialize | public | type        | scientist | USAGE
+ PUBLIC | NULL        | NULL   | cluster     | mike      | CREATE
 ```
 
 ```sql
