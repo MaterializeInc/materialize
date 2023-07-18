@@ -48,6 +48,10 @@ information_schema
 enabled_roles
 VIEW
 materialize
+role_table_grants
+applicable_roles
+VIEW
+materialize
 information_schema
 routines
 VIEW
@@ -58,6 +62,10 @@ VIEW
 materialize
 information_schema
 tables
+VIEW
+materialize
+information_schema
+table_privileges
 VIEW
 materialize
 information_schema

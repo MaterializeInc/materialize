@@ -2348,7 +2348,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             ) => String, 1642;
         },
         // The privilege param is validated but ignored. That's because we haven't implemented
-        // noinherit roles, so it has no effect on the result.
+        // NOINHERIT roles, so it has no effect on the result.
+        //
+        // In PostgreSQL, this should always return true for superusers. In Materialize it's
+        // impossible to determine if a role is a superuser since it's specific to a session. So we
+        // cannot copy PostgreSQL semantics there.
         "pg_has_role" => Scalar {
             params!(String, String, String) => sql_impl_func("pg_has_role(mz_internal.mz_role_oid($1), mz_internal.mz_role_oid($2), $3)") => Bool, 2705;
             params!(String, Oid, String) => sql_impl_func("pg_has_role(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2706;
@@ -3475,6 +3479,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // If the first argument is NULL, returns an EvalError::Internal whose error
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+        },
+        "mz_format_privileges" => Scalar {
+            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
         },
         "mz_resolve_object_name" => Table {
             // This implementation is available primarily to drive the other, single-param

@@ -4766,6 +4766,155 @@ SELECT has_cluster_privilege('c2', 'CREATE')
 ----
 false
 
+# Reset server so we can get back to a clean state.
+reset-server
+
+# Test table_privileges and role_table_grants
+
+statement ok
+CREATE ROLE r1
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER default TO r1
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA public TO r1
+----
+COMPLETE 0
+
+statement ok
+CREATE ROLE r2
+
+statement ok
+CREATE ROLE r3
+
+statement ok
+GRANT r2 TO r1
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+statement ok
+GRANT SELECT ON s TO r2
+
+statement ok
+CREATE TABLE t ()
+
+statement ok
+GRANT INSERT ON t TO r1
+
+statement ok
+CREATE VIEW v AS SELECT 1
+
+statement ok
+GRANT SELECT ON v TO r2, r3
+
+simple conn=r1,user=r1
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+----
+COMPLETE 0
+
+simple conn=r1,user=r1
+GRANT SELECT ON mv TO r2
+----
+COMPLETE 0
+
+# For privileges granted to PUBLIC and mz_system, we don't want to enumerate every single row
+# because there is a lot. Instead we just assert that there's a bunch of rows emitted. The number
+# of rows was chosen because that was the value at the time the test was written.
+
+## table_privileges
+
+simple conn=r1,user=r1
+SELECT * FROM information_schema.table_privileges WHERE grantee != 'PUBLIC'
+----
+r1,r1,materialize,public,mv,SELECT,NO,YES
+r1,r2,materialize,public,mv,SELECT,NO,YES
+materialize,r1,materialize,public,t,INSERT,NO,NO
+materialize,r2,materialize,public,s,SELECT,NO,YES
+materialize,r2,materialize,public,v,SELECT,NO,YES
+COMPLETE 5
+
+simple conn=r1,user=r1
+SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT * FROM information_schema.table_privileges WHERE grantee != 'PUBLIC' AND grantee != 'mz_system'
+----
+r1,r1,materialize,public,mv,SELECT,NO,YES
+r1,r2,materialize,public,mv,SELECT,NO,YES
+materialize,r1,materialize,public,t,INSERT,NO,NO
+materialize,r2,materialize,public,s,SELECT,NO,YES
+materialize,r2,materialize,public,v,SELECT,NO,YES
+materialize,r3,materialize,public,v,SELECT,NO,YES
+materialize,materialize,materialize,public,t,DELETE,NO,NO
+materialize,materialize,materialize,public,t,INSERT,NO,NO
+materialize,materialize,materialize,public,t,UPDATE,NO,NO
+materialize,materialize,materialize,public,s,SELECT,NO,YES
+materialize,materialize,materialize,public,t,SELECT,NO,YES
+materialize,materialize,materialize,public,v,SELECT,NO,YES
+materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
+COMPLETE 13
+
+simple conn=mz_system,user=mz_system
+SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT COUNT(*) >= 307 FROM information_schema.table_privileges WHERE grantee = 'mz_system'
+----
+t
+COMPLETE 1
+
+## role_table_grants
+
+simple conn=r1,user=r1
+SELECT * FROM information_schema.role_table_grants
+----
+r1,r1,materialize,public,mv,SELECT,NO,YES
+r1,r2,materialize,public,mv,SELECT,NO,YES
+materialize,r1,materialize,public,t,INSERT,NO,NO
+materialize,r2,materialize,public,s,SELECT,NO,YES
+materialize,r2,materialize,public,v,SELECT,NO,YES
+COMPLETE 5
+
+simple conn=mz_system,user=mz_system
+SELECT * FROM information_schema.role_table_grants WHERE grantee != 'PUBLIC' AND grantee != 'mz_system'
+----
+r1,r1,materialize,public,mv,SELECT,NO,YES
+r1,r2,materialize,public,mv,SELECT,NO,YES
+materialize,r1,materialize,public,t,INSERT,NO,NO
+materialize,r2,materialize,public,s,SELECT,NO,YES
+materialize,r2,materialize,public,v,SELECT,NO,YES
+materialize,r3,materialize,public,v,SELECT,NO,YES
+materialize,materialize,materialize,public,t,DELETE,NO,NO
+materialize,materialize,materialize,public,t,INSERT,NO,NO
+materialize,materialize,materialize,public,t,UPDATE,NO,NO
+materialize,materialize,materialize,public,s,SELECT,NO,YES
+materialize,materialize,materialize,public,t,SELECT,NO,YES
+materialize,materialize,materialize,public,v,SELECT,NO,YES
+materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
+COMPLETE 13
+
+simple conn=mz_system,user=mz_system
+SELECT COUNT(*) >= 166 FROM information_schema.role_table_grants WHERE grantee = 'PUBLIC'
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT COUNT(*) >= 307 FROM information_schema.role_table_grants WHERE grantee = 'mz_system'
+----
+t
+COMPLETE 1
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system

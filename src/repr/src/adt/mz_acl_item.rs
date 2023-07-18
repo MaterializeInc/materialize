@@ -118,6 +118,10 @@ impl AclMode {
     }
 
     pub fn to_error_string(&self) -> String {
+        self.to_full_length_strings().join(", ")
+    }
+
+    pub fn to_full_length_strings(&self) -> Vec<&'static str> {
         let mut privileges = Vec::new();
         if self.contains(AclMode::SELECT) {
             privileges.push(SELECT_STR);
@@ -146,7 +150,7 @@ impl AclMode {
         if self.contains(AclMode::CREATE_CLUSTER) {
             privileges.push(CREATE_CLUSTER_STR);
         }
-        privileges.join(", ")
+        privileges
     }
 }
 

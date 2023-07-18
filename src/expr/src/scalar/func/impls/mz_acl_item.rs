@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str::FromStr;
+
 use crate::EvalError;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::ArrayRustType;
 
 sqlfunc!(
     #[sqlname = "mz_aclitem_grantor"]
@@ -29,6 +32,23 @@ sqlfunc!(
     #[sqlname = "mz_aclitem_privileges"]
     fn mz_acl_item_privileges(mz_acl_item: MzAclItem) -> String {
         mz_acl_item.acl_mode.to_string()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_format_privileges"]
+    fn mz_format_privileges(privileges: String) -> Result<ArrayRustType<String>, EvalError> {
+        AclMode::from_str(&privileges)
+            .map(|acl_mode| {
+                ArrayRustType(
+                    acl_mode
+                        .to_full_length_strings()
+                        .into_iter()
+                        .map(|privilege| privilege.to_string())
+                        .collect(),
+                )
+            })
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))
     }
 );
 

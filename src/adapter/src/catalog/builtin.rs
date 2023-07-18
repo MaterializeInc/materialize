@@ -3252,16 +3252,12 @@ pub const INFORMATION_SCHEMA_APPLICABLE_ROLES: BuiltinView = BuiltinView {
 SELECT
     member.name AS grantee,
     role.name AS role_name,
-    -- ADMIN OPTION isn't implemented
+    -- ADMIN OPTION isn't implemented.
     'NO' AS is_grantable
 FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
-WHERE
-    (CASE
-        WHEN mz_internal.mz_is_superuser() THEN true
-        ELSE pg_has_role(current_role, member.oid, 'MEMBER')
-    END)",
+WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -3291,11 +3287,18 @@ pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW information_schema.enabled_roles AS
 SELECT name AS role_name
 FROM mz_roles
+WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
+};
+
+pub const INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: BuiltinView = BuiltinView {
+    name: "role_table_grants",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.role_table_grants AS
+SELECT grantor, grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable, with_hierarchy
+FROM information_schema.table_privileges
 WHERE
-    (CASE
-        WHEN mz_internal.mz_is_superuser() THEN true
-        ELSE pg_has_role(current_role, oid, 'USAGE')
-    END)",
+    grantor IN (SELECT role_name FROM information_schema.enabled_roles)
+    OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
 };
 
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
@@ -3341,6 +3344,61 @@ FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_TABLE_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "table_privileges",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.table_privileges AS
+SELECT
+    grantor,
+    grantee,
+    table_catalog,
+    table_schema,
+    table_name,
+    privilege_type,
+    is_grantable,
+    CASE privilege_type
+        WHEN 'SELECT' THEN 'YES'
+        ELSE 'NO'
+    END AS with_hierarchy
+FROM
+    (SELECT
+        grantor.name AS grantor,
+        CASE mz_internal.mz_aclitem_grantee(privileges)
+            WHEN 'p' THEN 'PUBLIC'
+            ELSE grantee.name
+        END AS grantee,
+        table_catalog,
+        table_schema,
+        table_name,
+        unnest(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges(privileges))) AS privilege_type,
+        -- ADMIN OPTION isn't implemented.
+        'NO' AS is_grantable
+    FROM
+        (SELECT
+            unnest(relations.privileges) AS privileges,
+            CASE
+                WHEN schemas.database_id IS NULL THEN current_database()
+                ELSE databases.name
+            END AS table_catalog,
+            schemas.name AS table_schema,
+            relations.name AS table_name
+        FROM mz_relations AS relations
+        JOIN mz_schemas AS schemas ON relations.schema_id = schemas.id
+        LEFT JOIN mz_databases AS databases ON schemas.database_id = databases.id
+        WHERE schemas.database_id IS NULL OR databases.name = current_database())
+    JOIN mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
+    LEFT JOIN mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
+WHERE
+    -- WHERE clause is not gauranteed to short-circuit and 'PUBLIC' will cause an error when passed
+    -- to pg_has_role. Therefore we need to use a CASE statement.
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE mz_internal.mz_is_superuser()
+            OR pg_has_role(current_role, grantee, 'USAGE')
+            OR pg_has_role(current_role, grantor, 'USAGE')
+    END",
 };
 
 pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
@@ -4234,6 +4292,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
         Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::View(&INFORMATION_SCHEMA_TABLE_PRIVILEGES),
+        Builtin::View(&INFORMATION_SCHEMA_ROLE_TABLE_GRANTS),
         Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
         Builtin::View(&INFORMATION_SCHEMA_VIEWS),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
