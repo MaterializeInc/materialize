@@ -142,7 +142,7 @@ You can now:
   ...          | -1      | send_email | ...             | <-- Time to send the email!
   ```
 
-### Periodically Emit Results
+### Periodically emit results
 
 Suppose you want to count the number of records in each 1 minute time window, grouped by an `id` column.
 You don't care to receive every update as it happens; instead, you would prefer Materialize to emit a single result at the end of each window.
