@@ -446,21 +446,25 @@ where
                         cursor1.step_val(storage1);
                         cursor2.rewind_vals(storage2);
 
-                        // TODO: This consolidation is optional, and it may not be very
-                        //       helpful. We might try harder to understand whether we
-                        //       should do this work here, or downstream at consumers.
-                        consolidate_updates(temp);
+                        if *fuel <= temp.len() {
+                            *fuel = 0;
+                            consolidate_updates(temp);
+                            session.give_container(temp);
 
-                        *fuel = fuel.saturating_sub(temp.len());
-                        session.give_container(temp);
-
-                        if *fuel == 0 {
                             // The fuel is exhausted, so we should yield. Returning here is only
                             // allowed because we leave the cursors in a state that will let us
                             // pick up the work correctly on the next invocation.
                             return;
                         }
                     }
+
+                    // TODO: This consolidation is optional, and it may not be very
+                    //       helpful. We might try harder to understand whether we
+                    //       should do this work here, or downstream at consumers.
+                    consolidate_updates(temp);
+
+                    *fuel = fuel.saturating_sub(temp.len());
+                    session.give_container(temp);
 
                     cursor1.step_key(storage1);
                     cursor2.step_key(storage2);
