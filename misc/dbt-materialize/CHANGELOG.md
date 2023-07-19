@@ -266,7 +266,7 @@
 
 * Support the `sslcert`, `sslkey`, and `sslrootcert` parameters for specifying a
   TLS client certificate. Notably, this allows using `dbt-materialize` with the
-  new architecture of [Materialize](https://cloud.materialize.com).
+  new architecture of [Materialize](https://console.materialize.com).
 
 ## 0.18.1.post2 - 2021-04-21
 
