@@ -1789,33 +1789,28 @@ impl MirRelationExpr {
     /// The goal is to be a heuristic for "this expression is cheap to evaluate:
     /// ideally not creating a dataflow at all when optimized".
     pub fn could_run_expensive_function(&self) -> bool {
-        /// Returns whether a scalar expression can run an expensive function
-        fn scalar_could_run_expensive_function(scalar: &MirScalarExpr) -> bool {
-            match scalar {
-                MirScalarExpr::Column(_)
-                | MirScalarExpr::Literal(_, _)
-                | MirScalarExpr::CallUnmaterializable(_) => false,
-                MirScalarExpr::CallUnary { .. }
-                | MirScalarExpr::CallBinary { .. }
-                | MirScalarExpr::CallVariadic { .. } => true,
-                MirScalarExpr::If { cond, then, els } => {
-                    scalar_could_run_expensive_function(cond)
-                        || scalar_could_run_expensive_function(then)
-                        || scalar_could_run_expensive_function(els)
-                }
-            }
-        }
-
-        // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
-        let mut result = match self {
-            MirRelationExpr::FlatMap { .. } => true,
-            _ => false,
-        };
-        self.visit_scalars(&mut |scalar| {
-            result = result || scalar_could_run_expensive_function(scalar)
-        });
-        self.visit_children(|e| result = result || e.could_run_expensive_function());
-        result
+        self.try_could_run_expensive_function().unwrap_or(true)
+    }
+    fn try_could_run_expensive_function(&self) -> Result<bool, RecursionLimitError> {
+        let mut result = false;
+        self.try_visit_pre(&mut |e| {
+            // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
+            result = result || matches!(e, MirRelationExpr::FlatMap { .. });
+            self.try_visit_scalars(&mut |scalar| {
+                result = result
+                    || match scalar {
+                        MirScalarExpr::Column(_)
+                        | MirScalarExpr::Literal(_, _)
+                        | MirScalarExpr::CallUnmaterializable(_)
+                        | MirScalarExpr::If { .. } => false,
+                        MirScalarExpr::CallUnary { .. }
+                        | MirScalarExpr::CallBinary { .. }
+                        | MirScalarExpr::CallVariadic { .. } => true,
+                    };
+                Ok(())
+            })
+        })?;
+        Ok(result)
     }
 }
 
