@@ -74,7 +74,9 @@ Managed clusters with sources and sinks only support a replication factor of zer
 We plan to remove this restriction in a future version of Materialize.
 {{< /warning >}}
 
-## Syntax to create managed clusters
+### Managed clusters
+
+### Syntax
 
 
 {{< diagram "create-managed-cluster.svg" >}}
