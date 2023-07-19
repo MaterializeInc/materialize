@@ -42,4 +42,5 @@ scratch
 
 /misc/python/materialize/build/
 /misc/python/materialize/mz_test_base.egg-info/
+/misc/python/materialize/materialize.egg-info/
 /misc/python/materialize/dist/
