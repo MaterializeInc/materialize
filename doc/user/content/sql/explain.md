@@ -52,10 +52,11 @@ This stage determines the query optimization stage at which the plan snapshot wi
 
 Plan Stage | Description
 ------|-----
-**RAW** | Display the raw plan.
-**DECORRELATED** | Display the decorrelated plan.
-**OPTIMIZED** | _(Default)_ Display the optimized plan.
-**PHYSICAL** | Display the physical plan.
+**RAW PLAN** | Display the raw plan.
+**DECORRELATED PLAN** | Display the decorrelated plan.
+**OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
+**PHYSICAL PLAN** | Display the physical plan.
+**TIMESTAMP** | Display the [timestamps](#timestamps) for the plan.
 
 ### Output modifiers
 
@@ -245,156 +246,78 @@ Operator | Meaning | Example
 **Union** | Sums the counts of each row of all inputs. | `Union`
 **Return ... With ...**  | Binds sub-plans consumed multiple times by downstream operators. | [See above](#reading-decorrelatedoptimized-plans)
 
-### Timestamps
+## Timestamps
 
-`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement, view, or materialized view -- valuable information to acknowledge query delays.
+`EXPLAIN TIMESTAMP` displays the timestamps associated with the hypothetical
+execution of a `SELECT` statement.
 
-The explanation is divided in two parts:
+You can use `EXPLAIN TIMESTAMP` to assess:
 
-1. Determinations for a timestamp
-2. Sources frontiers
+  * Whether a query would have waited for data to become available
+  * How stale the data returned by the query would have been
 
-#### Determinations for a timestamp
-
-Queries in Materialize have a logical timestamp, known as _query timestamp_. It plays a critical role to return a correct result. Returning a correct result implies retrieving data with the same logical time from each source present in a query.
-
-In this case, sources are objects providing data: materialized views, views, indexes, tables, or sources. Each will have a pair of logical timestamps frontiers, denoted as _sources frontiers_.
-
-#### Sources frontiers
-
-Every source has a beginning _read frontier_ and an ending _write frontier_. They stand for a source’s limits to return a correct result immediately:
-
-* Read frontier: Indicates the minimum logical timestamp to return a correct result (known as _compaction_)
-* Write frontier: Indicates the maximum timestamp to build a correct result without waiting unprocessed data.
-
-Having a _query timestamp_ outside the values of the frontiers can explain the presence of delays. While in the middle, the space of processed but not yet compacted data, allows building and returning a correct result immediately.
-
-#### Example
+### Output format
 
 ```sql
-EXPLAIN TIMESTAMP FOR MATERIALIZED VIEW users;
+EXPLAIN TIMESTAMP FOR SELECT * FROM users;
 ```
 ```
-                                 Timestamp
----------------------------------------------------------------------------
-                 query timestamp: 1673618185152 (2023-01-13 13:56:25.152) +
-           oracle read timestamp: 1673618185152 (2023-01-13 13:56:25.152) +
- largest not in advance of upper: 1673618185152 (2023-01-13 13:56:25.152) +
-                           upper:[1673618185153 (2023-01-13 13:56:25.153)]+
-                           since:[1673618184000 (2023-01-13 13:56:24.000)]+
-         can respond immediately: true                                    +
-                        timeline: Some(EpochMilliseconds)                 +
-                                                                          +
- source materialize.public.raw_users (u2014, storage):                    +
-                   read frontier:[1673618184000 (2023-01-13 13:56:24.000)]+
-                  write frontier:[1673618185153 (2023-01-13 13:56:25.153)]+
+                                    Timestamp
+----------------------------------------------------------------------------------
+                      query timestamp: 1673618185152 (2023-01-13 13:56:25.152)   +
+        strict serializable timestamp: 1673618185152 (2023-01-13 13:56:25.152)   +
+               minimum write frontier: [1673618185153 (2023-01-13 13:56:25.153)] +
+                maximum read frontier: [1673618184000 (2023-01-13 13:56:24.000)] +
+               query timestamp closed: true                                      +
+                                                                                 +
+ referenced object materialize.public.users (u2014, storage):                    +
+                        read frontier: [1673618184000 (2023-01-13 13:56:24.000)] +
+                       write frontier: [1673618185153 (2023-01-13 13:56:25.153)] +
 ```
 
-#### Definitions
+#### Fields
 
-Field | Meaning | Example
+Field    | Meaning |
 ---------|---------|---------
-**query timestamp** | The query timestamp value |`1673612424151 (2023-01-13 12:20:24.151)`
-**oracle read** | The value of the timeline's oracle timestamp, if used. | `1673612424151 (2023-01-13 12:20:24.151)`
-**largest not in advance of upper** | The largest timestamp not in advance of upper. | `1673612424151 (2023-01-13 12:20:24.151)`
-**since** | The maximum read frontier of all involved sources. | `[1673612423000 (2023-01-13 12:20:23.000)]`
-**upper** | The minimum write frontier of all involved sources | `[1673612424152 (2023-01-13 12:20:24.152)]`
-**can respond immediately** | Returns true when the **query timestamp** is greater or equal to **since** and lower than **upper** | `true`
-**timeline** | The type of timeline the query's timestamp belongs | `Some(EpochMilliseconds)`
+**query timestamp** | The timestamp at which the query would execute. See [Timestamps](/sql/consistency#timestamps) for details.
+**strict serializable timestamp** | The timestamp at which the transaction must execute to adhere to [strict serializability](/sql/consistency#strict-serializable). Present only if the isolation level is strict serializable and the query references at least one object.
+**minimum write frontier** | The minimum write frontier of all referenced objects.
+**maximum read timestamp** | The maximum read frontier of all referenced objects.
+**query timestamp closed** | Whether the **query timestamp** is less than the minimum write frontier (i.e., the query does not need to wait for the data to become available)
 
+#### Referenced objects
 
-##### Timeline values
-Field | Meaning | Example
----------|---------|---------
-**EpochMilliseconds** | Means the timestamp is the number of milliseconds since the Unix epoch. | `Some(EpochMilliseconds)`
-**External** | Means the timestamp comes from an external data source and we don't know what the number means. The attached String is the source's name, which will result in different sources being incomparable. | `Some(External)`
-**User** | Means the user has manually specified a timeline. The attached String is specified by the user, allowing them to decide sources that are joinable. | `Some(User)`
+For each object referenced by the query, `EXPLAIN TIMESTAMP` prints the
+following information:
 
-##### Sources frontiers
+Field    | Meaning
+---------|---------
+**object** | The full name, ID, and class (storage or compute) of the object
+**read frontier** | The [read frontier](/sql/consistency#queryable-objects) for the object
+**write frontier** | The [write frontier](/sql/consistency#queryable-objects) for the object
 
-Field | Meaning | Example
----------|---------|---------
-**source** | Source’s identifiers | `source materialize.public.raw_users (u2014, storage)`
-**read frontier** | Minimum logical timestamp. |`[1673612423000 (2023-01-13 12:20:23.000)]`
-**write frontier** | Maximum logical timestamp. | `[1673612424152 (2023-01-13 12:20:24.152)]`
+### Interpretation
 
-<!-- We think of `since` as the "read frontier": times not later than or equal to
-`since` cannot be correctly read. We think of `upper` as the "write frontier":
-times later than or equal to `upper` may still be written to the TVC. -->
-<!-- Who is the oracle? -->
-<!--
-We maintain a timestamp oracle that returns strictly increasing timestamps
-Mentions that this is inspired/similar to Percolator.
+If Materialize reports that the query timestamp was closed, the query would have
+begun execution immediately. If Materialize reports that the query timestamp was
+**not** closed, the query would have needed to wait for the write frontier to
+advance past the query timestamp.
 
-Timestamp oracle is periodically bumped up to the current system clock
-We never revert oracle if system clock goes backwards.
+In a well-functioning deployment, the minimum write frontier of a query
+typically lags the wall clock time by at most a few seconds, reflecting the
+processing time of any referenced indexes and materialized views and the tick
+interval of any referenced sources.
 
-https://tikv.org/deep-dive/distributed-transaction/timestamp-oracle/
--->
-<!-- Materialize's objects request timestamp to the oracle, a timestamp provider. The oracle's timestamp bumps up periodically to match the current system clock, and never goes backwards.
+Substantial lag between wall clock time and the minimum write frontier usually
+indicates a stuck source, index, or materialized view. You can determine which
+objects are dominating the lag by finding the referenced objects whose write
+frontiers are equal to the minimum write frontier. See
+[troubleshooting](/manage/troubleshooting) for help debugging a stuck source,
+index, or materialized view.
 
-It relies on an oracle, a timestamp provider, to handle them correctly.
-
-The oracle it is a timestamp provider. It bumps up periodically internal value to the current system clock, never going backwards.
-
-Issuing a select statement in Materialize
-When a select statement runs, Materialize will pick a timestamp between all the sources:
-
-`max(max(read_frontiers), min(write_frontiers) - 1)` -->
-
-<!-- /// Information used when determining the timestamp for a query.
-#[derive(Serialize, Deserialize)]
-pub struct TimestampDetermination<T> {
-    /// The chosen timestamp context from `determine_timestamp`.
-    pub timestamp_context: TimestampContext<T>,
-    /// The largest timestamp not in advance of upper.
-    pub largest_not_in_advance_of_upper: T,
-}
-
-
-*Query timestamp: The timestamp in a timeline at which the query makes the read
-oracle read: The value of the timeline's oracle timestamp, if used.
-largest not in advance of upper: The largest timestamp not in advance of upper.
-upper: The write frontier of all involved sources.
-since: The read frontier of all involved sources.
-can respond immediately: True when the write frontier is greater than the query timestamp.
-timeline: The type of timeline the query's timestamp belongs:
-      /// EpochMilliseconds means the timestamp is the number of milliseconds since
-      /// the Unix epoch.
-      EpochMilliseconds,
-      /// External means the timestamp comes from an external data source and we
-      /// don't know what the number means. The attached String is the source's name,
-      /// which will result in different sources being incomparable.
-      External(String),
-      /// User means the user has manually specified a timeline. The attached
-      /// String is specified by the user, allowing them to decide sources that are
-      /// joinable.
-      User(String),
-
-Each source contains two frontiers:
-  Read: At which time
-  Write:
-
-                 query timestamp: 1673612424151 (2023-01-13 12:20:24.151) +
-           oracle read timestamp: 1673612424151 (2023-01-13 12:20:24.151) +
- largest not in advance of upper: 1673612424151 (2023-01-13 12:20:24.151) +
-                           upper:[1673612424152 (2023-01-13 12:20:24.152)]+
-                           since:[1673612423000 (2023-01-13 12:20:23.000)]+
-
-
-                                 Timestamp
----------------------------------------------------------------------------
-                 query timestamp: 1673612424151 (2023-01-13 12:20:24.151) +
-           oracle read timestamp: 1673612424151 (2023-01-13 12:20:24.151) +
- largest not in advance of upper: 1673612424151 (2023-01-13 12:20:24.151) +
-                           upper:[1673612424152 (2023-01-13 12:20:24.152)]+
-                           since:[1673612423000 (2023-01-13 12:20:23.000)]+
-         can respond immediately: true                                    +
-                        timeline: Some(EpochMilliseconds)                 +
-                                                                          +
- source materialize.public.a (u2014, storage):                            +
-                   read frontier:[1673612423000 (2023-01-13 12:20:23.000)]+
-                  write frontier:[1673612424152 (2023-01-13 12:20:24.152)]+ -->
+The largest timestamp that is less than the write frontier reflects the time at
+which the freshest data is available. If the query timestamp is less than this
+timestamp, the delta reflects the amount of staleness in the query results.
 
 ## Privileges
 

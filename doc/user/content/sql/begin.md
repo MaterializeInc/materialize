@@ -30,7 +30,7 @@ Transactions in Materialize do not support interleaving arbitrary kinds of state
 A **read-only** transaction starts with a [`SELECT`](/sql/select) statement and allows only `SELECT` statements.
 Because Materialize does not know which objects (sources, tables, or views) will be queried during the transaction, the objects in the first `SELECT` and any other object in the same schemas are assumed to be possible query targets.
 Other queries can only reference these same-schema objects.
-During the first query, a timestamp is chosen that is valid for all of those objects.
+During the first query, a timestamp is chosen that is greater than the [read frontier](/sql/explain#source-frontiers) for all of those objects.
 This timestamp will be used for all other queries.
 The transaction will additionally hold back normal compaction of the objects, potentially increasing memory usage for very long running transactions.
 
