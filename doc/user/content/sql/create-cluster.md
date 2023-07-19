@@ -81,7 +81,7 @@ We plan to remove this restriction in a future version of Materialize.
 
 {{< diagram "create-managed-cluster.svg" >}}
 
-### Cluster options
+#### `CLUSTER` options
 
 {{% cluster-options %}}
 
