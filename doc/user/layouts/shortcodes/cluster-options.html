@@ -1,6 +1,6 @@
 Field                               | Value      | Description
 ------------------------------------|------------|-------------------------------------
-`MANAGED`                           | `bool`     | Default: `true`. Indicates whether the cluster is a [managed cluster](/sql/create-cluster/#managed-and-unmanaged-clusters).
+`MANAGED`                           | `bool`     | Default: `true`. Indicates whether the cluster is a [managed cluster](/sql/create-cluster/#managed-and-unmanaged-clusters). We infer the value for `MANAGED` to be true unless you specify replicas manually.
 `SIZE`                              | `text`     | The size of the cluster replicas. For valid sizes, see [cluster replica sizes](/sql/create-cluster-replica#sizes).
 `REPLICATION FACTOR`                | `text`     | The replication factor of the cluster. Can be 0 to disable computations.
 `AVAILABILITY ZONES`                | `text[]`   | If you want the cluster replicas to reside in specific availability zones. You must specify a list of [AWS availability zone IDs] in either `us-east-1` or `eu-west-1`, e.g. `use1-az1`. Note that we expect the zone's ID, rather than its name.

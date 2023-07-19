@@ -85,8 +85,6 @@ We plan to remove this restriction in a future version of Materialize.
 
 {{% cluster-options %}}
 
-We infer the value for `MANAGED` to be true unless you specify replicas manually.
-
 ## Unmanaged clusters
 
 ### Syntax
