@@ -124,8 +124,8 @@ timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow.git", branch = "fix_398" }
+dogsdogsdogs = { git = "https://github.com/antiguru/differential-dataflow.git", branch = "fix_398" }
 
 # Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
 # which depends on ahash v0.8 instead of v0.7. In the meantime we've
@@ -177,3 +177,7 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+# Projects that do not reliably release to crates.io.
+timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
