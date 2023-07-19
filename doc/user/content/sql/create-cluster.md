@@ -85,7 +85,9 @@ We plan to remove this restriction in a future version of Materialize.
 
 We infer the value for `MANAGED` to be true unless you specify replicas manually.
 
-## Syntax to create unmanaged clusters
+## Unmanaged clusters
+
+### Syntax
 
 {{< diagram "create-cluster.svg" >}}
 
