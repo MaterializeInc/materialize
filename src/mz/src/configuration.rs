@@ -62,7 +62,10 @@ impl Endpoint {
         );
         query_pairs.append_pair("profile", profile_name);
         drop(query_pairs);
-        url
+
+        // TODO: Remove after the transition to the console.
+        // Simple tweak to redirect the user to the console domain.
+        url.as_str().replace("cloud", "console").parse().unwrap()
     }
 
     /// Returns the URL for reading API tokens.
