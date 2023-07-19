@@ -30,7 +30,7 @@ use crate::plan::{AvailableCollections, GetPlan};
 /// is true (i.e., physically monotonic) and the top value is false (i.e. not
 /// physically monotonic).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct PhysicallyMonotonic(bool);
+pub struct PhysicallyMonotonic(pub bool);
 
 impl BoundedLattice for PhysicallyMonotonic {
     fn top() -> Self {
