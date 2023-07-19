@@ -164,7 +164,7 @@ SHOW PRIVILEGES FROM ALL DATABASES;
  materialize | public | my_table    | table       | SELECT, INSERT
  materialize | public | my_view     | view        | SELECT
  materialize | NULL   | public      | schema      | USAGE
- db2         | NULL   | my_schema   | schema      | CREATE 
+ db2         | NULL   | my_schema   | schema      | CREATE
  NULL        | NULL   | materialize | database    | USAGE
  NULL        | NULL   | my_db       | database    | USAGE
  NULL        | NULL   | my_cluster  | cluster     | CREATE
