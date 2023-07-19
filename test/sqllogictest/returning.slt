@@ -62,17 +62,15 @@ INSERT INTO t (a) VALUES (100) RETURNING t.a
 ----
 100
 
-# Work around our table parse alias bug, but verify we can RETURNING results
-# of queries.
 query I
 INSERT INTO t SELECT count(*), 0 FROM t AS t RETURNING a
 ----
 10
 
-# TODO(mjibson): This works in Postgres. We currently parse the RETURNING as a
-# table alias for t.
-statement error Expected end of statement
+query I
 INSERT INTO t SELECT count(*), 0 FROM t RETURNING a
+----
+11
 
 # TODO(mjibson): This works in Postgres.
 statement error Expected right parenthesis
@@ -135,6 +133,7 @@ SELECT * FROM t ORDER BY a, b
 9  10
 10  0
 10  11
+11  0
 100  11
 NULL  10
 NULL  11
