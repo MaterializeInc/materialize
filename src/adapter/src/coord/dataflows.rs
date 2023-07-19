@@ -802,6 +802,7 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))
         }
+        UnmaterializableFunc::MzIsSuperuser => pack(Datum::from(session.is_superuser())),
         UnmaterializableFunc::MzNow => match logical_time {
             EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
             EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),

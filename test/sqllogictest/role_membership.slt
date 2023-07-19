@@ -661,6 +661,67 @@ SELECT pg_has_role('materialize', 'public', 'USAGE')
 query error role "public" does not exist
 SELECT pg_has_role('public', 'materialize', 'USAGE')
 
+# Test information_schema.applicable_roles
+
+statement ok
+CREATE ROLE r1
+
+statement ok
+CREATE ROLE r2
+
+statement ok
+CREATE ROLE r3
+
+statement ok
+CREATE ROLE r4
+
+statement ok
+GRANT r2 TO r1
+
+statement ok
+GRANT r3 TO r2
+
+statement ok
+GRANT r3 TO r4
+
+simple conn=r1,user=r1
+SELECT * FROM information_schema.applicable_roles
+----
+r1,r2,NO
+r2,r3,NO
+COMPLETE 2
+
+simple conn=mz_system,user=mz_system
+SELECT * FROM information_schema.applicable_roles
+----
+r1,r2,NO
+r2,r3,NO
+r4,r3,NO
+COMPLETE 3
+
+simple conn=r1,user=r1
+SELECT * FROM information_schema.enabled_roles
+----
+r1
+r2
+r3
+COMPLETE 3
+
+simple conn=mz_system,user=mz_system
+SELECT * FROM information_schema.enabled_roles
+----
+r1
+r2
+r3
+r4
+mz_system
+materialize
+mz_introspection
+COMPLETE 7
+
+statement ok
+DROP ROLE r1, r2, r3, r4
+
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system

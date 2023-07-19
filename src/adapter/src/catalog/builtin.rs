@@ -3245,6 +3245,25 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = m.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+pub const INFORMATION_SCHEMA_APPLICABLE_ROLES: BuiltinView = BuiltinView {
+    name: "applicable_roles",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.applicable_roles AS
+SELECT
+    member.name AS grantee,
+    role.name AS role_name,
+    -- ADMIN OPTION isn't implemented
+    'NO' AS is_grantable
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+WHERE
+    (CASE
+        WHEN mz_internal.mz_is_superuser() THEN true
+        ELSE pg_has_role(current_role, member.oid, 'MEMBER')
+    END)",
+};
+
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
@@ -3264,6 +3283,19 @@ JOIN mz_catalog.mz_objects o ON o.id = c.id
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
+    name: "enabled_roles",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.enabled_roles AS
+SELECT name AS role_name
+FROM mz_roles
+WHERE
+    (CASE
+        WHEN mz_internal.mz_is_superuser() THEN true
+        ELSE pg_has_role(current_role, oid, 'USAGE')
+    END)",
 };
 
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
@@ -4196,7 +4228,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_LANGUAGE),
         Builtin::View(&PG_SHDESCRIPTION),
         Builtin::View(&PG_INDEXES),
+        Builtin::View(&INFORMATION_SCHEMA_APPLICABLE_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
+        Builtin::View(&INFORMATION_SCHEMA_ENABLED_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
         Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),

@@ -3567,6 +3567,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
         },
+        "mz_is_superuser" => Scalar {
+            params!() => UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
+        },
         "mz_normalize_object_name" => Scalar {
             params!(String) => sql_impl_func("
             (
