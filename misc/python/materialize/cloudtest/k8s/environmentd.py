@@ -102,7 +102,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = [V1VolumeMount(name="data", mount_path="/data")]
+        volume_mounts = []
 
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
@@ -151,15 +151,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         )
 
     def claim_templates(self) -> list[V1PersistentVolumeClaim]:
-        claim_templates = [
-            V1PersistentVolumeClaim(
-                metadata=V1ObjectMeta(name="data"),
-                spec=V1PersistentVolumeClaimSpec(
-                    access_modes=["ReadWriteOnce"],
-                    resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
-                ),
-            ),
-        ]
+        claim_templates = []
 
         if self.coverage_mode:
             claim_templates.append(
