@@ -2050,7 +2050,7 @@ impl Coordinator {
                 &id_bundle,
                 &when,
                 cluster_id,
-                timeline_context.clone(),
+                &timeline_context,
                 None,
             )?
             .timestamp_context
