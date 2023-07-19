@@ -1,49 +1,92 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="327" height="147">
-   <polygon points="11 17 3 13 3 21"/>
-   <polygon points="19 17 11 13 11 21"/>
-   <rect x="33" y="3" width="76" height="32" rx="10"/>
-   <rect x="31"
+<svg xmlns="http://www.w3.org/2000/svg" width="545" height="147">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="76" height="32" rx="10"/>
+   <rect x="29"
          y="1"
          width="76"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="41" y="21">CREATE</text>
-   <rect x="129" y="3" width="84" height="32" rx="10"/>
-   <rect x="127"
+   <text class="terminal" x="39" y="21">CREATE</text>
+   <rect x="127" y="3" width="84" height="32" rx="10"/>
+   <rect x="125"
          y="1"
          width="84"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="137" y="21">CLUSTER</text>
-   <rect x="233" y="3" width="56" height="32"/>
-   <rect x="231" y="1" width="56" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="241" y="21">name</text>
-   <rect x="45" y="113" width="112" height="32"/>
-   <rect x="43" y="111" width="112" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="53" y="131">cluster_option</text>
-   <rect x="177" y="113" width="28" height="32" rx="10"/>
-   <rect x="175"
+   <text class="terminal" x="135" y="21">CLUSTER</text>
+   <rect x="231" y="3" width="56" height="32"/>
+   <rect x="229" y="1" width="56" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="239" y="21">name</text>
+   <rect x="307" y="3" width="50" height="32" rx="10"/>
+   <rect x="305"
+         y="1"
+         width="50"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="315" y="21">SIZE</text>
+   <rect x="377" y="3" width="28" height="32" rx="10"/>
+   <rect x="375"
+         y="1"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="385" y="21">=</text>
+   <rect x="425" y="3" width="54" height="32"/>
+   <rect x="423" y="1" width="54" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="433" y="21">value</text>
+   <rect x="499" y="3" width="24" height="32" rx="10"/>
+   <rect x="497"
+         y="1"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="507" y="21">,</text>
+   <rect x="89" y="113" width="114" height="32" rx="10"/>
+   <rect x="87"
+         y="111"
+         width="114"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="97" y="131">REPLICATION</text>
+   <rect x="223" y="113" width="78" height="32" rx="10"/>
+   <rect x="221"
+         y="111"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="231" y="131">FACTOR</text>
+   <rect x="341" y="113" width="28" height="32" rx="10"/>
+   <rect x="339"
          y="111"
          width="28"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="185" y="131">=</text>
-   <rect x="225" y="113" width="54" height="32"/>
-   <rect x="223" y="111" width="54" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="233" y="131">value</text>
-   <rect x="45" y="69" width="24" height="32" rx="10"/>
-   <rect x="43"
+   <text class="terminal" x="349" y="131">=</text>
+   <rect x="389" y="113" width="54" height="32"/>
+   <rect x="387" y="111" width="54" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="397" y="131">value</text>
+   <rect x="341" y="69" width="112" height="32"/>
+   <rect x="339" y="67" width="112" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="349" y="87">cluster_option</text>
+   <rect x="473" y="69" width="24" height="32" rx="10"/>
+   <rect x="471"
          y="67"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="53" y="87">,</text>
+   <text class="terminal" x="481" y="87">,</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m76 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m56 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-308 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m112 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m54 0 h10 m-274 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m254 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-254 0 h10 m24 0 h10 m0 0 h210 m23 44 h-3"/>
-   <polygon points="317 127 325 123 325 131"/>
-   <polygon points="317 127 309 123 309 131"/>
+         d="m17 17 h2 m0 0 h10 m76 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m56 0 h10 m0 0 h10 m50 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m54 0 h10 m0 0 h10 m24 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-478 110 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m114 0 h10 m0 0 h10 m78 0 h10 m20 0 h10 m28 0 h10 m0 0 h10 m54 0 h10 m0 0 h54 m-196 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m176 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-176 0 h10 m112 0 h10 m0 0 h10 m24 0 h10 m23 44 h-3"/>
+   <polygon points="535 127 543 123 543 131"/>
+   <polygon points="535 127 527 123 527 131"/>
 </svg>
