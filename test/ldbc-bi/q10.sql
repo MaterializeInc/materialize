@@ -4,7 +4,7 @@
 \set minPathDistance 3 -- fixed value
 \set maxPathDistance 4 -- fixed value
 -- materialize=> \i q10.sql
---    person.id    |             tag.name              | messagecount 
+--    person.id    |             tag.name              | messagecount
 -- ----------------+-----------------------------------+--------------
 --   2199023257601 | Ralph_Vaughan_Williams            |            3
 --   2199023257601 | Aristophanes                      |            2
@@ -107,7 +107,7 @@
 --  10995116279128 | Claude_Debussy                    |            1
 --  10995116285979 | Claude_Debussy                    |            1
 -- (100 rows)
--- 
+--
 -- Time: 22849.938 ms (00:22.850)
 
 /* Q10. Experts in social circle

@@ -1,6 +1,6 @@
 \set tag '\'Sikh_Empire\''
 -- materialize=> \i q05.sql
---    person.id    | replycount | likecount | messagecount | score 
+--    person.id    | replycount | likecount | messagecount | score
 -- ----------------+------------+-----------+--------------+-------
 --   8796093023472 |          2 |       176 |            1 |  1765
 --   2199023258140 |          2 |       134 |            1 |  1345
@@ -103,7 +103,7 @@
 --   2199023261155 |          2 |         0 |            1 |     5
 --   2199023262487 |          2 |         0 |            1 |     5
 -- (100 rows)
--- 
+--
 -- Time: 17582.355 ms (00:17.582)
 
 /* Q5. Most active posters in a given topic

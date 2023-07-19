@@ -1,7 +1,7 @@
 \set startDate '\'2012-08-29\''::timestamp
 \set endDate '\'2012-11-24\''::timestamp
 -- materialize=> \i q09.sql
---    person.id    | person.firstName  | person.lastName | threadcount | messagecount 
+--    person.id    | person.firstName  | person.lastName | threadcount | messagecount
 -- ----------------+-------------------+-----------------+-------------+--------------
 --   8796093032299 | Robert            | Brown           |         144 |         1984
 --  26388279073672 | Andrei            | Condariuc       |         185 |         1314
@@ -104,7 +104,7 @@
 --   2199023265231 | Wei               | Wang            |          82 |          249
 --  19791209301504 | Jose              | Costa           |          16 |          241
 -- (100 rows)
--- 
+--
 -- Time: 3765.033 ms (00:03.765)
 
 /* Q9. Top thread initiators

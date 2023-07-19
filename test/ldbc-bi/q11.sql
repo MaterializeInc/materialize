@@ -2,11 +2,11 @@
 \set startDate '\'2012-09-28\''::timestamp
 \set endDate '\'2013-01-10\''::timestamp
 -- materialize=> \i q11.sql
---  count 
+--  count
 -- -------
 --    840
 -- (1 row)
--- 
+--
 -- Time: 330.155 ms
 
 /* Q11. Friend triangles

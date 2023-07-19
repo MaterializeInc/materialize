@@ -1,5 +1,5 @@
 \set date '\'2010-02-12\''::timestamp
--- materialize=> \i q04.sql 
+-- materialize=> \i q04.sql
 -- CREATE MATERIALIZED VIEW
 -- Time: 544.434 ms
 -- ^CCancel request sent

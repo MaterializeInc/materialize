@@ -1,6 +1,6 @@
 \set tag '\'Slovenia\''
 -- materialize=> \i q07.sql
---              relatedTag.name              | count 
+--              relatedTag.name              | count
 -- ------------------------------------------+-------
 --  Humayun                                  |    10
 --  Genghis_Khan                             |     9
@@ -103,7 +103,7 @@
 --  Chuck_Berry                              |     3
 --  Chulalongkorn                            |     3
 -- (100 rows)
--- 
+--
 -- Time: 17272.877 ms (00:17.273)
 
 /* Q7. Related topics

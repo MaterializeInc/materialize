@@ -2,7 +2,7 @@
 \set startDate '\'2010-06-14\''::timestamp
 \set endDate '\'2010-06-28\''::timestamp
 -- materialize=> \i q08.sql
---    person.id    | score | friendsscore 
+--    person.id    | score | friendsscore
 -- ----------------+-------+--------------
 --  15393162796516 |   100 |         2304
 --  10995116284819 |   100 |         2202
@@ -96,7 +96,7 @@
 --  37383395348360 |   100 |            0
 --  37383395353132 |   100 |            0
 -- (91 rows)
--- 
+--
 -- Time: 10117.007 ms (00:10.117)
 
 /* Q8. Central person for a tag

@@ -6,7 +6,7 @@
 -- ^CCancel request sent
 -- psql:q15.sql:114: ERROR:  canceling statement due to user request
 -- Time: 895779.453 ms (14:55.779)
--- materialize=> 
+-- materialize=>
 
 /* Q15. Trusted connection paths through forums created in a given timeframe
 \set person1Id 21990232564808
@@ -23,10 +23,10 @@ WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (
       SELECT least(msg.CreatorPersonId, reply.CreatorPersonId) AS src,
              greatest(msg.CreatorPersonId, reply.CreatorPersonId) AS dst,
-	     sum(case when msg.ParentMessageId is null then 10 else 5 end) AS w
+             sum(case when msg.ParentMessageId is null then 10 else 5 end) AS w
       FROM Person_knows_Person pp, Message msg, Message reply
       WHERE true
-            AND pp.person1id = msg.CreatorPersonId 
+            AND pp.person1id = msg.CreatorPersonId
             AND pp.person2id = reply.CreatorPersonId
             AND reply.ParentMessageId = msg.MessageId
             AND EXISTS (SELECT * FROM myForums f WHERE f.id = msg.containerforumid)
@@ -78,9 +78,9 @@ WITH MUTUALLY RECURSIVE
       (
           WITH
           ss (dir, gsrc, dst, w, dead, iter) AS
-	     (SELECT * FROM shorts),
+             (SELECT * FROM shorts),
           toExplore (dir, gsrc, dst, w, dead, iter) AS
-	  	    (SELECT * FROM ss WHERE dead = false ORDER BY w limit 1000),
+             (SELECT * FROM ss WHERE dead = false ORDER BY w limit 1000),
           -- assumes graph is undirected
           newPoints (dir, gsrc, dst, w, dead) AS (
               SELECT e.dir, e.gsrc AS gsrc, p.dst AS dst, e.w + p.w AS w, false AS dead

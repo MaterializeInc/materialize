@@ -4,7 +4,7 @@
 -- Time: 592.701 ms
 -- CREATE INDEX
 -- Time: 675.665 ms
---    person1.id   | authorityscore 
+--    person1.id   | authorityscore
 -- ----------------+----------------
 --  10995116278639 |          65214
 --  21990232559802 |          51479
@@ -107,7 +107,7 @@
 --   6597069776679 |              0
 --   8796093022752 |              0
 -- (100 rows)
--- 
+--
 -- Time: 30927.052 ms (00:30.927)
 
 CREATE OR REPLACE MATERIALIZED VIEW PopularityScoreQ06 AS
