@@ -249,9 +249,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .config(&*context.secrets_reader)
                 .await?
                 .replication_timeouts(config.params.pg_replication_timeouts.clone());
+            let task_name = format!("timely-{worker_id} PG snapshotter");
 
-            let client = connection_config.connect_replication().await?;
-            if is_snapshot_leader {
+            let client = if is_snapshot_leader {
+                let client = connection_config.connect_replication().await?;
                 // The main slot must be created *before* we start snapshotting so that we can be
                 // certain that the temporarly slot created for the snapshot start at an LSN that
                 // is greater than or equal to that of the main slot.
@@ -261,7 +262,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 trace!(%id, "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
                 let cap = snapshot_cap.as_ref().unwrap();
                 snapshot_handle.give(cap, snapshot_info).await;
-            }
+
+                client
+            } else {
+                // Only the snapshot leader needs a replication connection.
+                connection_config.connect(&task_name).await?
+            };
 
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next_mut().await {
