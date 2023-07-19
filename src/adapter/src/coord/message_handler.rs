@@ -786,6 +786,7 @@ impl Coordinator {
                         copy_to,
                         dataflow,
                         cluster_id,
+                        id_bundle: None,
                         when,
                         target_replica,
                         view_id,

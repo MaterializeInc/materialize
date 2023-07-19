@@ -440,7 +440,11 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle())?;
+        mz_transform::optimize_dataflow(
+            &mut dataflow,
+            &self.index_oracle(),
+            &mz_transform::EmptyStatisticsOracle,
+        )?;
 
         Ok(dataflow)
     }
@@ -476,7 +480,11 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(dataflow, &self.index_oracle())?;
+        mz_transform::optimize_dataflow(
+            dataflow,
+            &self.index_oracle(),
+            &mz_transform::EmptyStatisticsOracle,
+        )?;
 
         Ok(())
     }

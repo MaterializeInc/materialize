@@ -2104,6 +2104,33 @@ impl FilterCharacteristics {
     pub fn add_literal_equality(&mut self) {
         self.literal_equality = true;
     }
+
+    pub fn worst_case_scaling_factor(&self) -> f64 {
+        let mut factor = 1.0;
+
+        if self.literal_equality {
+            factor *= 0.1;
+        }
+
+        if self.is_null {
+            factor *= 0.1;
+        }
+
+        if self.literal_inequality >= 2 {
+            factor *= 0.25;
+        } else if self.literal_inequality == 1 {
+            factor *= 0.33;
+        }
+
+        // catch various negated filters, treat them pessimistically
+        if !(self.literal_equality || self.is_null || self.literal_inequality > 0)
+            && self.any_filter
+        {
+            factor *= 0.9;
+        }
+
+        factor
+    }
 }
 
 #[derive(

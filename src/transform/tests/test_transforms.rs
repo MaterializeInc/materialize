@@ -238,5 +238,6 @@ impl mz_transform::Transform for Identity {
 
 const EMPTY_ARGS: mz_transform::TransformArgs<'static> = mz_transform::TransformArgs {
     indexes: &mz_transform::EmptyIndexOracle,
+    stats: &mz_transform::EmptyStatisticsOracle,
     global_id: None,
 };

@@ -292,7 +292,7 @@ impl Coordinator {
                 self.sequence_copy_rows(ctx, id, columns, rows);
             }
             Plan::Explain(plan) => {
-                self.sequence_explain(ctx, plan, target_cluster);
+                self.sequence_explain(ctx, plan, target_cluster).await;
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(ctx, plan).await;
