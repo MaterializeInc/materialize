@@ -49,7 +49,7 @@ create_cluster ::=
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
 create_managed_cluster ::=
-  'CREATE' 'CLUSTER' name '(' 'MANAGED' (',' cluster_option '=' value)* ')'
+  'CREATE' 'CLUSTER' name 'SIZE' '=' value (',' cluster_option '=' value)*
 cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
