@@ -420,6 +420,12 @@ where
             // capabilities.
             drop(capabilities);
             while let Some(event) = desired_input.next_mut().await {
+                if collection_id.is_user() {
+                    tracing::info!(
+                        "id {collection_id:?}: persist_sink mint_batch_descriptions {:?}",
+                        event
+                    );
+                }
                 match event {
                     Event::Data(cap, data) => {
                         data_output.give_container(&cap, data).await;
@@ -473,6 +479,12 @@ where
 
         loop {
             if let Some(event) = desired_input.next_mut().await {
+                if collection_id.is_user() {
+                    tracing::info!(
+                        "id {collection_id:?}: persist_sink mint_batch_descriptions active worker {:?}",
+                        event
+                    );
+                }
                 match event {
                     Event::Data(cap, data) => {
                         // Just passthrough the data.
@@ -507,7 +519,7 @@ where
                     })
                     .unwrap();
 
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         new batch_description: {:?}",
                     batch_description
@@ -518,7 +530,7 @@ where
                 // We downgrade our capability to the batch
                 // description upper, as there will never be
                 // any overlapping descriptions.
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         downgrading to {:?}",
                     desired_frontier
@@ -639,7 +651,7 @@ where
                             // Ingest new batch descriptions.
                             for description in data.drain(..) {
                                 if collection_id.is_user() {
-                                    trace!(
+                                    tracing::info!(
                                         "persist_sink {collection_id}/{shard_id}: \
                                             write_batches: \
                                             new_description: {:?}, \
@@ -681,16 +693,20 @@ where
                     }
                 }
                 Some(event) = desired_input.next_mut() => {
+                    if collection_id.is_user() {
+                        tracing::info!("write_batches event {:?}", event);
+                    }
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(cap, data) => {
                             // Extract desired rows as positive contributions to `correction`.
                             if collection_id.is_user() && !data.is_empty() {
-                                trace!(
+                                tracing::info!(
                                     "persist_sink {collection_id}/{shard_id}: \
-                                        updates: {:?}, \
+                                        updates: {:#?}, \
                                         in-flight-batches: {:?}, \
                                         desired_frontier: {:?}, \
-                                        batch_descriptions_frontier: {:?}",
+                                        batch_descriptions_frontier: {:?},
+                                        cap {:?}", cap,
                                     data,
                                     in_flight_batches,
                                     desired_frontier,
@@ -759,7 +775,7 @@ where
                     &batch_descriptions_frontier,
                 )
             {
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         CAN emit: \
                         processed_desired_frontier: {:?}, \
@@ -772,7 +788,7 @@ where
                     batch_descriptions_frontier,
                 );
 
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         in-flight batches: {:?}, \
                         batch_descriptions_frontier: {:?}, \
@@ -795,7 +811,7 @@ where
                     .cloned()
                     .collect::<Vec<_>>();
 
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         ready batches: {:?}",
                     ready_batches,
@@ -805,7 +821,7 @@ where
                     let cap = in_flight_batches.remove(&batch_description).unwrap();
 
                     if collection_id.is_user() {
-                        trace!(
+                        tracing::info!(
                             "persist_sink {collection_id}/{shard_id}: \
                                 emitting done batch: {:?}, cap: {:?}",
                             batch_description,
@@ -828,7 +844,7 @@ where
                         let batch_builder = stashed_batches.remove(&ts).unwrap();
 
                         if collection_id.is_user() {
-                            trace!(
+                            tracing::info!(
                                 "persist_sink {collection_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?}),
                                     containing {:?}",
@@ -863,7 +879,7 @@ where
                     processed_descriptions_frontier = batch_descriptions_frontier.clone();
                 }
             } else {
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         cannot emit: processed_desired_frontier: {:?}, \
                         processed_descriptions_frontier: {:?}, \
@@ -877,7 +893,7 @@ where
     });
 
     if collection_id.is_user() {
-        output_stream.inspect(|d| trace!("batch: {:?}", d));
+        output_stream.inspect(|d| tracing::info!("batch: {:?}", d));
     }
 
     let token = Rc::new(shutdown_button.press_on_drop());
@@ -1042,7 +1058,7 @@ where
                             // Ingest new batch descriptions.
                             for batch_description in data.drain(..) {
                                 if collection_id.is_user() {
-                                    trace!(
+                                    tracing::info!(
                                         "persist_sink {collection_id}/{shard_id}: \
                                             append_batches: sink {}, \
                                             new description: {:?}, \
@@ -1133,7 +1149,7 @@ where
                 .cloned()
                 .collect::<Vec<_>>();
 
-            trace!(
+            tracing::info!(
                 "persist_sink {collection_id}/{shard_id}: \
                     append_batches: in_flight: {:?}, \
                     done: {:?}, \
@@ -1166,7 +1182,7 @@ where
 
                 let mut batches = batch_set.finished;
 
-                trace!(
+                tracing::info!(
                     "persist_sink {collection_id}/{shard_id}: \
                         done batch: {:?}, {:?}",
                     done_batch_metadata,
@@ -1221,7 +1237,7 @@ where
                     .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
 
                 if collection_id.is_user() {
-                    trace!(
+                    tracing::info!(
                         "persist_sink {collection_id}/{shard_id}: \
                             append result for batch ({:?} -> {:?}): {:?}",
                         batch_lower,

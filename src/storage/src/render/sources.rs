@@ -456,7 +456,10 @@ where
 
                     let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
 
-                    let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
+                    let (stream, errors) = flattened_stream.inner.ok_err(|d| {
+                        tracing::info!("render_source_stream {d:?}");
+                        split_ok_err(d)
+                    });
 
                     let errors = errors.as_collection();
                     (stream.as_collection(), Some(errors), empty(scope))

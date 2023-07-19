@@ -200,11 +200,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use differential_dataflow::AsCollection;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 use timely::communication::Allocate;
+use timely::dataflow::operators::InspectCore;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -287,6 +289,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     export_id,
                     export.storage_metadata.clone(),
                     source_data,
+                    // source_data
+                    //     .inner
+                    //     .inspect_container(|v| tracing::info!("build_ingestion_dataflow {:?}", v))
+                    //     .as_collection(),
                     storage_state,
                     metrics,
                     export.output_index,

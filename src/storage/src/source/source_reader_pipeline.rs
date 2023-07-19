@@ -192,6 +192,8 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
+    <C as SourceRender>::Key: std::fmt::Debug,
+    <C as SourceRender>::Value: std::fmt::Debug,
 {
     let worker_id = config.worker_id;
     let id = config.id;
@@ -272,6 +274,8 @@ fn source_render_operator<G, C>(
 where
     G: Scope<Timestamp = C::Time>,
     C: SourceRender + 'static,
+    <C as SourceRender>::Key: std::fmt::Debug,
+    <C as SourceRender>::Value: std::fmt::Debug,
 {
     let source_id = config.id;
     let worker_id = config.worker_id;
@@ -300,10 +304,12 @@ where
         let mut statuses_by_idx = BTreeMap::new();
 
         while let Some(event) = data_input.next_mut().await {
+            tracing::info!("event {event:?}");
             let AsyncEvent::Data(cap, data) = event else {
                 continue;
             };
             for ((output_index, message), _, _) in data.iter() {
+                tracing::info!("output_index {output_index}, message {message:?}");
                 let status = match message {
                     Ok(_) => HealthStatusUpdate::status(HealthStatus::Running),
                     Err(ref error) => HealthStatusUpdate::status(HealthStatus::StalledWithError {
@@ -830,8 +836,8 @@ fn reclock_operator<G, K, V, FromTime, D>(
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    K: timely::Data + MaybeLength,
-    V: timely::Data + MaybeLength,
+    K: timely::Data + MaybeLength + std::fmt::Debug,
+    V: timely::Data + MaybeLength + std::fmt::Debug,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
 {
@@ -1057,9 +1063,15 @@ where
 
     // TODO(petrosagg): output the two streams directly
     let (ok_muxed_stream, err_muxed_stream) =
-        reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| match r {
-            Ok(ok) => Ok(((output, ok), ts, diff)),
-            Err(err) => Err(((output, err), ts, diff.into())),
+        reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| {
+            let r = match r {
+                Ok(ok) => Ok(((output, ok), ts, diff)),
+                Err(err) => Err(((output, err), ts, diff.into())),
+            };
+
+            tracing::info!("source_reader_pipeline {r:?}");
+
+            r
         });
 
     // We use the output index from the source export to route values to its ok and err streams. We

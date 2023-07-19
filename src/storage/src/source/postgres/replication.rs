@@ -171,6 +171,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 return Ok(());
             }
 
+            tracing::info!("\n\n\nworker_id {worker_id} responsible for slot");
+
             // Determine the slot lsn.
             let connection_config = connection
                 .connection
@@ -190,12 +192,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     .map(|t|std::cmp::max(*t, slot_lsn))
             );
 
+            tracing::info!("resume_upper {resume_upper:?}");
+
             let Some(resume_lsn) = resume_upper.into_option() else {
                 return Ok(());
             };
             data_cap.downgrade(&resume_lsn);
             upper_cap.downgrade(&resume_lsn);
-            trace!(%id, "timely-{worker_id} replication reader started lsn={}", resume_lsn);
+            tracing::info!(%id, "timely-{worker_id} replication reader started lsn={}", resume_lsn);
 
 
             let mut rewinds = BTreeMap::new();
@@ -211,16 +215,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                 }
             }
-            trace!(%id, "timely-{worker_id} pending rewinds {rewinds:?}");
+
+            tracing::info!(%id, "timely-{worker_id} pending rewinds {rewinds:?}");
 
             let mut committed_uppers = pin!(committed_uppers);
 
             let client = connection_config.connect("replication metadata").await?;
-            if let Err(err) = ensure_publication_exists(&client, &connection.publication).await? {
+            if let Err(err) = dbg!(ensure_publication_exists(&client, &connection.publication).await?) {
                 // If the publication gets deleted there is nothing else to do. These errors
                 // are not retractable.
                 for &oid in table_info.keys() {
                     let update = ((oid, Err(err.clone())), *data_cap.time(), 1);
+                    tracing::info!("definite err {:?}", update);
                     data_output.give(data_cap, update).await;
                 }
                 return Ok(());
@@ -261,7 +267,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 &mut errored
                             ));
 
-                            trace!(%id, "timely-{worker_id} extracting transaction at {commit_lsn}");
+                            tracing::info!(%id, "timely-{worker_id} extracting transaction at {commit_lsn}");
                             while let Some((oid, event, diff)) = tx.try_next().await? {
                                 if !table_info.contains_key(&oid) {
                                     continue;
@@ -282,18 +288,24 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 upper_cap.downgrade(&new_upper);
                                 data_cap.downgrade(&new_upper);
                             }
+                            tracing::info!("extracted txn @ {:?}",commit_lsn);
                         },
                         _ => return Err(TransientError::BareTransactionEvent),
                     }
                     Ok(PrimaryKeepAlive(keepalive)) => {
-                        trace!(%id, "timely-{worker_id} received keepalive lsn={}", keepalive.wal_end());
+                        tracing::info!(%id, "timely-{worker_id} received keepalive lsn={}", keepalive.wal_end());
                         new_upper = std::cmp::max(new_upper, keepalive.wal_end().into());
+                        tracing::info!("new upper {new_upper:?}");
                     }
                     Ok(_) => return Err(TransientError::UnknownReplicationMessage),
-                    Err(err) => return Err(err),
+                    Err(err) => {
+                        tracing::info!("transient err {err:?}");
+                        return Err(err)
+                    },
                 }
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
+                tracing::info!("will yield? {}", will_yield);
                 if will_yield {
                     data_output.give_container(data_cap, &mut container).await;
                     upper_cap.downgrade(&new_upper);
@@ -301,6 +313,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     rewinds.retain(|_, (_, req)| data_cap.time() <= &req.snapshot_lsn);
                 }
             }
+
+            tracing::info!("ReplicationEOF\n\n\n");
             // We never expect the replication stream to gracefully end
             Err(TransientError::ReplicationEOF)
         })
@@ -323,6 +337,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             super::cast_row(casts, &datums, &mut final_row)?;
             Ok(final_row.clone())
         });
+
+        tracing::info!("output_index {output_index}, event {event:?}");
 
         (*output_index, event.err_into())
     });
@@ -393,6 +409,7 @@ fn raw_stream<'a>(
                     }
                     Some(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
                         let send_feedback = keepalive.reply() == 1;
+                        tracing::info!("keepalive");
                         yield ReplicationMessage::PrimaryKeepAlive(keepalive);
                         send_feedback
                     }
@@ -402,6 +419,7 @@ fn raw_stream<'a>(
                 future::Either::Right((upper, _)) => match upper.and_then(|u| u.into_option()) {
                     Some(lsn) => {
                         last_committed_upper = std::cmp::max(last_committed_upper, lsn);
+                        tracing::info!("last_committed_upper {last_committed_upper:?}");
                         true
                     }
                     None => false,
@@ -410,6 +428,7 @@ fn raw_stream<'a>(
             if send_feedback {
                 let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
                 let lsn = PgLsn::from(last_committed_upper.offset);
+                tracing::info!("committing LSN {lsn:?}");
                 stream
                     .as_mut()
                     .standby_status_update(lsn, lsn, lsn, ts, 0)
