@@ -22,7 +22,6 @@ use futures::FutureExt;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_ore::task::spawn;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -901,7 +900,13 @@ where
         gc: GarbageCollector<K, V, T, D>,
     ) -> JoinHandle<()> {
         let mut machine = self;
-        spawn(|| "persist::heartbeat_read", async move {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let name = format!(
+            "persist::heartbeat_read({},{})",
+            machine.shard_id(),
+            reader_id
+        );
+        isolated_runtime.spawn_named(|| name, async move {
             let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
             loop {
                 let before_sleep = Instant::now();
@@ -946,7 +951,13 @@ where
         gc: GarbageCollector<K, V, T, D>,
     ) -> JoinHandle<()> {
         let mut machine = self;
-        spawn(|| "persist::heartbeat_write", async move {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let name = format!(
+            "persist::heartbeat_write({},{})",
+            machine.shard_id(),
+            writer_id
+        );
+        isolated_runtime.spawn_named(|| name, async move {
             let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
             loop {
                 let before_sleep = Instant::now();
