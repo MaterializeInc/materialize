@@ -62,7 +62,11 @@ impl Endpoint {
         );
         query_pairs.append_pair("profile", profile_name);
         drop(query_pairs);
-        url
+
+        // TODO: Remove after consolidating the domains into one.
+        // For more information: (https://github.com/MaterializeInc/materialize/issues/20654)
+        // Simple tweak to redirect the user to the console domain.
+        url.as_str().replace("cloud", "console").parse().unwrap()
     }
 
     /// Returns the URL for reading API tokens.
