@@ -29,6 +29,7 @@ from kubernetes.client import (
     V1ServiceSpec,
     V1StatefulSet,
     V1StatefulSetSpec,
+    V1Toleration,
     V1VolumeMount,
 )
 
@@ -119,7 +120,20 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             volume_mounts=volume_mounts,
         )
 
-        pod_spec = V1PodSpec(containers=[container])
+        node_selector = {"environmentd": "true"}
+
+        taint_toleration = V1Toleration(
+            key="environmentd",
+            operator="Equal",
+            value="true",
+            effect="NoSchedule",
+        )
+
+        pod_spec = V1PodSpec(
+            containers=[container],
+            tolerations=[taint_toleration],
+            node_selector=node_selector,
+        )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
 
         return V1StatefulSet(
