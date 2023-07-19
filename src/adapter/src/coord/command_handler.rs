@@ -411,10 +411,11 @@ impl Coordinator {
             .expect("known to exist");
 
         let session_type = metrics::session_type_label_value(ctx.session().user());
+        let application_name = ctx.session().application_name();
         let stmt_type = metrics::statement_type_label_value(&stmt);
         self.metrics
             .query_total
-            .with_label_values(&[session_type, stmt_type])
+            .with_label_values(&[session_type, stmt_type, application_name])
             .inc();
         match &stmt {
             Statement::Subscribe(SubscribeStatement { output, .. })

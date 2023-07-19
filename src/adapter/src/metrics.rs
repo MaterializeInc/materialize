@@ -38,7 +38,7 @@ impl Metrics {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
-                var_labels: ["session_type", "statement_type"],
+                var_labels: ["session_type", "statement_type", "application_name"],
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
