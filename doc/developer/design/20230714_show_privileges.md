@@ -35,19 +35,11 @@ We will also add an `owner` column to the existing show commands.
 
 ## Detailed description
 
-- We will add an internal unmaterializable function, `mz_internal.mz_role_membership() -> text[]`,
-  that returns an array of all the role IDs that the session's current role is a member of.
-- We will add an internal unary function, `mz_internal.mz_format_privileges(text) -> text`,
-  that accepts a privilege string descriptor and returns a human-readable version. For
-  example: `mz_internal.mz_format_privileges('ar') = 'INSERT, SELECT'`.
-
-These two functions will help implement the `SHOW` commands described below.
-
 ### `SHOW PRIVILEGES`
 
-Will show all privileges held by the current session.
+Will show object privileges.
 
-The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FROM <schema-name>] [FOR <role>]`.
+The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FOR {<role> | ALL ROLES}] [FROM {SCHEMA <schema-name> | ALL SCHEMAS | DATABASE <database> | ALL DATABASES}]`.
 
 - `ON <object-type>` will filter the output to only include objects of type `<object-type>`. Valid
   values are:
@@ -63,54 +55,119 @@ The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FROM <schema-name>] [FO
     - `DATABASES`
     - `SCHEMAS`
     - `SYSTEM`
-- `FROM <schema-name>` will filter the output to exclude objects in a schema other `<schema-name>`.
-    - If specified, top level objects, such as database, schemas, and clusters are not included.
-    - If not specified then objects are limited to the current schema and top level objects are
-    - shown.
-- `FOR <role>` will filter the output to only include privileges granted to `<role>` instead of the
-current session.
+- `FOR <role>` will filter the output to only include privileges granted to `<role>`.
+  - If a role or `ALL ROLES` is not specified then the current role is assumed.
+- `FOR ALL ROLES` will display privileges granted to all roles.
+- `FROM SCHEMA <schema-name>` will filter the output to exclude items not in schema `<schema-name>`.
+    - This has no effect on database, schema, cluster, or system privileges.
+    - If a schema or `ALL SCHEMAS` is not specified then the active schema is assumed.
+- `FROM ALL SCHEMAS` will include all items.
+- `FROM DATABASE <database>` will filter the output to exclude schemas not in database `<database>`.
+  - This has no effect on item, database, cluster, or cluster privileges.
+  - If a database or `ALL DATABASES` is not specified then the active database is assumed.
+- `FROM ALL DATABASES` will include all schemas.
 
 The output will include the following columns:
 
-- `name: text` The name of the object.
-- `object_type: text` The type of the object.
-- `privileges: text` Human readable version of the privileges that held by the current session.
+- `database: text` - The database of the object. `NULL` for databases and clusters.
+- `schema: text` - The schema of the object. `NULL` for databases, schemas, and clusters.
+- `name: text` - The name of the object.
+- `object_type: text` -  The type of the object.
+- `privileges: text` - Human readable version of the privileges that held by the current session.
 
 Here are some example queries:
 
 ```sql
 SHOW PRIVILEGES;
 
- name       | object_type | privileges
-------------+-------------+----------------
- my_table   | table       | SELECT, INSERT
- my_view    | view        | SELECT
- my_cluster | cluster     | CREATE
+ database    | schema | name        | object_type | privileges
+-------------+--------+-------------+-------------+----------------
+ materialize | public | my_table    | table       | SELECT, INSERT
+ materialize | public | my_view     | view        | SELECT
+ materialize | NULL   | public      | schema      | USAGE
+ NULL        | NULL   | materialize | database    | USAGE
+ NULL        | NULL   | my_db       | database    | USAGE
+ NULL        | NULL   | my_cluster  | cluster     | CREATE
+```
+
+```sql
+SHOW PRIVILEGES FOR ROLE ceo;
+
+ database    | schema | name        | object_type | privileges
+-------------+--------+-------------+-------------+--------------------------------
+ materialize | public | my_table    | table       | SELECT, INSERT, UPDATE, DELETE
+ materialize | public | my_view     | view        | SELECT
+ materialize | NULL   | public      | schema      | CREATE, USAGE
+ NULL        | NULL   | materialize | database    | CREATE, USAGE
+ NULL        | NULL   | my_db       | database    | CREATE, USAGE
+ NULL        | NULL   | my_cluster  | cluster     | CREATE, USAGE
 ```
 
 ```sql
 SHOW PRIVILEGES ON TABLES;
 
- name       | object_type | privileges
-------------+-------------+----------------
- my_table   | table       | SELECT, INSERT
+ database    | schema | name       | object_type | privileges
+-------------+--------+------------+-------------+----------------
+ materialize | public | my_table   | table       | SELECT, INSERT
 ```
 
 ```sql
-SHOW PRIVILEGES FROM public;
+SHOW PRIVILEGES FROM SCHEMA qa;
 
- name       | object_type | privileges
-------------+-------------+----------------
- my_table   | table       | SELECT, INSERT
- my_view    | view        | SELECT
+ database    | schema | name        | object_type | privileges
+-------------+--------+-------------+-------------+----------------
+ materialize | qa     | my_secret   | secret      | USAGE
+ materialize | NULL   | public      | schema      | USAGE
+ NULL        | NULL   | materialize | database    | USAGE
+ NULL        | NULL   | my_db       | database    | USAGE
+ NULL        | NULL   | my_cluster  | cluster     | CREATE
 ```
 
 ```sql
-SHOW PRIVILEGES ON VIEWS FROM public;
+SHOW PRIVILEGES ON VIEWS FROM SCHEMA public;
 
- name       | object_type | privileges
-------------+-------------+----------------
- my_view    | view        | SELECT
+ database    | schema | name       | object_type | privileges
+-------------+--------+------------+-------------+----------------
+ materialize | public | my_view    | view        | SELECT
+```
+
+```sql
+SHOW PRIVILEGES FROM DATABASE db2;
+
+ database    | schema | name        | object_type | privileges
+-------------+--------+-------------+-------------+----------------
+ db2         | NULL   | my_schema   | schema      | CREATE
+ NULL        | NULL   | materialize | database    | USAGE
+ NULL        | NULL   | my_db       | database    | USAGE
+ NULL        | NULL   | my_cluster  | cluster     | CREATE
+```
+
+```sql
+SHOW PRIVILEGES FROM ALL SCHEMAS;
+
+ database    | schema | name        | object_type | privileges
+-------------+--------+-------------+-------------+----------------
+ materialize | public | my_table    | table       | SELECT, INSERT
+ materialize | public | my_view     | view        | SELECT
+ materialize | qa     | my_secret   | secret      | USAGE
+ materialize | NULL   | public      | schema      | USAGE
+ NULL        | NULL   | materialize | database    | USAGE
+ NULL        | NULL   | my_db       | database    | USAGE
+ NULL        | NULL   | my_cluster  | cluster     | CREATE
+```
+
+```sql
+SHOW PRIVILEGES FROM ALL DATABASES;
+
+ database    | schema | name        | object_type | privileges
+-------------+--------+-------------+-------------+----------------
+ materialize | public | my_table    | table       | SELECT, INSERT
+ materialize | public | my_view     | view        | SELECT
+ materialize | NULL   | public      | schema      | USAGE
+ db2         | NULL   | my_schema   | schema      | CREATE 
+ NULL        | NULL   | materialize | database    | USAGE
+ NULL        | NULL   | my_db       | database    | USAGE
+ NULL        | NULL   | my_cluster  | cluster     | CREATE
 ```
 
 ### `SHOW DEFAULT PRIVILEGES`
@@ -131,12 +188,12 @@ The syntax will be `SHOW DEFAULT PRIVILEGES [ON <object-type>]`.
 
 The output will include the following columns:
 
-- `role: text` The name of the affected role.
-- `database: text` The name of the affected database.
-- `schema: text` The name of the affected schema.
-- `object_type: text` The type of object.
-- `grantee: text` The role being granted privileges.
-- `privileges: text` Human readable version of the privileges that will be granted.
+- `role: text` - The name of the affected role.
+- `database: text` - The name of the affected database.
+- `schema: text` - The name of the affected schema.
+- `object_type: text` - The type of object.
+- `grantee: text` - The role being granted privileges.
+- `privileges: text` - Human readable version of the privileges that will be granted.
 
 Here are some example queries:
 
@@ -164,14 +221,17 @@ SHOW DEFAULT PRIVILEGES ON TABLES;
 
 Will show the role membership of the current session.
 
-The syntax will be: `SHOW ROLE MEMBERSHIPS [FOR <role>]`.
+The syntax will be: `SHOW ROLE MEMBERSHIPS [FOR {<role> | ALL ROLES}]`.
 
-- `FOR <role>` will filter the output to only include roles that `<role>` is a member of instead of
-the current session.
+- `FOR <role>` will filter the output to only include roles that `<role>` is a member of directly
+or indirectly.
+  - If a role or `ALL ROLES` is not specified then the current role is assumed.
+- `FOR ALL ROLES` will display all role memberships.
 
 The output will include the following columns:
 
-- `name: text` The name of the role.
+- `role_name: text` - Name of the role.
+- `member_name: text` - Name of a role that is a member of `role_name`.
 
 Here is an example query:
 
@@ -195,11 +255,15 @@ The following columns will be added to all existing `SHOW <OBJECTS>` commands:
 
 - Create documentation with queries against catalog tables that would return the equivalent results
   as the `SHOW` commands.
-- Add syntax, to specify the database instead of the schema in `SHOW PRIVILEGES`.
-- Return a list from `mz_internal.mz_role_membership()` instead of an array.
 - Add a column to `SHOW PRIVILEGES` to indicate which role a privilege comes from.
 - Don't limit the results of `SHOW PRIVILEGES` to a single schema.
+- Split `SHOW PRIVILEGES` into multiple commands:
+  - `SHOW ITEM PRIVILEGES`
+  - `SHOW SCHEMA PRIVILEGES`
+  - `SHOW DATABASE PRIVILEGES`
+  - `SHOW CLUSTER PRIVILEGES`
 
 ## Open questions
 
-- None.
+- How should we filter `SHOW PRIVILEGES`?
+- Do we want to include the grantor in the output?
