@@ -93,9 +93,12 @@ where
     }
 
     /// Connects to the storage replica at the specified network address.
-    pub fn connect(&mut self, location: ClusterReplicaLocation) {
+    pub fn connect(&mut self, location: ClusterReplicaLocation, cluster_size: Option<String>) {
         self.command_tx
-            .send(RehydrationCommand::Connect { location })
+            .send(RehydrationCommand::Connect {
+                location,
+                cluster_size,
+            })
             .expect("rehydration task should not drop first");
     }
 
@@ -125,6 +128,7 @@ enum RehydrationCommand<T> {
     Connect {
         /// The location of the (singular) replica we are going to connect to.
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
     },
     /// Send the contained storage command to the replica.
     Send(StorageCommand<T>),
@@ -168,12 +172,14 @@ enum RehydrationTaskState<T: Timestamp + Lattice> {
     Rehydrate {
         /// The location of the storage replica.
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
     },
     /// Communication with the storage replica is live. Commands and responses
     /// should be forwarded until an error occurs.
     Pump {
         /// The location of the storage replica.
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
         /// The connected client for the replica.
         client: PartitionedClient<T>,
     },
@@ -192,10 +198,15 @@ where
         loop {
             state = match state {
                 RehydrationTaskState::AwaitAddress => self.step_await_address().await,
-                RehydrationTaskState::Rehydrate { location } => self.step_rehydrate(location).await,
-                RehydrationTaskState::Pump { location, client } => {
-                    self.step_pump(location, client).await
-                }
+                RehydrationTaskState::Rehydrate {
+                    location,
+                    cluster_size,
+                } => self.step_rehydrate(location, cluster_size).await,
+                RehydrationTaskState::Pump {
+                    location,
+                    cluster_size,
+                    client,
+                } => self.step_pump(location, cluster_size, client).await,
                 RehydrationTaskState::Done => break,
             }
         }
@@ -205,8 +216,14 @@ where
         loop {
             match self.command_rx.recv().await {
                 None => break RehydrationTaskState::Done,
-                Some(RehydrationCommand::Connect { location }) => {
-                    break RehydrationTaskState::Rehydrate { location }
+                Some(RehydrationCommand::Connect {
+                    location,
+                    cluster_size,
+                }) => {
+                    break RehydrationTaskState::Rehydrate {
+                        location,
+                        cluster_size,
+                    }
                 }
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
@@ -219,6 +236,7 @@ where
     async fn step_rehydrate(
         &mut self,
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
     ) -> RehydrationTaskState<T> {
         // Reconnect to the storage replica.
         let stream = Retry::default()
@@ -234,8 +252,14 @@ where
             // to a new storage replica.
             loop {
                 match self.command_rx.try_recv() {
-                    Ok(RehydrationCommand::Connect { location }) => {
-                        return RehydrationTaskState::Rehydrate { location };
+                    Ok(RehydrationCommand::Connect {
+                        location,
+                        cluster_size,
+                    }) => {
+                        return RehydrationTaskState::Rehydrate {
+                            location,
+                            cluster_size,
+                        };
                     }
                     Ok(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
@@ -257,6 +281,7 @@ where
                 // TODO(guswynn): cluster-unification: ensure this is cleaned up when
                 // the compute and storage command streams are merged.
                 idle_arrangement_merge_effort: 1337,
+                cluster_size: cluster_size.clone(),
             };
             let dests = location
                 .ctl_addrs
@@ -317,22 +342,24 @@ where
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
         }
-        self.send_commands(location, client, commands).await
+        self.send_commands(location, cluster_size, client, commands)
+            .await
     }
 
     async fn step_pump(
         &mut self,
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
         mut client: PartitionedClient<T>,
     ) -> RehydrationTaskState<T> {
         select! {
             // Command from controller to forward to storage cluster.
             command = self.command_rx.recv() => match command {
                 None => RehydrationTaskState::Done,
-                Some(RehydrationCommand::Connect { location }) => RehydrationTaskState::Rehydrate { location },
+                Some(RehydrationCommand::Connect { location, cluster_size }) => RehydrationTaskState::Rehydrate { location, cluster_size },
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
-                    self.send_commands(location, client, vec![command]).await
+                    self.send_commands(location, cluster_size, client, vec![command]).await
                 }
                 Some(RehydrationCommand::Reset) => {
                     RehydrationTaskState::AwaitAddress
@@ -351,7 +378,7 @@ where
                     Some(response) => response,
                 };
 
-                self.send_response(location, client, response)
+                self.send_response(location, cluster_size, client, response)
             }
         }
     }
@@ -359,20 +386,26 @@ where
     async fn send_commands(
         &mut self,
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
         mut client: PartitionedClient<T>,
         commands: impl IntoIterator<Item = StorageCommand<T>>,
     ) -> RehydrationTaskState<T> {
         for command in commands {
             if let Err(e) = client.send(command).await {
-                return self.send_response(location.clone(), client, Err(e));
+                return self.send_response(location.clone(), cluster_size.clone(), client, Err(e));
             }
         }
-        RehydrationTaskState::Pump { location, client }
+        RehydrationTaskState::Pump {
+            location,
+            cluster_size,
+            client,
+        }
     }
 
     fn send_response(
         &mut self,
         location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
         client: PartitionedClient<T>,
         response: Result<StorageResponse<T>, anyhow::Error>,
     ) -> RehydrationTaskState<T> {
@@ -382,15 +415,26 @@ where
                     if self.response_tx.send(response).is_err() {
                         RehydrationTaskState::Done
                     } else {
-                        RehydrationTaskState::Pump { location, client }
+                        RehydrationTaskState::Pump {
+                            location,
+                            cluster_size,
+                            client,
+                        }
                     }
                 } else {
-                    RehydrationTaskState::Pump { location, client }
+                    RehydrationTaskState::Pump {
+                        location,
+                        cluster_size,
+                        client,
+                    }
                 }
             }
             Err(e) => {
                 warn!("storage cluster produced error, reconnecting: {e}");
-                RehydrationTaskState::Rehydrate { location }
+                RehydrationTaskState::Rehydrate {
+                    location,
+                    cluster_size,
+                }
             }
         }
     }

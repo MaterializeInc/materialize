@@ -21,4 +21,6 @@ message ProtoTimelyConfig {
     uint64 process = 2;
     repeated string addresses = 3;
     uint32 idle_arrangement_merge_effort = 4;
+    optional string cluster_size = 5;
+
 }

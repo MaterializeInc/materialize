@@ -208,7 +208,7 @@ use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
-use timely::worker::Worker as TimelyWorker;
+use timely::worker::{AsWorker, Worker as TimelyWorker};
 
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
@@ -236,6 +236,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
+    let cluster_size: Option<String> = timely_worker
+        .config()
+        .get("materialize/storage.cluster_size")
+        .map(|s: &String| s.clone());
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
         // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
         // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
@@ -258,6 +262,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 source_resume_uppers,
                 &feedback,
                 storage_state,
+                cluster_size.as_ref(),
             );
             tokens.push(token);
 

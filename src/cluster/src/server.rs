@@ -175,6 +175,12 @@ where
                 idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
             },
         );
+        if let Some(cluster_size) = &config.cluster_size {
+            worker_config.set(
+                "materialize/storage.cluster_size".to_string(),
+                cluster_size.to_owned(),
+            );
+        }
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
