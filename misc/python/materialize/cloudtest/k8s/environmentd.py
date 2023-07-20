@@ -133,6 +133,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             containers=[container],
             tolerations=[taint_toleration],
             node_selector=node_selector,
+            termination_grace_period_seconds=0,
         )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
 
