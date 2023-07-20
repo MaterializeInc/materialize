@@ -3606,6 +3606,7 @@ name = "mz-cloud-api"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "mz-frontegg-auth",
  "mz-frontegg-client",
  "once_cell",
