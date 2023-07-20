@@ -194,6 +194,19 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 $ webhook-append name=webhook_validation_panic status=503
 abc
 
+# Dropping a webhook source should drop the underlying persist shards.
+
+$ set-from-sql var=webhook-source-id
+SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
+
+> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+1
+
+> DROP SOURCE webhook_bytes;
+
+> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+0
+
 # Turn off the feature.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_webhook_sources = false

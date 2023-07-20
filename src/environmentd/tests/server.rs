@@ -79,6 +79,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
@@ -1987,4 +1988,136 @@ fn test_http_metrics() {
     assert_eq!(failure_metric.get_counter().get_value(), 1.0);
     assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
     assert_eq!(failure_metric.get_label()[1].get_value(), "400");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_concurrent_actions() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    struct WebhookEvent {
+        ts: u128,
+        name: String,
+        thread: usize,
+    }
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos()
+    };
+
+    // Flag that lets us shutdown our threads.
+    let keep_sending = Arc::new(AtomicBool::new(true));
+    let success_count = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    // Spin up a few threads that push a bunch of data to the webhook.
+    let posters: Vec<_> = (0..4)
+        .map(|thread_idx| {
+            let keep_sending_ = Arc::clone(&keep_sending);
+            let success_count_ = Arc::clone(&success_count);
+            let addr = server.inner.http_local_addr().clone();
+            let tx_ = tx.clone();
+
+            std::thread::spawn(move || {
+                let mut i = 0;
+
+                // Keep sending events until we're told to stop.
+                while keep_sending_.load(std::sync::atomic::Ordering::Relaxed) {
+                    let http_client = Client::new();
+                    let webhook_url = format!(
+                        "http://{}/api/webhook/materialize/public/webhook_json",
+                        addr,
+                    );
+
+                    // Create an event.
+                    let event = WebhookEvent {
+                        ts: now(),
+                        name: format!("event_{i}"),
+                        thread: thread_idx,
+                    };
+
+                    // Send all of our events to our webhook source.
+                    let resp = http_client
+                        .post(&webhook_url)
+                        .json(&event)
+                        .send()
+                        .expect("failed to POST event");
+                    tx_.send(resp.status()).expect("channel closed?");
+
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+
+                    // Incrament the count of how many successes we should see.
+                    success_count_.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    i += 1;
+                }
+            })
+        })
+        .collect();
+
+    // Let the posting threads run for a bit.
+    std::thread::sleep(std::time::Duration::from_secs(4));
+
+    // We should see at least this many successes.
+    let expected_success = success_count.load(std::sync::atomic::Ordering::Relaxed);
+    // Drop the source
+    client
+        .execute("DROP SOURCE webhook_json;", &[])
+        .expect("failed to drop source");
+
+    // Keep sending for a bit.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Stop the threads.
+    keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
+    for handle in posters {
+        handle.join().expect("thread panicked!");
+    }
+    // Drop our sender, otherwise the channel will never complete?
+    drop(tx);
+
+    // Inspect the results.
+    let mut results = rx.into_iter();
+
+    // We should see at least "expected_success" number of successes, because this was the total
+    // count before we dropped the source.
+    for _ in 0..expected_success {
+        let status = results.next().expect("status to exist");
+        assert!(status.is_success())
+    }
+    // We should have seen at least 100 successes.
+    assert!(expected_success > 100);
+
+    // After we drop the source though, we should see a few successes followed by a bunch of
+    // NOT_FOUND.
+    let mut saw_atleast_one_success_after_close = false;
+    while let Some(status) = results.next() {
+        if status.is_success() {
+            saw_atleast_one_success_after_close = true;
+        }
+        assert!(
+            status.is_success() || status == http::StatusCode::NOT_FOUND,
+            "found bad status {status:?}"
+        );
+    }
+    assert!(saw_atleast_one_success_after_close);
 }
