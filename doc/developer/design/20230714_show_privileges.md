@@ -235,11 +235,11 @@ Here is an example query:
 ```sql
 SHOW ROLE MEMBERSHIPS;
 
- name
-----------------
- data_scientist
- dev
- qa
+ role_name      | member_name
+----------------+-------------
+ data_scientist | joe
+ dev            | mike
+ qa             | arjun
 ```
 
 ### `SHOW <OBJECTS>`
