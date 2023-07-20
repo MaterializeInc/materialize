@@ -1794,8 +1794,13 @@ impl MirRelationExpr {
     fn try_could_run_expensive_function(&self) -> Result<bool, RecursionLimitError> {
         let mut result = false;
         self.try_visit_pre(&mut |e| {
-            // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
-            result = result || matches!(e, MirRelationExpr::FlatMap { .. });
+            // FlatMap has a table function; Reduce has an aggregate function.
+            // Other constructs use MirScalarExpr to run a function
+            result = result
+                || matches!(
+                    e,
+                    MirRelationExpr::FlatMap { .. } | MirRelationExpr::Reduce { .. }
+                );
             self.try_visit_scalars(&mut |scalar| {
                 result = result
                     || match scalar {
