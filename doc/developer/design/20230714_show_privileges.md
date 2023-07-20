@@ -70,102 +70,104 @@ The output will include the following columns:
 - `schema: text` - The schema of the object. `NULL` for databases, schemas, and clusters.
 - `name: text` - The name of the object.
 - `object_type: text` -  The type of the object.
+- `grantee: text` - The role name of the grantee.
 - `privileges: text` - Human readable version of the privileges that held by the current session.
+- `grantor: text` - The role name of the grantor.
 
 Here are some example queries:
 
 ```sql
 SHOW PRIVILEGES;
 
- database    | schema | name        | object_type | privileges
--------------+--------+-------------+-------------+----------------
- materialize | public | my_table    | table       | SELECT, INSERT
- materialize | public | my_view     | view        | SELECT
- materialize | NULL   | public      | schema      | USAGE
- NULL        | NULL   | materialize | database    | USAGE
- NULL        | NULL   | my_db       | database    | USAGE
- NULL        | NULL   | my_cluster  | cluster     | CREATE
+ database    | schema | name        | object_type | grantee | privileges     | grantor
+-------------+--------+-------------+-------------+---------+----------------+---------
+ materialize | public | my_table    | table       | r1      | SELECT, INSERT | r2
+ materialize | public | my_view     | view        | r1      | SELECT         | r2
+ materialize | NULL   | public      | schema      | r1      | USAGE          | r2
+ NULL        | NULL   | materialize | database    | r1      | USAGE          | r2
+ NULL        | NULL   | my_db       | database    | r1      | USAGE          | r2
+ NULL        | NULL   | my_cluster  | cluster     | r1      | CREATE         | r2
 ```
 
 ```sql
 SHOW PRIVILEGES FOR ROLE ceo;
 
- database    | schema | name        | object_type | privileges
--------------+--------+-------------+-------------+--------------------------------
- materialize | public | my_table    | table       | SELECT, INSERT, UPDATE, DELETE
- materialize | NULL   | public      | schema      | CREATE, USAGE
- NULL        | NULL   | materialize | database    | CREATE, USAGE
- NULL        | NULL   | my_db       | database    | CREATE, USAGE
- NULL        | NULL   | my_cluster  | cluster     | CREATE, USAGE
+ database    | schema | name        | object_type | grantee | privileges                     | grantor
+-------------+--------+-------------+-------------+---------+--------------------------------+---------
+ materialize | public | my_table    | table       | r1      | SELECT, INSERT, UPDATE, DELETE | r2
+ materialize | NULL   | public      | schema      | r1      | CREATE, USAGE                  | r2
+ NULL        | NULL   | materialize | database    | r1      | CREATE, USAGE                  | r2
+ NULL        | NULL   | my_db       | database    | r1      | CREATE, USAGE                  | r2
+ NULL        | NULL   | my_cluster  | cluster     | r1      | CREATE, USAGE                  | r2
 ```
 
 ```sql
 SHOW OBJECT PRIVILEGES;
 
- database    | schema | name       | object_type | privileges
--------------+--------+------------+-------------+----------------
- materialize | public | my_table   | table       | SELECT, INSERT
- materialize | public | my_view    | view        | SELECT
+ database    | schema | name       | object_type | grantee | privileges     | grantor
+-------------+--------+------------+-------------+---------+----------------+---------
+ materialize | public | my_table   | table       | r1      | SELECT, INSERT | r2
+ materialize | public | my_view    | view        | r1      | SELECT         | r2
 ```
 
 ```sql
 SHOW PRIVILEGES FROM SCHEMA qa;
 
- database    | schema | name        | object_type | privileges
--------------+--------+-------------+-------------+----------------
- materialize | qa     | my_secret   | secret      | USAGE
- materialize | NULL   | public      | schema      | USAGE
- NULL        | NULL   | materialize | database    | USAGE
- NULL        | NULL   | my_db       | database    | USAGE
- NULL        | NULL   | my_cluster  | cluster     | CREATE
+ database    | schema | name        | object_type | grantee | privileges | grantor
+-------------+--------+-------------+-------------+---------+------------+---------
+ materialize | qa     | my_secret   | secret      | r1      | USAGE      | r2
+ materialize | NULL   | public      | schema      | r1      | USAGE      | r2
+ NULL        | NULL   | materialize | database    | r1      | USAGE      | r2
+ NULL        | NULL   | my_db       | database    | r1      | USAGE      | r2
+ NULL        | NULL   | my_cluster  | cluster     | r1      | CREATE     | r2
 ```
 
 ```sql
 SHOW OBJECT PRIVILEGES FROM SCHEMA public;
 
- database    | schema | name       | object_type | privileges
--------------+--------+------------+-------------+----------------
- materialize | public | my_table   | table       | SELECT, INSERT
- materialize | public | my_view    | view        | SELECT
+ database    | schema | name       | object_type | grantee | privileges     | grantor
+-------------+--------+------------+-------------+---------+----------------+---------
+ materialize | public | my_table   | table       | r1      | SELECT, INSERT | r2
+ materialize | public | my_view    | view        | r1      | SELECT         | r2
 ```
 
 ```sql
 SHOW PRIVILEGES FROM DATABASE db2;
 
- database    | schema | name        | object_type | privileges
--------------+--------+-------------+-------------+----------------
- db2         | NULL   | my_schema   | schema      | CREATE
- NULL        | NULL   | materialize | database    | USAGE
- NULL        | NULL   | my_db       | database    | USAGE
- NULL        | NULL   | my_cluster  | cluster     | CREATE
+ database    | schema | name        | object_type | grantee | privileges | grantor
+-------------+--------+-------------+-------------+---------+------------+---------
+ db2         | NULL   | my_schema   | schema      | r1      | CREATE     | r2
+ NULL        | NULL   | materialize | database    | r1      | USAGE      | r2
+ NULL        | NULL   | my_db       | database    | r1      | USAGE      | r2
+ NULL        | NULL   | my_cluster  | cluster     | r1      | CREATE     | r2
 ```
 
 ```sql
 SHOW PRIVILEGES FROM ALL SCHEMAS;
 
- database    | schema | name        | object_type | privileges
--------------+--------+-------------+-------------+----------------
- materialize | public | my_table    | table       | SELECT, INSERT
- materialize | public | my_view     | view        | SELECT
- materialize | qa     | my_secret   | secret      | USAGE
- materialize | NULL   | public      | schema      | USAGE
- NULL        | NULL   | materialize | database    | USAGE
- NULL        | NULL   | my_db       | database    | USAGE
- NULL        | NULL   | my_cluster  | cluster     | CREATE
+ database    | schema | name        | object_type | grantee | privileges     | grantor
+-------------+--------+-------------+-------------+---------+----------------+---------
+ materialize | public | my_table    | table       | r1      | SELECT, INSERT | r2
+ materialize | public | my_view     | view        | r1      | SELECT         | r2
+ materialize | qa     | my_secret   | secret      | r1      | USAGE          | r2
+ materialize | NULL   | public      | schema      | r1      | USAGE          | r2
+ NULL        | NULL   | materialize | database    | r1      | USAGE          | r2
+ NULL        | NULL   | my_db       | database    | r1      | USAGE          | r2
+ NULL        | NULL   | my_cluster  | cluster     | r1      | CREATE         | r2
 ```
 
 ```sql
 SHOW PRIVILEGES FROM ALL DATABASES;
 
- database    | schema | name        | object_type | privileges
--------------+--------+-------------+-------------+----------------
- materialize | public | my_table    | table       | SELECT, INSERT
- materialize | public | my_view     | view        | SELECT
- materialize | NULL   | public      | schema      | USAGE
- db2         | NULL   | my_schema   | schema      | CREATE
- NULL        | NULL   | materialize | database    | USAGE
- NULL        | NULL   | my_db       | database    | USAGE
- NULL        | NULL   | my_cluster  | cluster     | CREATE
+ database    | schema | name        | object_type | grantee | privileges     | grantor
+-------------+--------+-------------+-------------+---------+----------------+---------
+ materialize | public | my_table    | table       | r1      | SELECT, INSERT | r2
+ materialize | public | my_view     | view        | r1      | SELECT         | r2
+ materialize | NULL   | public      | schema      | r1      | USAGE          | r2
+ db2         | NULL   | my_schema   | schema      | r1      | CREATE         | r2
+ NULL        | NULL   | materialize | database    | r1      | USAGE          | r2
+ NULL        | NULL   | my_db       | database    | r1      | USAGE          | r2
+ NULL        | NULL   | my_cluster  | cluster     | r1      | CREATE         | r2
 ```
 
 ### `SHOW DEFAULT PRIVILEGES`
@@ -229,17 +231,18 @@ The output will include the following columns:
 
 - `role_name: text` - Name of the role.
 - `member_name: text` - Name of a role that is a member of `role_name`.
+- `grantor_name: text` - Name of a role that granted the membership.
 
 Here is an example query:
 
 ```sql
 SHOW ROLE MEMBERSHIPS;
 
- role_name      | member_name
-----------------+-------------
- data_scientist | joe
- dev            | mike
- qa             | arjun
+ role_name      | member_name | grantor
+----------------+-------------+-----------
+ data_scientist | joe         | mz_system
+ dev            | mike        | mz_system
+ qa             | arjun       | mz_system
 ```
 
 ### `SHOW <OBJECTS>`
