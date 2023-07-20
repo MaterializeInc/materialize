@@ -148,6 +148,7 @@ known_errors = [
     "number of columns must be a positive integer literal",
     "regex_extract requires a string literal as its first argument",
     "out of valid range",
+    '" does not exist',  # role does not exist
 ]
 
 
