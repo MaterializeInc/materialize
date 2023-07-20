@@ -9,14 +9,14 @@ menu:
 
 Materialize exposes a system catalog that contains metadata about your running
 Materialize instances. The system catalog consists of four schemas available
-in all databases, which contain sources, tables, and views that expose
+in all databases, which contain tables, and views that expose
 different types of metadata. 
 
 This metadata can help you track and monitor your Materialize usage in tools
 like Datadog.
 
 For this guide, you'll setup a Datadog integration and create a dashboard to
-monitor cluster performance, credit consumption, and memory usage.
+monitor cluster performance, credit consumption, and storage usage.
 
 We'll also share some helpful queries you can use in your observability tools to
 keep track of other metrics important to you.
@@ -25,7 +25,7 @@ keep track of other metrics important to you.
 
 Before you get started make sure you have the following:
 
-- Docker Compose
+- Docker
 - Datadog API Key
 
 This integration quick start uses the Prometheus SQL exporter Docker image to
@@ -76,7 +76,7 @@ agents. The SQL exporter tool uses the connection string you created in a
 previous step to connect with your Materialize instance. 
 
 ```shell
-$ docker-compose up -d
+$ docker compose up -d
 ```
 
 The Prometheus SQL exporter container runs a service that executes queries against your
@@ -96,8 +96,8 @@ dashboard with some important information.
 
 In the `datadog` directory, copy the contents of the `dashboard.json` file.
 
-In your Datadog instance, navigate to the **Dashboards** section and select **
-New Dashboard** in the upper right section. Name and create the new dashboard
+In your Datadog instance, navigate to the **Dashboards** section and select 
+**New Dashboard** in the upper right section. Name and create the new dashboard
 then find the gear icon in the upper right navigation. Select **Import dashboard
 JSON** and paste the contents of the `dashboard.json` file.
 

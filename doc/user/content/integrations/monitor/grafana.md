@@ -9,7 +9,7 @@ menu:
 
 Materialize exposes a system catalog that contains metadata about your running
 Materialize instances. The system catalog consists of four schemas available
-in all databases, which contain sources, tables, and views that expose
+in all databases, which contain tables, and views that expose
 different types of metadata. 
 
 This metadata can help you track and monitor your Materialize usage in tools
@@ -24,7 +24,7 @@ We'll also share some helpful queries you can use in your observability tools to
 
 Before you get started make sure you have the following:
 
-- Docker Compose
+- Docker
 
 This integration quick start uses the Prometheus SQL exporter Docker image to
 pass data to and from your Materialize instance and to a Grafana instance.
@@ -61,7 +61,7 @@ and Prometheus agents. The SQL exporter tool uses the connection string you crea
 previous step to connect with your Materialize instance. 
 
 ```shell
-$ docker-compose up -d
+$ docker compose up -d
 ```
 
 The SQL exporter container runs a service that executes queries against your
