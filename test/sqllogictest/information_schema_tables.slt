@@ -48,6 +48,7 @@ information_schema
 enabled_roles
 VIEW
 materialize
+information_schema
 role_table_grants
 applicable_roles
 VIEW
