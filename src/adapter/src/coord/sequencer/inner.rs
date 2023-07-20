@@ -2258,7 +2258,13 @@ impl Coordinator {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_peek_plan(peek_plan, finishing, cluster_id, target_replica)
+            .implement_peek_plan(
+                peek_plan,
+                finishing,
+                cluster_id,
+                target_replica,
+                session.vars().max_query_result_size(),
+            )
             .await?;
 
         if session.vars().emit_timestamp_notice() {
