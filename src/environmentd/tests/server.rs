@@ -1118,7 +1118,7 @@ fn test_ws_passes_options() {
     };
 
     if let WebSocketResponse::Rows(rows) = columns {
-        let names: Vec<&str> = rows.columns.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<&str> = rows.desc.columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["application_name"]);
     } else {
         panic!("wrong message!, {columns:?}");

@@ -275,6 +275,9 @@ pub enum SqlRequest {
         /// A query string containing zero or more queries delimited by
         /// semicolons.
         query: String,
+        /// Optional max row count for each statement.
+        #[serde(default)]
+        max_rows: Option<usize>,
     },
     /// An extended query request.
     Extended {
@@ -291,6 +294,9 @@ pub struct ExtendedRequest {
     /// Optional parameters for the query.
     #[serde(default)]
     params: Vec<Option<String>>,
+    /// Optional max row count.
+    #[serde(default)]
+    max_rows: Option<usize>,
 }
 
 /// The response to a `SqlRequest`.
@@ -329,6 +335,9 @@ pub enum SqlResult {
         desc: Description,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
+        /// The number of remaining rows after reaching max_rows.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rows_remaining: Option<usize>,
     },
     /// The query executed successfully but did not return rows.
     Ok {
@@ -354,14 +363,21 @@ impl SqlResult {
     fn rows(
         client: &mut SessionClient,
         tag: String,
-        rows: Vec<Vec<serde_json::Value>>,
+        mut rows: Vec<Vec<serde_json::Value>>,
         desc: RelationDesc,
+        max_rows: Option<usize>,
     ) -> SqlResult {
+        let rows_remaining = max_rows.map(|max| {
+            let remaining = rows.len().saturating_sub(max);
+            rows.truncate(max);
+            remaining
+        });
         SqlResult::Rows {
             tag,
             rows,
             desc: Description::from(&desc),
             notices: make_notices(client),
+            rows_remaining,
         }
     }
 
@@ -430,7 +446,7 @@ impl From<anyhow::Error> for SqlError {
 pub enum WebSocketResponse {
     ReadyForQuery(String),
     Notice(Notice),
-    Rows(Description),
+    Rows(RowsDescription),
     Row(Vec<serde_json::Value>),
     CommandStarting(CommandStarting),
     CommandComplete(String),
@@ -453,6 +469,13 @@ impl Notice {
     pub fn message(&self) -> &str {
         &self.message
     }
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RowsDescription {
+    #[serde(flatten)]
+    pub desc: Description,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_remaining: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -617,8 +640,12 @@ impl ResultSender for WebSocket {
                 rows,
                 desc,
                 notices,
+                rows_remaining,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(desc)];
+                let mut msgs = vec![WebSocketResponse::Rows(RowsDescription {
+                    desc,
+                    rows_remaining,
+                })];
                 msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
                 msgs.push(WebSocketResponse::CommandComplete(tag));
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
@@ -648,7 +675,14 @@ impl ResultSender for WebSocket {
                 tag,
                 mut rx,
             } => {
-                send(self, WebSocketResponse::Rows(desc.into())).await?;
+                send(
+                    self,
+                    WebSocketResponse::Rows(RowsDescription {
+                        desc: desc.into(),
+                        rows_remaining: None,
+                    }),
+                )
+                .await?;
 
                 let mut datum_vec = mz_repr::DatumVec::new();
                 loop {
@@ -710,14 +744,25 @@ impl ResultSender for WebSocket {
     }
 }
 
+struct ExecuteStatement {
+    stmt: Statement<Raw>,
+    params: Vec<Option<String>>,
+    max_rows: Option<usize>,
+}
+
 /// Returns Ok(Err) if any statement error'd during execution.
 async fn execute_stmt_group<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
-    stmt_group: Vec<(Statement<Raw>, Vec<Option<String>>)>,
+    stmt_group: Vec<ExecuteStatement>,
 ) -> Result<Result<(), ()>, anyhow::Error> {
     let num_stmts = stmt_group.len();
-    for (stmt, params) in stmt_group {
+    for ExecuteStatement {
+        stmt,
+        params,
+        max_rows,
+    } in stmt_group
+    {
         assert!(num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
         );
@@ -739,7 +784,7 @@ async fn execute_stmt_group<S: ResultSender>(
             let _ = sender.add_result(|| client.canceled(), err.into()).await?;
             return Ok(Err(()));
         }
-        let res = execute_stmt(client, sender, stmt, params).await?;
+        let res = execute_stmt(client, sender, stmt, params, max_rows).await?;
         let is_err = sender.add_result(|| client.canceled(), res).await?;
         if is_err.is_err() {
             // Mirror StateMachine::error, which sometimes will clean up the
@@ -826,17 +871,26 @@ async fn execute_request<S: ResultSender>(
     let mut stmt_groups = vec![];
 
     match request {
-        SqlRequest::Simple { query } => {
+        SqlRequest::Simple { query, max_rows } => {
             let stmts = parse(client, &query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
             for stmt in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
-                stmt_group.push((stmt, vec![]));
+                stmt_group.push(ExecuteStatement {
+                    stmt,
+                    params: vec![],
+                    max_rows,
+                });
             }
             stmt_groups.push(stmt_group);
         }
         SqlRequest::Extended { queries } => {
-            for ExtendedRequest { query, params } in queries {
+            for ExtendedRequest {
+                query,
+                params,
+                max_rows,
+            } in queries
+            {
                 let mut stmts = parse(client, &query)?;
                 if stmts.len() != 1 {
                     anyhow::bail!(
@@ -849,7 +903,11 @@ async fn execute_request<S: ResultSender>(
                 let stmt = stmts.pop().unwrap();
                 check_prohibited_stmts(sender, &stmt)?;
 
-                stmt_groups.push(vec![(stmt, params)]);
+                stmt_groups.push(vec![ExecuteStatement {
+                    stmt,
+                    params,
+                    max_rows,
+                }]);
             }
         }
     }
@@ -881,6 +939,7 @@ async fn execute_stmt<S: ResultSender>(
     sender: &mut S,
     stmt: Statement<Raw>,
     raw_params: Vec<Option<String>>,
+    max_rows: Option<usize>,
 ) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
@@ -1064,7 +1123,7 @@ async fn execute_stmt<S: ResultSender>(
                 sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
-            SqlResult::rows(client, tag, sql_rows, desc).into()
+            SqlResult::rows(client, tag, sql_rows, desc, max_rows).into()
         }
         ExecuteResponse::Subscribing { rx }  => {
             StatementResult::Subscribe {

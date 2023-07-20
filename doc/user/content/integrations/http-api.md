@@ -95,7 +95,8 @@ semicolons.
 
 ```json
 {
-    "query": "select * from a; select * from b;"
+    "query": "select * from a; select * from b;",
+    "max_rows": 1
 }
 ```
 
@@ -108,13 +109,14 @@ Key | Value
 ----|------
 `query` | A SQL string containing one statement to execute
 `params` | An optional array of text values to be used as the parameters to `query`. _null_ values are converted to _null_ values in Materialize. Note that all parameter values' elements must be text or _null_; the API will not accept JSON numbers.
+`max_rows` | An optional number that will limit the number of rows returned.
 
 ```json
 {
     "queries": [
         { "query": "select * from a;" },
         { "query": "select a + $1 from a;", "params": ["100"] }
-        { "query": "select a + $1 from a;", "params": [null] }
+        { "query": "select a + $1 from a;", "params": [null], "max_rows": 1 }
     ]
 }
 ```
@@ -126,7 +128,7 @@ an array of the following:
 
 Result | JSON value
 ---------------------|------------
-Rows | `{"rows": <2D array of JSON-ified results>, "desc": <array of column descriptions>, "notices": <array of notices>}`
+Rows | `{"rows": <2D array of JSON-ified results>, "desc": <array of column descriptions>, "notices": <array of notices>, "max_rows": <number of remaining rows>}`
 Error | `{"error": <Error object from execution>, "notices": <array of notices>}`
 Ok | `{"ok": <tag>, "notices": <array of notices>}`
 
@@ -149,6 +151,8 @@ the resultant state.
 
 Column descriptions contain the name, oid, data type size and type modifier of a returned column.
 
+`rows_remaining` only appears if `max_rows` was present in the request, and is the number of remaining rows that were not sent.
+
 #### TypeScript definition
 
 You can model these with the following TypeScript definitions:
@@ -156,11 +160,13 @@ You can model these with the following TypeScript definitions:
 ```typescript
 interface Simple {
     query: string;
+    max_rows?: number;
 }
 
 interface ExtendedRequest {
     query: string;
     params?: (string | null)[];
+    max_rows?: number;
 }
 
 interface Extended {
@@ -200,6 +206,7 @@ type SqlResult =
 	rows: any[][];
 	desc: Description;
 	notices: Notice[];
+  rows_remaining?: number; // u64
 } | {
 	ok: string;
 	notices: Notice[];

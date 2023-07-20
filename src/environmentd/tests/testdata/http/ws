@@ -290,6 +290,41 @@ ws-text
 {"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+ws-text
+{"query":"VALUES (1), (2), (3)", "max_rows":1}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}],"rows_remaining":2}}
+{"type":"Row","payload":[1]}
+{"type":"CommandComplete","payload":"SELECT 3"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [
+  {"query": "VALUES (1), (2), (3)", "max_rows": 2},
+  {"query": "VALUES (1), (2), (3)"},
+  {"query": "VALUES (1), (2), (3)", "max_rows": 4}
+]}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}],"rows_remaining":1}}
+{"type":"Row","payload":[1]}
+{"type":"Row","payload":[2]}
+{"type":"CommandComplete","payload":"SELECT 3"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":[1]}
+{"type":"Row","payload":[2]}
+{"type":"Row","payload":[3]}
+{"type":"CommandComplete","payload":"SELECT 3"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}],"rows_remaining":0}}
+{"type":"Row","payload":[1]}
+{"type":"Row","payload":[2]}
+{"type":"Row","payload":[3]}
+{"type":"CommandComplete","payload":"SELECT 3"}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----

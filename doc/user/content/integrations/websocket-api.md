@@ -96,9 +96,9 @@ There is exactly one `ReadyForQuery` message for each request, regardless of how
 
 #### Simple
 
-The message payload is a JSON object containing a key, `query`, which specifies the
-SQL string to execute. `query` may contain multiple SQL statements separated by
-semicolons.
+The message payload is a JSON object containing a key, `query`, which specifies the SQL string to execute.
+`query` may contain multiple SQL statements separated by semicolons.
+`max_rows` is an optional number that will limit the number of rows returned for each statement.
 
 ```json
 {
@@ -115,6 +115,7 @@ Key | Value
 ----|------
 `query` | A SQL string containing one statement to execute
 `params` | An optional array of text values to be used as the parameters to `query`. _null_ values are converted to _null_ values in Materialize. Note that all parameter values' elements must be text or _null_; the API will not accept JSON numbers.
+`max_rows` | An optional number that will limit the number of rows returned.
 
 ```json
 {
@@ -220,7 +221,8 @@ The payload has the following structure:
                 "type_mod": <type mod>
             }
             ...
-        ]
+        ],
+    "rows_remaining": 0
 }
 ```
 
@@ -228,6 +230,7 @@ The inner object's various `type_X` fields are lower-level details that can be u
 `type_oid` is the OID of the data type.
 `type_len` is the data size type (see `pg_type.typlen`).
 `type_mod` is the type modifier (see `pg_attribute.atttypmod`).
+`rows_remaining` only appears if `max_rows` was present in the request, and is the number of remaining rows that were not sent.
 
 #### `Row`
 
@@ -272,11 +275,13 @@ type Auth =
 
 interface Simple {
     query: string;
+    max_rows?: number;
 }
 
 interface ExtendedRequest {
     query: string;
     params?: (string | null)[];
+    max_rows?: number;
 }
 
 interface Extended {
@@ -323,6 +328,7 @@ interface Column {
 
 interface Description {
 	columns: Column[];
+    rows_remaining?: number; // u64
 }
 
 type WebSocketResult =

@@ -456,3 +456,41 @@ http
 ----
 200 OK
 {"results":[{"error":{"message":"cannot materialize call to current_timestamp","code":"0A000","detail":"See: https://materialize.com/docs/sql/functions/now_and_mz_now/","hint":"Try using `mz_now()` here instead."},"notices":[]}]}
+
+# Test max_rows.
+http
+{"query":"VALUES (1), (2), (3)", "max_rows":0}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[],"desc":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[],"rows_remaining":3}]}
+
+http
+{"query":"VALUES (1), (2), (3)", "max_rows":1}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1]],"desc":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[],"rows_remaining":2}]}
+
+http
+{"query":"VALUES (1), (2), (3)", "max_rows":2}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2]],"desc":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[],"rows_remaining":1}]}
+
+http
+{"query":"VALUES (1), (2), (3)", "max_rows":3}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[],"rows_remaining":0}]}
+
+http
+{"query":"VALUES (1), (2), (3)", "max_rows":4}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"desc":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[],"rows_remaining":0}]}
+
+# Test max_rows with multiple statements in a single query.
+http
+{"query":"VALUES (1), (2), (3); VALUES ('a'), ('b'), ('c'), ('d')", "max_rows":2}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2]],"desc":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[],"rows_remaining":1},{"tag":"SELECT 4","rows":[["a"],["b"]],"desc":{"columns":[{"name":"column1","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[],"rows_remaining":2}]}
