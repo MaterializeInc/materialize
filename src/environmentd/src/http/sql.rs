@@ -38,6 +38,7 @@ use mz_sql::plan::Plan;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
@@ -1070,7 +1071,7 @@ async fn execute_stmt<S: ResultSender>(
             StatementResult::Subscribe {
                 tag: "SUBSCRIBE".into(),
                 desc: desc.relation_desc.unwrap(),
-                rx: RecordFirstRowStream::new(rx, execute_started, client),
+                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client),
             }
         },
         res @ (ExecuteResponse::Fetch { .. }
