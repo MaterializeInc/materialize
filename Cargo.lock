@@ -4646,7 +4646,6 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
- "serde_regex",
  "smallvec",
  "thiserror",
  "timely",
