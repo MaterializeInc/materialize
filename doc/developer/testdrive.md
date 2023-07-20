@@ -845,9 +845,11 @@ Debezium, to upload a particular schema.
 
 ## Actions on REST services
 
-#### `$ http-request method=(GET|POST|PUT) url=... content-type=...`
+#### `$ http-request method=(GET|POST|PUT) url=... content-type=... [accept-additional-status-codes=404,409]`
 
-Issue a HTTP request against a third-party server. The body of the command is used as a body of the request. This is generally used when communicating with REST services such as Debezium and Toxiproxy. See `test/debezium-avro/debezium-postgres.td.initialize` and `test/pg-cdc-resumption/configure-toxiproxy.td`
+Issue an HTTP request against a third-party server. The body of the command is used as a body of the request. This is
+generally used when communicating with REST services such as Debezium and Toxiproxy. See
+`test/debezium-avro/debezium-postgres.td.initialize` and `test/pg-cdc-resumption/configure-toxiproxy.td`
 
 ```
 $ http-request method=POST url=http://example/com content-type=application/json
@@ -856,7 +858,8 @@ $ http-request method=POST url=http://example/com content-type=application/json
 }
 ```
 
-The test will fail unless the HTTP status code of the response is in the 200 range.
+The test will fail unless the HTTP status code of the response is in the 200 range. If further status codes shall be
+accepted, use the parameter `accept-additional-status-codes`, which takes a comma-separated list.
 
 ## Actions on Webhook Sources
 
