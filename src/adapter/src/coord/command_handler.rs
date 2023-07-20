@@ -592,15 +592,17 @@ impl Coordinator {
                 }
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
-                let purify_fut = mz_sql::pure::purify_statement(
-                    Box::new(catalog.into_owned()),
-                    self.now(),
-                    stmt,
-                    self.connection_context.clone(),
-                );
+
+                let catalog = self.owned_catalog();
+                let now = self.now();
+                let connection_context = self.connection_context.clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let result = purify_fut.await.map_err(|e| e.into());
+                    let catalog = catalog.for_session(ctx.session());
+                    let result =
+                        mz_sql::pure::purify_statement(catalog, now, stmt, connection_context)
+                            .await
+                            .map_err(|e| e.into());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {

@@ -1668,7 +1668,7 @@ pub struct ConnCatalog<'a> {
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     role_id: RoleId,
-    prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
+    prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
     notices_tx: UnboundedSender<AdapterNotice>,
 }
 
@@ -1696,20 +1696,6 @@ impl ConnCatalog<'_> {
             "only the system role can mark IDs unresolvable",
         );
         self.unresolvable_ids.insert(id);
-    }
-
-    pub fn into_owned(self) -> ConnCatalog<'static> {
-        ConnCatalog {
-            state: Cow::Owned(self.state.into_owned()),
-            unresolvable_ids: self.unresolvable_ids.clone(),
-            conn_id: self.conn_id,
-            cluster: self.cluster,
-            database: self.database,
-            search_path: self.search_path,
-            role_id: self.role_id,
-            prepared_statements: self.prepared_statements.map(|s| Cow::Owned(s.into_owned())),
-            notices_tx: self.notices_tx,
-        }
     }
 
     /// Returns the schemas:
@@ -4665,7 +4651,7 @@ impl Catalog {
             database,
             search_path,
             role_id: session.current_role_id().clone(),
-            prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
+            prepared_statements: Some(session.prepared_statements()),
             notices_tx: session.retain_notice_transmitter(),
         }
     }
