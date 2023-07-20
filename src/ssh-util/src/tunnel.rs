@@ -85,16 +85,23 @@ impl SshTunnelConfig {
         );
 
         info!(%tunnel_id, "connecting to ssh tunnel");
-        let (mut session, local_port) = match connect(self, remote_host, remote_port).await {
-            Ok(r) => r,
+        let mut session = match connect(self).await {
+            Ok(s) => s,
             Err(e) => {
                 warn!(%tunnel_id, "failed to connect to ssh tunnel: {}", e.display_with_causes());
                 return Err(e);
             }
         };
+        let local_port = match port_forward(&mut session, remote_host, remote_port).await {
+            Ok(local_port) => local_port,
+            Err(e) => {
+                warn!(%tunnel_id, "failed to forward port through ssh tunnel: {}", e.display_with_causes());
+                return Err(e);
+            }
+        };
         info!(%tunnel_id, %local_port, "connected to ssh tunnel");
-
         let local_port = Arc::new(AtomicU16::new(local_port));
+
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
@@ -107,19 +114,22 @@ impl SshTunnelConfig {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {
                         warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
-                        match connect(&config, &remote_host, remote_port).await {
-                            Ok((s, lp)) => {
-                                session = s;
-                                local_port.store(lp, Ordering::SeqCst)
-                            }
+                        let mut s = match connect(&config).await {
+                            Ok(s) => s,
                             Err(e) => {
-                                warn!(
-                                    %tunnel_id,
-                                    "reconnection to ssh tunnel failed: {}",
-                                    e.display_with_causes()
-                                )
+                                warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+                                continue;
                             }
                         };
+                        let lp = match port_forward(&mut s, &remote_host, remote_port).await {
+                            Ok(lp) => lp,
+                            Err(e) => {
+                                warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+                                continue;
+                            }
+                        };
+                        session = s;
+                        local_port.store(lp, Ordering::SeqCst)
                     }
                 }
             }
@@ -129,6 +139,13 @@ impl SshTunnelConfig {
             local_port,
             _join_handle: join_handle.abort_on_drop(),
         })
+    }
+
+    /// Validates the SSH configuration by establishing a connection to the intermediate SSH
+    /// bastion host. It does not set up a port forwarding tunnel.
+    pub async fn validate(&self) -> Result<(), anyhow::Error> {
+        connect(self).await?;
+        Ok(())
     }
 }
 
@@ -150,11 +167,7 @@ impl SshTunnelHandle {
     }
 }
 
-async fn connect(
-    config: &SshTunnelConfig,
-    host: &str,
-    port: u16,
-) -> Result<(Session, u16), anyhow::Error> {
+async fn connect(config: &SshTunnelConfig) -> Result<Session, anyhow::Error> {
     let tempdir = tempfile::Builder::new()
         .prefix("ssh-tunnel-key")
         .tempdir()?;
@@ -191,6 +204,10 @@ async fn connect(
     // Ensure session is healthy.
     session.check().await?;
 
+    Ok(session)
+}
+
+async fn port_forward(session: &mut Session, host: &str, port: u16) -> Result<u16, anyhow::Error> {
     // Loop trying to find an open port.
     for _ in 0..50 {
         // Choose a dynamic port according to RFC 6335.
@@ -207,7 +224,7 @@ async fn connect(
             .request_port_forward(ForwardType::Local, local, remote)
             .await
         {
-            Ok(_) => return Ok((session, local_port)),
+            Ok(_) => return Ok(local_port),
             Err(err) => match err {
                 openssh::Error::SshMux(openssh_mux_client::Error::RequestFailure(e))
                     if &*e == "Port forwarding failed" =>
@@ -221,7 +238,6 @@ async fn connect(
             },
         };
     }
-
     // If we failed to find an open port after 50 attempts,
     // something is seriously wrong.
     bail!("failed to find an open port for SSH tunnel")

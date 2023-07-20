@@ -508,7 +508,7 @@ impl Coordinator {
             Plan::ValidateConnection(plan) => {
                 let connection_context = self.connection_context.clone();
                 mz_ore::task::spawn(|| "coord::validate_connection", async move {
-                    let res = match plan.connection.validate(&connection_context).await {
+                    let res = match plan.connection.validate(plan.id, &connection_context).await {
                         Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
                         Err(err) => Err(err.into()),
                     };

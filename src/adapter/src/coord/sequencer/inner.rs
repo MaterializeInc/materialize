@@ -287,9 +287,34 @@ impl Coordinator {
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: CreateConnectionPlan,
+        mut plan: CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
+        let connection_gid = match self.catalog_mut().allocate_user_id().await {
+            Ok(gid) => gid,
+            Err(err) => return ctx.retire(Err(err.into())),
+        };
+
+        match plan.connection.connection {
+            mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
+                let key_set = match SshKeyPairSet::new() {
+                    Ok(key) => key,
+                    Err(err) => return ctx.retire(Err(err.into())),
+                };
+                let secret = key_set.to_bytes();
+                match self
+                    .secrets_controller
+                    .ensure(connection_gid, &secret)
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(err) => return ctx.retire(Err(err.into())),
+                }
+                ssh.public_keys = Some(key_set.public_keys());
+            }
+            _ => {}
+        }
+
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
@@ -298,7 +323,10 @@ impl Coordinator {
             let otel_ctx = OpenTelemetryContext::obtain();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let connection = &plan.connection.connection;
-                let result = match connection.validate(&connection_context).await {
+                let result = match connection
+                    .validate(connection_gid, &connection_context)
+                    .await
+                {
                     Ok(()) => Ok(plan),
                     Err(err) => Err(err.into()),
                 };
@@ -308,6 +336,7 @@ impl Coordinator {
                     CreateConnectionValidationReady {
                         ctx,
                         result,
+                        connection_gid,
                         plan_validity: PlanValidity {
                             transient_revision,
                             dependency_ids: resolved_ids.0,
@@ -323,7 +352,12 @@ impl Coordinator {
             });
         } else {
             let result = self
-                .sequence_create_connection_stage_finish(ctx.session_mut(), plan, resolved_ids)
+                .sequence_create_connection_stage_finish(
+                    ctx.session_mut(),
+                    connection_gid,
+                    plan,
+                    resolved_ids,
+                )
                 .await;
             ctx.retire(result);
         }
@@ -333,23 +367,12 @@ impl Coordinator {
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
+        connection_gid: GlobalId,
         plan: CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog_mut().allocate_oid()?;
-        let connection_gid = self.catalog_mut().allocate_user_id().await?;
-        let mut connection = plan.connection.connection;
-
-        match connection {
-            mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
-                let key_set = SshKeyPairSet::new()?;
-                self.secrets_controller
-                    .ensure(connection_gid, &key_set.to_bytes())
-                    .await?;
-                ssh.public_keys = Some(key_set.public_keys());
-            }
-            _ => {}
-        }
+        let connection = plan.connection.connection;
 
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,

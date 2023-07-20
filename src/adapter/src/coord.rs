@@ -249,6 +249,7 @@ pub struct CreateConnectionValidationReady {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
 }
