@@ -48,6 +48,13 @@ use crate::render::LinearJoinImpl;
 /// done between data ingress and egress.
 pub struct ComputeState {
     /// State kept for each installed compute collection.
+    ///
+    /// Each collection has exactly one frontier.
+    /// How the frontier is communicated depends on the collection type:
+    ///  * Frontiers of indexes are equal to the frontier of their corresponding traces in the
+    ///    `TraceManager`.
+    ///  * Persist sinks store their current frontier in `CollectionState::sink_write_frontier`.
+    ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// Collections that were recently dropped and whose removal needs to be reported.
     pub dropped_collections: Vec<GlobalId>,
@@ -420,6 +427,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             let mut new_frontier = Antichain::new();
             if let Some(traces) = self.compute_state.traces.get_mut(&id) {
+                assert!(
+                    collection.sink_write_frontier.is_none(),
+                    "collection {id} has multiple frontiers"
+                );
                 traces.oks_mut().read_upper(&mut new_frontier);
             } else if let Some(frontier) = &collection.sink_write_frontier {
                 new_frontier.clone_from(&frontier.borrow());
