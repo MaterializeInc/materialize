@@ -6093,6 +6093,7 @@ fn regexp_match_static<'a>(
 
 pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
     let mut case_insensitive = false;
+    // Note: Postgres accepts it when both flags are present, taking the last one. We do the same.
     for f in flags.chars() {
         match f {
             'i' => {

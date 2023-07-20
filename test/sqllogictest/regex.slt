@@ -102,6 +102,17 @@ SELECT regexp_match('ABC', 'a.*', 'i');
 ----
 {ABC}
 
+# We have to accept it when both flags are present (taking the last one), because Postgres also does the same.
+query T
+SELECT regexp_match('ABC', 'a.*', 'ic');
+----
+NULL
+
+query T
+SELECT regexp_match('ABC', 'a.*', 'ci');
+----
+{ABC}
+
 query error db error: ERROR: invalid regular expression: regex parse error:
 SELECT 'abs' ~ '\';
 
@@ -195,6 +206,26 @@ ABC
 abc
 {abc}
 
+query TT
+SELECT s, regexp_match(s, 'a.*', 'ic') FROM t;
+----
+ABC
+NULL
+ccc
+NULL
+abc
+{abc}
+
+query TT
+SELECT s, regexp_match(s, 'a.*', 'ci') FROM t;
+----
+ccc
+NULL
+ABC
+{ABC}
+abc
+{abc}
+
 query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
 SELECT s FROM t WHERE s ~ '\';
 
@@ -276,6 +307,32 @@ EOF
 
 query TTT
 SELECT s, regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
+----
+ccc
+a.*
+NULL
+ABC
+a.*
+{ABC}
+abc
+a.*
+{abc}
+
+query TTT
+SELECT s, regex_pat, regexp_match(s, regex_pat, 'ic') FROM t;
+----
+ABC
+a.*
+NULL
+ccc
+a.*
+NULL
+abc
+a.*
+{abc}
+
+query TTT
+SELECT s, regex_pat, regexp_match(s, regex_pat, 'ci') FROM t;
 ----
 ccc
 a.*
