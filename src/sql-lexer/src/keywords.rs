@@ -65,7 +65,7 @@ impl Keyword {
         matches!(
             self,
             // Keywords that can appear at the top-level of a SELECT statement.
-            WITH | SELECT | FROM | WHERE | GROUP | HAVING | ORDER | LIMIT | OFFSET | FETCH | OPTIONS |
+            WITH | SELECT | FROM | WHERE | GROUP | HAVING | ORDER | LIMIT | OFFSET | FETCH | OPTIONS | RETURNING |
             // Set operations.
             UNION | EXCEPT | INTERSECT
         )
