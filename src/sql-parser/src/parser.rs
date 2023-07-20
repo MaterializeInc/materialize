@@ -4059,39 +4059,7 @@ impl<'a> Parser<'a> {
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
-                let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
-                let name = UnresolvedObjectName::Item(
-                    self.parse_item_name().map_no_statement_parser_err()?,
-                );
-                let action = self
-                    .expect_one_of_keywords(&[RENAME, OWNER])
-                    .map_no_statement_parser_err()?;
-                self.expect_keyword(TO).map_no_statement_parser_err()?;
-                match action {
-                    RENAME => {
-                        let to_item_name = self
-                            .parse_identifier()
-                            .map_parser_err(StatementKind::AlterObjectRename)?;
-                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            to_item_name,
-                        }))
-                    }
-                    OWNER => {
-                        let new_owner = self
-                            .parse_identifier()
-                            .map_parser_err(StatementKind::AlterOwner)?;
-                        Ok(Statement::AlterOwner(AlterOwnerStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            new_owner,
-                        }))
-                    }
-                    _ => unreachable!(),
-                }
+                self.parse_alter_views(object_type)
             }
             ObjectType::Type => {
                 let if_exists = self
@@ -4781,6 +4749,44 @@ impl<'a> Parser<'a> {
                 grant_or_revoke,
             },
         ))
+    }
+
+    fn parse_alter_views(
+        &mut self,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name =
+            UnresolvedObjectName::Item(self.parse_item_name().map_no_statement_parser_err()?);
+        let action = self
+            .expect_one_of_keywords(&[RENAME, OWNER])
+            .map_no_statement_parser_err()?;
+        self.expect_keyword(TO).map_no_statement_parser_err()?;
+        match action {
+            RENAME => {
+                let to_item_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterObjectRename)?;
+                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    to_item_name,
+                }))
+            }
+            OWNER => {
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            _ => unreachable!(),
+        }
     }
 
     /// Parse a copy statement
