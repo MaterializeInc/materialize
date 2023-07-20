@@ -50,7 +50,6 @@ VIEW
 materialize
 information_schema
 role_table_grants
-applicable_roles
 VIEW
 materialize
 information_schema
@@ -62,11 +61,11 @@ schemata
 VIEW
 materialize
 information_schema
-tables
+table_privileges
 VIEW
 materialize
 information_schema
-table_privileges
+tables
 VIEW
 materialize
 information_schema
