@@ -40,6 +40,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
@@ -1343,7 +1344,7 @@ where
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        rows,
+                        Box::new(UnboundedReceiverStream::new(rows)),
                         execute_started,
                         &self.adapter_client,
                     )),
@@ -1396,7 +1397,7 @@ where
                     row_desc,
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
-                        rx,
+                        Box::new(UnboundedReceiverStream::new(rx)),
                         execute_started,
                         &self.adapter_client,
                     )),
@@ -1428,7 +1429,11 @@ where
                 self.copy_rows(
                     format,
                     row_desc,
-                    RecordFirstRowStream::new(rows, execute_started, &self.adapter_client),
+                    RecordFirstRowStream::new(
+                        Box::new(UnboundedReceiverStream::new(rows)),
+                        execute_started,
+                        &self.adapter_client,
+                    ),
                 )
                 .await
             }

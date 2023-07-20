@@ -4516,6 +4516,7 @@ dependencies = [
  "postgres",
  "tokio",
  "tokio-openssl",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "workspace-hack",

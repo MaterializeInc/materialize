@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::{self};
 use std::sync::Arc;
@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
+use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdHandle};
@@ -30,7 +32,6 @@ use mz_sql::session::user::{User, INTROSPECTION_USER};
 use mz_sql_parser::parser::ParserStatementError;
 use prometheus::Histogram;
 use serde_json::json;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
@@ -755,9 +756,11 @@ impl Timeout {
 
 /// A wrapper around an UnboundedReceiver of PeekResponseUnary that records when it sees the
 /// first row data in the given histogram
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct RecordFirstRowStream {
-    pub rows: UnboundedReceiver<PeekResponseUnary>,
+    #[derivative(Debug = "ignore")]
+    pub rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
     pub execute_started: Instant,
     pub time_to_first_row_seconds: Histogram,
     saw_rows: bool,
@@ -766,7 +769,7 @@ pub struct RecordFirstRowStream {
 impl RecordFirstRowStream {
     /// Create a new [`RecordFirstRowStream`]
     pub fn new(
-        rows: UnboundedReceiver<PeekResponseUnary>,
+        rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
         execute_started: Instant,
         client: &SessionClient,
     ) -> Self {
@@ -801,7 +804,7 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        let msg = self.rows.recv().await;
+        let msg = self.rows.next().await;
         if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
