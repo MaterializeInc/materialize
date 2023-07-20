@@ -261,8 +261,8 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Description**: The import frontiers of dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_compute_import_frontiers` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
-  * [ ] `mz_dataflow_initial_output_duration_seconds`
-    * **Type**: counter
+  * [x] `mz_dataflow_initial_output_duration_seconds`
+    * **Type**: gauge
     * **Labels**: `worker_id`, `collection_id`
     * **Description**: The time from dataflow installation up to when the first output was produced.
     * **Export Type**: direct
