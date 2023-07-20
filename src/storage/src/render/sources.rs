@@ -17,8 +17,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
+use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::metrics::BackpressureMetrics;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
@@ -368,11 +370,11 @@ where
                     let (upsert, health_update) = scope.scoped(
                         &format!("upsert_rehydration_backpressure({})", id),
                         |scope| {
-                            let (previous, previous_token, feedback_handle) =
+                            let (previous, previous_token, feedback_handle, backpressure_metrics) =
                                 if Timestamp::minimum() < upper_ts {
                                     let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                                    let (feedback_handle, flow_control) =
+                                    let (feedback_handle, flow_control, backpressure_metrics) =
                                         if let Some(storage_dataflow_max_inflight_bytes) =
                                             storage_state
                                                 .dataflow_parameters
@@ -381,6 +383,38 @@ where
                                             let (feedback_handle, feedback_data) =
                                                 scope.feedback(Default::default());
 
+                                            let backpressure_metrics = Some(BackpressureMetrics {
+                                                emitted_bytes: Arc::new(
+                                                    base_source_config
+                                                        .base_metrics
+                                                        .upsert_backpressure_specific
+                                                        .emitted_bytes
+                                                        .get_delete_on_drop_counter(vec![
+                                                            dbg!(id.to_string()),
+                                                            dbg!(scope.index().to_string()),
+                                                        ]),
+                                                ),
+                                                last_backpressured_bytes: Arc::new(
+                                                    base_source_config
+                                                        .base_metrics
+                                                        .upsert_backpressure_specific
+                                                        .last_backpressured_bytes
+                                                        .get_delete_on_drop_gauge(vec![
+                                                            dbg!(id.to_string()),
+                                                            dbg!(scope.index().to_string()),
+                                                        ]),
+                                                ),
+                                                retired_bytes: Arc::new(
+                                                    base_source_config
+                                                        .base_metrics
+                                                        .upsert_backpressure_specific
+                                                        .retired_bytes
+                                                        .get_delete_on_drop_counter(vec![
+                                                            dbg!(id.to_string()),
+                                                            dbg!(scope.index().to_string()),
+                                                        ]),
+                                                ),
+                                            });
                                             (
                                                 Some(feedback_handle),
                                                 Some(persist_source::FlowControl {
@@ -388,10 +422,12 @@ where
                                                     max_inflight_bytes:
                                                         storage_dataflow_max_inflight_bytes,
                                                     summary: (Default::default(), 1),
+                                                    metrics: backpressure_metrics.clone(),
                                                 }),
+                                                backpressure_metrics,
                                             )
                                         } else {
-                                            (None, None)
+                                            (None, None, None)
                                         };
                                     let (stream, tok) = persist_source::persist_source_core(
                                         scope,
@@ -405,9 +441,14 @@ where
                                         // Copy the logic in DeltaJoin/Get/Join to start.
                                         |_timer, count| count > 1_000_000,
                                     );
-                                    (stream.as_collection(), Some(tok), feedback_handle)
+                                    (
+                                        stream.as_collection(),
+                                        Some(tok),
+                                        feedback_handle,
+                                        backpressure_metrics,
+                                    )
                                 } else {
-                                    (Collection::new(empty(scope)), None, None)
+                                    (Collection::new(empty(scope)), None, None, None)
                                 };
                             let (upsert, health_update) = crate::render::upsert::upsert(
                                 &upsert_input.enter(scope),
@@ -418,6 +459,7 @@ where
                                 base_source_config,
                                 &storage_state.instance_context,
                                 &storage_state.dataflow_parameters,
+                                backpressure_metrics,
                             );
 
                             // If backpressure is enabled, we probe the upsert operator's
