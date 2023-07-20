@@ -60,9 +60,9 @@ values are:
 - `FROM DATABASE <database>` will filter the output to exclude schemas not in database `<database>`.
   - This has no effect on item, database, cluster, or cluster privileges.
   - If a database or `ALL DATABASES` is not specified then the active database is assumed.
-  - Invalid if an object type of `DATABASE`, `CLUSTER`, or `SYSTEM` has been specified. 
+  - Invalid if an object type of `DATABASE`, `CLUSTER`, or `SYSTEM` has been specified.
 - `FROM ALL DATABASES` will include all schemas.
-  - Invalid if an object type of `DATABASE`, `CLUSTER`, or `SYSTEM` has been specified. 
+  - Invalid if an object type of `DATABASE`, `CLUSTER`, or `SYSTEM` has been specified.
 
 The output will include the following columns:
 
