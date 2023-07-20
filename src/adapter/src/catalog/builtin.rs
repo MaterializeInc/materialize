@@ -3391,7 +3391,7 @@ FROM
     JOIN mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
     LEFT JOIN mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
 WHERE
-    -- WHERE clause is not gauranteed to short-circuit and 'PUBLIC' will cause an error when passed
+    -- WHERE clause is not guaranteed to short-circuit and 'PUBLIC' will cause an error when passed
     -- to pg_has_role. Therefore we need to use a CASE statement.
     CASE
         WHEN grantee = 'PUBLIC' THEN true
