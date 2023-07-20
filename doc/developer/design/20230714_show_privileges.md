@@ -39,33 +39,30 @@ We will also add an `owner` column to the existing show commands.
 
 Will show object privileges.
 
-The syntax will be: `SHOW PRIVILEGES [ON <object-type>] [FOR {<role> | ALL ROLES}] [FROM {SCHEMA <schema-name> | ALL SCHEMAS | DATABASE <database> | ALL DATABASES}]`.
+The syntax will be: `SHOW [<object-type>] PRIVILEGES [FOR {<role> | ALL ROLES}] [FROM {SCHEMA <schema-name> | ALL SCHEMAS | DATABASE <database> | ALL DATABASES}]`.
 
-- `ON <object-type>` will filter the output to only include objects of type `<object-type>`. Valid
-  values are:
-    - `TABLES`
-    - `VIEWS`
-    - `MATERIALIZED VIEWS`
-    - `SOURCES`
-    - `SINKS`
-    - `TYPES`
-    - `CLUSTERS`
-    - `SECRETS`
-    - `CONNECTIONS`
-    - `DATABASES`
-    - `SCHEMAS`
-    - `SYSTEM`
+- `<object-type>` will filter the output to only include objects of type `<object-type>`. Valid
+values are:
+  - `OBJECT`
+  - `DATABASE`
+  - `SCHEMA`
+  - `CLUSTER`
+  - `SYSTEM`
 - `FOR <role>` will filter the output to only include privileges granted to `<role>`.
   - If a role or `ALL ROLES` is not specified then the current role is assumed.
 - `FOR ALL ROLES` will display privileges granted to all roles.
 - `FROM SCHEMA <schema-name>` will filter the output to exclude items not in schema `<schema-name>`.
-    - This has no effect on database, schema, cluster, or system privileges.
-    - If a schema or `ALL SCHEMAS` is not specified then the active schema is assumed.
+  - This has no effect on database, schema, cluster, or system privileges.
+  - If a schema or `ALL SCHEMAS` is not specified then the active schema is assumed.
+  - Invalid if an object type of `DATABASE`, `SCHEMA`, `CLUSTER`, or `SYSTEM` has been specified.
 - `FROM ALL SCHEMAS` will include all items.
+  - Invalid if an object type of `DATABASE`, `SCHEMA`, `CLUSTER`, or `SYSTEM` has been specified.
 - `FROM DATABASE <database>` will filter the output to exclude schemas not in database `<database>`.
   - This has no effect on item, database, cluster, or cluster privileges.
   - If a database or `ALL DATABASES` is not specified then the active database is assumed.
+  - Invalid if an object type of `DATABASE`, `CLUSTER`, or `SYSTEM` has been specified. 
 - `FROM ALL DATABASES` will include all schemas.
+  - Invalid if an object type of `DATABASE`, `CLUSTER`, or `SYSTEM` has been specified. 
 
 The output will include the following columns:
 
@@ -96,7 +93,6 @@ SHOW PRIVILEGES FOR ROLE ceo;
  database    | schema | name        | object_type | privileges
 -------------+--------+-------------+-------------+--------------------------------
  materialize | public | my_table    | table       | SELECT, INSERT, UPDATE, DELETE
- materialize | public | my_view     | view        | SELECT
  materialize | NULL   | public      | schema      | CREATE, USAGE
  NULL        | NULL   | materialize | database    | CREATE, USAGE
  NULL        | NULL   | my_db       | database    | CREATE, USAGE
@@ -104,11 +100,12 @@ SHOW PRIVILEGES FOR ROLE ceo;
 ```
 
 ```sql
-SHOW PRIVILEGES ON TABLES;
+SHOW OBJECT PRIVILEGES;
 
  database    | schema | name       | object_type | privileges
 -------------+--------+------------+-------------+----------------
  materialize | public | my_table   | table       | SELECT, INSERT
+ materialize | public | my_view    | view        | SELECT
 ```
 
 ```sql
@@ -124,10 +121,11 @@ SHOW PRIVILEGES FROM SCHEMA qa;
 ```
 
 ```sql
-SHOW PRIVILEGES ON VIEWS FROM SCHEMA public;
+SHOW OBJECT PRIVILEGES FROM SCHEMA public;
 
  database    | schema | name       | object_type | privileges
 -------------+--------+------------+-------------+----------------
+ materialize | public | my_table   | table       | SELECT, INSERT
  materialize | public | my_view    | view        | SELECT
 ```
 
@@ -174,17 +172,15 @@ SHOW PRIVILEGES FROM ALL DATABASES;
 
 Will show all default privileges
 
-The syntax will be `SHOW DEFAULT PRIVILEGES [ON <object-type>]`.
+The syntax will be `SHOW DEFAULT [<object-type>] PRIVILEGES [ON <object-type>]`.
 
-- `ON <object-type>` will filter the output to only include objects of type `<object-type>`. Valid
-  values are:
-  - `TABLES` (includes views, materialized views, and sources)
-  - `TYPES`
-  - `CLUSTERS`
-  - `SECRETS`
-  - `CONNECTIONS`
-  - `DATABASES`
-  - `SCHEMAS`
+- `<object-type>` will filter the output to only include objects of type `<object-type>`. Valid
+values are:
+  - `OBJECT`
+  - `DATABASE`
+  - `SCHEMA`
+  - `CLUSTER`
+  - `SYSTEM`
 
 The output will include the following columns:
 
@@ -209,12 +205,13 @@ SHOW DEFAULT PRIVILEGES;
 ```
 
 ```sql
-SHOW DEFAULT PRIVILEGES ON TABLES;
+SHOW DEFAULT OBJECT PRIVILEGES ON TABLES;
 
  role   | database    | schema | object_type | grantee   | privileges
 --------+-------------+--------+-------------+-----------+----------------
  PUBLIC | NULL        | NULL   | table       | dev       | INSERT, SELECT
  joe    | materialize | NULL   | table       | PUBLIC    | SELECT
+ qa     | materialize | public | type        | scientist | USAGE
 ```
 
 ### `SHOW ROLE MEMBERSHIPS`
