@@ -218,6 +218,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         progress_stream: flow_control_input,
                         max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
                         summary: mz_repr::Timestamp::minimum().step_forward(),
+                        // TODO(guswynn): add metrics for compute flow control
+                        metrics: None,
                     };
 
                     // Note: For correctness, we require that sources only emit times advanced by
