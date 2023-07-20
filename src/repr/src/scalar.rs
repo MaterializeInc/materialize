@@ -1653,6 +1653,11 @@ pub trait DatumType<'a, E>: Sized {
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E>;
 }
 
+/// A new type that wraps a [`Vec`] that is used to differentiate the target [`Datum`] between
+/// Arrays and Lists. The target of this type is Array.
+#[derive(Debug)]
+pub struct ArrayRustType<T>(pub Vec<T>);
+
 impl<B: AsColumnType> AsColumnType for Option<B> {
     fn as_column_type() -> ColumnType {
         B::as_column_type().nullable(true)
@@ -1880,6 +1885,44 @@ impl<'a, E> DatumType<'a, E> for String {
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self)))
+    }
+}
+
+impl AsColumnType for ArrayRustType<String> {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Array(arr)) => Ok(ArrayRustType(
+                arr.elements()
+                    .into_iter()
+                    .map(|d| d.unwrap_str().to_string())
+                    .collect(),
+            )),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(temp_storage.make_datum(|packer| {
+            packer
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: self.0.len(),
+                    }],
+                    self.0.iter().map(|elem| Datum::String(elem.as_str())),
+                )
+                .expect("self is 1 dimensional, and its length is used for the array length");
+        }))
     }
 }
 
