@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
+use mz_ore::collections::HashSet;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::Method;
 
@@ -21,6 +22,14 @@ pub async fn run_request(
     let url = cmd.args.string("url")?;
     let method: Method = cmd.args.parse("method")?;
     let content_type = cmd.args.opt_string("content-type");
+    let further_accepted_status_codes = match cmd.args.opt_string("accept-additional-status-codes")
+    {
+        Some(s) => s
+            .split(',')
+            .map(|s| s.parse::<u16>().unwrap())
+            .collect::<HashSet<u16>>(),
+        None => HashSet::new(),
+    };
     let body = cmd.input.join("\n");
 
     println!("$ http-request {} {}\n{}", method, url, body);
@@ -38,7 +47,7 @@ pub async fn run_request(
 
     println!("{}\n{}", status, response.text().await?);
 
-    if status.is_success() {
+    if status.is_success() || further_accepted_status_codes.contains(&status.as_u16()) {
         Ok(ControlFlow::Continue)
     } else {
         bail!("http request returned failing status: {}", status)
