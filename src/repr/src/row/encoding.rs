@@ -140,7 +140,8 @@ impl ColumnType {
                 | Map { .. }
                 | Int2Vector
                 | Range { .. }
-                | MzAclItem,
+                | MzAclItem
+                | AclItem,
             ) => None,
         }
     }
@@ -841,6 +842,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 }),
             })),
             Datum::MzAclItem(x) => DatumType::MzAclItem(x.into_proto()),
+            Datum::AclItem(x) => DatumType::AclItem(x.into_proto()),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -989,6 +991,7 @@ impl RowPacker<'_> {
                 }
             }
             Some(DatumType::MzAclItem(x)) => self.push(Datum::MzAclItem(x.clone().into_rust()?)),
+            Some(DatumType::AclItem(x)) => self.push(Datum::AclItem(x.clone().into_rust()?)),
             None => return Err("unknown datum type".into()),
         };
         Ok(())

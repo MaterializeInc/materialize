@@ -749,6 +749,7 @@ impl TypeReference for IdReference {
 #[allow(missing_docs)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogType<T: TypeReference> {
+    AclItem,
     Array {
         element_reference: T::Reference,
     },

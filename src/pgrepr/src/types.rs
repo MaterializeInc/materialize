@@ -12,7 +12,7 @@ use std::fmt;
 use std::mem::size_of;
 
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{
     InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
 };
@@ -154,8 +154,12 @@ pub enum Type {
         /// The domain type.
         element_type: Box<Type>,
     },
-    /// A list of privileges granted to a role.
+    /// A list of privileges granted to a user, that uses [`mz_repr::role_id::RoleId`]s for role
+    /// references.
     MzAclItem,
+    /// A list of privileges granted to a user that uses [`mz_repr::adt::system::Oid`]s for role
+    /// references. This type is used primarily for compatibility with PostgreSQL.
+    AclItem,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -666,7 +670,9 @@ impl Type {
 
     pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
+            Type::AclItem => &postgres_types::Type::ACLITEM,
             Type::Array(t) => match &**t {
+                Type::AclItem => &postgres_types::Type::ACLITEM_ARRAY,
                 Type::Array(_) => unreachable!(),
                 Type::Bool => &postgres_types::Type::BOOL_ARRAY,
                 Type::Bytea => &postgres_types::Type::BYTEA_ARRAY,
@@ -842,7 +848,8 @@ impl Type {
             Type::TimestampTz {
                 precision: Some(precision),
             } => Some(precision),
-            Type::Array(_)
+            Type::AclItem
+            | Type::Array(_)
             | Type::Bool
             | Type::Bytea
             | Type::BpChar { length: None }
@@ -927,6 +934,7 @@ impl Type {
                 .expect("must fit"),
             Type::Range { .. } => -1,
             Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
+            Type::AclItem => AclItem::binary_size().try_into().expect("must fit"),
         }
     }
 
@@ -961,6 +969,7 @@ impl TryFrom<&Type> for ScalarType {
 
     fn try_from(typ: &Type) -> Result<ScalarType, TypeConversionError> {
         match typ {
+            Type::AclItem => Ok(ScalarType::AclItem),
             Type::Array(t) => Ok(ScalarType::Array(Box::new(TryFrom::try_from(&**t)?))),
             Type::Bool => Ok(ScalarType::Bool),
             Type::Bytea => Ok(ScalarType::Bytes),
@@ -1145,6 +1154,7 @@ impl From<InvalidVarCharMaxLengthError> for TypeConversionError {
 impl From<&ScalarType> for Type {
     fn from(typ: &ScalarType) -> Type {
         match typ {
+            ScalarType::AclItem => Type::AclItem,
             ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,

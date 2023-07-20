@@ -6347,6 +6347,7 @@ where
 {
     use ScalarType::*;
     match &ty {
+        AclItem => Ok(strconv::format_acl_item(buf, d.unwrap_acl_item())),
         Bool => Ok(strconv::format_bool(buf, d.unwrap_bool())),
         Int16 => Ok(strconv::format_int16(buf, d.unwrap_int16())),
         Int32 => Ok(strconv::format_int32(buf, d.unwrap_int32())),

@@ -22,3 +22,9 @@ message ProtoMzAclItem {
     mz_repr.role_id.ProtoRoleId grantor = 2;
     ProtoAclMode acl_mode = 3;
 }
+
+message ProtoAclItem {
+  uint32 grantee = 1;
+  uint32 grantor = 2;
+  ProtoAclMode acl_mode = 3;
+}
