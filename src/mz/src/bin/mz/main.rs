@@ -89,9 +89,8 @@ use serde::Deserialize;
 use utils::{ascii_validator, new_client};
 
 use mz::api::{
-    disable_region_environment, enable_region_environment, get_provider_by_region_name,
-    get_provider_region_environment, get_region_environment, list_cloud_providers, list_regions,
-    CloudProviderRegion,
+    disable_region, enable_region, get_cloud_provider, get_region, get_region_by_cloud_provider,
+    list_cloud_providers, list_regions, CloudProviderRegion,
 };
 use mz::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use mz::vault::Vault;
@@ -100,8 +99,8 @@ use mz_ore::cli::CliConfig;
 
 use crate::login::{generate_api_token, login_with_browser, login_with_console};
 use crate::password::list_passwords;
-use crate::region::{print_environment_status, print_region_enabled};
-use crate::shell::{check_environment_health, shell};
+use crate::region::{print_region_enabled, print_region_status};
+use crate::shell::{check_region_health, shell};
 use crate::utils::{parse_timeout, run_loading_spinner};
 
 use self::clap_clippy_hack::*;
@@ -347,11 +346,11 @@ async fn main() -> Result<()> {
 
                 let loading_spinner = run_loading_spinner("Enabling region...".to_string());
                 let cloud_provider =
-                    get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
+                    get_cloud_provider(&client, &valid_profile, &cloud_provider_region)
                         .await
                         .with_context(|| "Retrieving cloud provider.")?;
 
-                let region = enable_region_environment(
+                enable_region(
                     &client,
                     &cloud_provider,
                     version,
@@ -366,17 +365,16 @@ async fn main() -> Result<()> {
                         .max_duration(timeout)
                         .clamp_backoff(Duration::from_secs(1))
                         .retry_async(|_| async {
-                            let environment =
-                                get_region_environment(&client, &valid_profile, &region)
-                                    .await
-                                    .with_context(|| "Retrieving environment data.")?;
-                            if !environment.resolvable {
+                            let region = get_region(&client, &cloud_provider, &valid_profile)
+                                .await
+                                .with_context(|| "Retrieving region data.")?;
+                            if !region.region_info.resolvable {
                                 bail!(String::from("Timeout expired enabling region."));
                             }
 
                             loop {
-                                if check_environment_health(&valid_profile, &environment)? {
-                                    break Ok(environment);
+                                if check_region_health(&valid_profile, &region)? {
+                                    break Ok(region);
                                 }
                             }
                         })
@@ -397,11 +395,11 @@ async fn main() -> Result<()> {
 
                 let loading_spinner = run_loading_spinner("Disabling region...".to_string());
                 let cloud_provider =
-                    get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
+                    get_cloud_provider(&client, &valid_profile, &cloud_provider_region)
                         .await
                         .with_context(|| "Retrieving cloud provider.")?;
 
-                disable_region_environment(&client, &cloud_provider, &valid_profile)
+                disable_region(&client, &cloud_provider, &valid_profile)
                     .await
                     .with_context(|| "Disabling region.")?;
 
@@ -434,16 +432,13 @@ async fn main() -> Result<()> {
 
                 let valid_profile = profile.validate(&profile_name, &client).await?;
 
-                let environment = get_provider_region_environment(
-                    &client,
-                    &valid_profile,
-                    &cloud_provider_region,
-                )
-                .await
-                .with_context(|| "Retrieving cloud provider region.")?;
-                let health = check_environment_health(&valid_profile, &environment)?;
+                let region =
+                    get_region_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
+                        .await
+                        .with_context(|| "Retrieving cloud provider region.")?;
+                let health = check_region_health(&valid_profile, &region)?;
 
-                print_environment_status(&valid_profile, environment, health)
+                print_region_status(&valid_profile, region, health)
                     .with_context(|| "Printing the status of the environment.")?;
             }
         },

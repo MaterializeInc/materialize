@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{Context, Ok, Result};
-use mz::api::{get_provider_region_environment, CloudProviderRegion, Environment};
+use mz::api::{get_region_by_cloud_provider, CloudProviderRegion, Region};
 use mz::configuration::ValidProfile;
 use reqwest::Client;
 
@@ -24,9 +24,9 @@ const PG_APPLICATION_NAME: &str = "mz_psql";
 /// ----------------------------
 
 /// Runs psql as a subprocess command
-fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) -> Result<()> {
+fn run_psql_shell(valid_profile: ValidProfile<'_>, region: &Region) -> Result<()> {
     let error = Command::new("psql")
-        .arg(environment.sql_url(&valid_profile).to_string())
+        .arg(region.sql_url(&valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password)
         .env("PGAPPNAME", PG_APPLICATION_NAME)
         .exec();
@@ -34,18 +34,18 @@ fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) ->
     Err(error).context("failed to spawn psql")
 }
 
-/// Runs pg_isready to check if an environment is healthy
-pub(crate) fn check_environment_health(
+/// Runs pg_isready to check if an region is healthy
+pub(crate) fn check_region_health(
     valid_profile: &ValidProfile<'_>,
-    environment: &Environment,
+    region: &Region,
 ) -> Result<bool> {
-    if !environment.resolvable {
+    if !region.region_info.resolvable {
         return Ok(false);
     }
     let status = Command::new("pg_isready")
         .arg("-q")
         .arg("-d")
-        .arg(environment.sql_url(valid_profile).to_string())
+        .arg(region.sql_url(valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password.clone())
         .output()
         .context("failed to execute pg_isready")?
@@ -61,10 +61,9 @@ pub(crate) async fn shell(
     valid_profile: ValidProfile<'_>,
     cloud_provider_region: CloudProviderRegion,
 ) -> Result<()> {
-    let environment =
-        get_provider_region_environment(&client, &valid_profile, &cloud_provider_region)
-            .await
-            .context("Retrieving cloud provider region.")?;
+    let region = get_region_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
+        .await
+        .context("Retrieving cloud provider region.")?;
 
-    run_psql_shell(valid_profile, &environment)
+    run_psql_shell(valid_profile, &region)
 }
