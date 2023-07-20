@@ -128,7 +128,6 @@ impl RustType<ProtoMatcher> for Matcher {
         ProtoMatcher {
             pattern: self.pattern.clone(),
             case_insensitive: self.case_insensitive,
-            //matcher_impl: Some(self.matcher_impl.into_proto()),
         }
     }
 
