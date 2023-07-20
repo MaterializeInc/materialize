@@ -10,6 +10,7 @@
 //! Regular expressions.
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
@@ -18,7 +19,9 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest::prop_compose;
 use regex::{Error, RegexBuilder};
-use serde::{Deserialize, Serialize};
+use serde::de::Error as DeError;
+use serde::ser::SerializeStruct;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
@@ -41,29 +44,16 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 /// often useful to have _some_ equivalence relation available (e.g., to store
 /// types containing regexes in a hashmap) even if the equivalence relation is
 /// imperfect.
-#[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
+///
+/// [regex::Regex] is hard to serialize (because of the compiled code), so our approach is to
+/// instead serialize this wrapper struct, where we skip serializing the actual regex field, and
+/// we reconstruct the regex field from the other two fields upon deserialization.
+/// (Earlier, serialization was buggy due to <https://github.com/tailhook/serde-regex/issues/14>,
+/// and also making the same mistake in our own protobuf serialization code.)
+#[derive(Debug, Clone, MzReflect)]
 pub struct Regex {
     pub pattern: String,
     pub case_insensitive: bool,
-    // TODO(benesch): watch for a more efficient binary serialization for
-    // [`regex::Regex`] (https://github.com/rust-lang/regex/issues/258). The
-    // `serde_regex` crate serializes to a string and is forced to recompile the
-    // regex during deserialization.
-    // TODO(ggevay): This used to be serialized with #[serde(with = "serde_regex")], but this is
-    // actually incorrect, as it serializes based on `as_str()`, which is not capturing
-    // `case_insensitive`! I fixed this for our protobuf serialization, but not yet
-    // for the Deserialize/Serialize implementations. I opened an issue to serde_regex, but I'm not
-    // very hopeful that they will fix it: https://github.com/tailhook/serde-regex/issues/14
-    // Anyhow, this is not so urgent to fix, because it is only used by non-essential things AFAIK:
-    // - `MzReflect`
-    // - `EXPLAIN AS JSON` (through `DisplayJson`)
-    // For now, we just skip serializing it, to avoid putting incorrect information in
-    // serialized form. This also means that we panic if we try to deserialize it (which we should
-    // be able to easily avoid doing, as far as I can see). Note that EXPLAIN AS JSON will serialize
-    // our wrapping [Regex] struct, which _will_ show the `case_insensitive` field. Also note that
-    // EXPLAIN AS JSON does only serialization, but not deserialization.
-    // (see also the commented out test `regex_serde_case_insensitive`)
-    #[serde(with = "serde_regex", skip_serializing)]
     pub regex: regex::Regex,
 }
 
@@ -127,6 +117,124 @@ impl RustType<ProtoRegex> for Regex {
     }
 }
 
+impl Serialize for Regex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("Regex", 2)?;
+        state.serialize_field("pattern", &self.pattern)?;
+        state.serialize_field("case_insensitive", &self.case_insensitive)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Regex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        enum Field {
+            Pattern,
+            CaseInsensitive,
+        }
+
+        impl<'de> Deserialize<'de> for Field {
+            fn deserialize<D>(deserializer: D) -> Result<Field, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                struct FieldVisitor;
+
+                impl<'de> de::Visitor<'de> for FieldVisitor {
+                    type Value = Field;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                        formatter.write_str("pattern string or case_insensitive bool")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Field, E>
+                    where
+                        E: de::Error,
+                    {
+                        match value {
+                            "pattern" => Ok(Field::Pattern),
+                            "case_insensitive" => Ok(Field::CaseInsensitive),
+                            _ => Err(de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+
+                deserializer.deserialize_identifier(FieldVisitor)
+            }
+        }
+
+        struct RegexVisitor;
+
+        impl<'de> de::Visitor<'de> for RegexVisitor {
+            type Value = Regex;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("Regex serialized by the manual Serialize impl from above")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<Regex, V::Error>
+            where
+                V: de::SeqAccess<'de>,
+            {
+                let pattern = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let case_insensitive = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Regex::new(pattern, case_insensitive).map_err(|err| {
+                    V::Error::custom(format!(
+                        "Unable to recreate regex during deserialization: {}",
+                        err
+                    ))
+                })
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Regex, V::Error>
+            where
+                V: de::MapAccess<'de>,
+            {
+                let mut pattern: Option<String> = None;
+                let mut case_insensitive: Option<bool> = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Pattern => {
+                            if pattern.is_some() {
+                                return Err(de::Error::duplicate_field("pattern"));
+                            }
+                            pattern = Some(map.next_value()?);
+                        }
+                        Field::CaseInsensitive => {
+                            if case_insensitive.is_some() {
+                                return Err(de::Error::duplicate_field("case_insensitive"));
+                            }
+                            case_insensitive = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let pattern = pattern.ok_or_else(|| de::Error::missing_field("pattern"))?;
+                let case_insensitive =
+                    case_insensitive.ok_or_else(|| de::Error::missing_field("case_insensitive"))?;
+                Regex::new(pattern, case_insensitive).map_err(|err| {
+                    V::Error::custom(format!(
+                        "Unable to recreate regex during deserialization: {}",
+                        err
+                    ))
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["pattern", "case_insensitive"];
+        deserializer.deserialize_struct("Regex", FIELDS, RegexVisitor)
+    }
+}
+
 // TODO: this is not really high priority, but this could modified to generate a
 // greater variety of regexes. Ignoring the beginning-of-file/line and EOF/EOL
 // symbols, the only regexes being generated are `.{#repetitions}` and
@@ -163,27 +271,18 @@ mod tests {
         }
     }
 
-    // This is currently failing due to the derived serde serialization being incorrect.
-    // See comment in the [Regex] struct above.
-    // (And also failing because of currently skipping the Regex field inside the wrapper struct.)
-    // (Also, there was some dependency conflict when I tried to add serde_assert as a dependency,
-    // so I'm not actually adding that for now.)
-    // #[mz_ore::test]
-    // fn regex_serde_case_insensitive() {
-    //     let orig_regex = Regex::new("AAA".to_string(), true).unwrap();
-    //     let serializer = serde_assert::Serializer::builder().build();
-    //     let serialized = orig_regex.serialize(&serializer);
-    //     // Uncomment this to see that the serialized forms are identical for case sensitive and
-    //     // insensitive:
-    //     //println!("serialized: {:?}", serialized);
-    //     assert!(serialized.is_ok());
-    //     let mut deserializer = serde_assert::Deserializer::builder()
-    //         .tokens(serialized.unwrap())
-    //         .build();
-    //     let roundtrip_result = Regex::deserialize(&mut deserializer).unwrap();
-    //     // Equality test between orig and roundtrip_result wouldn't work, because Eq doesn't test
-    //     // the actual regex object. So test the actual regex functionality.
-    //     assert_eq!(orig_regex.regex.is_match("aaa"), true);
-    //     assert_eq!(roundtrip_result.regex.is_match("aaa"), true);
-    // }
+    // This was failing before due to the derived serde serialization being incorrect, because of
+    // <https://github.com/tailhook/serde-regex/issues/14>.
+    // Nowadays, we use our own handwritten Serialize/Deserialize impls for our Regex wrapper struct.
+    #[mz_ore::test]
+    fn regex_serde_case_insensitive() {
+        let orig_regex = Regex::new("AAA".to_string(), true).unwrap();
+        let serialized: String = serde_json::to_string(&orig_regex).unwrap();
+        let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
+        // Equality test between orig and roundtrip_result wouldn't work, because Eq doesn't test
+        // the actual regex object. So test the actual regex functionality (concentrating on case
+        // sensitivity).
+        assert_eq!(orig_regex.regex.is_match("aaa"), true);
+        assert_eq!(roundtrip_result.regex.is_match("aaa"), true);
+    }
 }

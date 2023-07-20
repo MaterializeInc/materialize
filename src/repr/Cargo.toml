@@ -42,7 +42,6 @@ regex = "1.7.0"
 ryu = "1.0.12"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
-serde_regex = "1.1.0"
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio-postgres = { version = "0.7.8" }
