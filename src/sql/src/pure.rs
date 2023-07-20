@@ -127,7 +127,7 @@ fn subsource_name_gen(
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
 pub async fn purify_statement(
-    catalog: Box<dyn SessionCatalog>,
+    catalog: impl SessionCatalog,
     now: u64,
     stmt: Statement<Aug>,
     connection_context: ConnectionContext,
@@ -150,7 +150,7 @@ pub async fn purify_statement(
 }
 
 async fn purify_create_source(
-    catalog: Box<dyn SessionCatalog>,
+    catalog: impl SessionCatalog,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connection_context: ConnectionContext,
@@ -226,7 +226,7 @@ async fn purify_create_source(
                 },
             ..
         }) => {
-            let scx = StatementContext::new(None, &*catalog);
+            let scx = StatementContext::new(None, &catalog);
             let mut connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
@@ -307,7 +307,7 @@ async fn purify_create_source(
             connection,
             options,
         } => {
-            let scx = StatementContext::new(None, &*catalog);
+            let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
@@ -465,7 +465,7 @@ async fn purify_create_source(
             })
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let scx = StatementContext::new(None, &*catalog);
+            let scx = StatementContext::new(None, &catalog);
 
             let (_load_generator, available_subsources) =
                 load_generator_ast_to_generator(generator, options)?;
@@ -574,7 +574,7 @@ async fn purify_create_source(
     // Create the targeted AST node for the original CREATE SOURCE statement
     let transient_id = GlobalId::Transient(subsource_id_counter);
 
-    let scx = StatementContext::new(None, &*catalog);
+    let scx = StatementContext::new(None, &catalog);
 
     // Take name from input or generate name
     let (name, subsource) = match progress_subsource {
@@ -624,7 +624,7 @@ async fn purify_create_source(
     };
     subsources.push((transient_id, subsource));
 
-    purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
+    purify_source_format(&catalog, format, connection, envelope, &connection_context).await?;
 
     Ok((subsources, Statement::CreateSource(stmt)))
 }
@@ -636,7 +636,7 @@ async fn purify_create_source(
 /// `AlterSourceStatement` with any modifications that are only accessible while
 /// we are permitted to use async code.
 async fn purify_alter_source(
-    catalog: Box<dyn SessionCatalog>,
+    catalog: impl SessionCatalog,
     mut stmt: AlterSourceStatement<Aug>,
     connection_context: ConnectionContext,
 ) -> Result<
@@ -646,7 +646,7 @@ async fn purify_alter_source(
     ),
     PlanError,
 > {
-    let scx = StatementContext::new(None, &*catalog);
+    let scx = StatementContext::new(None, &catalog);
     let AlterSourceStatement {
         source_name,
         action,
