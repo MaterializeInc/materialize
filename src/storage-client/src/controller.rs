@@ -2288,6 +2288,26 @@ where
                 }
             }
 
+            // Check if the collection is for a Webhook source, unregister if so.
+            let collection = self.state.collections.get(&id);
+            if let Some(CollectionState { description, .. }) = collection {
+                if description.data_source == DataSource::Webhook && frontier.is_empty() {
+                    // Unregister our collection from the manager so writes should no longer occur.
+                    self.state
+                        .collection_manager
+                        .unregsiter_collection(id)
+                        .await;
+
+                    pending_source_drops.push(id);
+                    // Normally `clusterd` will emit this StorageResponse when it knows we can
+                    // drop an ID, but since Webhook sources don't run on a cluster, we manually
+                    // emit this event here.
+                    let _ = self
+                        .internal_response_sender
+                        .send(StorageResponse::DroppedIds([id].into()));
+                }
+            }
+
             // Sources can have subsources, which don't have associated clusters, which
             // is why this operates differently than sinks.
             if frontier.is_empty() {
@@ -2303,25 +2323,6 @@ where
                     id,
                     frontier.clone(),
                 )]));
-            }
-
-            // Check if the collection is for a Webhook source, unregister if so.
-            let collection = self.state.collections.get(&id);
-            if let Some(CollectionState { description, .. }) = collection {
-                if description.data_source == DataSource::Webhook && frontier.is_empty() {
-                    // Unregister our collection from the manager so writes should no longer occur.
-                    self.state.collection_manager.unregsiter_collection(id);
-                    // Wait for a barrier to assert that no work is in progress for the collection.
-                    self.state.collection_manager.barrier().await;
-
-                    pending_source_drops.push(id);
-                    // Normally `clusterd` will emit this StorageResponse when it knows we can
-                    // drop an ID, but since Webhook sources don't run on a cluster, we manually
-                    // emit this event here.
-                    let _ = self
-                        .internal_response_sender
-                        .send(StorageResponse::DroppedIds([id].into()));
-                }
             }
         }
 

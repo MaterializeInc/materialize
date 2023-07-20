@@ -2114,7 +2114,10 @@ fn webhook_concurrent_actions() {
         if status.is_success() {
             saw_atleast_one_success_after_close = true;
         }
-        assert!(status.is_success() || status == http::StatusCode::NOT_FOUND)
+        assert!(
+            status.is_success() || status == http::StatusCode::NOT_FOUND,
+            "found bad status {status:?}"
+        );
     }
     assert!(saw_atleast_one_success_after_close);
 }

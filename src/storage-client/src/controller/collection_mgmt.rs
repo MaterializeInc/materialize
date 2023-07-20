@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::{Future, FutureExt};
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_types::Codec64;
@@ -34,7 +33,7 @@ pub struct CollectionManager {
         Vec<(Row, Diff)>,
         oneshot::Sender<Result<(), StorageError>>,
     )>,
-    barrier: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
+    notifies: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
 }
 
 /// The `CollectionManager` provides two complementary functions:
@@ -67,14 +66,18 @@ impl CollectionManager {
         //
         // For example, after unregistering a collection a user might wait on a barrier to be sure
         // any in-progress work with that collection has completed.
-        let barrier: Arc<Mutex<Vec<oneshot::Sender<_>>>> = Arc::new(Mutex::new(Vec::new()));
-        let barrier_outer = Arc::clone(&barrier);
+        //
+        // TODO(parkmycar): Revist the API for persist write handles. Ideally we can return results
+        // per-ID instead of for the entire batch. This should allow us to gracefully handle
+        // collections for which a write handle doesn't exist, or the shard has been sealed.
+        let notifies: Arc<Mutex<Vec<oneshot::Sender<_>>>> = Arc::new(Mutex::new(Vec::new()));
+        let notifies_outer = Arc::clone(&notifies);
 
         mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
             loop {
-                // Notify any waiting barriers.
-                barrier
+                // Notify any waiters.
+                notifies
                     .lock()
                     .expect("CollectionManager panicked")
                     .drain(..)
@@ -211,18 +214,8 @@ impl CollectionManager {
         CollectionManager {
             tx,
             collections: collections_outer,
-            barrier: barrier_outer,
+            notifies: notifies_outer,
         }
-    }
-
-    /// Returns a [`Future`] that resolves once any in-progress work has been completed.
-    pub(super) fn barrier(&self) -> impl Future<Output = ()> + 'static {
-        let (tx, rx) = oneshot::channel();
-        self.barrier
-            .lock()
-            .expect("CollectionManager panicked")
-            .push(tx);
-        rx.map(|_| ())
     }
 
     /// Registers the collection as one that `CollectionManager` will:
@@ -238,14 +231,28 @@ impl CollectionManager {
 
     /// Unregisters the collection as one that `CollectionManager` will maintain.
     ///
-    /// Note: After unregistering a collection there could be in-progress work that started before
-    /// the call to unregister. Callers should obtain a `CollectionManager::barrier` and wait for
-    /// its completion before assuming we are no longer interacting with a collection.
-    pub(super) fn unregsiter_collection(&self, id: GlobalId) -> bool {
-        self.collections
+    /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
+    /// it has stopped referencing the provided `id`.
+    pub(super) async fn unregsiter_collection(&self, id: GlobalId) -> bool {
+        let existed = self
+            .collections
             .lock()
             .expect("CollectionManager panicked")
-            .remove(&id)
+            .remove(&id);
+
+        // Wait for the CollectionManager to finish all in-progress work, so we can be sure that we
+        // no longer reference the specified collection again.
+        let (tx, rx) = oneshot::channel();
+        self.notifies
+            .lock()
+            .expect("CollectionManager panicked")
+            .push(tx);
+
+        // We don't care if our sender dropped, because that would mean the CollectionManager
+        // has shutdown and at that point it's definitely not referencing `id` anymore.
+        let _ = rx.await;
+
+        existed
     }
 
     /// Appends `updates` to the collection correlated with `id`.
