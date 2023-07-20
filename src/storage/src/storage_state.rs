@@ -850,13 +850,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             InternalStorageCommand::UpdateConfiguration {
                 pg,
                 rocksdb,
-                storage_dataflow_max_inflight_bytes,
+                storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
             } => self.storage_state.dataflow_parameters.update(
                 pg,
                 rocksdb,
                 auto_spill_config,
-                storage_dataflow_max_inflight_bytes,
+                storage_dataflow_max_inflight_bytes_config,
             ),
         }
     }
@@ -1169,8 +1169,8 @@ impl StorageState {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
                         pg: params.pg_replication_timeouts,
                         rocksdb: params.upsert_rocksdb_tuning_config,
-                        storage_dataflow_max_inflight_bytes: params
-                            .storage_dataflow_max_inflight_bytes,
+                        storage_dataflow_max_inflight_bytes_config: params
+                            .storage_dataflow_max_inflight_bytes_config,
                         auto_spill_config: params.upsert_auto_spill_config,
                     })
                 }

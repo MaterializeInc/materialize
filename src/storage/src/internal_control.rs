@@ -31,9 +31,10 @@ pub struct DataflowParameters {
     /// A set of parameters to configure auto spill to disk behaviour for a `DISK`
     /// enabled upsert source
     pub auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
-    /// A loose boundary on the number of inflight bytes used by parts in `persist_source`,
+    /// Configuration options for the number of inflight bytes used by parts in `persist_source`,
     /// used in `UPSERT/DEBEZIUM` sources.
-    pub storage_dataflow_max_inflight_bytes: Option<usize>,
+    pub storage_dataflow_max_inflight_bytes_config:
+        mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
 }
 
 impl DataflowParameters {
@@ -43,12 +44,13 @@ impl DataflowParameters {
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
-        storage_dataflow_max_inflight_bytes: Option<usize>,
+        storage_dataflow_max_inflight_bytes_config:mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
         self.auto_spill_config = auto_spill_config;
-        self.storage_dataflow_max_inflight_bytes = storage_dataflow_max_inflight_bytes;
+        self.storage_dataflow_max_inflight_bytes_config =
+            storage_dataflow_max_inflight_bytes_config;
     }
 }
 
@@ -95,7 +97,8 @@ pub enum InternalStorageCommand {
         /// RocksDB configuration.
         rocksdb: mz_rocksdb::RocksDBTuningParameters,
         /// Backpressure configuration.
-        storage_dataflow_max_inflight_bytes: Option<usize>,
+        storage_dataflow_max_inflight_bytes_config:
+            mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
         /// Upsert autospill configuration.
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
     },

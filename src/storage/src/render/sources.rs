@@ -25,6 +25,7 @@ use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
+use mz_storage_client::types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
@@ -247,7 +248,6 @@ fn render_source_stream<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    println!("********* mouli cluster_size: {:?}", cluster_size);
     let mut needed_tokens: Vec<Rc<dyn Any>> = vec![];
 
     let SourceDesc {
@@ -377,12 +377,35 @@ where
                             let (previous, previous_token, feedback_handle, backpressure_metrics) =
                                 if Timestamp::minimum() < upper_ts {
                                     let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                                    let StorageMaxInflightBytesConfig {
+                                        max_in_flight_bytes_default,
+                                        max_in_flight_bytes_cluster_size_percent,
+                                        cluster_size_memory_map,
+                                    } = &storage_state
+                                        .dataflow_parameters
+                                        .storage_dataflow_max_inflight_bytes_config;
+
+                                    let current_cluster_memory_limit = cluster_size
+                                        .map(|size| cluster_size_memory_map.get(size))
+                                        .flatten();
+
+                                    let max_inflight_bytes_for_current_cluster: Option<usize> =
+                                        if let (Some(current_cluster_memory), Some(percent)) = (
+                                            current_cluster_memory_limit,
+                                            max_in_flight_bytes_cluster_size_percent,
+                                        ) {
+                                            Some(current_cluster_memory * percent / 100)
+                                        } else {
+                                            None
+                                        };
+
+                                    let backpressure_max_inflight_bytes =
+                                        max_inflight_bytes_for_current_cluster
+                                            .or(*max_in_flight_bytes_default);
 
                                     let (feedback_handle, flow_control, backpressure_metrics) =
                                         if let Some(storage_dataflow_max_inflight_bytes) =
-                                            storage_state
-                                                .dataflow_parameters
-                                                .storage_dataflow_max_inflight_bytes
+                                            backpressure_max_inflight_bytes
                                         {
                                             let (feedback_handle, feedback_data) =
                                                 scope.feedback(Default::default());

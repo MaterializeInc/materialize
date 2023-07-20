@@ -26,7 +26,7 @@ message ProtoStorageParameters {
     uint64 keep_n_sink_status_history_entries = 7;
     mz_tracing.params.ProtoTracingParameters tracing = 8;
     ProtoUpsertAutoSpillConfig upsert_auto_spill_config = 9;
-    optional uint64 storage_dataflow_max_inflight_bytes = 10;
+    ProtoStorageMaxInflightBytesConfig storage_dataflow_max_inflight_bytes_config = 10;
 }
 
 
@@ -41,4 +41,10 @@ message ProtoPgReplicationTimeouts {
 message ProtoUpsertAutoSpillConfig {
     bool allow_spilling_to_disk = 1;
     uint64 spill_to_disk_threshold_bytes = 2;
+}
+
+message ProtoStorageMaxInflightBytesConfig {
+    optional uint64 max_in_flight_bytes_default = 1;
+    optional uint64 max_in_flight_bytes_cluster_size_percent = 2;
+    map<string, uint64> cluster_size_memory_map = 3;
 }
