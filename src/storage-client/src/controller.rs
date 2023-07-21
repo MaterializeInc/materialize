@@ -33,6 +33,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::{NewReplicaId, ReplicaId};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -512,6 +513,17 @@ pub trait StorageController: Debug + Send {
     /// call from the single user into this method.
     async fn inspect_persist_state(&self, id: GlobalId)
         -> Result<serde_json::Value, anyhow::Error>;
+
+    /// Records the current frontiers of all known storage objects.
+    ///
+    /// The provided `frontiers` are merged with the frontiers known to the
+    /// storage controller. If `frontiers` contains entries with object IDs
+    /// that are known to storage controller, the contents of `frontiers` take
+    /// precedence.
+    async fn record_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    );
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -862,6 +874,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
     /// installed on a `clusterd` this can likely be refactored away.
     internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+    /// Frontiers that have been recorded in the `Frontiers` collection, kept to be able to retract
+    /// old rows.
+    recorded_frontiers: BTreeMap<(GlobalId, Option<ReplicaId>), Antichain<T>>,
 }
 
 #[derive(Debug)]
@@ -1111,7 +1126,13 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     MetadataExportFetcher: MetadataExport<T>,
@@ -2401,6 +2422,61 @@ where
         let json_state = serde_json::to_value(shard_state)?;
         Ok(json_state)
     }
+
+    async fn record_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    ) {
+        // Make `replica_id` optional, to account for storage objects that are not installed on
+        // replicas.
+        let mut frontiers = BTreeMap::new();
+        for ((object_id, replica_id), frontier) in external_frontiers {
+            frontiers.insert((object_id, Some(replica_id)), frontier);
+        }
+
+        // TODO: enrich `frontiers` with storage frontiers
+
+        let mut updates = Vec::new();
+        let mut push_update = |(object_id, replica_id): (GlobalId, Option<ReplicaId>),
+                               frontier: Antichain<Self::Timestamp>,
+                               diff: Diff| {
+            let time_datum = match frontier.into_option() {
+                Some(ts) => Datum::MzTimestamp(ts.into()),
+                None => return, // don't record empty frontiers
+            };
+            let object_id = object_id.to_string();
+            let object_datum = Datum::String(&object_id);
+            let replica_id = replica_id.map(|id| {
+                // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+                NewReplicaId::User(id).to_string()
+            });
+            let replica_datum = replica_id.as_deref().map_or(Datum::Null, Datum::String);
+
+            let row = Row::pack_slice(&[object_datum, replica_datum, time_datum]);
+            updates.push((row, diff));
+        };
+
+        let mut old_frontiers = std::mem::replace(&mut self.recorded_frontiers, frontiers);
+        for (&key, new_frontier) in &self.recorded_frontiers {
+            match old_frontiers.remove(&key) {
+                Some(old_frontier) if &old_frontier != new_frontier => {
+                    push_update(key, new_frontier.clone(), 1);
+                    push_update(key, old_frontier, -1);
+                }
+                Some(_) => (),
+                None => push_update(key, new_frontier.clone(), 1),
+            }
+        }
+        for (key, old_frontier) in old_frontiers {
+            push_update(key, old_frontier, -1);
+        }
+
+        self.append_to_managed_collection(
+            self.state.introspection_ids[&IntrospectionType::Frontiers],
+            updates,
+        )
+        .await;
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2476,6 +2552,7 @@ where
             persist_location,
             persist: persist_clients,
             metrics: StorageControllerMetrics::new(metrics_registry),
+            recorded_frontiers: BTreeMap::new(),
         }
     }
 

@@ -214,6 +214,23 @@ impl<T> ComputeController<T> {
 
 impl<T> ComputeController<T>
 where
+    T: Clone,
+{
+    /// Returns the write frontier for each collection installed on each replica.
+    pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
+        let mut result = BTreeMap::new();
+        let collections = self.instances.values().flat_map(|i| i.collections_iter());
+        for (&collection_id, collection) in collections {
+            for (&replica_id, frontier) in &collection.replica_write_frontiers {
+                result.insert((collection_id, replica_id), frontier.clone());
+            }
+        }
+        result
+    }
+}
+
+impl<T> ComputeController<T>
+where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {

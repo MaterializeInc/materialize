@@ -122,6 +122,7 @@ use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
@@ -208,6 +209,8 @@ enum Readiness {
     Compute,
     /// The metrics channel is ready.
     Metrics,
+    /// Frontiers are ready for recording.
+    Frontiers,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -228,6 +231,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
     metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
     metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
+    /// Periodic notification to record frontiers.
+    frontiers_ticker: Interval,
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
@@ -279,6 +284,9 @@ where
                 _ = Pin::new(&mut self.metrics_rx).peek() => {
                     self.readiness = Readiness::Metrics;
                 }
+                _ = self.frontiers_ticker.tick() => {
+                    self.readiness = Readiness::Frontiers;
+                }
             }
         }
     }
@@ -306,7 +314,16 @@ where
                 .next()
                 .await
                 .map(|(id, metrics)| ControllerResponse::ComputeReplicaMetrics(id, metrics))),
+            Readiness::Frontiers => {
+                self.record_frontiers().await;
+                Ok(None)
+            }
         }
+    }
+
+    async fn record_frontiers(&mut self) {
+        let compute_frontiers = self.compute.replica_write_frontiers();
+        self.storage.record_frontiers(compute_frontiers).await;
     }
 
     /// Produces a timestamp that reflects all data available in
@@ -360,6 +377,9 @@ where
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
+        let mut frontiers_ticker = time::interval(Duration::from_secs(1));
+        frontiers_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         Self {
             storage: Box::new(storage_controller),
             compute: compute_controller,
@@ -370,6 +390,7 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
+            frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
             secrets_args: config.secrets_args,
         }
