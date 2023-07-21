@@ -47,31 +47,26 @@ use crate::render::LinearJoinImpl;
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
+    /// State kept for each installed compute collection.
+    ///
+    /// Each collection has exactly one frontier.
+    /// How the frontier is communicated depends on the collection type:
+    ///  * Frontiers of indexes are equal to the frontier of their corresponding traces in the
+    ///    `TraceManager`.
+    ///  * Persist sinks store their current frontier in `CollectionState::sink_write_frontier`.
+    ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
+    pub collections: BTreeMap<GlobalId, CollectionState>,
+    /// Collections that were recently dropped and whose removal needs to be reported.
+    pub dropped_collections: Vec<GlobalId>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
-    /// Tokens that should be dropped when a dataflow is dropped to clean up
-    /// associated state.
-    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
     /// and the response itself.
     pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
-    /// Frontier of sink writes (all subsequent writes will be at times at or
-    /// equal to this frontier)
-    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Probe handles for regulating the output of dataflow sources.
-    ///
-    /// Keys are IDs of indexes that are (transitively) fed by a flow-controlled source. New
-    /// dataflows that depend on these indexes are expected to report their output frontiers
-    /// through the corresponding probe handles.
-    pub flow_control_probes: BTreeMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
-    /// Tracks the frontier information that has been sent over `response_tx`.
-    pub reported_frontiers: BTreeMap<GlobalId, ReportedFrontier>,
-    /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<GlobalId>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -80,7 +75,7 @@ pub struct ComputeState {
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
-    pub max_result_size: u32,
+    max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
     /// Implementation to use for rendering linear joins.
@@ -88,13 +83,55 @@ pub struct ComputeState {
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
-    pub tracing_handle: Arc<TracingHandle>,
+    tracing_handle: Arc<TracingHandle>,
 }
 
 impl ComputeState {
+    /// Construct a new `ComputeState`.
+    pub fn new(
+        traces: TraceManager,
+        persist_clients: Arc<PersistClientCache>,
+        metrics: ComputeMetrics,
+        tracing_handle: Arc<TracingHandle>,
+    ) -> Self {
+        let command_history = ComputeCommandHistory::new(metrics.for_history());
+
+        Self {
+            collections: Default::default(),
+            dropped_collections: Default::default(),
+            traces,
+            subscribe_response_buffer: Default::default(),
+            pending_peeks: Default::default(),
+            compute_logger: None,
+            persist_clients,
+            command_history,
+            max_result_size: u32::MAX,
+            dataflow_max_inflight_bytes: usize::MAX,
+            linear_join_impl: Default::default(),
+            metrics,
+            tracing_handle,
+        }
+    }
+
     /// Return whether a collection with the given ID exists.
     pub fn collection_exists(&self, id: GlobalId) -> bool {
-        self.traces.get(&id).is_some() || self.sink_tokens.contains_key(&id)
+        self.collections.contains_key(&id)
+    }
+
+    /// Return a reference to the identified collection.
+    ///
+    /// Panics if the collection doesn't exist.
+    pub fn expect_collection(&self, id: GlobalId) -> &CollectionState {
+        self.collections.get(&id).expect("collection must exist")
+    }
+
+    /// Return a mutable reference to the identified collection.
+    ///
+    /// Panics if the collection doesn't exist.
+    pub fn expect_collection_mut(&mut self, id: GlobalId) -> &mut CollectionState {
+        self.collections
+            .get_mut(&id)
+            .expect("collection must exist")
     }
 }
 
@@ -194,18 +231,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             let dataflow_index = self.timely_worker.next_dataflow_index();
 
-            // Initialize frontiers for each object, and optionally log their construction.
+            // Initialize compute and logging state for each object.
             for (object_id, collection_id) in exported_ids {
-                let reported_frontier = ReportedFrontier::NotReported {
+                let mut collection = CollectionState::new();
+
+                collection.reported_frontier = ReportedFrontier::NotReported {
                     lower: dataflow.as_of.clone().unwrap(),
                 };
-                if let Some(frontier) = self
-                    .compute_state
-                    .reported_frontiers
-                    .insert(object_id, reported_frontier)
-                {
+
+                let existing = self.compute_state.collections.insert(object_id, collection);
+                if existing.is_some() {
                     error!(
-                        "existing frontier {frontier:?} for newly created dataflow id {object_id}"
+                        id = ?object_id,
+                        "existing collection for newly created dataflow",
                     );
                 }
 
@@ -237,40 +275,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
-
-                let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
-                    && !self.compute_state.sink_write_frontiers.contains_key(&id);
-
-                // Sink-specific work:
-                self.compute_state.sink_write_frontiers.remove(&id);
-                self.compute_state.sink_tokens.remove(&id);
-                // Index-specific work:
-                self.compute_state.traces.del_trace(&id);
-                self.compute_state.flow_control_probes.remove(&id);
-
-                // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
-                let prev_frontier = self
-                    .compute_state
-                    .reported_frontiers
-                    .remove(&id)
-                    .expect("Dropped compute collection with no frontier");
-                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::ExportDropped { id });
-                    if let Some(time) = prev_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                    }
-                }
-
-                // We need to emit a final response reporting the dropping of this collection,
-                // unless:
-                //  * The collection is a subscribe, in which case we will emit a
-                //    `SubscribeResponse::Dropped` independently.
-                //  * The collection has already advanced to the empty frontier, in which case
-                //    the final `FrontierUppers` response already serves the purpose of reporting
-                //    the end of the dataflow.
-                if !is_subscribe && !prev_frontier.is_empty() {
-                    self.compute_state.dropped_collections.push(id);
-                }
+                self.drop_collection(id);
             } else {
                 self.compute_state
                     .traces
@@ -331,6 +336,36 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
+    fn drop_collection(&mut self, id: GlobalId) {
+        let collection = self
+            .compute_state
+            .collections
+            .remove(&id)
+            .expect("dropped untracked collection");
+
+        // If this collection is an index, remove its trace.
+        self.compute_state.traces.del_trace(&id);
+
+        // Remove frontier logging.
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+            logger.log(ComputeEvent::ExportDropped { id });
+            if let Some(time) = collection.reported_frontier.logging_time() {
+                logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
+            }
+        }
+
+        // We need to emit a final response reporting the dropping of this collection,
+        // unless:
+        //  * The collection is a subscribe, in which case we will emit a
+        //    `SubscribeResponse::Dropped` independently.
+        //  * The collection has already advanced to the empty frontier, in which case
+        //    the final `FrontierUppers` response already serves the purpose of reporting
+        //    the end of the dataflow.
+        if !collection.is_subscribe() && !collection.reported_frontier.is_empty() {
+            self.compute_state.dropped_collections.push(id);
+        }
+    }
+
     /// Initializes timely dataflow logging and publishes as a view.
     pub fn initialize_logging(&mut self, config: &LoggingConfig) {
         if self.compute_state.compute_logger.is_some() {
@@ -345,18 +380,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             self.compute_state.traces.set(id, trace);
         }
 
-        // Initialize frontier reporting for all logging indexes.
+        // Initialize compute and logging state for each logging index.
         let index_ids = config.index_logs.values().copied();
         for id in index_ids {
-            if let Some(frontier) = self
-                .compute_state
-                .reported_frontiers
-                .insert(id, ReportedFrontier::new())
-            {
+            let collection = CollectionState::new();
+
+            let existing = self.compute_state.collections.insert(id, collection);
+            if existing.is_some() {
                 error!(
-                    "existing frontier {frontier:?} for newly initialized logging export id {id}"
+                    id = ?id,
+                    "existing collection for newly initialized logging export",
                 );
             }
+
             logger.log(ComputeEvent::Frontier {
                 id,
                 time: timely::progress::Timestamp::minimum(),
@@ -388,26 +424,37 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn report_compute_frontiers(&mut self) {
         let mut new_uppers = Vec::new();
 
-        let mut update_frontier = |id, new_frontier: &Antichain<Timestamp>| {
-            let reported_frontier = self
-                .compute_state
-                .reported_frontiers
-                .get_mut(&id)
-                .unwrap_or_else(|| panic!("Frontier update for untracked identifier: {id}"));
+        for (&id, collection) in self.compute_state.collections.iter_mut() {
+            let mut new_frontier = Antichain::new();
+            if let Some(traces) = self.compute_state.traces.get_mut(&id) {
+                assert!(
+                    collection.sink_write_frontier.is_none(),
+                    "collection {id} has multiple frontiers"
+                );
+                traces.oks_mut().read_upper(&mut new_frontier);
+            } else if let Some(frontier) = &collection.sink_write_frontier {
+                new_frontier.clone_from(&frontier.borrow());
+            } else {
+                // Subscribe frontiers are reported in `process_subscribes` instead.
+                if !collection.is_subscribe() {
+                    error!(id = ?id, "collection without frontier");
+                }
+                continue;
+            }
 
-            match reported_frontier {
+            match &collection.reported_frontier {
                 ReportedFrontier::Reported(old_frontier) => {
                     // In steady state it is not expected for `old_frontier` to be beyond
                     // `new_frontier`. However, during reconcilation this can happen as we
                     // artificially advance the frontiers of to-be-dropped collections to disable
                     // frontier reporting for them.
-                    if !PartialOrder::less_than(old_frontier, new_frontier) {
-                        return; // nothing new to report
+                    if !PartialOrder::less_than(old_frontier, &new_frontier) {
+                        continue; // nothing new to report
                     }
                 }
                 ReportedFrontier::NotReported { lower } => {
-                    if !PartialOrder::less_equal(lower, new_frontier) {
-                        return; // lower bound for reporting not yet reached
+                    if !PartialOrder::less_equal(lower, &new_frontier) {
+                        continue; // lower bound for reporting not yet reached
                     }
                 }
             }
@@ -415,7 +462,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             let new_reported_frontier = ReportedFrontier::Reported(new_frontier.clone());
 
             if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                if let Some(time) = reported_frontier.logging_time() {
+                if let Some(time) = collection.reported_frontier.logging_time() {
                     logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                 }
                 if let Some(time) = new_reported_frontier.logging_time() {
@@ -423,18 +470,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             }
 
-            new_uppers.push((id, new_frontier.clone()));
-            *reported_frontier = new_reported_frontier;
-        };
-
-        let mut new_frontier = Antichain::new();
-        for (id, traces) in self.compute_state.traces.traces.iter_mut() {
-            traces.oks_mut().read_upper(&mut new_frontier);
-            update_frontier(*id, &new_frontier);
-        }
-        for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
-            new_frontier.clone_from(&frontier.borrow());
-            update_frontier(*id, &new_frontier);
+            new_uppers.push((id, new_frontier));
+            collection.reported_frontier = new_reported_frontier;
         }
 
         if !new_uppers.is_empty() {
@@ -506,14 +543,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
         for (sink_id, mut response) in subscribe_responses.drain(..) {
             // Update frontier logging for this subscribe.
-            if let Some(reported_frontier) = self.compute_state.reported_frontiers.get_mut(&sink_id)
-            {
+            if let Some(collection) = self.compute_state.collections.get_mut(&sink_id) {
                 let new_frontier = match &response {
                     SubscribeResponse::Batch(b) => b.upper.clone(),
                     SubscribeResponse::DroppedAt(_) => Antichain::new(),
                 };
 
-                match reported_frontier {
+                match &collection.reported_frontier {
                     ReportedFrontier::Reported(old_frontier) => {
                         assert!(
                             PartialOrder::less_than(old_frontier, &new_frontier),
@@ -532,7 +568,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 let new_reported_frontier = ReportedFrontier::Reported(new_frontier);
 
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    if let Some(time) = reported_frontier.logging_time() {
+                    if let Some(time) = collection.reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier {
                             id: sink_id,
                             time,
@@ -548,10 +584,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     }
                 }
 
-                *reported_frontier = new_reported_frontier;
+                collection.reported_frontier = new_reported_frontier;
             } else {
-                // Presumably tracking state for this frontier was already dropped by
-                // `handle_allow_compaction`. There is nothing left to do for logging.
+                // Presumably tracking state for this subscribe was already dropped by
+                // `drop_collection`. There is nothing left to do for logging.
             }
 
             response
@@ -865,5 +901,43 @@ impl ReportedFrontier {
             Self::Reported(frontier) => frontier.get(0).copied(),
             Self::NotReported { .. } => Some(timely::progress::Timestamp::minimum()),
         }
+    }
+}
+
+/// State maintained for a compute collection.
+pub struct CollectionState {
+    /// Tracks the frontier that has been reported to the controller.
+    pub reported_frontier: ReportedFrontier,
+    /// A token that should be dropped when this collection is dropped to clean up associated
+    /// sink state.
+    ///
+    /// Only `Some` if the collection is a sink.
+    pub sink_token: Option<SinkToken>,
+    /// Frontier of sink writes.
+    ///
+    /// Only `Some` if the collection is a sink and *not* a subscribe.
+    pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Probe handles for regulating the output of dataflow sources that (transitively) feed this
+    /// collection.
+    ///
+    /// Only populated if the collection is an index.
+    ///
+    /// New dataflows that depend on this index are expected to report their output frontiers
+    /// through these probe handles.
+    pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
+}
+
+impl CollectionState {
+    fn new() -> Self {
+        Self {
+            reported_frontier: ReportedFrontier::new(),
+            sink_token: None,
+            sink_write_frontier: None,
+            index_flow_control_probes: Default::default(),
+        }
+    }
+
+    fn is_subscribe(&self) -> bool {
+        self.sink_token.is_some() && self.sink_write_frontier.is_none()
     }
 }
