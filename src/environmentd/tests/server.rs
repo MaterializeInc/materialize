@@ -2186,7 +2186,7 @@ fn webhook_concurrent_actions() {
         if status.is_success() {
             saw_atleast_one_success_after_close = true;
         }
-        // TODO(parkmycar): We should assert 200s or 404s here.
+        // TODO(parkmycar): Ideally we only get 200s or 404s here, but occassionally we see 500s.
     }
     assert!(saw_atleast_one_success_after_close);
 }
