@@ -74,13 +74,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  disk_percent  double␠precision
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
-----
-1  replica_id  text
-2  export_id   text
-3  time  mz_timestamp
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_heartbeats' ORDER BY position
 ----
 1  replica_id  text
@@ -96,6 +89,19 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  created_at  timestamp␠with␠time␠zone
 6  dropped_at  timestamp␠with␠time␠zone
 7  credits_per_hour  numeric
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  time  mz_timestamp
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_global_frontiers' ORDER BY position
+----
+1  object_id  text
+2  time  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_sources' ORDER BY position
@@ -515,7 +521,6 @@ mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_links
-mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
@@ -554,6 +559,8 @@ mz_dataflow_operators
 mz_dataflow_operators_per_worker
 mz_dataflows
 mz_dataflows_per_worker
+mz_frontiers
+mz_global_frontiers
 mz_kafka_sources
 mz_message_counts
 mz_message_counts_per_worker
