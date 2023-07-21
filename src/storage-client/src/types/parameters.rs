@@ -50,10 +50,10 @@ pub struct StorageParameters {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct StorageMaxInflightBytesConfig {
     /// The default value for the max in-flight bytes
-    pub max_in_flight_bytes_default: Option<usize>,
+    pub max_inflight_bytes_default: Option<usize>,
     /// Specified percentage which will be used to calculate the max in-flight from the
     /// memory limit of the cluster in use.
-    pub max_in_flight_bytes_cluster_size_percent: Option<usize>,
+    pub max_inflight_bytes_cluster_size_percent: Option<usize>,
     /// A map of different cluster sizes and their corresponding memory limits in bytes
     /// This will be used to find out the memory limit of the cluster in use.
     pub cluster_size_memory_map: BTreeMap<String, usize>,
@@ -62,9 +62,9 @@ pub struct StorageMaxInflightBytesConfig {
 impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesConfig {
     fn into_proto(&self) -> ProtoStorageMaxInflightBytesConfig {
         ProtoStorageMaxInflightBytesConfig {
-            max_in_flight_bytes_default: self.max_in_flight_bytes_default.map(u64::cast_from),
+            max_in_flight_bytes_default: self.max_inflight_bytes_default.map(u64::cast_from),
             max_in_flight_bytes_cluster_size_percent: self
-                .max_in_flight_bytes_cluster_size_percent
+                .max_inflight_bytes_cluster_size_percent
                 .map(u64::cast_from),
             cluster_size_memory_map: self
                 .cluster_size_memory_map
@@ -81,8 +81,8 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
             cluster_size_memory_map.insert(cluster_size, usize::cast_from(memory_limit));
         }
         Ok(Self {
-            max_in_flight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
-            max_in_flight_bytes_cluster_size_percent: proto
+            max_inflight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
+            max_inflight_bytes_cluster_size_percent: proto
                 .max_in_flight_bytes_cluster_size_percent
                 .map(usize::cast_from),
             cluster_size_memory_map,

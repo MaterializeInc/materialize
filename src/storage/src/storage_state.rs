@@ -162,6 +162,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
+        cluster_size: Option<String>,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -228,6 +229,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             async_worker,
             dataflow_parameters: Default::default(),
             tracing_handle,
+            cluster_size,
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -314,6 +316,8 @@ pub struct StorageState {
 
     /// A process-global handle to tracing configuration.
     pub tracing_handle: Arc<TracingHandle>,
+    /// The materialize cluster size the worker belongs to
+    pub cluster_size: Option<String>,
 }
 
 /// Extra context for a storage instance.

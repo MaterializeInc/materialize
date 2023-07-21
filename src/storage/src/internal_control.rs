@@ -44,7 +44,7 @@ impl DataflowParameters {
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
-        storage_dataflow_max_inflight_bytes_config:mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
+        storage_dataflow_max_inflight_bytes_config: mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);

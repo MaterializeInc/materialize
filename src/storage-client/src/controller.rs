@@ -282,6 +282,7 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: StorageInstanceId,
         location: ClusterReplicaLocation,
+        // The human readable `string` cluster size if there is one
         cluster_size: Option<String>,
     );
 

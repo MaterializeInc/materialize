@@ -139,6 +139,7 @@ pub struct TimelyConfig {
     ///
     /// See `differential_dataflow::Config::idle_merge_effort`.
     pub idle_arrangement_merge_effort: u32,
+    /// The human readable materialize cluster size for this timely cluster
     pub cluster_size: Option<String>,
 }
 

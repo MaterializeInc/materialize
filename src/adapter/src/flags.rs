@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_sql::session::vars::SystemVars;
@@ -40,16 +41,9 @@ pub fn storage_config(
         .0
         .iter()
         .filter_map(|(cluster_size, replica_allocation)| {
-            replica_allocation.memory_limit.map(|memory| {
-                (
-                    cluster_size.to_owned(),
-                    memory
-                        .0
-                        .as_u64()
-                        .try_into()
-                        .expect("should be able to cast to usize from u64"),
-                )
-            })
+            replica_allocation
+                .memory_limit
+                .map(|memory| (cluster_size.to_owned(), usize::cast_from(memory.0.as_u64())))
         })
         .collect();
 
@@ -95,8 +89,8 @@ pub fn storage_config(
             spill_to_disk_threshold_bytes: config.upsert_rocksdb_auto_spill_threshold_bytes(),
         },
         storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig {
-            max_in_flight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
-            max_in_flight_bytes_cluster_size_percent: config
+            max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
+            max_inflight_bytes_cluster_size_percent: config
                 .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
             cluster_size_memory_map,
         },
