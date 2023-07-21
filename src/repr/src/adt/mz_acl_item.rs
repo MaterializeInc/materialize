@@ -937,8 +937,9 @@ proptest! {
 
   #[mz_ore::test]
   #[cfg_attr(miri, ignore)] // slow
-  fn proptest_valid_acl_item_str(s in "[\\d]?=[arwdUCRBN]\\/[\\d]+") {
-      let acl_item = AclItem::from_str(&s).unwrap();
-      assert_eq!(s, acl_item.to_string());
+  fn proptest_valid_acl_item_str(acl_item: AclItem) {
+      let encoded = acl_item.to_string();
+      let decoded = AclItem::from_str(&encoded).unwrap();
+      assert_eq!(acl_item, decoded);
   }
 }
