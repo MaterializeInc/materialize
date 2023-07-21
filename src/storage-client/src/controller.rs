@@ -278,7 +278,13 @@ pub trait StorageController: Debug + Send {
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
+    fn connect_replica(
+        &mut self,
+        id: StorageInstanceId,
+        location: ClusterReplicaLocation,
+        // The human readable `string` cluster size if there is one
+        cluster_size: Option<String>,
+    );
 
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(
@@ -1177,13 +1183,18 @@ where
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation) {
+    fn connect_replica(
+        &mut self,
+        id: StorageInstanceId,
+        location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
+    ) {
         let client = self
             .state
             .clients
             .get_mut(&id)
             .unwrap_or_else(|| panic!("instance {id} does not exist"));
-        client.connect(location);
+        client.connect(location, cluster_size);
     }
 
     fn drop_replica(

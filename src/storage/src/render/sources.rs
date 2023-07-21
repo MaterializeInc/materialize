@@ -25,6 +25,7 @@ use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
+use mz_storage_client::types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
@@ -374,11 +375,17 @@ where
                                 if Timestamp::minimum() < upper_ts {
                                     let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
+                                    let backpressure_max_inflight_bytes =
+                                        get_backpressure_max_inflight_bytes(
+                                            &storage_state
+                                                .dataflow_parameters
+                                                .storage_dataflow_max_inflight_bytes_config,
+                                            &storage_state.cluster_size,
+                                        );
+
                                     let (feedback_handle, flow_control, backpressure_metrics) =
                                         if let Some(storage_dataflow_max_inflight_bytes) =
-                                            storage_state
-                                                .dataflow_parameters
-                                                .storage_dataflow_max_inflight_bytes
+                                            backpressure_max_inflight_bytes
                                         {
                                             let (feedback_handle, feedback_data) =
                                                 scope.feedback(Default::default());
@@ -532,6 +539,33 @@ where
 
     // Return the collections and any needed tokens.
     (collection, err_collection, needed_tokens, health)
+}
+
+// Returns the maximum limit of inflight bytes for backpressure based on given config
+// and the current cluster size
+fn get_backpressure_max_inflight_bytes(
+    inflight_bytes_config: &StorageMaxInflightBytesConfig,
+    cluster_size: &Option<String>,
+) -> Option<usize> {
+    let StorageMaxInflightBytesConfig {
+        max_inflight_bytes_default,
+        max_inflight_bytes_cluster_size_percent,
+        cluster_size_memory_map,
+    } = inflight_bytes_config;
+
+    // Will use backpressure only if the default inflight value is provided
+    if max_inflight_bytes_default.is_some() {
+        let current_cluster_max_bytes_limit = cluster_size
+            .as_ref()
+            .and_then(|size| cluster_size_memory_map.get(size))
+            .and_then(|cluster_memory| {
+                max_inflight_bytes_cluster_size_percent
+                    .map(|percent| cluster_memory * percent / 100)
+            });
+        current_cluster_max_bytes_limit.or(*max_inflight_bytes_default)
+    } else {
+        None
+    }
 }
 
 // TODO: Maybe we should finally move this to some central place and re-use. There seem to be
@@ -705,5 +739,59 @@ fn raise_key_value_errors(
         _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
             "Value not present for message".to_string(),
         )))),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_no_default() {
+        let config = StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: None,
+            max_inflight_bytes_cluster_size_percent: Some(50),
+            cluster_size_memory_map: BTreeMap::from([("size_1".to_string(), 100)]),
+        };
+        let cluster_size = Some("size_1".to_string());
+
+        let backpressure_inflight_bytes_limit =
+            get_backpressure_max_inflight_bytes(&config, &cluster_size);
+
+        assert_eq!(backpressure_inflight_bytes_limit, None)
+    }
+
+    #[mz_ore::test]
+    fn test_no_matching_size() {
+        let config = StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: Some(10000),
+            max_inflight_bytes_cluster_size_percent: Some(50),
+            cluster_size_memory_map: BTreeMap::from([("size_another".to_string(), 100)]),
+        };
+        let cluster_size = Some("size_1".to_string());
+
+        let backpressure_inflight_bytes_limit =
+            get_backpressure_max_inflight_bytes(&config, &cluster_size);
+
+        assert_eq!(
+            backpressure_inflight_bytes_limit,
+            config.max_inflight_bytes_default
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_calculated_cluster_limit() {
+        let config = StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: Some(10000),
+            max_inflight_bytes_cluster_size_percent: Some(50),
+            cluster_size_memory_map: BTreeMap::from([("size_1".to_string(), 2000)]),
+        };
+        let cluster_size = Some("size_1".to_string());
+
+        let backpressure_inflight_bytes_limit =
+            get_backpressure_max_inflight_bytes(&config, &cluster_size);
+
+        // the limit should be 50% of 2000 i.e. 1000
+        assert_eq!(backpressure_inflight_bytes_limit, Some(1000));
     }
 }

@@ -8,11 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_sql::session::vars::SystemVars;
-use mz_storage_client::types::parameters::{StorageParameters, UpsertAutoSpillConfig};
+use mz_storage_client::types::parameters::{
+    StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
+};
 use mz_tracing::params::TracingParameters;
+
+use crate::catalog::ClusterReplicaSizeMap;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
@@ -26,7 +31,22 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 }
 
 /// Return the current storage configuration, derived from the system configuration.
-pub fn storage_config(config: &SystemVars) -> StorageParameters {
+pub fn storage_config(
+    config: &SystemVars,
+    cluster_replica_sizes: &ClusterReplicaSizeMap,
+) -> StorageParameters {
+    // populating map of cluster size and corresponding memory limits in bytes where the
+    // value is given
+    let cluster_size_memory_map = cluster_replica_sizes
+        .0
+        .iter()
+        .filter_map(|(cluster_size, replica_allocation)| {
+            replica_allocation
+                .memory_limit
+                .map(|memory| (cluster_size.to_owned(), usize::cast_from(memory.0.as_u64())))
+        })
+        .collect();
+
     StorageParameters {
         persist: persist_config(config),
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
@@ -68,7 +88,12 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             allow_spilling_to_disk: config.upsert_rocksdb_auto_spill_to_disk(),
             spill_to_disk_threshold_bytes: config.upsert_rocksdb_auto_spill_threshold_bytes(),
         },
-        storage_dataflow_max_inflight_bytes: config.storage_dataflow_max_inflight_bytes(),
+        storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
+            max_inflight_bytes_cluster_size_percent: config
+                .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
+            cluster_size_memory_map,
+        },
     }
 }
 
