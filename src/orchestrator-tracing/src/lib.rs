@@ -94,6 +94,7 @@ use mz_orchestrator::{
     ServiceProcessMetrics,
 };
 use mz_ore::cli::KeyValueArg;
+use mz_ore::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use mz_ore::netio::SocketAddr;
 #[cfg(feature = "tokio-console")]
@@ -269,6 +270,7 @@ impl TracingCliArgs {
             service_name,
             build_info,
         }: StaticTracingConfig,
+        registry: MetricsRegistry,
     ) -> Result<(TracingHandle, TracingGuard), anyhow::Error> {
         mz_ore::tracing::configure(TracingConfig {
             service_name,
@@ -320,6 +322,7 @@ impl TracingCliArgs {
             build_version: build_info.version,
             build_sha: build_info.sha,
             build_time: build_info.time,
+            registry,
         })
         .await
     }

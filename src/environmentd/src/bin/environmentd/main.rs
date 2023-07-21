@@ -617,11 +617,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         None
     };
 
-    let (tracing_handle, _tracing_guard) =
-        runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
+    let metrics_registry = MetricsRegistry::new();
+    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
+        StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
-        }))?;
+        },
+        metrics_registry.clone(),
+    ))?;
 
     if args.tracing.log_filter.is_some() {
         halt!(
@@ -641,7 +644,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let span = tracing::info_span!("environmentd::run").entered();
 
-    let metrics_registry = MetricsRegistry::new();
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));

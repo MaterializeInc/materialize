@@ -34,6 +34,7 @@ use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::{global, KeyValue};
+use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
@@ -47,6 +48,8 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{reload, EnvFilter, Registry};
 
+use crate::metric;
+use crate::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
 
@@ -75,6 +78,8 @@ pub struct TracingConfig<F> {
     pub build_sha: &'static str,
     /// The time of this build of the service.
     pub build_time: &'static str,
+    /// Registry for prometheus metrics.
+    pub registry: MetricsRegistry,
 }
 
 /// Configures Sentry reporting.
@@ -331,6 +336,7 @@ where
             }
             filter
         });
+        let metrics_layer = MetricsLayer::new(&config.registry);
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
             // eating memory until OOM. So we set a max number of events that are allowed to be
@@ -339,6 +345,7 @@ where
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
             .max_events_per_span(2048)
             .with_tracer(tracer)
+            .and_then(metrics_layer)
             // WARNING, ENTERING SPOOKY ZONE 2.0
             //
             // Notice we use `with_filter` here. `and_then` will apply the filter globally.
@@ -590,6 +597,27 @@ impl From<OpenTelemetryContext> for BTreeMap<String, String> {
 impl From<BTreeMap<String, String>> for OpenTelemetryContext {
     fn from(map: BTreeMap<String, String>) -> Self {
         Self { inner: map }
+    }
+}
+
+struct MetricsLayer {
+    on_close: IntCounter,
+}
+
+impl MetricsLayer {
+    fn new(registry: &MetricsRegistry) -> Self {
+        MetricsLayer {
+            on_close: registry.register(metric!(
+                name: "mz_otel_on_close",
+                help: "count of on_close events sent to otel",
+            )),
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
+    fn on_close(&self, _id: tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        self.on_close.inc()
     }
 }
 
