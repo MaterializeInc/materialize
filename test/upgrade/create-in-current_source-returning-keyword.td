@@ -9,10 +9,6 @@
 
 $ postgres-connect name=materialize url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
-# Before v0.62, `returning` was accepted as a bare identifier.
-
-$ skip-if
-SELECT mz_version_num() >= 6200;
-
+# In v0.62+, `returning` must be quoted when used as an identifier.
 $ postgres-execute connection=materialize
-CREATE VIEW view_with_returning AS SELECT returning FROM (VALUES (1)) _ (returning)
+CREATE VIEW view_with_returning AS SELECT "returning" FROM (VALUES (1)) _ ("returning")
