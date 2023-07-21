@@ -11,6 +11,7 @@
 
 import argparse
 import os
+import shlex
 import shutil
 import signal
 import sys
@@ -120,6 +121,10 @@ def main() -> int:
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--wrapper",
+        help="Wrapper command for the program",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -146,7 +151,11 @@ def main() -> int:
         elif sys.platform == "darwin":
             _macos_codesign(path)
 
-        command = [str(path)]
+        if args.wrapper:
+            command = shlex.split(args.wrapper)
+        else:
+            command = []
+        command.append(str(path))
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
