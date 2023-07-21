@@ -405,8 +405,8 @@ impl AclItem {
 }
 
 // PostgreSQL has no stable binary encoding for AclItems. However, we need to be able to convert
-// types to and from binary, so we invent our own encoding. The encoding matches the in memory
-// format that PostgreSQL uses, which is (Oid, Oid, AclMode).
+// types to and from binary, to pack a Datum in a row, so we invent our own encoding. The encoding
+// matches the in memory format that PostgreSQL uses, which is (Oid, Oid, AclMode).
 impl AclItem {
     pub fn encode_binary(&self) -> Vec<u8> {
         let mut res = Vec::with_capacity(Self::binary_size());
