@@ -92,8 +92,6 @@ pub enum ComputeControllerResponse<T> {
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// A notification that new resource usage metrics are available for a given replica.
     ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// A notification that the write frontiers of the replicas have changed.
-    ReplicaWriteFrontiers(BTreeMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 /// Replica configuration
@@ -143,10 +141,6 @@ pub struct ComputeController<T> {
     replica_metrics: BTreeMap<ReplicaId, Vec<ServiceProcessMetrics>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
-    /// Periodic notification to produce a `ReplicaWriteFrontiers` response.
-    stats_update_ticker: tokio::time::Interval,
-    /// Set to `true` if `process` should produce a `ReplicaWriteFrontiers` next.
-    stats_update_pending: bool,
     /// The compute controller metrics
     metrics: ComputeControllerMetrics,
 }
@@ -158,9 +152,6 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
-        let mut stats_update_ticker = tokio::time::interval(Duration::from_secs(1));
-        stats_update_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
         Self {
             instances: BTreeMap::new(),
             build_info,
@@ -170,8 +161,6 @@ impl<T> ComputeController<T> {
             replica_heartbeats: BTreeMap::new(),
             replica_metrics: BTreeMap::new(),
             envd_epoch,
-            stats_update_ticker,
-            stats_update_pending: false,
             metrics: ComputeControllerMetrics::new(metrics_registry),
         }
     }
@@ -325,21 +314,17 @@ where
             .iter_mut()
             .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
 
-        tokio::select! {
-            ((instance_id, result), _index, _remaining) = future::select_all(receives) => {
-                match result {
-                    Ok((replica_id, resp)) => {
-                        self.replica_heartbeats.insert(replica_id, Utc::now());
-                        self.stashed_response = Some((instance_id, replica_id, resp));
-                    }
-                    Err(_) => {
-                        // There is nothing to do here. `recv` has already added the failed replica to
-                        // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                        // `ActiveComputeController::process`.
-                    }
-                }
-            },
-            _ = self.stats_update_ticker.tick() => { self.stats_update_pending = true }
+        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
+        match result {
+            Ok((replica_id, resp)) => {
+                self.replica_heartbeats.insert(replica_id, Utc::now());
+                self.stashed_response = Some((instance_id, replica_id, resp));
+            }
+            Err(_) => {
+                // There is nothing to do here. `recv` has already added the failed replica to
+                // `instance.failed_replicas`, so it will be rehydrated in the next call to
+                // `ActiveComputeController::process`.
+            }
         }
     }
 
@@ -575,37 +560,7 @@ where
             };
         }
 
-        // Process pending stats updates
-        if self.compute.stats_update_pending {
-            self.compute.stats_update_pending = false;
-
-            let mut replica_frontiers = BTreeMap::new();
-            self.compute
-                .instances
-                .values()
-                .flat_map(|inst| inst.collections_iter())
-                .flat_map(|(coll_id, cs)| {
-                    cs.replica_write_frontiers
-                        .iter()
-                        .filter_map(|(replica_id, frontier)| {
-                            frontier
-                                .elements()
-                                .get(0)
-                                .map(|x| (*replica_id, (*coll_id, x.clone())))
-                        })
-                })
-                .for_each(|(replica_id, frontier)| {
-                    replica_frontiers
-                        .entry(replica_id)
-                        .or_insert_with(Vec::new)
-                        .push(frontier)
-                });
-            Some(ComputeControllerResponse::ReplicaWriteFrontiers(
-                replica_frontiers,
-            ))
-        } else {
-            None
-        }
+        None
     }
 }
 

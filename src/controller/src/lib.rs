@@ -174,8 +174,6 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification that the write frontiers of the replicas have changed.
-    ComputeReplicaWriteFrontiers(BTreeMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -192,9 +190,6 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             }
             ComputeControllerResponse::ReplicaMetrics(id, metrics) => {
                 ControllerResponse::ComputeReplicaMetrics(id, metrics)
-            }
-            ComputeControllerResponse::ReplicaWriteFrontiers(frontiers) => {
-                ControllerResponse::ComputeReplicaWriteFrontiers(frontiers)
             }
         }
     }
