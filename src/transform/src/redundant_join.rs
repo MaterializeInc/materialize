@@ -88,7 +88,7 @@ impl RedundantJoin {
         relation: &mut MirRelationExpr,
         lets: &mut BTreeMap<Id, Vec<ProvInfo>>,
     ) -> Result<Vec<ProvInfo>, crate::TransformError> {
-        let result = self.checked_recur(|_| {
+        let mut result = self.checked_recur(|_| {
             match relation {
                 MirRelationExpr::Let { id, value, body } => {
                     // Recursively determine provenance of the value.
@@ -401,6 +401,7 @@ impl RedundantJoin {
         // println!("result = {result:?}");
         // println!("lets: {lets:?}");
         // println!("---------------------");
+        result.retain(|info| !info.is_trivial());
         Ok(result)
     }
 }
@@ -532,6 +533,16 @@ impl ProvInfo {
         } else {
             None
         }
+    }
+
+    /// Check if all entries of the deferenced projection are missing.
+    ///
+    /// If this is the case keeping the `ProvInfo` entry around is meaningless.
+    fn is_trivial(&self) -> bool {
+        all![
+            !self.dereferenced_projection.is_empty(),
+            self.dereferenced_projection.iter().all(|x| x.is_none()),
+        ]
     }
 }
 
