@@ -7,4 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE VIEW v AS SELECT returning FROM (VALUES (1)) _ (returning)
+> CREATE VIEW view_with_returning AS SELECT returning FROM (VALUES (1)) _ (returning)
