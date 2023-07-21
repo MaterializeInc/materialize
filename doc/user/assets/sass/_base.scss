@@ -79,6 +79,7 @@ body.dark {
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
     --card-light: var(--black-light);
+    --color-scheme: dark;
     --divider: var(--black-lighter);
     --divider-light: var(--black-lightest);
 
@@ -109,6 +110,7 @@ body.light {
     --bg-sub: var(--gray-lighter);
     --card: var(--gray-lightest);
     --card-light: var(--white);
+    --color-scheme: light;
     --divider: var(--gray);
     --divider-light: var(--gray-lighter);
 
@@ -147,6 +149,7 @@ html {
 body {
     font-family: "Inter", sans-serif;
     color: var(--important);
+    color-scheme: var(--color-scheme);
     background: var(--bg);
     font-size: var(--base);
     line-height: 1.7;
