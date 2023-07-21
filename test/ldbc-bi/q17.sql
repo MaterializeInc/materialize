@@ -1,9 +1,33 @@
 \set tag '\'Cosmic_Egg\''
-\set delta '12
+\set delta '12'
 -- materialize=> \i q17.sql
--- ^CCancel request sent
--- psql:q17.sql:42: ERROR:  canceling statement due to user request
--- Time: 1097643.363 ms (18:17.643)'
+--  person1.id | messagecount
+-- ------------+--------------
+-- (0 rows)
+--
+-- Time: 23811.382 ms (00:23.811)
+
+-- spooked by empty results, tried it for a more popular tag:
+--
+-- \set tag '\'Wolfgang_Amadeus_Mozart\''
+-- \set delta '12'
+-- Time: 1.440 ms
+-- materialize=> \i q17.sql
+--    person1.id   | messagecount
+-- ----------------+--------------
+--  19791209302816 |           67
+--   2199023256087 |           50
+--  19791209301614 |           43
+--  13194139537074 |           42
+--  17592186048228 |           42
+--  13194139540244 |           40
+--   2199023258027 |           39
+--   6597069767000 |           37
+--   8796093031814 |           36
+--            3819 |           35
+-- (10 rows)
+--
+-- Time: 30821.626 ms (00:30.822)
 
 /* Q17. Information propagation analysis
 \set tag '\'Slavoj_Žižek\''
@@ -20,7 +44,7 @@ SELECT Message1.CreatorPersonId AS "person1.id", count(DISTINCT Message2.Message
 FROM MyMessage Message1
 -- (message2 <date filtering>})
 JOIN MyMessage Message2
- ON (Message1.creationDate + ':delta hour'::interval) < Message2.creationDate
+ ON (Message1.creationDate + (:delta || ' hour')::interval) < Message2.creationDate
 JOIN MyMessage Comment
  ON Comment.ParentMessageId = Message2.MessageId
 -- (forum1)-[:Has_MEMBER]->(person2)

@@ -1,28 +1,55 @@
 \set company '\'Balkh_Airlines\''
 \set person2Id 10995116285979::bigint
--- materialize=> \i q20.sql
 -- CREATE MATERIALIZED VIEW
--- Time: 845.782 ms
+-- Time: 650.821 ms
 -- CREATE INDEX
--- Time: 477.543 ms
--- ^CCancel request sent
--- psql:q20.sql:86: ERROR:  canceling statement due to user request
--- Time: 209054.017 ms (03:29.054)
+-- Time: 476.647 ms
+--  t | w
+-- ---+---
+-- (0 rows)
+--
+-- Time: 843.523 ms
+
+-- emptiness is expected from a 20a parameter!
+
+\set company '\'National_Airlines_(5M)\''
+\set person2Id 13194139540317::bigint
+
 
 /* Q20. Recruitment
 \set person2Id 32985348834889
 \set company 'Express_Air'
  */
-CREATE OR REPLACE MATERIALIZED VIEW PathQ20 AS
-  SELECT p1.personid AS src, p2.personid AS dst, min(abs(p1.classYear - p2.classYear)) + 1 AS w
-  FROM Person_knows_person pp, Person_studyAt_University p1, Person_studyAt_University p2
-  WHERE pp.person1id = p1.personid
-    AND pp.person2id = p2.personid
-    AND p1.universityid = p2.universityid
-  GROUP BY p1.personid, p2.personid;
-CREATE INDEX PathQ20_src_dst ON PathQ20 (src, dst);
+-- edge relation
+-- CREATE OR REPLACE MATERIALIZED VIEW PathQ20 AS
+--   SELECT p1.personid AS src, p2.personid AS dst, min(abs(p1.classYear - p2.classYear)) + 1 AS w
+--   FROM Person_knows_person pp, Person_studyAt_University p1, Person_studyAt_University p2
+--   WHERE pp.person1id = p1.personid
+--     AND pp.person2id = p2.personid
+--     AND p1.universityid = p2.universityid
+--   GROUP BY p1.personid, p2.personid;
+-- CREATE INDEX PathQ20_src_dst ON PathQ20 (src, dst);
 
+WITH MUTUALLY RECURSIVE
+  dsts (personid bigint) AS (SELECT personid
+           FROM Person_workat_company pwc, Company c
+           WHERE pwc.companyid = c.id AND c.name=:company),
+  paths(src bigint, dst bigint, w bigint) AS (
+    SELECT :person2Id AS src, :person2Id AS dst, 0 AS w
+    UNION
+    SELECT paths1.src, paths2.dst, paths1.w + paths2.w
+      FROM paths paths1
+      JOIN PathQ20 paths2 -- step-transitive closure
+        ON paths1.dst = paths2.src
+  )
+SELECT dst, w
+  FROM paths
+ WHERE dst IN (SELECT * FROM dsts)
+   AND w = (SELECT min(w) FROM paths)
+ORDER BY dst
+LIMIT 20;
 
+/*
 WITH MUTUALLY RECURSIVE
   srcs(f bigint) AS (SELECT :person2Id),
   dsts(t bigint) AS (
@@ -92,3 +119,4 @@ WITH MUTUALLY RECURSIVE
       GROUP BY l.gsrc, r.gsrc
   )
 SELECT t, w FROM results WHERE w = (SELECT min(w) FROM results) ORDER BY t LIMIT 20;
+*/

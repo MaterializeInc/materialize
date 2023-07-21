@@ -2,12 +2,15 @@
 \set city2Id 1138::bigint
 -- materialize=> \i q19.sql
 -- CREATE MATERIALIZED VIEW
--- Time: 804.867 ms
+-- Time: 624.232 ms
 -- CREATE INDEX
--- Time: 643.425 ms
--- ^CCancel request sent
--- psql:q19.sql:76: ERROR:  canceling statement due to user request
--- Time: 598992.554 ms (09:58.993)
+-- Time: 497.689 ms
+--        f        |       t        | w
+-- ----------------+----------------+----
+--  24189255818627 | 26388279072272 | 39
+-- (1 row)
+--
+-- Time: 8267.997 ms (00:08.268)
 
 /* Q19. Interaction path between cities
 \set city1Id 608

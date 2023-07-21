@@ -4,9 +4,13 @@
 \set dateB '\'2012-12-14\''::timestamp
 \set maxKnowsLimit '5'
 -- materialize=> \i q16.sql
--- ^CCancel request sent
--- psql:q16.sql:74: ERROR:  canceling statement due to user request
--- Time: 398707.449 ms (06:38.707)
+--  personid | messagecounta | messagecountb
+-- ----------+---------------+---------------
+-- (0 rows)
+--
+-- Time: 14005.429 ms (00:14.005)
+
+-- apparently no results is common... searching a few other parameters still turned up no results
 
 /* Q16. Fake news detection
 \set tagA '\'Augustine_of_Hippo\''

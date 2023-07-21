@@ -14,7 +14,7 @@
 \set startDate '\'2010-11-01\''::timestamp
 \set endDate '\'2010-12-01\''::timestamp
  */
-WITH MUTUALLY RECURSIVE
+EXPLAIN WITH MUTUALLY RECURSIVE
   srcs (f bigint) AS (SELECT :person1Id),
   dsts (t bigint) AS (SELECT :person2Id),
   myForums (id bigint) AS (
