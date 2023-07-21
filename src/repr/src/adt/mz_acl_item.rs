@@ -22,6 +22,7 @@ use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
+use proptest::proptest;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -923,4 +924,21 @@ fn test_acl_item_binary() {
 #[mz_ore::test]
 fn test_acl_item_binary_size() {
     assert_eq!(16, AclItem::binary_size());
+}
+
+proptest! {
+  #[mz_ore::test]
+  #[cfg_attr(miri, ignore)] // slow
+  fn proptest_acl_item_binary_encoding_roundtrip(acl_item: AclItem) {
+      let encoded = acl_item.encode_binary();
+      let decoded = AclItem::decode_binary(encoded);
+      assert_eq(acl_item, decoded);
+  }
+
+  #[mz_ore::test]
+  #[cfg_attr(miri, ignore)] // slow
+  fn proptest_valid_acl_item_str(s: "[\d]?=[arwdUCRBN]\/[\d]+") {
+      let acl_item = AclItem::from_str(s);
+      assert!(acl_item.is_ok());
+  }
 }
