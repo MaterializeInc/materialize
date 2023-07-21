@@ -59,7 +59,7 @@ Project (#0, #0, #1)
 # Map.
 # [ProvInfo {
 #   id: t0,
-#   dereferenced_projection: [#0, #1, _, #1 > #0]
+#   dereferenced_projection: [#1, #0, _, #1 > #0]
 #   exact: true
 # }]
 apply pipeline=redundant_join
@@ -88,7 +88,8 @@ Filter (#0 > 5)
 # [ProvInfo {
 #   id: t0,
 #   dereferenced_projection: [_, #1, #0, #1, #0 > #1],
-#   exact: true },
+#   exact: true
+#  },
 #  ProvInfo {
 #   id: l0,
 #   dereferenced_projection: [#2, #1, #0, #1, #0 > #1],
@@ -152,6 +153,27 @@ With
       Get x
 
 
+# Distinct handling.
+#
+# This is sensitive to skipping empty projections the `is_trivial` method
+# when pruning `ProvInfo` instances.
+apply pipeline=redundant_join
+Project (#1, #2, #0)
+  Map (123, 0)
+    Join on=(0 = #0)
+      Distinct
+        Get x
+      Filter (#0) IS NOT NULL
+        Get x
+----
+Project (#1, #2, #0)
+  Map (123, 0)
+    Project (#0, #1)
+      Join on=(#0 = 0)
+        Filter (#0) IS NOT NULL
+          Get x
+
+
 ## LetRec cases
 ## ------------
 
@@ -182,3 +204,38 @@ With Mutually Recursive
           Map ((#0 % 2))
             CrossJoin
               Get x
+
+
+# Ensure that we're not double-counting in `remove_uses`.
+apply pipeline=redundant_join
+Return
+  Get l1
+With Mutually Recursive
+  cte l1 = // { types: "(bigint)" }
+    Return
+      Threshold
+        Union
+          Get l1
+          Negate
+            Get l0
+    With Mutually Recursive
+      cte l0 = // { types: "(bigint)" }
+        Union
+          Get l1
+          Get l0
+----
+Return
+  Get l1
+With Mutually Recursive
+  cte l1 =
+    Return
+      Threshold
+        Union
+          Get l1
+          Negate
+            Get l0
+    With Mutually Recursive
+      cte l0 =
+        Union
+          Get l1
+          Get l0
