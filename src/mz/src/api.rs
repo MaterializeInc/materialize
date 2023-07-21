@@ -70,12 +70,12 @@ pub struct RegionInfo {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Region {
-    pub region_info: RegionInfo,
+    pub region_info: Option<RegionInfo>,
 }
 
-impl Region {
+impl RegionInfo {
     pub fn sql_url(&self, profile: &ValidProfile) -> Url {
-        let mut url = Url::parse(&format!("postgres://{}", &self.region_info.sql_address))
+        let mut url = Url::parse(&format!("postgres://{}", &self.sql_address))
             .expect("url known to be valid");
         url.set_username(profile.profile.get_email()).unwrap();
         url.set_path("materialize");
@@ -247,11 +247,11 @@ pub async fn get_cloud_provider(
     Ok(cloud_provider)
 }
 
-pub async fn get_region_by_cloud_provider(
+pub async fn get_region_info_by_cloud_provider(
     client: &Client,
     valid_profile: &ValidProfile<'_>,
     cloud_provider_region: &CloudProviderRegion,
-) -> Result<Region> {
+) -> Result<RegionInfo> {
     let cloud_provider = get_cloud_provider(client, valid_profile, cloud_provider_region)
         .await
         .with_context(|| "Retrieving cloud provider.")?;
@@ -260,5 +260,5 @@ pub async fn get_region_by_cloud_provider(
         .await
         .with_context(|| "Retrieving region.")?;
 
-    Ok(region)
+    Ok(region.region_info.with_context(|| "Retrieving region info.")?)
 }

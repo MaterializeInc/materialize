@@ -44,6 +44,8 @@ impl Endpoint {
             .host()
             .to_owned()
             .expect("endpoint url has a valid host");
+
+        // TODO: Change to API after the sync migration: https://github.com/MaterializeInc/cloud/pull/6981
         let url_str = format!("https://sync.{host}");
         let mut url = Url::parse(&url_str).expect("sync endpoint name should be valid");
         url.path_segments_mut()

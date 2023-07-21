@@ -89,8 +89,8 @@ use serde::Deserialize;
 use utils::{ascii_validator, new_client};
 
 use mz::api::{
-    disable_region, enable_region, get_cloud_provider, get_region, get_region_by_cloud_provider,
-    list_cloud_providers, list_regions, CloudProviderRegion,
+    disable_region, enable_region, get_cloud_provider, get_region,
+    list_cloud_providers, list_regions, CloudProviderRegion, get_region_info_by_cloud_provider,
 };
 use mz::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use mz::vault::Vault;
@@ -368,14 +368,19 @@ async fn main() -> Result<()> {
                             let region = get_region(&client, &cloud_provider, &valid_profile)
                                 .await
                                 .with_context(|| "Retrieving region data.")?;
-                            if !region.region_info.resolvable {
-                                bail!(String::from("Timeout expired enabling region."));
-                            }
 
-                            loop {
-                                if check_region_health(&valid_profile, &region)? {
-                                    break Ok(region);
+                            if let Some(region_info) = region.region_info {
+                                if !region_info.resolvable {
+                                    bail!(String::from("Timeout expired enabling region."));
                                 }
+
+                                loop {
+                                    if check_region_health(&valid_profile, &region_info)? {
+                                        break Ok(region_info);
+                                    }
+                                }
+                            } else {
+                                bail!(String::from("Timeout expired enabling region."));
                             }
                         })
                         .await
@@ -433,7 +438,7 @@ async fn main() -> Result<()> {
                 let valid_profile = profile.validate(&profile_name, &client).await?;
 
                 let region =
-                    get_region_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
+                    get_region_info_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
                         .await
                         .with_context(|| "Retrieving cloud provider region.")?;
                 let health = check_region_health(&valid_profile, &region)?;

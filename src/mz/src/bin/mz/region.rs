@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Result;
-use mz::api::{CloudProviderAndRegion, Region};
+use mz::api::{CloudProviderAndRegion, RegionInfo};
 use mz::configuration::ValidProfile;
 
 /// Prints if a region is enabled or not
@@ -39,7 +39,7 @@ pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndR
 /// Connection string:      postgres://{user}@{address}/materialize?sslmode=require
 pub(crate) fn print_region_status(
     valid_profile: &ValidProfile,
-    region: Region,
+    region_info: RegionInfo,
     health: bool,
 ) -> Result<()> {
     if health {
@@ -50,9 +50,9 @@ pub(crate) fn print_region_status(
 
     println!(
         "HTTPS address: \t\thttps://{}",
-        &region.region_info.http_address[0..region.region_info.http_address.len() - 4]
+        &region_info.http_address[0..region_info.http_address.len() - 4]
     );
-    println!("SQL connection string: \t{}", region.sql_url(valid_profile));
+    println!("SQL connection string: \t{}", region_info.sql_url(valid_profile));
 
     Ok(())
 }

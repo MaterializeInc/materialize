@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{Context, Ok, Result};
-use mz::api::{get_region_by_cloud_provider, CloudProviderRegion, Region};
+use mz::api::{CloudProviderRegion, RegionInfo, get_region_info_by_cloud_provider};
 use mz::configuration::ValidProfile;
 use reqwest::Client;
 
@@ -24,9 +24,9 @@ const PG_APPLICATION_NAME: &str = "mz_psql";
 /// ----------------------------
 
 /// Runs psql as a subprocess command
-fn run_psql_shell(valid_profile: ValidProfile<'_>, region: &Region) -> Result<()> {
+fn run_psql_shell(valid_profile: ValidProfile<'_>, region_info: &RegionInfo) -> Result<()> {
     let error = Command::new("psql")
-        .arg(region.sql_url(&valid_profile).to_string())
+        .arg(region_info.sql_url(&valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password)
         .env("PGAPPNAME", PG_APPLICATION_NAME)
         .exec();
@@ -37,15 +37,15 @@ fn run_psql_shell(valid_profile: ValidProfile<'_>, region: &Region) -> Result<()
 /// Runs pg_isready to check if an region is healthy
 pub(crate) fn check_region_health(
     valid_profile: &ValidProfile<'_>,
-    region: &Region,
+    region_info: &RegionInfo,
 ) -> Result<bool> {
-    if !region.region_info.resolvable {
+    if !region_info.resolvable {
         return Ok(false);
     }
     let status = Command::new("pg_isready")
         .arg("-q")
         .arg("-d")
-        .arg(region.sql_url(valid_profile).to_string())
+        .arg(region_info.sql_url(valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password.clone())
         .output()
         .context("failed to execute pg_isready")?
@@ -61,7 +61,7 @@ pub(crate) async fn shell(
     valid_profile: ValidProfile<'_>,
     cloud_provider_region: CloudProviderRegion,
 ) -> Result<()> {
-    let region = get_region_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
+    let region = get_region_info_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
         .await
         .context("Retrieving cloud provider region.")?;
 
