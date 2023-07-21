@@ -77,7 +77,25 @@
 
 #![warn(missing_docs)]
 
+use std::fmt;
+
 pub mod client;
 
 /// Identifier of a replica.
 pub type ReplicaId = u64;
+
+/// Identifier of a replica.
+// TODO(#18377): Replace `ReplicaId` with this type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum NewReplicaId {
+    /// A user replica.
+    User(u64),
+}
+
+impl fmt::Display for NewReplicaId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
