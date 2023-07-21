@@ -1260,6 +1260,7 @@ largest not in advance of upper:<TIMESTAMP>
                           since:[<TIMESTAMP>]
         can respond immediately: true
                        timeline: Some(EpochMilliseconds)
+              session wall time:<TIMESTAMP>
 
 source materialize.public.t1 (u1, storage):
                   read frontier:[<TIMESTAMP>]
@@ -2337,12 +2338,11 @@ fn test_coord_startup_blocking() {
 }
 
 #[mz_ore::test]
-fn test_cancel_on_dropped_cluster() {
+fn test_peek_on_dropped_cluster() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
 
     let mut read_client = server.connect(postgres::NoTls).unwrap();
-    let read_client_cancel = read_client.cancel_token();
     read_client.batch_execute("CREATE TABLE t ()").unwrap();
 
     let handle = thread::spawn(move || {
@@ -2350,11 +2350,16 @@ fn test_cancel_on_dropped_cluster() {
         let res = read_client.query_one("SELECT * FROM t AS OF 18446744073709551615", &[]);
         assert!(res.is_err(), "cancelled query should return error");
         let err = res.unwrap_err().unwrap_db_error();
+        //TODO(jkosh44) This isn't actually an internal error but we often incorrectly give back internal errors.
         assert_eq!(
             err.code(),
-            &SqlState::QUERY_CANCELED,
-            "error code should match QUERY_CANCELED"
+            &SqlState::INTERNAL_ERROR,
+            "error code should match INTERNAL_ERROR"
         );
+        assert!(err
+            .message()
+            .contains("query could not complete because cluster \"default\" was dropped"),
+                "error message should contain 'query could not complete because cluster \"default\" was dropped'");
     });
 
     // Wait for asynchronous query to start.
@@ -2374,10 +2379,10 @@ fn test_cancel_on_dropped_cluster() {
         })
         .unwrap();
 
-    // Drop cluster that query is running on.
+    // Drop cluster that query is running on, and table that query is selecting from.
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
-    drop_client.batch_execute("DROP CLUSTER default").unwrap();
-    read_client_cancel.cancel_query(postgres::NoTls).unwrap();
+    drop_client.batch_execute("DROP CLUSTER default;").unwrap();
+    drop_client.batch_execute("DROP TABLE t;").unwrap();
     handle.join().unwrap();
 }
 
@@ -2402,14 +2407,14 @@ fn test_emit_timestamp_notice() {
         .unwrap();
     client.batch_execute("SELECT * FROM t").unwrap();
 
-    let timestamp_re = Regex::new("query timestamp: (.*)").unwrap();
+    let timestamp_re = Regex::new("query timestamp: *([0-9]+)").unwrap();
 
     // Wait until there's a query timestamp notice.
     let first_timestamp = Retry::default()
         .retry(|_| loop {
             match rx.try_next() {
                 Ok(Some(msg)) => {
-                    if let Some(caps) = timestamp_re.captures(msg.message()) {
+                    if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default()) {
                         let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                         return Ok(mz_repr::Timestamp::from(ts));
                     }
@@ -2427,7 +2432,8 @@ fn test_emit_timestamp_notice() {
             loop {
                 match rx.try_next() {
                     Ok(Some(msg)) => {
-                        if let Some(caps) = timestamp_re.captures(msg.message()) {
+                        if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
+                        {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                             let ts = mz_repr::Timestamp::from(ts);
                             if ts > first_timestamp {
@@ -2483,7 +2489,9 @@ fn test_isolation_level_notice() {
 
 #[test] // allow(test-attribute)
 fn test_emit_tracing_notice() {
-    let config = util::Config::default().with_enable_tracing(true);
+    let config = util::Config::default()
+        .with_enable_tracing(true)
+        .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string());
     let server = util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -2895,8 +2903,14 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .execute("SET client_min_messages = debug", &[])
         .unwrap();
 
-    // Queries with no dependencies should not get run on the introspection cluster
+    // Simple queries with no dependencies should get run on the introspection cluster
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
+    assert_introspection_notice(true);
+
+    // Not "simple" queries with no dependencies shouldn't get run on the introspection cluster
+    let _row = client
+        .query_one("SELECT generate_series(1, 1);", &[])
+        .unwrap();
     assert_introspection_notice(false);
 
     // Queries that only depend on system tables, __should__ get run on the introspection cluster

@@ -18,7 +18,7 @@ use mz_controller::clusters::{
     ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -147,9 +147,6 @@ impl CatalogState {
                         Datum::UInt32(role.oid),
                         Datum::String(&role.name),
                         Datum::from(role.attributes.inherit),
-                        Datum::from(role.attributes.create_role),
-                        Datum::from(role.attributes.create_db),
-                        Datum::from(role.attributes.create_cluster),
                     ]),
                     diff,
                 })
@@ -185,11 +182,13 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
-        let (size, replication_factor) = match &cluster.config.variant {
-            ClusterVariant::Managed(config) => {
-                (Some(config.size.as_str()), Some(config.replication_factor))
-            }
-            ClusterVariant::Unmanaged => (None, None),
+        let (size, disk, replication_factor) = match &cluster.config.variant {
+            ClusterVariant::Managed(config) => (
+                Some(config.size.as_str()),
+                Some(config.disk),
+                Some(config.replication_factor),
+            ),
+            ClusterVariant::Unmanaged => (None, None, None),
         };
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
@@ -201,6 +200,7 @@ impl CatalogState {
                 cluster.is_managed().into(),
                 size.into(),
                 replication_factor.into(),
+                disk.into(),
             ]),
             diff,
         }
@@ -216,14 +216,15 @@ impl CatalogState {
         let id = cluster.replica_id_by_name[name];
         let replica = &cluster.replicas_by_id[&id];
 
-        let (size, az) = match &replica.config.location {
+        let (size, disk, az) = match &replica.config.location {
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zone,
                 az_user_specified: _,
                 allocation: _,
-            }) => (Some(&**size), Some(availability_zone.as_str())),
-            ReplicaLocation::Unmanaged(_) => (None, None),
+                disk,
+            }) => (Some(&**size), Some(*disk), Some(availability_zone.as_str())),
+            ReplicaLocation::Unmanaged(_) => (None, None, None),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
@@ -238,6 +239,7 @@ impl CatalogState {
                 Datum::from(size),
                 Datum::from(az),
                 Datum::String(&replica.owner_id.to_string()),
+                Datum::from(disk),
             ]),
             diff,
         }
@@ -379,7 +381,7 @@ impl CatalogState {
 
         if !entry.item().is_temporary() {
             // Populate or clean up the `mz_object_dependencies` table.
-            for dependee in entry.item().uses() {
+            for dependee in &entry.item().uses().0 {
                 updates.push(self.pack_depends_update(id, *dependee, diff))
             }
         }
@@ -653,10 +655,11 @@ impl CatalogState {
         view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&view.create_sql)
+        let create_stmt = mz_sql::parse::parse(&view.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
-            .into_element();
-        let query = match create_sql {
+            .into_element()
+            .ast;
+        let query = match create_stmt {
             Statement::CreateView(stmt) => stmt.definition.query,
             _ => unreachable!(),
         };
@@ -692,10 +695,11 @@ impl CatalogState {
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let create_sql = mz_sql::parse::parse(&mview.create_sql)
+        let create_stmt = mz_sql::parse::parse(&mview.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
-            .into_element();
-        let query = match create_sql {
+            .into_element()
+            .ast;
+        let query = match create_stmt {
             Statement::CreateMaterializedView(stmt) => stmt.query,
             _ => unreachable!(),
         };
@@ -786,6 +790,7 @@ impl CatalogState {
         let key_sqls = match mz_sql::parse::parse(&index.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
             .into_element()
+            .ast
         {
             Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
                 key_parts.expect("key_parts is filled in during planning")
@@ -1185,6 +1190,7 @@ impl CatalogState {
                     ReplicaAllocation {
                         memory_limit,
                         cpu_limit,
+                        disk_limit,
                         scale,
                         workers,
                         credits_per_hour,
@@ -1195,6 +1201,8 @@ impl CatalogState {
                     let cpu_limit = cpu_limit.unwrap_or(CpuLimit::MAX);
                     let MemoryLimit(ByteSize(memory_bytes)) =
                         (*memory_limit).unwrap_or(MemoryLimit::MAX);
+                    let DiskLimit(ByteSize(disk_bytes)) =
+                        (*disk_limit).unwrap_or(DiskLimit::ARBITRARY);
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
                         u64::from(*scale).into(),
@@ -1202,7 +1210,7 @@ impl CatalogState {
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
                         // TODO(guswynn): disk size will be filled in later.
-                        Datum::Null,
+                        disk_bytes.into(),
                         (*credits_per_hour).into(),
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
@@ -1302,6 +1310,7 @@ impl CatalogState {
                 default_privilege_object
                     .object_type
                     .to_string()
+                    .to_lowercase()
                     .as_str()
                     .into(),
                 grantee.to_string().as_str().into(),

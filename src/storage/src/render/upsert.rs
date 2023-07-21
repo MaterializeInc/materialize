@@ -35,9 +35,10 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::render::sources::{OutputIndex, WorkerId};
+use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
-    upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
+    upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
+    UpsertStateBackend,
 };
 use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
@@ -147,7 +148,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     dataflow_paramters: &crate::internal_control::DataflowParameters,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -158,49 +159,78 @@ where
         source_config.worker_id,
     );
 
-    if upsert_envelope.disk {
+    if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
+
+        let allow_auto_spill = dataflow_paramters.auto_spill_config.allow_spilling_to_disk;
+        let spill_threshold = dataflow_paramters
+            .auto_spill_config
+            .spill_to_disk_threshold_bytes;
 
         tracing::info!(
             ?tuning,
+            ?dataflow_paramters.auto_spill_config,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id
         );
         let rocksdb_metrics = Arc::clone(&upsert_metrics.rocksdb);
-        let rocksdb_dir = instance_context
-            .scratch_directory
-            .as_ref()
-            .expect("instance directory to be there if rendering an ON DISK source")
+        let rocksdb_dir = scratch_directory
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
 
         let env = instance_context.rocksdb_env.clone();
 
-        upsert_inner(
-            input,
-            upsert_envelope.key_indices,
-            resume_upper,
-            previous,
-            previous_token,
-            upsert_metrics,
-            source_config,
-            move || async move {
-                rocksdb::RocksDB::new(
-                    mz_rocksdb::RocksDBInstance::new(
-                        &rocksdb_dir,
-                        mz_rocksdb::InstanceOptions::defaults_with_env(env),
-                        tuning,
-                        rocksdb_metrics,
-                        // For now, just use the same config as the one used for
-                        // merging snapshots.
-                        upsert_bincode_opts(),
+        let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
+
+        if allow_auto_spill {
+            upsert_inner(
+                input,
+                upsert_envelope.key_indices,
+                resume_upper,
+                previous,
+                previous_token,
+                upsert_metrics,
+                source_config,
+                move || async move {
+                    AutoSpillBackend::new(
+                        RocksDBParams {
+                            instance_path: rocksdb_dir,
+                            env,
+                            tuning_config: tuning,
+                            metrics: rocksdb_metrics,
+                        },
+                        spill_threshold,
+                        rocksdb_in_use_metric,
                     )
-                    .await
-                    .unwrap(),
-                )
-            },
-        )
+                },
+            )
+        } else {
+            upsert_inner(
+                input,
+                upsert_envelope.key_indices,
+                resume_upper,
+                previous,
+                previous_token,
+                upsert_metrics,
+                source_config,
+                move || async move {
+                    rocksdb::RocksDB::new(
+                        mz_rocksdb::RocksDBInstance::new(
+                            &rocksdb_dir,
+                            mz_rocksdb::InstanceOptions::defaults_with_env(env),
+                            tuning,
+                            rocksdb_metrics,
+                            // For now, just use the same config as the one used for
+                            // merging snapshots.
+                            upsert_bincode_opts(),
+                        )
+                        .await
+                        .unwrap(),
+                    )
+                },
+            )
+        }
     } else {
         tracing::info!(
             "timely-{} rendering {} with memory-backed upsert state",
@@ -220,6 +250,27 @@ where
     }
 }
 
+/// Helper method for `upsert_inner` used to stage `data` updates
+/// from the input timely edge.
+fn stage_input<T, O>(
+    stash: &mut Vec<(T, UpsertKey, Reverse<O>, Option<UpsertValue>)>,
+    data: &mut Vec<((UpsertKey, Option<UpsertValue>, O), T, Diff)>,
+    input_upper: &Antichain<T>,
+    resume_upper: &Antichain<T>,
+) where
+    T: PartialOrder,
+    O: Ord,
+{
+    if PartialOrder::less_equal(input_upper, resume_upper) {
+        data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
+    }
+
+    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+        assert!(diff > 0, "invalid upsert input");
+        (time, key, Reverse(order), value)
+    }));
+}
+
 fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     mut key_indices: Vec<usize>,
@@ -231,7 +282,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     state: F,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -280,8 +331,34 @@ where
         );
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
+
+        let mut stash = vec![];
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
-            match previous.next_mut().await {
+            let previous_event = tokio::select! {
+                // Note that these are both cancel-safe. The reason we drain the `input` is to
+                // ensure the `output_frontier` (and therefore flow control on `previous`) make
+                // progress.
+                previous_event = previous.next_mut() => {
+                    previous_event
+                }
+                input_event = input.next_mut() => {
+                    match input_event {
+                        Some(AsyncEvent::Data(_cap, data)) => {
+                            stage_input(&mut stash, data, &input_upper, &resume_upper);
+                        }
+                        Some(AsyncEvent::Progress(upper)) => {
+                            input_upper = upper;
+                        }
+                        None => {
+                            input_upper = Antichain::new();
+                        }
+                    }
+                    continue;
+                }
+            };
+            match previous_event {
                 Some(AsyncEvent::Data(_cap, data)) => {
                     events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
                         if !resume_upper.less_equal(&ts) {
@@ -320,12 +397,20 @@ where
                 )
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => {
+                    if let Some(ts) = snapshot_upper.clone().into_option() {
+                        // As we shutdown, we could ostensibly get data from later than the
+                        // `resume_upper`, which we ignore above. We don't want our output capability to make
+                        // it further than the `resume_upper`.
+                        if !resume_upper.less_equal(&ts) {
+                            output_cap.downgrade(&ts);
+                        }
+                    }
+                }
                 Err(e) => {
                     process_upsert_state_error::<G>(
                         "Failed to rehydrate state".to_string(),
                         e,
-                        source_config.worker_id,
                         &mut health_output,
                         &health_cap,
                     )
@@ -337,9 +422,16 @@ where
         drop(events);
 
         drop(previous_token);
-        while let Some(_event) = previous.next().await {
-            // Exchaust the previous input. It is expected to immediately reach the empty
-            // antichain since we have dropped its token.
+        // Exchaust the previous input. It is expected to immediately reach the empty
+        // antichain since we have dropped its token.
+        //
+        // Note that we do not need to also process the `input` during this, as the dropped token
+        // will shutdown the `backpressure` operator
+        while let Some(_event) = previous.next().await {}
+
+        // After snapshotting, our output frontier is exactly the `resume_upper`
+        if let Some(ts) = resume_upper.as_option() {
+            output_cap.downgrade(ts);
         }
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
@@ -349,22 +441,28 @@ where
         let mut multi_get_scratch = Vec::new();
 
         // Now can can resume consuming the collection
-        let mut stash = vec![];
         let mut output_updates = vec![];
-        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
-        while let Some(event) = input.next_mut().await {
+        let mut post_snapshot = true;
+        while let Some(event) = {
+            // Synthesize a `Progress` event that allows us to drain the `stash` of values
+            // obtained during snapshotting.
+            if post_snapshot {
+                post_snapshot = false;
+                Some(AsyncEvent::Progress(input_upper.clone()))
+            } else {
+                input.next_mut().await
+            }
+        } {
             match event {
                 AsyncEvent::Data(_cap, data) => {
-                    if PartialOrder::less_equal(&input_upper, &resume_upper) {
-                        data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
-                    }
-
-                    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-                        assert!(diff > 0, "invalid upsert input");
-                        (time, key, Reverse(order), value)
-                    }));
+                    stage_input(&mut stash, data, &input_upper, &resume_upper);
                 }
                 AsyncEvent::Progress(upper) => {
+                    // Ignore progress updates before the `resume_upper`, which is our initial
+                    // capability post-snapshotting.
+                    if PartialOrder::less_than(&upper, &resume_upper) {
+                        continue;
+                    }
                     stash.sort_unstable();
 
                     // Find the prefix that we can emit
@@ -390,7 +488,6 @@ where
                             process_upsert_state_error::<G>(
                                 "Failed to fetch records from state".to_string(),
                                 e,
-                                source_config.worker_id,
                                 &mut health_output,
                                 &health_cap,
                             )
@@ -464,7 +561,6 @@ where
                             process_upsert_state_error::<G>(
                                 "Failed to update records in state".to_string(),
                                 e,
-                                source_config.worker_id,
                                 &mut health_output,
                                 &health_cap,
                             )
@@ -498,11 +594,10 @@ where
 async fn process_upsert_state_error<G: Scope>(
     context: String,
     e: anyhow::Error,
-    worker_id: usize,
     health_output: &mut AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
-        Vec<(usize, usize, HealthStatusUpdate)>,
-        TeeCore<<G as ScopeParent>::Timestamp, Vec<(usize, usize, HealthStatusUpdate)>>,
+        Vec<(OutputIndex, HealthStatusUpdate)>,
+        TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
@@ -513,7 +608,7 @@ async fn process_upsert_state_error<G: Scope>(
         },
         should_halt: true,
     };
-    health_output.give(health_cap, (worker_id, 0, update)).await;
+    health_output.give(health_cap, (0, update)).await;
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");
 }

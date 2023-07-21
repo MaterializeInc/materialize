@@ -41,7 +41,10 @@ SERVICES = [
         image=f"materialize/environmentd:{VERSION}",
         external_cockroach=True,
         persist_blob_url="file:///mzdata/persist/blob",
-        options=["--orchestrator-process-secrets-directory=/mzdata/secrets"],
+        options=[
+            "--orchestrator-process-secrets-directory=/mzdata/secrets",
+            "--orchestrator-process-scratch-directory=/scratch",
+        ],
     ),
     Testdrive(),  # Overriden below
     Mz(

@@ -86,14 +86,9 @@ pub struct QualifiedItemName {
     pub item: String,
 }
 
-impl fmt::Display for QualifiedItemName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let ResolvedDatabaseSpecifier::Id(id) = &self.qualifiers.database_spec {
-            write!(f, "{}.", id)?;
-        }
-        write!(f, "{}.{}", self.qualifiers.schema_spec, self.item)
-    }
-}
+// Do not implement [`Display`] for [`QualifiedItemName`]. [`FullItemName`] should always be
+// displayed instead.
+static_assertions::assert_not_impl_any!(QualifiedItemName: fmt::Display);
 
 /// An optionally-qualified human-readable name of an item in the catalog.
 ///
@@ -975,6 +970,27 @@ impl ObjectId {
     }
 }
 
+impl fmt::Display for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ObjectId::Cluster(cluster_id) => write!(f, "C{cluster_id}"),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                write!(f, "CR{cluster_id}.{replica_id}")
+            }
+            ObjectId::Database(database_id) => write!(f, "D{database_id}"),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                let database_id = match database_spec {
+                    ResolvedDatabaseSpecifier::Ambient => "".to_string(),
+                    ResolvedDatabaseSpecifier::Id(database_id) => format!("{database_id}."),
+                };
+                write!(f, "S{database_id}{schema_spec}")
+            }
+            ObjectId::Role(role_id) => write!(f, "R{role_id}"),
+            ObjectId::Item(item_id) => write!(f, "I{item_id}"),
+        }
+    }
+}
+
 impl TryFrom<ResolvedObjectName> for ObjectId {
     type Error = anyhow::Error;
 
@@ -1089,7 +1105,9 @@ impl From<&GlobalId> for ObjectId {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum SystemObjectId {
+    /// The ID of a specific object.
     Object(ObjectId),
+    /// Identifier for the entire system.
     System,
 }
 
@@ -1099,6 +1117,10 @@ impl SystemObjectId {
             SystemObjectId::Object(object_id) => Some(object_id),
             SystemObjectId::System => None,
         }
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, SystemObjectId::System)
     }
 }
 
@@ -1770,15 +1792,22 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
     node: N,
-) -> Result<(N::Folded, BTreeSet<GlobalId>), PlanError>
+) -> Result<(N::Folded, ResolvedIds), PlanError>
 where
     N: FoldNode<Raw, Aug>,
 {
     let mut resolver = NameResolver::new(catalog);
     let result = node.fold(&mut resolver);
     resolver.status?;
-    Ok((result, resolver.ids))
+    Ok((result, ResolvedIds(resolver.ids)))
 }
+
+/// A set of IDs resolved by name resolution.
+///
+/// This is a newtype of a `BTreeSet<GlobalId>` that is provided to make it
+/// harder to confuse a set of resolved IDs with other sets of `GlobalId`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ResolvedIds(pub BTreeSet<GlobalId>);
 
 #[derive(Debug)]
 /// An AST visitor that transforms an AST that contains temporary GlobalId references to one where
@@ -1924,13 +1953,13 @@ impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
     }
 }
 
-pub fn visit_dependencies<'ast, N>(node: &'ast N) -> BTreeSet<GlobalId>
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> ResolvedIds
 where
     N: VisitNode<'ast, Aug> + 'ast,
 {
     let mut visitor = DependencyVisitor::default();
     node.visit(&mut visitor);
-    visitor.ids
+    ResolvedIds(visitor.ids)
 }
 
 // Used when displaying a view's source for human creation. If the name

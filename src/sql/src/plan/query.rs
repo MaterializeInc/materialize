@@ -176,7 +176,7 @@ pub fn plan_insert_query(
     source: InsertSource<Aug>,
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<(GlobalId, HirRelationExpr, PlannedQuery<Vec<HirScalarExpr>>), PlanError> {
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
@@ -531,7 +531,7 @@ pub fn plan_delete_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut delete_stmt)?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     plan_mutation_query_inner(
         qcx,
         delete_stmt.table_name,
@@ -548,7 +548,7 @@ pub fn plan_update_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut update_stmt)?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
     plan_mutation_query_inner(
         qcx,
@@ -826,7 +826,7 @@ pub fn plan_up_to(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -854,7 +854,7 @@ pub fn plan_as_of(
             AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
-                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
                 transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
                     qcx: &qcx,
@@ -885,7 +885,7 @@ pub fn plan_secret_as(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
     transform_ast::transform(scx, &mut expr)?;
 
@@ -905,12 +905,58 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
+/// Plans an expression in the VALIDATE USING position of a `CREATE SOURCE ... FROM WEBHOOK`.
+pub fn plan_webhook_validate_using(
+    scx: &StatementContext,
+    mut expr: Expr<Aug>,
+) -> Result<MirScalarExpr, PlanError> {
+    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+
+    // We _always_ provide the body of the request as bytes and include the headers when validating
+    // a request, regardless of what has otherwise been specified for the source.
+    let column_typs = vec![
+        ColumnType {
+            scalar_type: ScalarType::Bytes,
+            nullable: false,
+        },
+        ColumnType {
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            },
+            nullable: false,
+        },
+    ];
+    let column_names = ["body", "headers"];
+
+    let relation_typ = RelationType::new(column_typs);
+    let desc = RelationDesc::new(relation_typ, column_names);
+    let scope = Scope::from_source(None, column_names);
+
+    transform_ast::transform(scx, &mut expr)?;
+
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "VALIDATE USING",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let expr = plan_expr(ecx, &expr)?
+        .type_as(ecx, &ScalarType::Bool)?
+        .lower_uncorrelated()?;
+    Ok(expr)
+}
+
 pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Aug>,
     target_ty: &ScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
@@ -938,7 +984,7 @@ pub fn plan_params<'a>(
         );
     }
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let scope = Scope::empty();
     let rel_type = RelationType::empty();
 
@@ -1469,9 +1515,27 @@ fn plan_set_expr(
             Ok((expr, scope))
         }
         SetExpr::Show(stmt) => {
+            // The create SQL definition of involving this query, will have the explicit `SHOW`
+            // command in it. Many `SHOW` commands will expand into a sub-query that involves the
+            // current schema of the executing user. When Materialize restarts and tries to re-plan
+            // these queries, it will only have access to the raw `SHOW` command and have no idea
+            // what schema to use. As a result Materialize will fail to boot.
+            //
+            // Some `SHOW` commands are ok, like `SHOW CLUSTERS`, and there are probably other ways
+            // around this issue. Such as expanding the `SHOW` command in the SQL definition. For
+            // now we just disallow any `SHOW` commands in views.
+            //
+            // Ideally, the `SHOW` commands that use the current schema would expand to use the
+            // `current_schema()` function, instead of hard-coding the current schema id, so that
+            // planning can correctly identify that they are unmaterializable. However, that's a
+            // little tricky because `current_schema()` returns a schema name not id, which is what
+            // we need.
+            if qcx.lifetime == QueryLifetime::Static {
+                return Err(PlanError::ShowCommandInView);
+            }
+
             // Some SHOW statements are a SELECT query. Others produces Rows
             // directly. Convert both of these to the needed Hir and Scope.
-
             fn to_hirscope(
                 plan: ShowCreatePlan,
                 desc: StatementDesc,
@@ -1518,7 +1582,7 @@ fn plan_set_expr(
                 ShowStatement::ShowObjects(stmt) => {
                     show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
                 }
-                ShowStatement::ShowVariable(_) => sql_bail!("unsupported SHOW statement"),
+                ShowStatement::ShowVariable(_) => bail_unsupported!("SHOW variable in subqueries"),
                 ShowStatement::InspectShard(_) => sql_bail!("unsupported INSPECT statement"),
             }
         }
@@ -5148,6 +5212,7 @@ fn scalar_type_from_catalog(
                 CatalogType::Jsonb => Ok(ScalarType::Jsonb),
                 CatalogType::Oid => Ok(ScalarType::Oid),
                 CatalogType::PgLegacyChar => Ok(ScalarType::PgLegacyChar),
+                CatalogType::PgLegacyName => Ok(ScalarType::PgLegacyName),
                 CatalogType::Pseudo => {
                     sql_bail!(
                         "cannot reference pseudo type {}",
@@ -5338,9 +5403,9 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
 /// allowed to reason about the time at which it is running, e.g., by calling
 /// the `now()` function.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum QueryLifetime<'a> {
+pub enum QueryLifetime {
     /// The query's result will be computed at one point in time.
-    OneShot(&'a PlanContext),
+    OneShot,
     /// The query's result will be maintained indefinitely.
     Static,
 }
@@ -5358,7 +5423,7 @@ pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
     pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
-    pub lifetime: QueryLifetime<'a>,
+    pub lifetime: QueryLifetime,
     /// The scopes of the outer relation expression.
     pub outer_scopes: Vec<Scope>,
     /// The type of the outer relation expressions.
@@ -5375,7 +5440,7 @@ impl CheckedRecursion for QueryContext<'_> {
 }
 
 impl<'a> QueryContext<'a> {
-    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime<'a>) -> QueryContext<'a> {
+    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime) -> QueryContext<'a> {
         QueryContext {
             scx,
             lifetime,

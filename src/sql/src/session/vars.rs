@@ -67,6 +67,8 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::str::FromStr;
+use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -78,6 +80,7 @@ use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -551,6 +554,22 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
+const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_consensus_connection_pool_ttl"),
+    value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL,
+    description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
+    internal: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl_stagger`].
+const PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_consensus_connection_pool_ttl_stagger"),
+    value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER,
+    description: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+    internal: true,
+};
+
 /// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
@@ -576,11 +595,11 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// The default for the `DISK` option in `UPSERT` sources.
-const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("upsert_source_disk_default"),
+/// The default for the `DISK` option when creating managed clusters and cluster replicas.
+const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("disk_cluster_replicas_default"),
     value: &false,
-    description: "The default for the `DISK` option in `UPSERT` sources.",
+    description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
 };
 
@@ -588,7 +607,7 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
 mod upsert_rocksdb {
     use std::str::FromStr;
 
-    use mz_rocksdb::config::{CompactionStyle, CompressionType};
+    use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 
     use super::*;
 
@@ -630,67 +649,95 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
-        value: &mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_COMPACTION_STYLE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
-        value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        value: &mz_rocksdb_types::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
-        value: &mz_rocksdb::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        value: &mz_rocksdb_types::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
-        value: &mz_rocksdb::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        value: &mz_rocksdb_types::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_parallelism"),
-        value: &mz_rocksdb::defaults::DEFAULT_PARALLELISM,
+        value: &mz_rocksdb_types::defaults::DEFAULT_PARALLELISM,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
-        value: &mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
     pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
-        value: &mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
 
     pub static UPSERT_ROCKSDB_BATCH_SIZE: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_batch_size"),
-        value: &mz_rocksdb::defaults::DEFAULT_BATCH_SIZE,
+        value: &mz_rocksdb_types::defaults::DEFAULT_BATCH_SIZE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::config` module. \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
                   Can be changed dynamically (Materialize).",
+        internal: true,
+    };
+
+    pub static UPSERT_ROCKSDB_RETRY_DURATION: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_retry_duration"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_RETRY_DURATION,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
+
+    /// Controls whether automatic spill to disk should be turned on when using `DISK`.
+    pub const UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_auto_spill_to_disk"),
+        value: &false,
+        description:
+            "Controls whether automatic spill to disk should be turned on when using `DISK`",
+        internal: true,
+    };
+
+    /// The upsert in memory state size threshold after which it will spill to disk.
+    /// The default is 256 MB = 268435456 bytes
+    pub const UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_auto_spill_threshold_bytes"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD,
+        description:
+            "The upsert in-memory state size threshold in bytes after which it will spill to disk",
         internal: true,
     };
 }
@@ -703,6 +750,24 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     replication connections. (Materialize)",
     internal: true,
 };
+
+static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
+static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("log_filter"),
+    value: &DEFAULT_LOGGING_FILTER,
+    description: "Sets the filter to apply to stderr logging.",
+    internal: true,
+});
+
+static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
+    Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
+static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("opentelemetry_filter"),
+    value: &DEFAULT_OPENTELEMETRY_FILTER,
+    description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
+    internal: true,
+});
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
 /// when connecting to PG via replication.
@@ -772,6 +837,17 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     value: &usize::MAX,
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   dataflows (Materialize).",
+    internal: true,
+};
+
+/// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
+/// dataflows_. This is distinct from `DATAFLOW_MAX_INFLIGHT_BYTES`, as this will
+/// supports more granular control (within a single timestamp).
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_max_inflight_bytes"),
+    value: &None,
+    description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
+                  storage dataflows. Defaults to not backpressure enabled (Materialize).",
     internal: true,
 };
 
@@ -879,7 +955,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_timestamp_notice"),
     value: &false,
     description:
-        "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
+        "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize).",
     internal: false
 };
 
@@ -925,14 +1001,32 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+// TODO(mgree) change this to a SelectOption
+pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_session_cardinality_estimates"),
+    value: &false,
+    description:
+        "Feature flag indicating whether to use cardinality estimates when optimizing queries; \
+    does not affect EXPLAIN WITH(cardinality) (Materialize).",
+    internal: false,
+};
+
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_mz_join_core"),
-    value: &false,
+    value: &true,
     description:
         "Feature flag indicating whether compute rendering should use Materialize's custom linear \
          join implementation rather than the one from Differential Dataflow. (Materialize).",
+    internal: true,
+};
+
+pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_default_connection_validation"),
+    value: &true,
+    description:
+        "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
 };
 
@@ -990,7 +1084,8 @@ macro_rules! feature_flags {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
                     description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true                };
+                    internal: true
+                };
 
                 pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                     flag: &[<$name:upper _VAR>],
@@ -1061,7 +1156,6 @@ feature_flags!(
         enable_envelope_upsert_in_subscribe,
         "`ENVELOPE UPSERT` can be used in `SUBSCRIBE`"
     ),
-    (enable_format_json, "FORMAT JSON"),
     (enable_index_options, "INDEX OPTIONS"),
     (
         enable_kafka_config_denylist_options,
@@ -1079,7 +1173,7 @@ feature_flags!(
         "monotonic evaluation of one-shot SELECT queries"
     ),
     (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
-    (enable_mfp_pushdown_explain, "`mfp_pushdown` explain"),
+    (enable_mfp_pushdown_explain, "`filter_pushdown` explain"),
     (
         enable_multi_worker_storage_persist_sink,
         "multi-worker storage persist sink"
@@ -1104,8 +1198,8 @@ feature_flags!(
         "depending on unstable objects"
     ),
     (
-        enable_upsert_source_disk,
-        "`WITH (DISK)` for `UPSERT/DEBEZIUM` sources"
+        enable_disk_cluster_replicas,
+        "`WITH (DISK)` for cluster replicas"
     ),
     (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
     (
@@ -1113,6 +1207,22 @@ feature_flags!(
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
     (enable_managed_clusters, "managed clusters"),
+    (
+        enable_cardinality_estimates,
+        "join planning with cardinality estimates"
+    ),
+    (
+        enable_connection_validation_syntax,
+        "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax"
+    ),
+    (
+        enable_webhook_sources,
+        "creating or pushing data to webhook sources"
+    ),
+    (
+        enable_try_parse_monotonic_iso8601_timestamp,
+        "the try_parse_monotonic_iso8601_timestamp function"
+    ),
 );
 
 /// Represents the input to a variable.
@@ -1160,7 +1270,7 @@ impl OwnedVarInput {
 
 /// Session variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
@@ -1204,6 +1314,10 @@ impl SessionVars {
             .with_var(&EMIT_TRACE_ID_NOTICE)
             .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&ENABLE_SESSION_RBAC_CHECKS)
+            .with_feature_gated_var(
+                &ENABLE_SESSION_CARDINALITY_ESTIMATES,
+                &ENABLE_CARDINALITY_ESTIMATES,
+            )
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1564,6 +1678,11 @@ impl SessionVars {
         *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
     }
 
+    /// Returns the value of `enable_cardinality_estimates` configuration parameter.
+    pub fn enable_session_cardinality_estimates(&self) -> bool {
+        *self.expect_value(&ENABLE_SESSION_CARDINALITY_ESTIMATES)
+    }
+
     /// Returns the value of `is_superuser` configuration parameter.
     pub fn is_superuser(&self) -> bool {
         self.user.is_superuser()
@@ -1643,7 +1762,7 @@ impl DropConnection {
 
 /// On disk variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
@@ -1698,7 +1817,9 @@ impl SystemVars {
             .with_var(&MAX_ROLES)
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
-            .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
+            .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
@@ -1707,12 +1828,16 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
+            .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
+            .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
+            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -1738,7 +1863,10 @@ impl SystemVars {
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
-            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION);
+            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
+            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+            .with_var(&LOGGING_FILTER)
+            .with_var(&OPENTELEMETRY_FILTER);
         vars.refresh_internal_state();
         vars
     }
@@ -2038,12 +2166,20 @@ impl SystemVars {
             .collect()
     }
 
-    /// Returns the `upsert_source_disk_default` configuration parameter.
-    pub fn upsert_source_disk_default(&self) -> bool {
-        *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
+    /// Returns the `disk_cluster_replicas_default` configuration parameter.
+    pub fn disk_cluster_replicas_default(&self) -> bool {
+        *self.expect_value(&DISK_CLUSTER_REPLICAS_DEFAULT)
     }
 
-    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::config::CompactionStyle {
+    pub fn upsert_rocksdb_auto_spill_to_disk(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
+    }
+
+    pub fn upsert_rocksdb_auto_spill_threshold_bytes(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES)
+    }
+
+    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb_types::config::CompactionStyle {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
 
@@ -2063,18 +2199,22 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
     }
 
-    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::config::CompressionType {
+    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb_types::config::CompressionType {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
     }
 
     pub fn upsert_rocksdb_bottommost_compression_type(
         &self,
-    ) -> mz_rocksdb::config::CompressionType {
+    ) -> mz_rocksdb_types::config::CompressionType {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
     }
 
     pub fn upsert_rocksdb_batch_size(&self) -> usize {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
+    }
+
+    pub fn upsert_rocksdb_retry_duration(&self) -> Duration {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -2105,6 +2245,16 @@ impl SystemVars {
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
         *self.expect_value(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
+    }
+
+    /// Returns the `persist_consensus_connection_pool_ttl` configuration parameter.
+    pub fn persist_consensus_connection_pool_ttl(&self) -> Duration {
+        *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
+    }
+
+    /// Returns the `persist_consensus_connection_pool_ttl_stagger` configuration parameter.
+    pub fn persist_consensus_connection_pool_ttl_stagger(&self) -> Duration {
+        *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
     }
 
     /// Returns the `pg_replication_connect_timeout` configuration parameter.
@@ -2145,6 +2295,11 @@ impl SystemVars {
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
     pub fn dataflow_max_inflight_bytes(&self) -> usize {
         *self.expect_value(&DATAFLOW_MAX_INFLIGHT_BYTES)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
+    pub fn storage_dataflow_max_inflight_bytes(&self) -> Option<usize> {
+        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
@@ -2228,6 +2383,19 @@ impl SystemVars {
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
+    }
+
+    /// Returns the `enable_default_connection_validation` configuration parameter.
+    pub fn enable_default_connection_validation(&self) -> bool {
+        *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+    }
+
+    pub fn logging_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*LOGGING_FILTER).clone()
+    }
+
+    pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
+        self.expect_value(&*OPENTELEMETRY_FILTER).clone()
     }
 }
 
@@ -3549,12 +3717,39 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
     }
 }
 
+impl Value for CloneableEnvFilter {
+    fn type_name() -> String {
+        "EnvFilter".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        CloneableEnvFilter::from_str(s).map_err(|e| VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: vec![s.to_string()],
+            reason: format!("{}", e),
+        })
+    }
+
+    fn format(&self) -> String {
+        format!("{}", self)
+    }
+}
+
+pub fn is_tracing_var(name: &str) -> bool {
+    name == LOGGING_FILTER.name() || name == OPENTELEMETRY_FILTER.name()
+}
+
 /// Returns whether the named variable is a compute configuration parameter.
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
+        || is_tracing_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.
@@ -3564,8 +3759,10 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
+        || is_tracing_var(name)
 }
 
 fn is_upsert_rocksdb_config_var(name: &str) -> bool {
@@ -3584,6 +3781,8 @@ fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
+        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
+        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()

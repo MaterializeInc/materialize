@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -123,6 +123,16 @@ class ExpressionWithArgs(Expression):
     def is_leaf(self) -> bool:
         return False
 
+    def contains(self, predicate: Callable[[Expression], bool]) -> bool:
+        if super().contains(predicate):
+            return True
+
+        for arg in self.args:
+            if arg.contains(predicate):
+                return True
+
+        return False
+
     def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
         for arg in self.args:
             if arg.is_leaf() and not self.is_aggregate:
@@ -137,21 +147,23 @@ class ExpressionWithArgs(Expression):
 
 
 def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
-    storage_layout: Optional[ValueStorageLayout] = None
+    mutual_storage_layout: Optional[ValueStorageLayout] = None
 
     for arg in args:
-        if arg.storage_layout == ValueStorageLayout.ANY:
+        if (
+            mutual_storage_layout is None
+            or mutual_storage_layout == ValueStorageLayout.ANY
+        ):
+            mutual_storage_layout = arg.storage_layout
+        elif arg.storage_layout == ValueStorageLayout.ANY:
             continue
-
-        if storage_layout is None:
-            storage_layout = arg.storage_layout
-        elif storage_layout != arg.storage_layout:
+        elif mutual_storage_layout != arg.storage_layout:
             raise RuntimeError(
-                f"It is not allowed to mix storage layouts in an expression (current={storage_layout}, got={arg.storage_layout})"
+                f"It is not allowed to mix storage layouts in an expression (current={mutual_storage_layout}, got={arg.storage_layout})"
             )
 
-    if storage_layout is None:
+    if mutual_storage_layout is None:
         # use this as default (but it should not matter as expressions are expected to always have at least one arg)
         return ValueStorageLayout.HORIZONTAL
 
-    return storage_layout
+    return mutual_storage_layout

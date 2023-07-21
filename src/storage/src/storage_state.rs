@@ -54,10 +54,10 @@
 //!    rendering a dataflow, which can "overtake" the external `RunIngestions`
 //!    command.
 //! 3. During processing of that command, we call
-//!    [`AsyncStorageWorker::calculate_resume_upper`], which causes a command to
+//!    [`AsyncStorageWorker::update_frontiers`], which causes a command to
 //!    be sent to the async worker.
 //! 4. We eventually get a response from the async worker:
-//!    [`AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper`].
+//!    [`AsyncStorageWorkerResponse::FrontiersUpdated`].
 //! 5. This response is handled in [`Worker::handle_async_worker_response`].
 //! 6. Handling that response causes a
 //!    [`InternalStorageCommand::CreateIngestionDataflow`] to be broadcast to
@@ -82,15 +82,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::Context;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::ShardId;
+use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{
@@ -161,6 +161,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -226,6 +227,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             internal_cmd_tx: command_sequencer,
             async_worker,
             dataflow_parameters: Default::default(),
+            tracing_handle,
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -309,6 +311,9 @@ pub struct StorageState {
 
     /// Dynamically configurable parameters that control how dataflows are rendered.
     pub dataflow_parameters: DataflowParameters,
+
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
 }
 
 /// Extra context for a storage instance.
@@ -326,17 +331,7 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
-        if let Some(scratch_directory) = &scratch_directory {
-            tokio::fs::create_dir_all(scratch_directory)
-                .await
-                .with_context(|| {
-                    format!(
-                        "creating scratch directory: {}",
-                        scratch_directory.display()
-                    )
-                })?;
-        }
+    pub fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
             rocksdb_env: rocksdb::Env::new()?,
@@ -388,9 +383,12 @@ impl SinkHandle {
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
                 .open_leased_reader(
                     shard_id,
-                    &format!("sink::since {}", sink_id),
                     Arc::new(from_relation_desc),
                     Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: sink_id.to_string(),
+                        handle_purpose: format!("sink::since {}", sink_id),
+                    },
                 )
                 .await
                 .expect("opening reader for shard");
@@ -604,12 +602,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
         match async_response {
-            AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper(
+            AsyncStorageWorkerResponse::FrontiersUpdated {
                 id,
                 ingestion_description,
-                resumption_frontier,
-                source_resumption_frontier,
-            ) => {
+                as_of,
+                resume_uppers,
+                source_resume_uppers,
+            } => {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
@@ -621,8 +620,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
                     id,
                     ingestion_description,
-                    resumption_frontier,
-                    source_resumption_frontier,
+                    as_of,
+                    resume_uppers,
+                    source_resume_uppers,
                 });
             }
         }
@@ -669,7 +669,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
-                        async_worker.calculate_resume_upper(id, ingestion_description);
+                        async_worker.update_frontiers(id, ingestion_description);
                     }
 
                     // Continue with other commands.
@@ -718,20 +718,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
                 ingestion_description,
-                resumption_frontier,
-                source_resumption_frontier,
+                as_of,
+                resume_uppers,
+                source_resume_uppers,
             } => {
                 info!(
-                    "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
+                    ?as_of,
+                    ?resume_uppers,
+                    "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                    resumption_frontier
                 );
-
-                // An empty resume upper means that we can never write down any
-                // more data for this ingestion. We therefore don't render a
-                // dataflow for it.
-                let is_closed = resumption_frontier.is_empty();
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     // This is a separate line cause rustfmt :(
@@ -757,11 +754,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .source_uppers
                         .entry(id.clone())
                         .or_insert_with(|| {
-                            Rc::new(RefCell::new(if is_closed {
-                                Antichain::new()
-                            } else {
-                                Antichain::from_elem(mz_repr::Timestamp::minimum())
-                            }))
+                            Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())))
                         });
 
                     let mut source_upper = source_upper.borrow_mut();
@@ -771,16 +764,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
-                if !is_closed {
-                    crate::render::build_ingestion_dataflow(
-                        self.timely_worker,
-                        &mut self.storage_state,
-                        ingestion_id,
-                        ingestion_description,
-                        resumption_frontier,
-                        source_resumption_frontier,
-                    );
-                }
+                crate::render::build_ingestion_dataflow(
+                    self.timely_worker,
+                    &mut self.storage_state,
+                    ingestion_id,
+                    ingestion_description,
+                    as_of,
+                    resume_uppers,
+                    source_resume_uppers,
+                );
             }
             InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
                 info!(
@@ -855,9 +847,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
             }
-            InternalStorageCommand::UpdateConfiguration(pg, rocksdb) => {
-                self.storage_state.dataflow_parameters.update(pg, rocksdb)
-            }
+            InternalStorageCommand::UpdateConfiguration {
+                pg,
+                rocksdb,
+                storage_dataflow_max_inflight_bytes,
+                auto_spill_config,
+            } => self.storage_state.dataflow_parameters.update(
+                pg,
+                rocksdb,
+                auto_spill_config,
+                storage_dataflow_max_inflight_bytes,
+            ),
         }
     }
 
@@ -1155,15 +1155,24 @@ impl StorageState {
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
+                params.tracing.apply(self.tracing_handle.as_ref());
+
+                if let Some(log_filter) = &params.tracing.log_filter {
+                    self.connection_context.librdkafka_log_level =
+                        mz_ore::tracing::crate_level(&log_filter.clone().into(), "librdkafka");
+                }
 
                 // This needs to be broadcast by one worker and go through
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
-                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
-                        params.pg_replication_timeouts,
-                        params.upsert_rocksdb_tuning_config,
-                    ))
+                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
+                        pg: params.pg_replication_timeouts,
+                        rocksdb: params.upsert_rocksdb_tuning_config,
+                        storage_dataflow_max_inflight_bytes: params
+                            .storage_dataflow_max_inflight_bytes,
+                        auto_spill_config: params.upsert_auto_spill_config,
+                    })
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {
@@ -1205,7 +1214,7 @@ impl StorageState {
                     // ingestion in the local storage state. This is something we might have
                     // interest in fixing in the future, e.g. #19907
                     if worker_index == 0 {
-                        async_worker.calculate_resume_upper(id, description);
+                        async_worker.update_frontiers(id, description);
                     }
                 }
             }
@@ -1274,10 +1283,16 @@ impl StorageState {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //
                         // This handler removes state that is put in place by
-                        // the handler for `CreateSources`/`CreateSinks`, while
+                        // the handler for `RunIngestions`/`CreateSinks`, while
                         // the handler for the internal command does the same
                         // for the state put in place by its corresponding
                         // creation command.
+
+                        // Cleanup exports and ingestions immediately to ensure
+                        // they are not re-rendered in the case of
+                        // reconciliation.
+                        self.exports.remove(&id);
+                        self.ingestions.remove(&id);
 
                         // This will stop reporting of frontiers.
                         self.reported_frontiers.remove(&id);

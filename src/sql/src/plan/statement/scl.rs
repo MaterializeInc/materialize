@@ -164,11 +164,12 @@ pub fn describe_declare(
 
 pub fn plan_declare(
     _: &StatementContext,
-    DeclareStatement { name, stmt }: DeclareStatement<Aug>,
+    DeclareStatement { name, stmt, sql }: DeclareStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
         stmt: *stmt,
+        sql,
     }))
 }
 
@@ -234,7 +235,7 @@ pub fn describe_prepare(
 
 pub fn plan_prepare(
     scx: &StatementContext,
-    PrepareStatement { name, stmt }: PrepareStatement<Aug>,
+    PrepareStatement { name, stmt, sql }: PrepareStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
@@ -244,6 +245,7 @@ pub fn plan_prepare(
         name: name.to_string(),
         stmt: *stmt,
         desc,
+        sql,
     }))
 }
 

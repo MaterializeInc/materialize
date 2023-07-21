@@ -20,7 +20,8 @@
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
+use mz_sql::names::{ResolvedIds, SystemObjectId};
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
@@ -38,9 +39,18 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
-    let depends_on = match plan {
-        Plan::Select(plan) => plan.source.depends_on(),
-        Plan::Subscribe(plan) => plan.from.depends_on(),
+    let (depends_on, could_run_expensive_function) = match plan {
+        Plan::Select(plan) => (
+            plan.source.depends_on(),
+            plan.source.could_run_expensive_function(),
+        ),
+        Plan::Subscribe(plan) => (
+            plan.from.depends_on(),
+            match &plan.from {
+                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
+            },
+        ),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -83,6 +93,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterIndexResetOptions(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
@@ -105,6 +116,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_)
+        | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
 
@@ -118,10 +130,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         return TargetCluster::Active;
     }
 
-    // Check to make sure our iterator contains atleast one element, this prevents us
-    // from always running empty queries on the mz_introspection cluster.
+    // These dependencies are just existing dataflows that are referenced in the plan.
     let mut depends_on = depends_on.into_iter().peekable();
-    let non_empty = depends_on.peek().is_some();
+    let has_dependencies = depends_on.peek().is_some();
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a
     // per-replica object, that requires being run a specific replica.
@@ -135,7 +146,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         system_only && non_replica
     });
 
-    if non_empty && valid_dependencies {
+    if (has_dependencies && valid_dependencies)
+        || (!has_dependencies && !could_run_expensive_function)
+    {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
@@ -211,7 +224,7 @@ pub fn user_privilege_hack(
     catalog: &impl SessionCatalog,
     session: &Session,
     plan: &Plan,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
     if session.user().name != MZ_INTROSPECTION_ROLE.name {
         return Ok(());
@@ -250,7 +263,8 @@ pub fn user_privilege_hack(
         | Plan::Prepare(_)
         | Plan::Execute(_)
         | Plan::Deallocate(_)
-        | Plan::SideEffectingFunc(_) => {}
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(_) => {}
 
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
@@ -281,6 +295,7 @@ pub fn user_privilege_hack(
         | Plan::AlterRole(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
@@ -306,15 +321,14 @@ pub fn user_privilege_hack(
         }
     }
 
-    for id in depends_on {
+    for id in &resolved_ids.0 {
         let item = catalog.get_item(id);
         let full_name = catalog.resolve_full_name(item.name());
         if !catalog.is_system_schema(&full_name.schema) {
+            let object_description =
+                ErrorMessageObjectDescription::from_id(&SystemObjectId::Object(id.into()), catalog);
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
-                    object_type: item.item_type().into(),
-                    object_name: full_name.to_string(),
-                },
+                rbac::UnauthorizedError::Privilege { object_description },
             ));
         }
     }

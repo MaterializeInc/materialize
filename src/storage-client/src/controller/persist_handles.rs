@@ -128,10 +128,24 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 
                     futs.push(async move {
                         let epoch = since_handle.opaque().clone();
-                        let result = since_handle
-                            .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
-                            .instrument(span)
-                            .await;
+
+                        let result = if since.is_empty() {
+                            // A shard's since reaching the empty frontier is a prereq for being
+                            // able to finalize a shard, so the final downgrade should never be
+                            // rate-limited.
+                            Some(
+                                since_handle
+                                    .compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                    .instrument(span)
+                                    .await,
+                            )
+                        } else {
+                            since_handle
+                                .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                .instrument(span)
+                                .await
+                        };
+
                         if let Some(Err(other_epoch)) = result {
                             mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
                         }
@@ -568,7 +582,7 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{RelationDesc, Row};
 
@@ -590,15 +604,19 @@ mod tests {
         .unwrap();
         let shard_id = ShardId::new();
         let since_handle = client
-            .open_critical_since(shard_id, PersistClient::CONTROLLER_CRITICAL_SINCE, "test")
+            .open_critical_since(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics::for_tests(),
+            )
             .await
             .unwrap();
         let mut write_handle = client
             .open_writer::<SourceData, (), u64, i64>(
                 shard_id,
-                "test",
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .unwrap();

@@ -97,7 +97,7 @@ use timely::progress::Timestamp;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
@@ -228,6 +228,34 @@ impl ShardId {
     }
 }
 
+/// Additional diagnostic information used within Persist
+/// e.g. for logging, metric labels, etc.
+#[derive(Clone, Debug)]
+pub struct Diagnostics {
+    /// A user-friendly name for the shard.
+    pub shard_name: String,
+    /// A purpose for the handle.
+    pub handle_purpose: String,
+}
+
+impl Diagnostics {
+    /// Create a new `Diagnostics` from `handle_purpose`.
+    pub fn from_purpose(handle_purpose: &str) -> Self {
+        Self {
+            shard_name: "unknown".to_string(),
+            handle_purpose: handle_purpose.to_string(),
+        }
+    }
+
+    /// Create a new `Diagnostics` for testing.
+    pub fn for_tests() -> Self {
+        Self {
+            shard_name: "test-shard-name".to_string(),
+            handle_purpose: "test-purpose".to_string(),
+        }
+    }
+}
+
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
 ///
@@ -242,9 +270,10 @@ impl ShardId {
 /// # let client: mz_persist_client::PersistClient = unimplemented!();
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
+/// # let diagnostics = mz_persist_client::Diagnostics { shard_name: "".into(), handle_purpose: "".into() };
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id, "desc",
-///     Arc::new(StringSchema),Arc::new(StringSchema))).await
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id,
+///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics)).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
@@ -253,7 +282,7 @@ pub struct PersistClient {
     blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
-    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    isolated_runtime: Arc<IsolatedRuntime>,
     shared_states: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
 }
@@ -269,7 +298,7 @@ impl PersistClient {
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, ExternalError> {
@@ -280,7 +309,7 @@ impl PersistClient {
             blob,
             consensus,
             metrics,
-            cpu_heavy_runtime,
+            isolated_runtime,
             shared_states,
             pubsub_sender,
         })
@@ -307,9 +336,9 @@ impl PersistClient {
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -320,12 +349,12 @@ impl PersistClient {
         Ok((
             self.open_writer(
                 shard_id,
-                purpose,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
+                diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, purpose, key_schema, val_schema)
+            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics)
                 .await?,
         ))
     }
@@ -342,9 +371,9 @@ impl PersistClient {
     pub async fn open_leased_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -365,16 +394,18 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
-                purpose,
+                &diagnostics.handle_purpose,
                 self.cfg.reader_lease_duration,
                 heartbeat_ts,
             )
@@ -411,6 +442,7 @@ impl PersistClient {
         shard_id: ShardId,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -424,7 +456,10 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
         );
-        let shard_metrics = self.metrics.shards.shard(&shard_id);
+        let shard_metrics = self
+            .metrics
+            .shards
+            .shard(&shard_id, &diagnostics.shard_name);
 
         // This call ensures that the types match what was used when creating
         // the shard or puts in place the types that we expect for future
@@ -498,7 +533,7 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
-        purpose: &str,
+        diagnostics: Diagnostics,
     ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -520,12 +555,14 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
-            .register_critical_reader::<O>(&reader_id, purpose)
+            .register_critical_reader::<O>(&reader_id, &diagnostics.handle_purpose)
             .await;
         maintenance.start_performing(&machine, &gc);
         let handle = SinceHandle::new(
@@ -551,9 +588,9 @@ impl PersistClient {
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -574,9 +611,11 @@ impl PersistClient {
             Arc::new(state_versions),
             Arc::clone(&self.shared_states),
             Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
         let schemas = Schemas {
             key: key_schema,
@@ -586,7 +625,7 @@ impl PersistClient {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
-                Arc::clone(&self.cpu_heavy_runtime),
+                Arc::clone(&self.isolated_runtime),
                 writer_id.clone(),
                 schemas.clone(),
                 gc.clone(),
@@ -596,7 +635,7 @@ impl PersistClient {
         let (shard_upper, _, maintenance) = machine
             .register_writer(
                 &writer_id,
-                purpose,
+                &diagnostics.handle_purpose,
                 self.cfg.writer_lease_duration,
                 heartbeat_ts,
             )
@@ -609,7 +648,7 @@ impl PersistClient {
             gc,
             compact,
             Arc::clone(&self.blob),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             writer_id,
             schemas,
             shard_upper.0,
@@ -665,9 +704,9 @@ impl PersistClient {
     {
         self.open(
             shard_id,
-            "tests",
             Arc::new(K::Schema::default()),
             Arc::new(V::Schema::default()),
+            Diagnostics::for_tests(),
         )
         .await
         .expect("codec mismatch")
@@ -853,7 +892,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn sanity_check() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -913,36 +951,36 @@ mod tests {
         let mut write1 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut read1 = client
             .open_leased_reader::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut read2 = client
             .open_leased_reader::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut write2 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
@@ -957,6 +995,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn invalid_usage() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -991,9 +1030,9 @@ mod tests {
                 client
                     .open::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1006,9 +1045,9 @@ mod tests {
                 client
                     .open::<String, Vec<u8>, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(VecU8Schema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1021,9 +1060,9 @@ mod tests {
                 client
                     .open::<String, String, i64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1036,9 +1075,9 @@ mod tests {
                 client
                     .open::<String, String, u64, u64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1055,9 +1094,9 @@ mod tests {
                 client
                     .open_leased_reader::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1070,9 +1109,9 @@ mod tests {
                 client
                     .open_writer::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1401,7 +1440,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1786,7 +1824,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn concurrency() {
         let data = DataGenerator::small();
 
@@ -1884,7 +1922,6 @@ mod tests {
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_blocking_reads() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -1956,7 +1993,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
@@ -2018,6 +2054,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());

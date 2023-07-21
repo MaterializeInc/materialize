@@ -28,6 +28,8 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration consensus_tcp_user_timeout = 12;
     optional uint64 rollup_threshold = 13;
     optional uint64 blob_cache_mem_limit_bytes = 14;
+    mz_proto.ProtoDuration consensus_connection_pool_ttl = 15;
+    mz_proto.ProtoDuration consensus_connection_pool_ttl_stagger = 16;
 }
 
 message ProtoRetryParameters {

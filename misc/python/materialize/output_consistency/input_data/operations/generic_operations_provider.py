@@ -31,7 +31,7 @@ GENERIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 GENERIC_OPERATION_TYPES.append(
     DbFunction(
-        "GREATEST",
+        "greatest",
         [
             NumericOperationParam(),
             NumericOperationParam(optional=True),
@@ -42,7 +42,7 @@ GENERIC_OPERATION_TYPES.append(
 )
 GENERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LEAST",
+        "least",
         [
             NumericOperationParam(),
             NumericOperationParam(optional=True),
@@ -56,5 +56,26 @@ GENERIC_OPERATION_TYPES.append(
         "CASE WHEN $ THEN $ ELSE $ END",
         [BooleanOperationParam(), AnyOperationParam(), AnyLikeOtherOperationParam(1)],
         DynamicReturnTypeSpec(param_index_to_take_type=1),
+    )
+)
+GENERIC_OPERATION_TYPES.append(
+    DbFunction(
+        "coalesce",
+        [
+            AnyOperationParam(),
+            AnyLikeOtherOperationParam(0, optional=True),
+            AnyLikeOtherOperationParam(0, optional=True),
+        ],
+        DynamicReturnTypeSpec(param_index_to_take_type=0),
+    )
+)
+GENERIC_OPERATION_TYPES.append(
+    DbFunction(
+        "nullif",
+        [
+            AnyOperationParam(),
+            AnyLikeOtherOperationParam(0),
+        ],
+        DynamicReturnTypeSpec(param_index_to_take_type=0),
     )
 )

@@ -349,7 +349,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGE
 ----
 Explained Query:
   Project (#2, #3) // { types: "(text[]?, text[]?)" }
-    Map (regexp_match[aaa](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
+    Map (regexp_match["aaa", case_insensitive=false](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
       Get materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
@@ -363,7 +363,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT SPLIT_PART(col_not_null, 'a', 100), SPL
 ----
 Explained Query:
   Project (#2..=#4) // { types: "(text, text, text)" }
-    Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", integer_to_bigint(text_to_integer(#1)))) // { types: "(text?, text, text, text, text)" }
+    Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", text_to_integer(#1))) // { types: "(text?, text, text, text, text)" }
       Get materialize.public.str_table // { types: "(text?, text)" }
 
 EOF

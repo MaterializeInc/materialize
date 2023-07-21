@@ -104,6 +104,7 @@ use mz_ore::collections::HashMap;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
@@ -314,7 +315,7 @@ pub(crate) fn render<G>(
     storage_state: &mut StorageState,
     metrics: SourcePersistSinkMetrics,
     output_index: usize,
-) -> Rc<dyn Any>
+) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -342,7 +343,7 @@ where
         storage_state,
     );
 
-    let append_token = append_batches(
+    let (upper_stream, append_token) = append_batches(
         scope,
         collection_id.clone(),
         operator_name,
@@ -355,7 +356,10 @@ where
         metrics,
     );
 
-    Rc::new((mint_token, write_token, append_token))
+    (
+        upper_stream,
+        Rc::new((mint_token, write_token, append_token)),
+    )
 }
 
 /// Whenever the frontier advances, this mints a new batch description (lower
@@ -445,12 +449,15 @@ where
             let write = persist_client
                 .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                     shard_id,
-                    &format!(
-                        "compute::persist_sink::mint_batch_descriptions {}",
-                        collection_id
-                    ),
                     Arc::new(target_relation_desc),
                     Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: collection_id.to_string(),
+                        handle_purpose: format!(
+                            "compute::persist_sink::mint_batch_descriptions {}",
+                            collection_id
+                        ),
+                    },
                 )
                 .await
                 .expect("could not open persist shard");
@@ -603,9 +610,12 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                 shard_id,
-                &format!("compute::persist_sink::write_batches {}", collection_id),
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: collection_id.to_string(),
+                    handle_purpose: format!("compute::persist_sink::write_batches {}", collection_id),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -894,7 +904,7 @@ fn append_batches<G>(
     storage_state: &mut StorageState,
     output_index: usize,
     metrics: SourcePersistSinkMetrics,
-) -> Rc<dyn Any>
+) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -933,12 +943,18 @@ where
         .expect("statistics initialized")
         .clone();
 
+    // An output whose frontier tracks the last successful compare and append of this operator
+    let (_upper_output, upper_stream) = append_op.new_output_connection(vec![Antichain::new(); 2]);
+
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |_| async move {
+    let shutdown_button = append_op.build(move |caps| async move {
+        let [upper_cap]: [_; 1] = caps.try_into().unwrap();
+        let mut upper_capset = CapabilitySet::from_elem(upper_cap);
+
         // This may SEEM unnecessary, but metrics contains extra
         // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
         // closure otherwise, dropping and destroying
@@ -981,9 +997,12 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                 shard_id,
-                &format!("persist_sink::append_batches {}", collection_id),
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name:collection_id.to_string(),
+                    handle_purpose: format!("persist_sink::append_batches {}", collection_id)
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -996,6 +1015,7 @@ where
         // shared upper. All other workers have already cleared this
         // upper above.
         current_upper.borrow_mut().clone_from(write.upper());
+        upper_capset.downgrade(current_upper.borrow().elements());
         source_statistics.initialize_snapshot_committed(write.upper());
 
         // The current input frontiers.
@@ -1213,6 +1233,7 @@ where
                 match result {
                     Ok(()) => {
                         current_upper.borrow_mut().clone_from(&batch_upper);
+                        upper_capset.downgrade(current_upper.borrow().elements());
                     }
                     Err(mismatch) => {
                         // _Best effort_ Clean up in case we didn't manage to append the
@@ -1234,5 +1255,5 @@ where
         }
     });
 
-    Rc::new(shutdown_button.press_on_drop())
+    (upper_stream, Rc::new(shutdown_button.press_on_drop()))
 }

@@ -59,10 +59,10 @@ pub const RECURSION_LIMIT: usize = 2048;
 
 /// A trait for types that describe how to build a collection.
 pub trait CollectionPlan {
-    /// Appends global identifiers on which this plan depends to `out`.
+    /// Collects the set of global identifiers from dataflows referenced in Get.
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>);
 
-    /// Returns the global identifiers on which this plan depends.
+    /// Returns the set of global identifiers from dataflows referenced in Get.
     ///
     /// See [`CollectionPlan::depends_on_into`] to reuse an existing `BTreeSet`.
     fn depends_on(&self) -> BTreeSet<GlobalId> {
@@ -1784,6 +1784,39 @@ impl MirRelationExpr {
         dfs(self, &mut size, &mut max_depth, 1);
         (size, max_depth)
     }
+
+    /// Returns whether a expression can run an expensive function. We err on returning false.
+    /// The goal is to be a heuristic for "this expression is cheap to evaluate:
+    /// ideally not creating a dataflow at all when optimized".
+    pub fn could_run_expensive_function(&self) -> bool {
+        /// Returns whether a scalar expression can run an expensive function
+        fn scalar_could_run_expensive_function(scalar: &MirScalarExpr) -> bool {
+            match scalar {
+                MirScalarExpr::Column(_)
+                | MirScalarExpr::Literal(_, _)
+                | MirScalarExpr::CallUnmaterializable(_) => false,
+                MirScalarExpr::CallUnary { .. }
+                | MirScalarExpr::CallBinary { .. }
+                | MirScalarExpr::CallVariadic { .. } => true,
+                MirScalarExpr::If { cond, then, els } => {
+                    scalar_could_run_expensive_function(cond)
+                        || scalar_could_run_expensive_function(then)
+                        || scalar_could_run_expensive_function(els)
+                }
+            }
+        }
+
+        // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
+        let mut result = match self {
+            MirRelationExpr::FlatMap { .. } => true,
+            _ => false,
+        };
+        self.visit_scalars(&mut |scalar| {
+            result = result || scalar_could_run_expensive_function(scalar)
+        });
+        self.visit_children(|e| result = result || e.could_run_expensive_function());
+        result
+    }
 }
 
 // `LetRec` helpers
@@ -2739,6 +2772,8 @@ pub struct JoinInputCharacteristics {
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
     /// We want to prefer input earlier in the input list, for stability of ordering.
@@ -2751,6 +2786,7 @@ impl JoinInputCharacteristics {
         unique_key: bool,
         key_length: usize,
         arranged: bool,
+        cardinality: Option<usize>,
         filters: FilterCharacteristics,
         input: usize,
     ) -> Self {
@@ -2758,6 +2794,7 @@ impl JoinInputCharacteristics {
             unique_key,
             key_length,
             arranged,
+            cardinality: cardinality.map(std::cmp::Reverse),
             filters,
             input: std::cmp::Reverse(input),
         }
@@ -2774,6 +2811,9 @@ impl JoinInputCharacteristics {
         }
         if self.arranged {
             e.push_str("A");
+        }
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
         }
         e.push_str(&self.filters.explain());
         e
@@ -3260,6 +3300,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
             assert!(actual.is_ok());

@@ -115,13 +115,28 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
+    /// Dumps the stash contents to stdout in a human readable format.
+    /// Includes JSON for each key and value that can be hand edited and
+    /// then passed to the `edit` or `delete` commands.
     Dump {
+        /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
+    /// Edits a single item in a collection in the stash.
     Edit {
+        /// The name of the stash collection to edit.
         collection: String,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        /// The JSON-encoded key that identifies the item to edit.
+        key: serde_json::Value,
+        /// The new JSON-encoded value for the item.
+        value: serde_json::Value,
+    },
+    /// Deletes a single item in a collection in the stash
+    Delete {
+        /// The name of the stash collection to edit.
+        collection: String,
+        /// The JSON-encoded key that identifies the item to delete.
+        key: serde_json::Value,
     },
     /// Checks if the specified stash could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
@@ -173,6 +188,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let stash = factory.open(args.postgres_url, None, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
+        Action::Delete { collection, key } => {
+            // delete needs a mutable stash, so reconnect.
+            let stash = factory.open(args.postgres_url, None, tls).await?;
+            delete(stash, usage, collection, key).await
+        }
         Action::UpgradeCheck {
             cluster_replica_sizes,
         } => {
@@ -191,18 +211,27 @@ async fn edit(
     mut stash: Stash,
     usage: Usage,
     collection: String,
-    key: Vec<u8>,
-    value: Vec<u8>,
+    key: serde_json::Value,
+    value: serde_json::Value,
 ) -> Result<(), anyhow::Error> {
     let prev = usage.edit(&mut stash, collection, key, value).await?;
     println!("previous value: {:?}", prev);
     Ok(())
 }
 
+async fn delete(
+    mut stash: Stash,
+    usage: Usage,
+    collection: String,
+    key: serde_json::Value,
+) -> Result<(), anyhow::Error> {
+    usage.delete(&mut stash, collection, key).await?;
+    Ok(())
+}
+
 async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<(), anyhow::Error> {
     let data = usage.dump(&mut stash).await?;
-    write!(&mut target, "{data:#?}")?;
-    write!(&mut target, "\n")?;
+    writeln!(&mut target, "{data:#?}")?;
     Ok(())
 }
 async fn upgrade_check(
@@ -213,6 +242,69 @@ async fn upgrade_check(
     let msg = usage.upgrade_check(stash, cluster_replica_sizes).await?;
     println!("{msg}");
     Ok(())
+}
+
+macro_rules! for_collections {
+    ($usage:expr, $macro:ident) => {
+        match $usage {
+            Usage::Catalog => {
+                $macro!(catalog::AUDIT_LOG_COLLECTION);
+                $macro!(catalog::CLUSTER_COLLECTION);
+                $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
+                $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
+                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::DATABASES_COLLECTION);
+                $macro!(catalog::DEFAULT_PRIVILEGES_COLLECTION);
+                $macro!(catalog::ID_ALLOCATOR_COLLECTION);
+                $macro!(catalog::ITEM_COLLECTION);
+                $macro!(catalog::ROLES_COLLECTION);
+                $macro!(catalog::SCHEMAS_COLLECTION);
+                $macro!(catalog::SETTING_COLLECTION);
+                $macro!(catalog::STORAGE_USAGE_COLLECTION);
+                $macro!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
+                $macro!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
+                $macro!(catalog::SYSTEM_PRIVILEGES_COLLECTION);
+                $macro!(catalog::TIMESTAMP_COLLECTION);
+            }
+            Usage::Storage => {
+                $macro!(storage::METADATA_COLLECTION);
+                $macro!(storage::METADATA_EXPORT);
+            }
+        }
+    };
+}
+
+struct Dumped {
+    key: Box<dyn std::fmt::Debug>,
+    value: Box<dyn std::fmt::Debug>,
+    key_json: UnescapedDebug,
+    value_json: UnescapedDebug,
+    timestamp: mz_stash::Timestamp,
+    diff: mz_stash::Diff,
+}
+
+impl std::fmt::Debug for Dumped {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("")
+            .field("key", &self.key)
+            .field("value", &self.value)
+            .field("key_json", &self.key_json)
+            .field("value_json", &self.value_json)
+            .field("timestamp", &self.timestamp)
+            .field("diff", &self.diff)
+            .finish()
+    }
+}
+
+// We want to auto format things with debug, but also not print \ before the " in JSON values, so
+// implement our own debug that doesn't escape.
+struct UnescapedDebug(String);
+
+impl std::fmt::Debug for UnescapedDebug {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "'{}'", &self.0)
+    }
 }
 
 #[derive(Debug)]
@@ -272,44 +364,36 @@ impl Usage {
         )
     }
 
-    async fn dump(
-        &self,
-        stash: &mut Stash,
-    ) -> Result<BTreeMap<&str, Box<dyn std::fmt::Debug>>, anyhow::Error> {
+    async fn dump(&self, stash: &mut Stash) -> Result<BTreeMap<&str, Vec<Dumped>>, anyhow::Error> {
         let mut collections = Vec::new();
         let collection_names = BTreeSet::from_iter(stash.collections().await?.into_values());
         macro_rules! dump_col {
             ($col:expr) => {
                 // Collections might not yet exist.
                 if collection_names.contains($col.name()) {
-                    let values: Box<dyn std::fmt::Debug> = Box::new($col.iter(stash).await?);
+                    let values = $col.iter(stash).await?;
+                    let values = values
+                        .into_iter()
+                        .map(|((k, v), timestamp, diff)| {
+                            let key_json = serde_json::to_string(&k).expect("must serialize");
+                            let value_json = serde_json::to_string(&v).expect("must serialize");
+                            Dumped {
+                                key: Box::new(k),
+                                value: Box::new(v),
+                                key_json: UnescapedDebug(key_json),
+                                value_json: UnescapedDebug(value_json),
+                                timestamp,
+                                diff,
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     collections.push(($col.name(), values));
                 }
             };
         }
 
-        match self {
-            Usage::Catalog => {
-                dump_col!(catalog::CONFIG_COLLECTION);
-                dump_col!(catalog::ID_ALLOCATOR_COLLECTION);
-                dump_col!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
-                dump_col!(catalog::CLUSTER_COLLECTION);
-                dump_col!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
-                dump_col!(catalog::CLUSTER_REPLICA_COLLECTION);
-                dump_col!(catalog::DATABASES_COLLECTION);
-                dump_col!(catalog::SCHEMAS_COLLECTION);
-                dump_col!(catalog::ITEM_COLLECTION);
-                dump_col!(catalog::ROLES_COLLECTION);
-                dump_col!(catalog::TIMESTAMP_COLLECTION);
-                dump_col!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
-                dump_col!(catalog::AUDIT_LOG_COLLECTION);
-                dump_col!(catalog::STORAGE_USAGE_COLLECTION);
-            }
-            Usage::Storage => {
-                dump_col!(storage::METADATA_COLLECTION);
-                dump_col!(storage::METADATA_EXPORT);
-            }
-        }
+        for_collections!(self, dump_col);
+
         let data = BTreeMap::from_iter(collections);
         let data_names = BTreeSet::from_iter(data.keys().map(|k| k.to_string()));
         if data_names != self.names() {
@@ -329,46 +413,45 @@ impl Usage {
         &self,
         stash: &mut Stash,
         collection: String,
-        key: Vec<u8>,
-        value: Vec<u8>,
-    ) -> Result<(), anyhow::Error> {
+        key: serde_json::Value,
+        value: serde_json::Value,
+    ) -> Result<serde_json::Value, anyhow::Error> {
         macro_rules! edit_col {
             ($col:expr) => {
                 if collection == $col.name() {
-                    let key = prost::Message::decode(&key[..])?;
-                    let value = prost::Message::decode(&value[..])?;
-                    let (_prev, _next) = $col
+                    let key = serde_json::from_value(key)?;
+                    let value = serde_json::from_value(value)?;
+                    let (prev, _next) = $col
                         .upsert_key(stash, key, move |_| {
                             Ok::<_, std::convert::Infallible>(value)
                         })
                         .await??;
+                    let prev = serde_json::to_value(&prev)?;
+                    return Ok(prev);
+                }
+            };
+        }
+        for_collections!(self, edit_col);
+        anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
+    }
+
+    async fn delete(
+        &self,
+        stash: &mut Stash,
+        collection: String,
+        key: serde_json::Value,
+    ) -> Result<(), anyhow::Error> {
+        macro_rules! delete_col {
+            ($col:expr) => {
+                if collection == $col.name() {
+                    let key = serde_json::from_value(key)?;
+                    let keys = BTreeSet::from([key]);
+                    $col.delete_keys(stash, keys).await?;
                     return Ok(());
                 }
             };
         }
-
-        match self {
-            Usage::Catalog => {
-                edit_col!(catalog::CONFIG_COLLECTION);
-                edit_col!(catalog::ID_ALLOCATOR_COLLECTION);
-                edit_col!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
-                edit_col!(catalog::CLUSTER_COLLECTION);
-                edit_col!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
-                edit_col!(catalog::CLUSTER_REPLICA_COLLECTION);
-                edit_col!(catalog::DATABASES_COLLECTION);
-                edit_col!(catalog::SCHEMAS_COLLECTION);
-                edit_col!(catalog::ITEM_COLLECTION);
-                edit_col!(catalog::ROLES_COLLECTION);
-                edit_col!(catalog::TIMESTAMP_COLLECTION);
-                edit_col!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
-                edit_col!(catalog::AUDIT_LOG_COLLECTION);
-                edit_col!(catalog::STORAGE_USAGE_COLLECTION);
-            }
-            Usage::Storage => {
-                edit_col!(storage::METADATA_COLLECTION);
-                edit_col!(storage::METADATA_EXPORT);
-            }
-        }
+        for_collections!(self, delete_col);
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }
 

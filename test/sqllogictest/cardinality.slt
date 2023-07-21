@@ -1,0 +1,197 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# TEST `EXPLAIN WITH(cardinality)`
+# (we test the stats themselves in the second half of this file)
+
+statement ok
+CREATE TABLE t (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t2 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE INDEX t_x ON t (x);
+
+statement ok
+CREATE INDEX tt_x ON t2 (x);
+
+statement ok
+CREATE TABLE cities (name TEXT NOT NULL, state TEXT NOT NULL, pop integer);
+
+statement ok
+CREATE TABLE states (state TEXT NOT NULL, pop integer);
+
+statement ok
+CREATE INDEX cities_name ON cities (name);
+
+statement ok
+CREATE INDEX cities_state ON cities (state);
+
+statement ok
+CREATE INDEX cities_name_and_state ON cities (name, state);
+
+statement ok
+CREATE INDEX state_state ON states (state);
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT DISTINCT x FROM t
+----
+Explained Query:
+  Distinct group_by=[#0] // { cardinality: "materialize.public.t" }
+    Project (#0) // { cardinality: "materialize.public.t" }
+      Get materialize.public.t // { cardinality: "materialize.public.t" }
+
+Used Indexes:
+  - materialize.public.t_x
+
+EOF
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT * FROM (SELECT DISTINCT ON(t.x) t.x, t.y FROM t) WHERE x = y
+----
+Explained Query:
+  Filter (#0 = #1) // { cardinality: "materialize.public.t * icard(#0)^1" }
+    TopK group_by=[#0] limit=1 // { cardinality: "materialize.public.t" }
+      Get materialize.public.t // { cardinality: "materialize.public.t" }
+
+Used Indexes:
+  - materialize.public.t_x
+
+EOF
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT name, cities.state FROM
+  cities JOIN states
+  ON cities.state = states.state
+  WHERE cities.pop > states.pop / 2;
+----
+Explained Query:
+  Project (#0, #1) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
+    Filter (#2 > (#4 / 2)) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
+      Join on=(#1 = #3) type=differential // { cardinality: "materialize.public.cities * materialize.public.states" }
+        ArrangeBy keys=[[#1]] // { cardinality: "materialize.public.cities" }
+          Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+        ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.states" }
+          Get materialize.public.states // { cardinality: "materialize.public.states" }
+
+Used Indexes:
+  - materialize.public.cities_state
+  - materialize.public.state_state
+
+EOF
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT MAX(t.y) FROM t JOIN t2 ON t.x = t2.x
+----
+Explained Query:
+  Return // { cardinality: "3" }
+    Union // { cardinality: "3" }
+      Get l0 // { cardinality: "1" }
+      Map (null) // { cardinality: "2" }
+        Union // { cardinality: "2" }
+          Negate // { cardinality: "1" }
+            Project () // { cardinality: "1" }
+              Get l0 // { cardinality: "1" }
+          Constant // { cardinality: "1" }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[max(#0)] // { cardinality: "1" }
+        Project (#1) // { cardinality: "materialize.public.t * materialize.public.t2" }
+          Join on=(#0 = #2) type=differential // { cardinality: "materialize.public.t * materialize.public.t2" }
+            ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t" }
+              Get materialize.public.t // { cardinality: "materialize.public.t" }
+            ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t2" }
+              Get materialize.public.t2 // { cardinality: "materialize.public.t2" }
+
+Used Indexes:
+  - materialize.public.t_x
+  - materialize.public.tt_x
+
+EOF
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (SELECT name FROM cities WHERE state = grp.state ORDER BY pop DESC NULLS LAST LIMIT 3);
+----
+Explained Query:
+  Project (#1, #0) // { cardinality: "materialize.public.cities" }
+    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 // { cardinality: "materialize.public.cities" }
+      Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+
+Used Indexes:
+  - materialize.public.cities_name
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cardinality_estimates = true
+----
+COMPLETE 0
+
+simple
+SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
+----
+COMPLETE 0
+
+statement ok
+INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t as l, t as r WHERE l.x = r.x;
+----
+Explained Query:
+  Return
+    Project (#0, #1, #0, #3)
+      Join on=(#0 = #2) type=differential
+        implementation
+          %0:l0[#0]KA|4| » %1:l0[#0]KA|4|
+        Get l0
+        Get l0
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_x
+
+EOF
+
+statement ok
+INSERT INTO t2 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 200)) AS l, (SELECT generate_series(1, 50)) AS r
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t, t2 WHERE t.x = t2.x;
+----
+Explained Query:
+  Project (#0, #1, #0, #3)
+    Join on=(#0 = #2) type=differential
+      implementation
+        %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t2
+
+Used Indexes:
+  - materialize.public.t_x
+  - materialize.public.tt_x
+
+EOF

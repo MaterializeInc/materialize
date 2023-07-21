@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> DROP CLUSTER IF EXISTS storage_cluster CASCADE;
+
 > CREATE CLUSTER storage_cluster REPLICAS (
     r1 (
       STORAGECTL ADDRESSES ['clusterd1:2100'],

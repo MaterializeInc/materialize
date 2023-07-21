@@ -156,62 +156,47 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 # Error checking
 #
 
-> CREATE CONNECTION no_such_host TO POSTGRES (
+! CREATE CONNECTION no_such_host TO POSTGRES (
     HOST 'no_such_postgres.mtrlz.com',
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_host"
-  FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
 
-> CREATE CONNECTION no_such_port TO POSTGRES (
+! CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
     PORT 65534,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_port"
-  FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:error connecting to server: Connection refused
 
-> CREATE CONNECTION no_such_user TO POSTGRES (
+! CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER no_such_user,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_user"
-  FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:password authentication failed for user "no_such_user"
 
 > CREATE SECRET badpass AS 'badpass'
-> CREATE CONNECTION no_such_password TO POSTGRES (
+! CREATE CONNECTION no_such_password TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET badpass
   )
-! CREATE SOURCE "no_such_password"
-  FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:password authentication failed for user "postgres"
 
-> CREATE CONNECTION no_such_dbname TO POSTGRES (
+! CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
     DATABASE no_such_dbname,
     USER postgres,
     PASSWORD SECRET pgpass
   )
-! CREATE SOURCE "no_such_dbname"
-  FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
-# TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:database "no_such_dbname" does not exist
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
@@ -290,7 +275,7 @@ true
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -303,10 +288,10 @@ $ unset-regex
 
 # Cannot drop subsources independent of primary source
 ! DROP SOURCE conflict_table
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 ! DROP SOURCE conflict_table CASCADE
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 > SELECT * FROM no_replica_identity;
 1
@@ -506,6 +491,27 @@ true
 true
 
 #
+# Ensure we can start a source with more workers than the default max_wal_senders param (10)
+#
+
+> CREATE SOURCE large_cluster
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES ("pk_table" AS large_cluster_pk_table)
+  WITH (SIZE = '16');
+
+> SELECT * FROM large_cluster_pk_table;
+13 three
+14 four
+2 two_two
+5 five
+
+# TODO: should only be 'running' w/ resolution of #20666
+> SELECT status = 'starting' OR status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+true
+
+> DROP SOURCE large_cluster;
+
+#
 # Remove all data on the Postgres side
 #
 
@@ -630,13 +636,27 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-> CREATE SOURCE enum_source
+! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
     TEXT COLUMNS [
       enum_table.a,
       public.another_enum_table."колона",
       pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+contains:TEXT COLUMNS can only refer to tables being added to source
+
+> CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона"
     ]
   )
   FOR TABLES (

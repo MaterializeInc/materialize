@@ -779,14 +779,15 @@ impl MirScalarExpr {
                             }
                         } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                             if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
-                                let flags = if *case_insensitive { "i" } else { "" };
-                                *e = match func::build_regex(row.unpack_first().unwrap_str(), flags)
-                                {
+                                *e = match Regex::new(
+                                    row.unpack_first().unwrap_str().to_string(),
+                                    *case_insensitive,
+                                ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
-                                        func::IsRegexpMatch(Regex(regex)),
+                                        func::IsRegexpMatch(regex),
                                     )),
                                     Err(err) => MirScalarExpr::literal(
-                                        Err(err),
+                                        Err(err.into()),
                                         e.typ(column_types).scalar_type,
                                     ),
                                 };
@@ -966,23 +967,6 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if let BinaryFunc::TimezoneTime { wall_time } = func {
-                            if expr1.is_literal() {
-                                let tz = expr1.as_literal_str().unwrap();
-                                *e = match parse_timezone(tz) {
-                                    Ok(tz) => MirScalarExpr::CallUnary {
-                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
-                                            tz,
-                                            wall_time: *wall_time,
-                                        }),
-                                        expr: Box::new(expr2.take()),
-                                    },
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err),
-                                        e.typ(column_types).scalar_type,
-                                    ),
-                                }
-                            }
                         } else if matches!(*func, BinaryFunc::Eq | BinaryFunc::NotEq)
                             && expr2 < expr1
                         {
@@ -1138,9 +1122,9 @@ impl MirScalarExpr {
                                 _ => "",
                             };
                             *e = match func::build_regex(needle, flags) {
-                                Ok(regex) => mem::take(exprs).into_first().call_unary(
-                                    UnaryFunc::RegexpMatch(func::RegexpMatch(Regex(regex))),
-                                ),
+                                Ok(regex) => mem::take(exprs)
+                                    .into_first()
+                                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(regex))),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
                                     e.typ(column_types).scalar_type,
@@ -1157,6 +1141,28 @@ impl MirScalarExpr {
                             // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
+                        } else if let VariadicFunc::TimezoneTime = func {
+                            if exprs[0].is_literal() && exprs[2].is_literal_ok() {
+                                let tz = exprs[0].as_literal_str().unwrap();
+                                *e = match parse_timezone(tz) {
+                                    Ok(tz) => MirScalarExpr::CallUnary {
+                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
+                                            tz,
+                                            wall_time: exprs[2]
+                                                .as_literal()
+                                                .unwrap()
+                                                .unwrap()
+                                                .unwrap_timestamptz()
+                                                .naive_utc(),
+                                        }),
+                                        expr: Box::new(exprs[1].take()),
+                                    },
+                                    Err(err) => MirScalarExpr::literal(
+                                        Err(err),
+                                        e.typ(column_types).scalar_type,
+                                    ),
+                                }
+                            }
                         }
                     }
                     MirScalarExpr::If { cond, then, els } => {
@@ -2099,6 +2105,33 @@ impl FilterCharacteristics {
     pub fn add_literal_equality(&mut self) {
         self.literal_equality = true;
     }
+
+    pub fn worst_case_scaling_factor(&self) -> f64 {
+        let mut factor = 1.0;
+
+        if self.literal_equality {
+            factor *= 0.1;
+        }
+
+        if self.is_null {
+            factor *= 0.1;
+        }
+
+        if self.literal_inequality >= 2 {
+            factor *= 0.25;
+        } else if self.literal_inequality == 1 {
+            factor *= 0.33;
+        }
+
+        // catch various negated filters, treat them pessimistically
+        if !(self.literal_equality || self.is_null || self.literal_inequality > 0)
+            && self.any_filter
+        {
+            factor *= 0.9;
+        }
+
+        factor
+    }
 }
 
 #[derive(
@@ -2243,6 +2276,7 @@ pub enum EvalError {
     // The error for ErrorIfNull; this should not be used in other contexts as a generic error
     // printer.
     IfNullError(String),
+    LengthTooLarge,
 }
 
 impl fmt::Display for EvalError {
@@ -2402,7 +2436,9 @@ impl fmt::Display for EvalError {
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
             EvalError::InvalidRange(e) => e.fmt(f),
             EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
-            EvalError::InvalidPrivileges(msg) => write!(f, "{msg}"),
+            EvalError::InvalidPrivileges(privilege) => {
+                write!(f, "unrecognized privilege type: {privilege}")
+            }
             EvalError::LetRecLimitExceeded(max_iters) => {
                 write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
                        max_iters)
@@ -2428,6 +2464,7 @@ impl fmt::Display for EvalError {
                 write!(f, "datediff overflow, {unit} of {a}, {b}")
             }
             EvalError::IfNullError(s) => f.write_str(s),
+            EvalError::LengthTooLarge => write!(f, "requested length too large"),
         }
     }
 }
@@ -2677,6 +2714,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 b: b.to_owned(),
             }),
             EvalError::IfNullError(s) => IfNullError(s.clone()),
+            EvalError::LengthTooLarge => LengthTooLarge(()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2793,6 +2831,7 @@ impl RustType<ProtoEvalError> for EvalError {
                     b: v.b,
                 }),
                 IfNullError(v) => Ok(EvalError::IfNullError(v)),
+                LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
@@ -2819,6 +2858,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2926,6 +2966,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2944,6 +2985,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

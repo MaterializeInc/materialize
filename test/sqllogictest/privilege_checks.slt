@@ -23,8 +23,20 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
+# Enable webhook sources.
+
 simple conn=mz_system,user=mz_system
-CREATE ROLE joe CREATEDB CREATECLUSTER;
+ALTER SYSTEM SET enable_webhook_sources TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE joe;
 ----
 COMPLETE 0
 
@@ -39,7 +51,7 @@ GRANT other TO joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE ROLE child CREATEDB CREATECLUSTER;
+CREATE ROLE child;
 ----
 COMPLETE 0
 
@@ -66,14 +78,14 @@ COMPLETE 0
 # CREATE CONNECTION
 
 simple conn=joe,user=joe
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -81,12 +93,12 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CONNECTION conn1 TO KAFKA (BROKER 'localhost:9092');
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -95,17 +107,81 @@ REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# CREATE DATABASE
+
+simple conn=joe,user=joe
+CREATE DATABASE d;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE DATABASE d;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE d;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE DATABASE d1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# CREATE CLUSTER
+
+simple conn=joe,user=joe
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
 # CREATE SCHEMA
 
 simple conn=joe,user=joe
 CREATE SCHEMA sch;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=child,user=child
 CREATE SCHEMA sch;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON DATABASE materialize TO joe;
@@ -127,20 +203,99 @@ REVOKE CREATE ON DATABASE materialize FROM joe;
 ----
 COMPLETE 0
 
+# CREATE ROLE
+
+simple conn=joe,user=joe
+CREATE ROLE r;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE ROLE r;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE ROLE r;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE ROLE r1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# ALTER ROLE
+
+simple conn=joe,user=joe
+ALTER ROLE r INHERIT;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+ALTER ROLE r1 INHERIT;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE r INHERIT;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+ALTER ROLE r1 INHERIT;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
 # CREATE SOURCE
 
 simple conn=joe,user=joe
 CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE SOURCE s3 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
 ----
 COMPLETE 0
 
@@ -162,12 +317,22 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE SOURCE s2 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
-db error: ERROR: permission denied for CLUSTER source_cluster
+db error: ERROR: permission denied for CLUSTER "source_cluster"
 
 simple conn=child,user=child
 CREATE SOURCE s2 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
-db error: ERROR: permission denied for CLUSTER source_cluster
+db error: ERROR: permission denied for CLUSTER "source_cluster"
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for CLUSTER "source_cluster"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for CLUSTER "source_cluster"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON CLUSTER source_cluster TO joe;
@@ -184,8 +349,33 @@ CREATE SOURCE s4 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -199,12 +389,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -231,12 +421,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE TYPE ty AS (a text);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 CREATE TYPE ty AS (a text);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -273,27 +463,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE TABLE t (a ty);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
 CREATE TABLE t (a ty);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE TABLE t (a ty);
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=child,user=child
-CREATE TABLE t (a ty);
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO PUBLIC;
@@ -302,6 +477,21 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE TABLE t (a ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE TABLE t (a ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -335,27 +525,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE VIEW v AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
 CREATE VIEW v AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE VIEW v AS SELECT ROW(1)::ty;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=child,user=child
-CREATE VIEW v AS SELECT ROW(1)::ty;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO PUBLIC;
@@ -364,6 +539,21 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE VIEW v AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE VIEW v AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -397,12 +587,32 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -412,35 +622,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON CLUSTER default TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO PUBLIC;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 
@@ -479,12 +669,32 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE INDEX i ON t (a::ty);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
 CREATE INDEX i ON t (a::ty);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -494,35 +704,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE INDEX i ON t (a::ty);
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 CREATE INDEX i ON t (a::ty);
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON CLUSTER default TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE INDEX i ON t (a::ty);
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=child,user=child
-CREATE INDEX i ON t (a::ty);
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO PUBLIC;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 
@@ -551,12 +741,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP CONNECTION conn;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP CONNECTION conn1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -578,17 +768,41 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# DROP DATABASE
+
+simple conn=joe,user=joe
+DROP DATABASE d;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP DATABASE d1;
+----
+COMPLETE 0
+
+# DROP CLUSTER
+
+simple conn=joe,user=joe
+DROP CLUSTER c;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP CLUSTER c1;
+----
+COMPLETE 0
+
 # DROP SCHEMA
 
 simple conn=joe,user=joe
 DROP SCHEMA sch;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=child,user=child
 DROP SCHEMA sch1;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON DATABASE materialize TO joe;
@@ -610,27 +824,54 @@ REVOKE USAGE ON DATABASE materialize FROM joe;
 ----
 COMPLETE 0
 
+# DROP ROLE
+
+simple conn=joe,user=joe
+DROP ROLE r;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+DROP ROLE r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE r;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP ROLE r1;
+----
+COMPLETE 0
+
 # DROP SOURCE
 
 simple conn=joe,user=joe
 DROP SOURCE s1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP SOURCE s3;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=joe,user=joe
 DROP SOURCE s2;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP SOURCE s4;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -667,12 +908,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP SECRET se;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP SECRET se1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -699,12 +940,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP INDEX i;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP INDEX i1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -731,12 +972,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP TABLE t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP TABLE t1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -763,12 +1004,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP VIEW v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP VIEW v1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -795,12 +1036,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP MATERIALIZED VIEW mv;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP MATERIALIZED VIEW mv1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -827,12 +1068,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DROP TYPE ty;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DROP TYPE ty1;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -864,12 +1105,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SHOW CREATE TABLE t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 SHOW CREATE TABLE t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -920,27 +1161,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=child,user=child
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
@@ -950,12 +1176,27 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+
+simple conn=child,user=child
+SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -965,12 +1206,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1042,12 +1283,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1057,12 +1298,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW materialize.public.v
+db error: ERROR: permission denied for VIEW "materialize.public.v"
 
 simple conn=child,user=child
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW materialize.public.v
+db error: ERROR: permission denied for VIEW "materialize.public.v"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE v TO joe;
@@ -1072,12 +1313,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO view_owner;
@@ -1087,12 +1328,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO view_owner;
@@ -1102,12 +1343,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1198,27 +1439,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
-
-simple conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE materialize.public.ty
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
@@ -1228,12 +1454,27 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+
+simple conn=child,user=child
+EXPLAIN SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -1290,12 +1531,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1305,12 +1546,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW materialize.public.v
+db error: ERROR: permission denied for VIEW "materialize.public.v"
 
 simple conn=child,user=child
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW materialize.public.v
+db error: ERROR: permission denied for VIEW "materialize.public.v"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE v TO joe;
@@ -1320,12 +1561,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO view_owner;
@@ -1335,12 +1576,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO view_owner;
@@ -1392,12 +1633,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1407,12 +1648,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT INSERT ON TABLE t TO joe;
@@ -1424,12 +1665,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1476,12 +1717,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1491,12 +1732,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT INSERT ON TABLE t TO joe;
@@ -1506,12 +1747,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -1521,12 +1762,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1551,12 +1792,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -1588,12 +1829,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1603,12 +1844,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT INSERT ON TABLE t TO joe;
@@ -1618,12 +1859,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -1633,12 +1874,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1665,12 +1906,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -1702,12 +1943,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1717,12 +1958,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT UPDATE ON TABLE t TO joe;
@@ -1732,12 +1973,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -1747,12 +1988,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1777,12 +2018,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -1814,12 +2055,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1829,12 +2070,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT UPDATE ON TABLE t TO joe;
@@ -1844,12 +2085,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -1859,12 +2100,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -1889,12 +2130,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -1926,12 +2167,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -1941,12 +2182,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT UPDATE ON TABLE t TO joe;
@@ -1956,12 +2197,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -1971,12 +2212,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -2001,12 +2242,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -2038,12 +2279,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -2053,12 +2294,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT DELETE ON TABLE t TO joe;
@@ -2068,12 +2309,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -2083,12 +2324,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -2113,12 +2354,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -2150,12 +2391,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -2165,12 +2406,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT DELETE ON TABLE t TO joe;
@@ -2180,12 +2421,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON TABLE t TO joe;
@@ -2195,12 +2436,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER default TO joe;
@@ -2225,12 +2466,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for TABLE materialize.public.t
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON TABLE t FROM joe;
@@ -2259,6 +2500,11 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
@@ -2274,18 +2520,8 @@ REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
-ALTER SOURCE s SET (SIZE = '4');
-----
-db error: ERROR: permission denied for SCHEMA materialize.public
-
-simple conn=child,user=child
-ALTER SOURCE s1 SET (SIZE = '4');
-----
-db error: ERROR: permission denied for SCHEMA materialize.public
-
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2310,7 +2546,7 @@ DROP SOURCE s1;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -2318,8 +2554,18 @@ COMPLETE 0
 
 ## Cluster
 
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -2353,7 +2599,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 ALTER CLUSTER REPLICA default.r2 OWNER TO other;
 ----
-db error: ERROR: permission denied for CLUSTER default
+db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON CLUSTER default TO joe;
@@ -2377,8 +2623,18 @@ COMPLETE 0
 
 ## Database
 
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE DATABASE db;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2412,7 +2668,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 ALTER SCHEMA materialize.sch OWNER TO other;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON DATABASE materialize TO joe;
@@ -2454,7 +2710,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 ALTER TABLE t OWNER TO other;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -2476,12 +2732,22 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
-# GRANT/REVOKE
+# GRANT/REVOKE privilege
 
 ## Cluster
 
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2502,8 +2768,18 @@ COMPLETE 0
 
 ## Database
 
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE DATABASE db;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
@@ -2537,7 +2813,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 GRANT CREATE, USAGE ON SCHEMA materialize.sch TO other;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON DATABASE materialize TO joe;
@@ -2557,7 +2833,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 REVOKE CREATE, USAGE ON SCHEMA materialize.sch FROM other;
 ----
-db error: ERROR: permission denied for DATABASE materialize
+db error: ERROR: permission denied for DATABASE "materialize"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON DATABASE materialize TO joe;
@@ -2594,7 +2870,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 GRANT INSERT, SELECT ON TABLE t TO other;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -2614,7 +2890,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 REVOKE INSERT, SELECT ON TABLE t FROM other;
 ----
-db error: ERROR: permission denied for SCHEMA materialize.public
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -2636,6 +2912,116 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+## System
+
+statement error You must be a superuser to GRANT/REVOKE SYSTEM PRIVILEGES
+GRANT CREATEDB ON SYSTEM TO joe
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+statement error You must be a superuser to GRANT/REVOKE SYSTEM PRIVILEGES
+REVOKE CREATEDB ON SYSTEM FROM joe
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
+
+# GRANT/REVOKE role
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r1
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r2
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r3
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT r1, r2 TO joe
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+GRANT r2 TO r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+GRANT r2 TO r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+GRANT r2 TO r1;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+GRANT r3 TO r1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+REVOKE r2 FROM r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+REVOKE r3 FROM r1;
+----
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+REVOKE r2 FROM r1;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+REVOKE r3 FROM r1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE r1, r2, r3;
+----
+COMPLETE 0
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system
@@ -2645,5 +3031,12 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+# Disable webhook sources.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources TO false;
 ----
 COMPLETE 0

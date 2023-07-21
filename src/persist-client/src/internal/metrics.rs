@@ -1159,143 +1159,143 @@ impl ShardsMetrics {
             since: registry.register(metric!(
                 name: "mz_persist_shard_since",
                 help: "since by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             upper: registry.register(metric!(
                 name: "mz_persist_shard_upper",
                 help: "upper by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             encoded_rollup_size: registry.register(metric!(
                 name: "mz_persist_shard_rollup_size_bytes",
                 help: "total encoded rollup size by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             encoded_diff_size: registry.register(metric!(
                 name: "mz_persist_shard_diff_size_bytes",
                 help: "total encoded diff size by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             hollow_batch_count: registry.register(metric!(
                 name: "mz_persist_shard_hollow_batch_count",
                 help: "count of hollow batches by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             spine_batch_count: registry.register(metric!(
                 name: "mz_persist_shard_spine_batch_count",
                 help: "count of spine batches by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             batch_part_count: registry.register(metric!(
                 name: "mz_persist_shard_batch_part_count",
                 help: "count of batch parts by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             update_count: registry.register(metric!(
                 name: "mz_persist_shard_update_count",
                 help: "count of updates by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             rollup_count: registry.register(metric!(
                 name: "mz_persist_shard_rollup_count",
                 help: "count of rollups by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             largest_batch_size: registry.register(metric!(
                 name: "mz_persist_shard_largest_batch_size",
                 help: "largest encoded batch size by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             seqnos_held: registry.register(metric!(
                 name: "mz_persist_shard_seqnos_held",
                 help: "maximum count of gc-ineligible states by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             seqnos_since_last_rollup: registry.register(metric!(
                 name: "mz_persist_shard_seqnos_since_last_rollup",
                 help: "count of seqnos since last rollup",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             gc_seqno_held_parts: registry.register(metric!(
                 name: "mz_persist_shard_gc_seqno_held_parts",
                 help: "count of parts referenced by some live state but not the current state (ie. parts kept only to satisfy seqno holds) at GC time",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             gc_live_diffs: registry.register(metric!(
                 name: "mz_persist_shard_gc_live_diffs",
                 help: "the number of diffs (or, alternatively, the number of seqnos) present in consensus state at GC time",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             gc_finished: registry.register(metric!(
                 name: "mz_persist_shard_gc_finished",
                 help: "count of garbage collections finished by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             compaction_applied: registry.register(metric!(
                 name: "mz_persist_shard_compaction_applied",
                 help: "count of compactions applied to state by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             cmd_succeeded: registry.register(metric!(
                 name: "mz_persist_shard_cmd_succeeded",
                 help: "count of commands succeeded by shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             usage_current_state_batches_bytes: registry.register(metric!(
                 name: "mz_persist_shard_usage_current_state_batches_bytes",
                 help: "data in batches/parts referenced by current version of state",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             usage_current_state_rollups_bytes: registry.register(metric!(
                 name: "mz_persist_shard_usage_current_state_rollups_bytes",
                 help: "data in rollups referenced by current version of state",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             usage_referenced_not_current_state_bytes: registry.register(metric!(
                 name: "mz_persist_shard_usage_referenced_not_current_state_bytes",
                 help: "data referenced only by a previous version of state",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             usage_not_leaked_not_referenced_bytes: registry.register(metric!(
                 name: "mz_persist_shard_usage_not_leaked_not_referenced_bytes",
                 help: "data written by an active writer but not referenced by any version of state",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             usage_leaked_bytes: registry.register(metric!(
                 name: "mz_persist_shard_usage_leaked_bytes",
                 help: "data reclaimable by a leaked blob detector",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             pubsub_push_diff_applied: registry.register(metric!(
                 name: "mz_persist_shard_pubsub_diff_applied",
                 help: "number of diffs received via pubsub that applied",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             pubsub_push_diff_not_applied_stale: registry.register(metric!(
                 name: "mz_persist_shard_pubsub_diff_not_applied_stale",
                 help: "number of diffs received via pubsub that did not apply due to staleness",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             pubsub_push_diff_not_applied_out_of_order: registry.register(metric!(
                 name: "mz_persist_shard_pubsub_diff_not_applied_out_of_order",
                 help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             blob_gets: registry.register(metric!(
                 name: "mz_persist_shard_blob_gets",
                 help: "number of Blob::get calls for this shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             blob_sets: registry.register(metric!(
                 name: "mz_persist_shard_blob_sets",
                 help: "number of Blob::set calls for this shard",
-                var_labels: ["shard"],
+                var_labels: ["shard", "name"],
             )),
             shards,
         }
     }
 
-    pub fn shard(&self, shard_id: &ShardId) -> Arc<ShardMetrics> {
+    pub fn shard(&self, shard_id: &ShardId, name: &str) -> Arc<ShardMetrics> {
         let mut shards = self.shards.lock().expect("mutex poisoned");
         if let Some(shard) = shards.get(shard_id) {
             if let Some(shard) = shard.upgrade() {
@@ -1304,7 +1304,7 @@ impl ShardsMetrics {
                 assert!(shards.remove(shard_id).is_some());
             }
         }
-        let shard = Arc::new(ShardMetrics::new(shard_id, self));
+        let shard = Arc::new(ShardMetrics::new(shard_id, name, self));
         assert!(shards
             .insert(shard_id.clone(), Arc::downgrade(&shard))
             .is_none());
@@ -1365,91 +1365,91 @@ pub struct ShardMetrics {
 }
 
 impl ShardMetrics {
-    pub fn new(shard_id: &ShardId, shards_metrics: &ShardsMetrics) -> Self {
+    pub fn new(shard_id: &ShardId, name: &str, shards_metrics: &ShardsMetrics) -> Self {
         let shard = shard_id.to_string();
         ShardMetrics {
             shard_id: *shard_id,
             since: shards_metrics
                 .since
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             upper: shards_metrics
                 .upper
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             latest_rollup_size: shards_metrics
                 .encoded_rollup_size
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             encoded_diff_size: shards_metrics
                 .encoded_diff_size
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             hollow_batch_count: shards_metrics
                 .hollow_batch_count
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             spine_batch_count: shards_metrics
                 .spine_batch_count
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             batch_part_count: shards_metrics
                 .batch_part_count
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             update_count: shards_metrics
                 .update_count
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             rollup_count: shards_metrics
                 .rollup_count
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             largest_batch_size: shards_metrics
                 .largest_batch_size
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             seqnos_held: shards_metrics
                 .seqnos_held
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             seqnos_since_last_rollup: shards_metrics
                 .seqnos_since_last_rollup
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             gc_seqno_held_parts: shards_metrics
                 .gc_seqno_held_parts
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             gc_live_diffs: shards_metrics
                 .gc_live_diffs
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             gc_finished: shards_metrics
                 .gc_finished
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             compaction_applied: shards_metrics
                 .compaction_applied
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             cmd_succeeded: shards_metrics
                 .cmd_succeeded
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             usage_current_state_batches_bytes: shards_metrics
                 .usage_current_state_batches_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             usage_current_state_rollups_bytes: shards_metrics
                 .usage_current_state_rollups_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             usage_referenced_not_current_state_bytes: shards_metrics
                 .usage_referenced_not_current_state_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             usage_not_leaked_not_referenced_bytes: shards_metrics
                 .usage_not_leaked_not_referenced_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_applied: shards_metrics
                 .pubsub_push_diff_applied
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_stale: shards_metrics
                 .pubsub_push_diff_not_applied_stale
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_out_of_order: shards_metrics
                 .pubsub_push_diff_not_applied_out_of_order
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             blob_gets: shards_metrics
                 .blob_gets
-                .get_delete_on_drop_counter(vec![shard.clone()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             blob_sets: shards_metrics
                 .blob_sets
-                .get_delete_on_drop_counter(vec![shard]),
+                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
         }
     }
 

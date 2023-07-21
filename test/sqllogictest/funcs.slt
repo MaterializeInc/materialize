@@ -1582,3 +1582,33 @@ query B
 SELECT pg_tablespace_location(0) IS NULL
 ----
 true
+
+query B
+SELECT pg_get_ruledef(0) IS NULL
+----
+true
+
+query I
+SELECT pg_relation_size('pg_views'::regclass)
+----
+-1
+
+query I
+SELECT pg_relation_size('pg_views'::regclass::oid)
+----
+-1
+
+query I
+SELECT pg_relation_size('pg_views'::regclass, 'main')
+----
+-1
+
+query I
+SELECT pg_relation_size('pg_views'::regclass::oid, 'main')
+----
+-1
+
+query I
+SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
+----
+-1

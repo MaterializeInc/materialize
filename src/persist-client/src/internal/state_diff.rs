@@ -32,7 +32,7 @@ use crate::internal::state::{
 use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
-use crate::{Metrics, PersistConfig};
+use crate::{Metrics, PersistConfig, ShardId};
 
 use StateFieldValDiff::*;
 
@@ -354,7 +354,13 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         self.seqno = diff_seqno_to;
         self.applier_version = diff_applier_version;
         self.walltime_ms = diff_walltime_ms;
-        force_apply_diffs_single("hostname", diff_hostname, &mut self.hostname)?;
+        force_apply_diffs_single(
+            &self.shard_id,
+            diff_seqno_to,
+            "hostname",
+            diff_hostname,
+            &mut self.hostname,
+        )?;
 
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
@@ -389,7 +395,10 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff_spine, trace)?;
+        if !diff_spine.is_empty() {
+            apply_diffs_spine(metrics, diff_spine, trace)?;
+            debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+        }
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
@@ -454,17 +463,21 @@ fn apply_diff_single<X: PartialEq + Debug>(
 //
 // TODO: delete this once `hostname` has zero mismatches
 fn force_apply_diffs_single<X: PartialEq + Debug>(
+    shard_id: &ShardId,
+    seqno: SeqNo,
     name: &str,
     diffs: Vec<StateFieldDiff<(), X>>,
     single: &mut X,
 ) -> Result<(), String> {
     for diff in diffs {
-        force_apply_diff_single(name, diff, single)?;
+        force_apply_diff_single(shard_id, seqno, name, diff, single)?;
     }
     Ok(())
 }
 
 fn force_apply_diff_single<X: PartialEq + Debug>(
+    shard_id: &ShardId,
+    seqno: SeqNo,
     name: &str,
     diff: StateFieldDiff<(), X>,
     single: &mut X,
@@ -473,8 +486,8 @@ fn force_apply_diff_single<X: PartialEq + Debug>(
         Update(from, to) => {
             if single != &from {
                 error!(
-                    "{} update didn't match: {:?} vs {:?}, continuing to force apply diff...",
-                    name, single, &from
+                    "{}: update didn't match: {:?} vs {:?}, continuing to force apply diff to {:?} for shard {} and seqno {}",
+                    name, single, &from, &to, shard_id, seqno
                 );
             }
             *single = to
@@ -1277,6 +1290,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn apply_lenient() {
         #[track_caller]
         fn testcase(
@@ -1338,7 +1352,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1366,7 +1380,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

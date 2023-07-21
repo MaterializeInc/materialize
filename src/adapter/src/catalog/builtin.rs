@@ -559,6 +559,28 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_NAME: BuiltinType<NameReference> = BuiltinType {
+    name: "name",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_NAME_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::PgLegacyName,
+        array_id: None,
+    },
+};
+
+pub const TYPE_NAME_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_name",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_NAME_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_NAME.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
     name: "numeric",
     schema: PG_CATALOG_SCHEMA,
@@ -1619,10 +1641,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("inherit", ScalarType::Bool.nullable(false))
-        .with_column("create_role", ScalarType::Bool.nullable(false))
-        .with_column("create_db", ScalarType::Bool.nullable(false))
-        .with_column("create_cluster", ScalarType::Bool.nullable(false)),
+        .with_column("inherit", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1697,7 +1716,8 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("managed", ScalarType::Bool.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("replication_factor", ScalarType::UInt32.nullable(true)),
+        .with_column("replication_factor", ScalarType::UInt32.nullable(true))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: false,
 });
 
@@ -1734,7 +1754,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -2130,17 +2151,12 @@ pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_object_transitive_dependencies AS
 WITH MUTUALLY RECURSIVE
-  base(id text, referenced_object_id text) AS (
+  reach(object_id text, referenced_object_id text) AS (
     SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
-  ),
-  reach(id text, referenced_object_id text) AS (
-    SELECT id, referenced_object_id FROM base
-    UNION ALL -- (TODO use UNION once #19817 is fixed)
-    SELECT id, referenced_object_id FROM reach
     UNION
-    SELECT r1.id, r2.referenced_object_id FROM reach r1 JOIN reach r2 ON r1.referenced_object_id = r2.id
+    SELECT x, z FROM reach r1(x, y) JOIN reach r2(y, z) USING(y)
   )
-SELECT id, referenced_object_id FROM reach;",
+SELECT object_id, referenced_object_id FROM reach;",
 };
 
 pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
@@ -2349,6 +2365,8 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     false AS relhasrules,
     -- MZ doesn't support creating triggers so relhastriggers is filled with false
     false AS relhastriggers,
+    -- MZ doesn't support table inheritance or partitions so relhassubclass is filled with false
+    false AS relhassubclass,
     -- MZ doesn't have row level security so relrowsecurity and relforcerowsecurity is filled with false
     false AS relrowsecurity,
     false AS relforcerowsecurity,
@@ -2374,6 +2392,58 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
+pub const PG_DEPEND: BuiltinView = BuiltinView {
+    name: "pg_depend",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_depend AS
+WITH class_objects AS (
+    SELECT
+        CASE
+            WHEN type = 'table' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'source' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'view' THEN 'pg_views'::pg_catalog.regclass::pg_catalog.oid
+            WHEN type = 'materialized-view' THEN 'pg_matviews'::pg_catalog.regclass::pg_catalog.oid
+        END classid,
+        id,
+        oid,
+        schema_id
+    FROM mz_catalog.mz_relations
+    UNION ALL
+    SELECT
+        'pg_index'::pg_catalog.regclass::pg_catalog.oid AS classid,
+        i.id,
+        i.oid,
+        r.schema_id
+    FROM mz_catalog.mz_indexes i
+    JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+),
+
+current_objects AS (
+    SELECT class_objects.*
+    FROM class_objects
+    JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
+    LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    -- This filter is tricky, as it filters out not just objects outside the
+    -- database, but *dependencies* on objects outside this database. It's not
+    -- clear that this is the right choice, but because PostgreSQL doesn't
+    -- support cross-database references, it's not clear that the other choice
+    -- is better.
+    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
+)
+
+SELECT
+    objects.classid::pg_catalog.oid,
+    objects.oid::pg_catalog.oid AS objid,
+    0::pg_catalog.int4 AS objsubid,
+    dependents.classid::pg_catalog.oid AS refclassid,
+    dependents.oid::pg_catalog.oid AS refobjid,
+    0::pg_catalog.int4 AS refobjsubid,
+    'n'::pg_catalog.char AS deptype
+FROM mz_internal.mz_object_dependencies
+JOIN current_objects objects ON object_id = objects.id
+JOIN current_objects dependents ON referenced_object_id = dependents.id",
+};
+
 pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
@@ -2382,6 +2452,8 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     d.name as datname,
     role_owner.oid as datdba,
     6 as encoding,
+    -- Materialize doesn't support database cloning.
+    FALSE AS datistemplate,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
@@ -2424,6 +2496,24 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
+};
+
+pub const PG_INDEXES: BuiltinView = BuiltinView {
+    name: "pg_indexes",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_indexes AS SELECT
+    current_database() as table_catalog,
+    s.name AS schemaname,
+    r.name AS tablename,
+    i.name AS indexname,
+    NULL::text AS tablespace,
+    -- TODO(jkosh44) Fill in with actual index definition.
+    NULL::text AS indexdef
+FROM mz_catalog.mz_indexes i
+JOIN mz_catalog.mz_relations r ON i.on_id = r.id
+JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
@@ -2652,6 +2742,46 @@ FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
 JOIN mz_roles grantor ON membership.grantor = grantor.id",
+};
+
+pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_event_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_event_trigger AS SELECT
+        NULL::pg_catalog.oid AS oid,
+        NULL::pg_catalog.text AS evtname,
+        NULL::pg_catalog.text AS evtevent,
+        NULL::pg_catalog.oid AS evtowner,
+        NULL::pg_catalog.oid AS evtfoid,
+        NULL::pg_catalog.char AS evtenabled,
+        NULL::pg_catalog.text[] AS evttags
+    WHERE false",
+};
+
+pub const PG_LANGUAGE: BuiltinView = BuiltinView {
+    name: "pg_language",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_language AS SELECT
+        NULL::pg_catalog.oid  AS oid,
+        NULL::pg_catalog.text AS lanname,
+        NULL::pg_catalog.oid  AS lanowner,
+        NULL::pg_catalog.bool AS lanispl,
+        NULL::pg_catalog.bool AS lanpltrusted,
+        NULL::pg_catalog.oid  AS lanplcallfoid,
+        NULL::pg_catalog.oid  AS laninline,
+        NULL::pg_catalog.oid  AS lanvalidator,
+        NULL::pg_catalog.text[] AS lanacl
+    WHERE false",
+};
+
+pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
+    name: "pg_shdescription",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_shdescription AS SELECT
+        NULL::pg_catalog.oid AS objoid,
+        NULL::pg_catalog.oid AS classoid,
+        NULL::pg_catalog.text AS description
+    WHERE false",
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3115,6 +3245,21 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = m.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+pub const INFORMATION_SCHEMA_APPLICABLE_ROLES: BuiltinView = BuiltinView {
+    name: "applicable_roles",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.applicable_roles AS
+SELECT
+    member.name AS grantee,
+    role.name AS role_name,
+    -- ADMIN OPTION isn't implemented.
+    'NO' AS is_grantable
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
+};
+
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
@@ -3136,6 +3281,53 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
+    name: "enabled_roles",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.enabled_roles AS
+SELECT name AS role_name
+FROM mz_roles
+WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
+};
+
+pub const INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: BuiltinView = BuiltinView {
+    name: "role_table_grants",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.role_table_grants AS
+SELECT grantor, grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable, with_hierarchy
+FROM information_schema.table_privileges
+WHERE
+    grantor IN (SELECT role_name FROM information_schema.enabled_roles)
+    OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
+};
+
+pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
+    name: "routines",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.routines AS SELECT
+    current_database() as routine_catalog,
+    s.name AS routine_schema,
+    f.name AS routine_name,
+    'FUNCTION' AS routine_type,
+    NULL::text AS routine_definition
+FROM mz_catalog.mz_functions f
+JOIN mz_catalog.mz_schemas s ON s.id = f.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_SCHEMATA: BuiltinView = BuiltinView {
+    name: "schemata",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.schemata AS
+SELECT
+    current_database() as catalog_name,
+    s.name AS schema_name
+FROM mz_catalog.mz_schemas s
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
@@ -3150,6 +3342,96 @@ pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     END AS table_type
 FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_TABLE_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "table_privileges",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.table_privileges AS
+SELECT
+    grantor,
+    grantee,
+    table_catalog,
+    table_schema,
+    table_name,
+    privilege_type,
+    is_grantable,
+    CASE privilege_type
+        WHEN 'SELECT' THEN 'YES'
+        ELSE 'NO'
+    END AS with_hierarchy
+FROM
+    (SELECT
+        grantor.name AS grantor,
+        CASE mz_internal.mz_aclitem_grantee(privileges)
+            WHEN 'p' THEN 'PUBLIC'
+            ELSE grantee.name
+        END AS grantee,
+        table_catalog,
+        table_schema,
+        table_name,
+        unnest(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges(privileges))) AS privilege_type,
+        -- ADMIN OPTION isn't implemented.
+        'NO' AS is_grantable
+    FROM
+        (SELECT
+            unnest(relations.privileges) AS privileges,
+            CASE
+                WHEN schemas.database_id IS NULL THEN current_database()
+                ELSE databases.name
+            END AS table_catalog,
+            schemas.name AS table_schema,
+            relations.name AS table_name
+        FROM mz_relations AS relations
+        JOIN mz_schemas AS schemas ON relations.schema_id = schemas.id
+        LEFT JOIN mz_databases AS databases ON schemas.database_id = databases.id
+        WHERE schemas.database_id IS NULL OR databases.name = current_database())
+    JOIN mz_roles AS grantor ON mz_internal.mz_aclitem_grantor(privileges) = grantor.id
+    LEFT JOIN mz_roles AS grantee ON mz_internal.mz_aclitem_grantee(privileges) = grantee.id)
+WHERE
+    -- WHERE clause is not guaranteed to short-circuit and 'PUBLIC' will cause an error when passed
+    -- to pg_has_role. Therefore we need to use a CASE statement.
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE mz_internal.mz_is_superuser()
+            OR pg_has_role(current_role, grantee, 'USAGE')
+            OR pg_has_role(current_role, grantor, 'USAGE')
+    END",
+};
+
+pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
+    name: "triggers",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.triggers AS SELECT
+    NULL::text as trigger_catalog,
+    NULL::text AS trigger_schema,
+    NULL::text AS trigger_name,
+    NULL::text AS event_manipulation,
+    NULL::text AS event_object_catalog,
+    NULL::text AS event_object_schema,
+    NULL::text AS event_object_table,
+    NULL::integer AS action_order,
+    NULL::text AS action_condition,
+    NULL::text AS action_statement,
+    NULL::text AS action_orientation,
+    NULL::text AS action_timing,
+    NULL::text AS action_reference_old_table,
+    NULL::text AS action_reference_new_table
+WHERE FALSE",
+};
+
+pub const INFORMATION_SCHEMA_VIEWS: BuiltinView = BuiltinView {
+    name: "views",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.views AS SELECT
+    current_database() as table_catalog,
+    s.name AS table_schema,
+    v.name AS table_name,
+    v.definition AS view_definition
+FROM mz_catalog.mz_views v
+JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
@@ -3244,8 +3526,8 @@ AS SELECT
         ELSE NULL::pg_catalog.bool
     END AS rolsuper,
     inherit AS rolinherit,
-    create_role AS rolcreaterole,
-    create_db AS rolcreatedb,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
+    mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
     -- We determine login status each time a role logs in, so there's no way to accurately depict
     -- this in the catalog. Instead we just hardcode NULL.
     NULL::pg_catalog.bool AS rolcanlogin,
@@ -3779,6 +4061,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_JSONB_ARRAY),
         Builtin::Type(&TYPE_LIST),
         Builtin::Type(&TYPE_MAP),
+        Builtin::Type(&TYPE_NAME),
+        Builtin::Type(&TYPE_NAME_ARRAY),
         Builtin::Type(&TYPE_NUMERIC),
         Builtin::Type(&TYPE_NUMERIC_ARRAY),
         Builtin::Type(&TYPE_OID),
@@ -3969,6 +4253,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
+        Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
         Builtin::View(&PG_DESCRIPTION),
@@ -3997,8 +4282,20 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TRIGGER),
         Builtin::View(&PG_REWRITE),
         Builtin::View(&PG_EXTENSION),
+        Builtin::View(&PG_EVENT_TRIGGER),
+        Builtin::View(&PG_LANGUAGE),
+        Builtin::View(&PG_SHDESCRIPTION),
+        Builtin::View(&PG_INDEXES),
+        Builtin::View(&INFORMATION_SCHEMA_APPLICABLE_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
+        Builtin::View(&INFORMATION_SCHEMA_ENABLED_ROLES),
+        Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
+        Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::View(&INFORMATION_SCHEMA_TABLE_PRIVILEGES),
+        Builtin::View(&INFORMATION_SCHEMA_ROLE_TABLE_GRANTS),
+        Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
+        Builtin::View(&INFORMATION_SCHEMA_VIEWS),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
@@ -4071,6 +4368,13 @@ pub mod BUILTINS {
         })
     }
 
+    pub fn funcs() -> impl Iterator<Item = &'static BuiltinFunc> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::Func(func) => Some(func),
+            _ => None,
+        })
+    }
+
     pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
         BUILTINS_STATIC.iter()
     }
@@ -4080,13 +4384,20 @@ pub mod BUILTINS {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::env;
+    use std::time::{Duration, Instant};
 
+    use mz_expr::MirScalarExpr;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+    use mz_repr::{Datum, RowArena};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
-    use mz_sql::func::OP_IMPLS;
+    use mz_sql::func::{Func, OP_IMPLS};
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::plan::{
+        CoercibleScalarExpr, ExprContext, HirScalarExpr, PlanContext, QueryContext, QueryLifetime,
+        Scope, StatementContext,
+    };
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
 
@@ -4097,6 +4408,7 @@ mod tests {
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -4431,7 +4743,7 @@ mod tests {
                         .map(|item| resolve_type_oid(item))
                         .expect("must have oid");
                     if imp_return_oid != pg_op.oprresult {
-                        println!(
+                        panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
                             imp.oid,
                             op,
@@ -4446,8 +4758,250 @@ mod tests {
         Catalog::with_debug(NOW_ZERO.clone(), inner).await
     }
 
+    // Execute all builtin functions with all combinations of arguments from interesting datums.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_smoketest_all_builtins() {
+        fn inner(catalog: Catalog) {
+            let conn_catalog = catalog.for_system_session();
+
+            let resolve_type_oid = |item: &str| {
+                conn_catalog
+                    .resolve_item(&PartialItemName {
+                        database: None,
+                        schema: Some(PG_CATALOG_SCHEMA.into()),
+                        item: item.to_string(),
+                    })
+                    .unwrap_or_else(|_| panic!("unable to resolve type: {item}"))
+                    .oid()
+            };
+            let pcx = PlanContext::zero();
+            let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "smoketest",
+                scope: &Scope::empty(),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let arena = RowArena::new();
+            // Extracted during planning; always panics when executed.
+            let ignore_names = BTreeSet::from([
+                "avg",
+                "bool_and",
+                "bool_or",
+                "mod",
+                "mz_panic",
+                "mz_sleep",
+                "pow",
+                "stddev_pop",
+                "stddev_samp",
+                "stddev",
+                "var_pop",
+                "var_samp",
+                "variance",
+            ]);
+
+            let fns = BUILTINS::funcs()
+                .map(|func| (&func.name, func.inner))
+                .chain(OP_IMPLS.iter());
+
+            for (name, func) in fns {
+                if ignore_names.contains(name) {
+                    continue;
+                }
+                let Func::Scalar(impls) = func else {
+                    continue;
+                };
+
+                'outer: for imp in impls {
+                    let details = imp.details();
+                    let mut styps = Vec::new();
+                    for item in details.arg_typs.iter() {
+                        let oid = resolve_type_oid(item);
+                        let Ok(pgtyp) = mz_pgrepr::Type::from_oid(oid) else {
+                            continue 'outer;
+                        };
+                        styps.push(ScalarType::try_from(&pgtyp).expect("must exist"));
+                    }
+                    let datums = styps
+                        .iter()
+                        .map(|styp| {
+                            let mut datums = vec![Datum::Null];
+                            datums.extend(styp.interesting_datums());
+                            datums
+                        })
+                        .collect::<Vec<_>>();
+                    // Skip nullary fns.
+                    if datums.is_empty() {
+                        continue;
+                    }
+
+                    let return_oid = details
+                        .return_typ
+                        .map(|item| resolve_type_oid(item))
+                        .expect("must exist");
+                    let return_styp = &mz_pgrepr::Type::from_oid(return_oid)
+                        .ok()
+                        .map(|typ| ScalarType::try_from(&typ).expect("must exist"));
+
+                    let mut idxs = vec![0; datums.len()];
+                    let mut args = Vec::with_capacity(idxs.len());
+                    while idxs[0] < datums[0].len() {
+                        args.clear();
+                        for i in 0..(datums.len()) {
+                            args.push(datums[i][idxs[i]]);
+                        }
+
+                        let op = &imp.op;
+                        let scalars = args
+                            .iter()
+                            .enumerate()
+                            .map(|(i, datum)| {
+                                CoercibleScalarExpr::Coerced(HirScalarExpr::literal(
+                                    datum.clone(),
+                                    styps[i].clone(),
+                                ))
+                            })
+                            .collect();
+
+                        let call_name = format!(
+                            "{name}({}) (oid: {})",
+                            args.iter()
+                                .map(|d| d.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            imp.oid
+                        );
+
+                        // Execute the function as much as possible, ensuring no panics occur, but
+                        // otherwise ignoring eval errors. We also do various other checks.
+                        let start = Instant::now();
+                        let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
+                        if let Ok(hir) = res {
+                            if let Ok(mir) = hir.lower_uncorrelated() {
+                                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
+                                    if let Some(return_styp) = return_styp {
+                                        let mir_typ = mir.typ(&[]);
+                                        // MIR type inference should be consistent with the type
+                                        // we get from the catalog.
+                                        assert_eq!(mir_typ.scalar_type, *return_styp);
+                                        // The following will check not just that the scalar type
+                                        // is ok, but also catches if the function returned a null
+                                        // but the MIR type inference said "non-nullable".
+                                        if !eval_result_datum.is_instance_of(&mir_typ) {
+                                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                                        }
+                                        // Check the consistency of `introduces_nulls` and
+                                        // `propagates_nulls` with `MirScalarExpr::typ`.
+                                        if let Some((introduces_nulls, propagates_nulls)) =
+                                            call_introduces_propagates_nulls(&mir)
+                                        {
+                                            if introduces_nulls {
+                                                // If the function introduces_nulls, then the return
+                                                // type should always be nullable, regardless of
+                                                // the nullability of the input types.
+                                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                            } else {
+                                                let any_input_null =
+                                                    args.iter().any(|arg| arg.is_null());
+                                                if !any_input_null {
+                                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                } else {
+                                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                                }
+                                            }
+                                        }
+                                        // Check that `MirScalarExpr::reduce` yields the same result
+                                        // as the real evaluation.
+                                        let mut reduced = mir.clone();
+                                        reduced.reduce(&[]);
+                                        match reduced {
+                                            MirScalarExpr::Literal(reduce_result, ctyp) => {
+                                                match reduce_result {
+                                                    Ok(reduce_result_row) => {
+                                                        let reduce_result_datum = reduce_result_row.unpack_first();
+                                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                        // Let's check that the types also match.
+                                                        // (We are not checking nullability here,
+                                                        // because it's ok when we know a more
+                                                        // precise nullability after actually
+                                                        // evaluating a function than before.)
+                                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                                    },
+                                                    Err(..) => {}, // It's ok, we might have given invalid args to the function
+                                                }
+                                            },
+                                            _ => unreachable!("all args are literals, so should have reduced to a literal"),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let elapsed = start.elapsed();
+                        if elapsed > Duration::from_millis(250) {
+                            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
+                        }
+
+                        // Advance to the next datum combination.
+                        for i in (0..datums.len()).rev() {
+                            idxs[i] += 1;
+                            if idxs[i] >= datums[i].len() {
+                                if i == 0 {
+                                    break;
+                                }
+                                idxs[i] = 0;
+                                continue;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await
+    }
+
+    /// If the given MirScalarExpr
+    ///  - is a function call, and
+    ///  - all arguments are literals
+    /// then it returns whether the called function (introduces_nulls, propagates_nulls).
+    fn call_introduces_propagates_nulls(mir_func_call: &MirScalarExpr) -> Option<(bool, bool)> {
+        match mir_func_call {
+            MirScalarExpr::CallUnary { func, expr } => {
+                if expr.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                if expr1.is_literal() && expr2.is_literal() {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                if exprs.iter().all(|arg| arg.is_literal()) {
+                    Some((func.introduces_nulls(), func.propagates_nulls()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     // Make sure pg views don't use types that only exist in Materialize.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -4504,7 +5058,8 @@ mod tests {
                         | ScalarType::RegType
                         | ScalarType::RegClass
                         | ScalarType::Int2Vector
-                        | ScalarType::Range { .. } => {}
+                        | ScalarType::Range { .. }
+                        | ScalarType::PgLegacyName => {}
                     }
                 }
             }

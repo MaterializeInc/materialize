@@ -1,7 +1,7 @@
 [
   {
     "name": "objects.proto",
-    "md5": "d0a50a214cd50661262397a54a35809f"
+    "md5": "57275dc806e67834d5ebcfb04001c50d"
   },
   {
     "name": "objects_v15.proto",
@@ -34,5 +34,29 @@
   {
     "name": "objects_v22.proto",
     "md5": "64a606a4e034cb9ab0e30f8ad02d4d02"
+  },
+  {
+    "name": "objects_v23.proto",
+    "md5": "167bdf10e2e9681049ec4d23352dc15a"
+  },
+  {
+    "name": "objects_v24.proto",
+    "md5": "36393b93b157a0167efaf97f01b70685"
+  },
+  {
+    "name": "objects_v25.proto",
+    "md5": "0a055b56539327ccbb8e23f209843cf2"
+  },
+  {
+    "name": "objects_v26.proto",
+    "md5": "bffd4936bea8f4f894662fcea12e4a5d"
+  },
+  {
+    "name": "objects_v27.proto",
+    "md5": "7ccd2c67b302d72cc4c94be892c7cfc1"
+  },
+  {
+    "name": "objects_v28.proto",
+    "md5": "891db1de528b10e073463cb8108556e0"
   }
 ]

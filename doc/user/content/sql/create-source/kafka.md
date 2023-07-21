@@ -150,7 +150,11 @@ Note that:
 
 #### Headers
 
-Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
+as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
+of records of type `(key text, value bytea)`.
+
+The following example demonstrates use of the `INCLUDE HEADERS` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
@@ -161,40 +165,30 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the headers in a message, you can unpack the value:
+To retrieve the value of an individual header in a message, you can use standard
+SQL techniques for working with [`list`](/sql/types/list) and
+[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
+encoded `client_id` header of the messages from the Kafka topic. Messages
+without a `client_id` header result in null values (`"\N"`) for the parsed
+attribute.
 
 ```sql
-SELECT key,
-       field1,
-       field2,
-       headers[1].value AS kafka_header
-FROM mv_kafka_metadata;
+SELECT
+    id,
+    seller,
+    item,
+    (
+        SELECT convert_from((h).value, 'utf8') AS client_id
+        FROM unnest(headers) AS h
+        WHERE (h).key = 'client_id'
+    )
+FROM kafka_metadata;
 
-  key  |  field1  |  field2  |  kafka_header
--------+----------+----------+----------------
-  foo  |  fooval  |   1000   |     hvalue
-  bar  |  barval  |   5000   |     <null>
-```
-
-, or lookup by key:
-
-```sql
-SELECT key,
-       field1,
-       field2,
-       thekey,
-       value
-FROM (SELECT key,
-             field1,
-             field2,
-             unnest(headers).key AS thekey,
-             unnest(headers).value AS value
-      FROM mv_kafka_metadata) AS km
-WHERE thekey = 'kvalue';
-
-  key  |  field1  |  field2  |  thekey  |  value
--------+----------+----------+----------+--------
-  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+ id | seller |        item        | client_id
+----+--------+--------------------+-----------
+  2 |   1592 | Custom Art         |        23
+  7 |   1509 | Custom Art         |        42
+  3 |   1411 | City Bar Crawl     |      "\N"
 ```
 
 Note that:
@@ -303,6 +297,63 @@ WHERE
 As long as any offset continues increasing, Materialize is consuming data from
 the upstream Kafka broker. For more details on monitoring source ingestion
 progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
+### Monitoring consumer lag
+
+To support Kafka tools that monitor consumer lag, Kafka sources commit offsets
+once the messages up through that offset have been durably recorded in
+Materialize's storage layer.
+
+However, rather than relying on committed offsets, Materialize suggests using
+our native [progress monitoring](#monitoring-source-progress), which contains
+more up-to-date information.
+
+{{< note >}}
+Some Kafka monitoring tools may indicate that Materialize's consumer groups have
+no active members. This is **not a cause for concern**.
+
+Materialize does not participate in the consumer group protocol nor does it
+recover on restart by reading the committed offsets. The committed offsets are
+provided solely for the benefit of Kafka monitoring tools.
+{{< /note >}}
+
+Committed offsets are associated with a consumer group specific to the source.
+The ID of the consumer group has a prefix with the following format:
+
+```
+materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}
+```
+
+You should not make assumptions about the number of consumer groups that
+Materialize will use to consume from a given source. The only guarantee is that
+the ID of each consumer group will begin with the above prefix.
+
+The rendered consumer group ID prefix for each Kafka source in the system is
+available in the `group_id_base` column of the [`mz_kafka_sources`] table. To
+look up the `group_id_base` for a source by name, use:
+
+```sql
+SELECT group_id_base
+FROM mz_internal.mz_kafka_sources ks
+JOIN mz_sources s ON s.id = ks.id
+WHERE s.name = '<src_name>'
+```
+
+## Required permissions
+
+The access control lists (ACLs) on the Kafka cluster must allow Materialize
+to perform the following operations on the following resources:
+
+Operation type | Resource type    | Resource name
+---------------|------------------|--------------
+Read           | Topic            | The specified `TOPIC` option
+
+To allow Materialize to [commit offsets](#monitoring-consumer-lag) to the Kafka
+broker, Materialize additionally requires access to the following operations:
+
+Operation type | Resource type    | Resource name
+---------------|------------------|--------------
+Read           | Group            | `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}*`
 
 ## Examples
 
@@ -481,7 +532,7 @@ CREATE SOURCE avro_source
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES
+  FORMAT JSON
   WITH (SIZE = '3xsmall');
 ```
 
@@ -491,7 +542,7 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
     (data->>'field3')::float AS field_3
-  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
+  FROM json_source;
 ```
 
 {{< /tab >}}
@@ -606,3 +657,4 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 [Append-only envelope]: /sql/create-source/#append-only-envelope
 [Upsert envelope]: /sql/create-source/#upsert-envelope
 [Debezium envelope]: /sql/create-source/#debezium-envelope
+[`mz_kafka_sources`]: /sql/system-catalog/mz_internal/#mz_kafka_sources

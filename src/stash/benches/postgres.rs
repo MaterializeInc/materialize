@@ -132,39 +132,5 @@ fn bench_update_many(c: &mut Criterion) {
     });
 }
 
-fn bench_append(c: &mut Criterion) {
-    c.bench_function("append", |b| {
-        let (runtime, mut stash) = init_bench();
-        const MAX: i64 = 1000;
-
-        let orders = runtime
-            .block_on(async {
-                let orders = stash.collection::<String, String>("orders").await?;
-                let mut batch = orders.make_batch(&mut stash).await?;
-                // Skip 0 so it can be added initially.
-                for i in 1..MAX {
-                    orders.append_to_batch(&mut batch, &i.to_string(), &format!("_{i}"), 1);
-                }
-                stash.append(vec![batch]).await?;
-                Result::<_, StashError>::Ok(orders)
-            })
-            .unwrap();
-        let mut i = 0;
-        b.iter(|| {
-            runtime.block_on(async {
-                let mut batch = orders.make_batch(&mut stash).await.unwrap();
-                let j = i % MAX;
-                let k = (i + 1) % MAX;
-                // Add the current i which doesn't exist, delete the next i
-                // which is known to exist.
-                orders.append_to_batch(&mut batch, &j.to_string(), &format!("_{j}"), 1);
-                orders.append_to_batch(&mut batch, &k.to_string(), &format!("_{k}"), -1);
-                stash.append(vec![batch]).await.unwrap();
-                i += 1;
-            })
-        })
-    });
-}
-
-criterion_group!(benches, bench_append, bench_update, bench_update_many);
+criterion_group!(benches, bench_update, bench_update_many);
 criterion_main!(benches);

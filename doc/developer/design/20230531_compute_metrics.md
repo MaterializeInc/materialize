@@ -201,14 +201,14 @@ All metrics in this list have an `instance_id` label identifying the compute ins
     * **Labels**: `instance_id`, `replica_id`
     * **Description**: The total time spent waiting for replica (re-)connection, by replica.
 * Peeks
-  * [ ] `mz_compute_peeks_total`
+  * [x] `mz_compute_peeks_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `result`
-    * **Description**: The total number of peeks served, by result type (success, error, canceled).
-  * [ ] `mz_compute_peek_duration_seconds`
+    * **Description**: The total number of peeks served, by result type (rows, error, canceled).
+  * [x] `mz_compute_peek_duration_seconds`
     * **Type**: histogram
     * **Labels**: `instance_id`, `result`
-    * **Description**: A histogram of peek durations since restart, by result type (success, error, canceled).
+    * **Description**: A histogram of peek durations since restart, by result type (rows, error, canceled).
 
 ### Replica Metrics
 

@@ -50,12 +50,14 @@ members = [
     "src/repr",
     "src/repr-test-util",
     "src/rocksdb",
+    "src/rocksdb-types",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
     "src/service",
     "src/ssh-util",
     "src/sql",
+    "src/sql-lexer",
     "src/sql-parser",
     "src/sqllogictest",
     "src/stash",
@@ -65,6 +67,7 @@ members = [
     "src/test-macro",
     "src/testdrive",
     "src/timely-util",
+    "src/tracing",
     "src/transform",
     "src/cloud-resources",
     "src/walkabout",
@@ -116,7 +119,6 @@ debug = 2
 # version of Materialize.
 [patch.crates-io]
 # Projects that do not reliably release to crates.io.
-columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
 timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
@@ -171,3 +173,7 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
 # a release.
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
+
+[patch."https://github.com/frankmcsherry/columnation"]
+# Projects that do not reliably release to crates.io.
+columnation = { git = "https://github.com/MaterializeInc/columnation.git" }

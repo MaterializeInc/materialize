@@ -13,13 +13,15 @@ from typing import List, Optional
 import numpy as np
 from scipy import stats  # type: ignore
 
+from materialize.feature_benchmark.measurement import Measurement
+
 
 class TerminationCondition:
     def __init__(self, threshold: float) -> None:
         self._threshold = threshold
         self._data: List[float] = []
 
-    def terminate(self, measurement: float) -> bool:
+    def terminate(self, measurement: Measurement) -> bool:
         assert False
 
 
@@ -30,8 +32,8 @@ class NormalDistributionOverlap(TerminationCondition):
         self._last_fit: Optional[statistics.NormalDist] = None
         super().__init__(threshold=threshold)
 
-    def terminate(self, measurement: float) -> bool:
-        self._data.append(measurement)
+    def terminate(self, measurement: Measurement) -> bool:
+        self._data.append(measurement.value)
 
         if len(self._data) > 10:
             (mu, sigma) = stats.norm.fit(self._data)
@@ -52,8 +54,8 @@ class ProbForMin(TerminationCondition):
     has dropped below the threshold
     """
 
-    def terminate(self, measurement: float) -> bool:
-        self._data.append(measurement)
+    def terminate(self, measurement: Measurement) -> bool:
+        self._data.append(measurement.value)
 
         if len(self._data) > 5:
             mean = np.mean(self._data)
@@ -70,7 +72,7 @@ class ProbForMin(TerminationCondition):
 
 
 class RunAtMost(TerminationCondition):
-    def terminate(self, measurement: float) -> bool:
-        self._data.append(measurement)
+    def terminate(self, measurement: Measurement) -> bool:
+        self._data.append(measurement.value)
 
         return len(self._data) >= self._threshold

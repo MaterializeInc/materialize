@@ -22,6 +22,10 @@ class Owners(Check):
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
             GRANT CREATE ON CLUSTER default TO {role}
+            $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            GRANT CREATEDB ON SYSTEM TO {role}
+            $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            ALTER ROLE {role} CREATEDB
             $ postgres-execute connection=postgres://{role}@materialized:6875/materialize
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}
@@ -89,7 +93,21 @@ class Owners(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            "> CREATE ROLE owner_role_01 CREATEDB CREATECLUSTER"
+            dedent(
+                """
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEROLE ON SYSTEM TO materialize
+
+                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER ROLE materialize CREATEROLE
+
+                > CREATE ROLE owner_role_01
+                >[version<5900] ALTER ROLE owner_role_01 CREATEDB CREATECLUSTER
+
+                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
+                """
+            )
             + self._create_objects("owner_role_01", 1, expensive=True)
         )
 
@@ -98,10 +116,38 @@ class Owners(Check):
             Testdrive(s)
             for s in [
                 self._create_objects("owner_role_01", 2)
-                + "> CREATE ROLE owner_role_02 CREATEDB CREATECLUSTER",
+                + dedent(
+                    """
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEROLE ON SYSTEM TO materialize
+
+                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER ROLE materialize CREATEROLE
+
+                    > CREATE ROLE owner_role_02
+                    >[version<5900] ALTER ROLE owner_role_02 CREATEDB CREATECLUSTER
+
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
+                    """
+                ),
                 self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_02", 4)
-                + "> CREATE ROLE owner_role_03 CREATEDB CREATECLUSTER",
+                + dedent(
+                    """
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEROLE ON SYSTEM TO materialize
+
+                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER ROLE materialize CREATEROLE
+
+                    > CREATE ROLE owner_role_03
+                    >[version<5900] ALTER ROLE owner_role_03 CREATEDB CREATECLUSTER
+
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
+                    """
+                ),
             ]
         ]
 
@@ -251,6 +297,13 @@ class Owners(Check):
                 owner_db5 owner_role_01=UC/owner_role_01
                 owner_db6 owner_role_02=UC/owner_role_02
                 owner_db7 owner_role_03=UC/owner_role_03
+                owner_db1 mz_introspection=U/owner_role_01
+                owner_db2 mz_introspection=U/owner_role_01
+                owner_db3 mz_introspection=U/owner_role_01
+                owner_db4 mz_introspection=U/owner_role_02
+                owner_db5 mz_introspection=U/owner_role_01
+                owner_db6 mz_introspection=U/owner_role_02
+                owner_db7 mz_introspection=U/owner_role_03
 
                 > SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name LIKE 'owner_schema%'
                 owner_schema1 owner_role_01=UC/owner_role_01
@@ -260,6 +313,13 @@ class Owners(Check):
                 owner_schema5 owner_role_01=UC/owner_role_01
                 owner_schema6 owner_role_02=UC/owner_role_02
                 owner_schema7 owner_role_03=UC/owner_role_03
+                owner_schema1 mz_introspection=U/owner_role_01
+                owner_schema2 mz_introspection=U/owner_role_01
+                owner_schema3 mz_introspection=U/owner_role_01
+                owner_schema4 mz_introspection=U/owner_role_02
+                owner_schema5 mz_introspection=U/owner_role_01
+                owner_schema6 mz_introspection=U/owner_role_02
+                owner_schema7 mz_introspection=U/owner_role_03
 
                 > SELECT name, unnest(privileges)::text FROM mz_tables WHERE name LIKE 'owner_t%'
                 owner_t1 owner_role_01=arwd/owner_role_01
@@ -320,6 +380,7 @@ class Owners(Check):
                 contains: column "privileges" does not exist
 
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
+                owner_cluster1 mz_introspection=U/owner_role_01
                 owner_cluster1 owner_role_01=UC/owner_role_01
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'

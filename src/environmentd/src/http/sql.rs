@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -17,10 +18,12 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
+use futures::future::BoxFuture;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
+use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
     SessionClient,
@@ -32,10 +35,12 @@ use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
+use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use serde::{Deserialize, Serialize};
-use tokio::time;
+use tokio::{select, time};
 use tokio_postgres::error::SqlState;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
@@ -48,6 +53,8 @@ pub async fn handle_sql(
     let mut res = SqlResponse {
         results: Vec::new(),
     };
+    // Don't need to worry about timeouts or resetting cancel here because there is always exactly 1
+    // request.
     match execute_request(&mut client, request, &mut res).await {
         Ok(()) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
@@ -137,7 +144,28 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
     }
 
     loop {
-        let msg = match ws.recv().await {
+        // Handle timeouts first so we don't execute any statements when there's a pending timeout.
+        let msg = select! {
+            biased;
+
+            // `recv_timeout()` is cancel-safe as per it's docs.
+            Some(timeout) = client.client.recv_timeout() => {
+                client.client.terminate().await;
+                // We must wait for the client to send a request before we can send the error
+                // response. Although this isn't the PG wire protocol, we choose to mirror it by
+                // only sending errors as responses to requests.
+                let _ = ws.recv().await;
+                let err = AdapterError::from(timeout);
+                let _ = send_ws_response(&mut ws, WebSocketResponse::Error(err.into())).await;
+                return;
+            },
+            message = ws.recv() => message,
+        };
+
+        client.client.remove_idle_in_transaction_session_timeout();
+        client.client.reset_canceled();
+
+        let msg = match msg {
             Some(Ok(msg)) => msg,
             _ => {
                 // client disconnected
@@ -280,7 +308,7 @@ enum StatementResult {
     Subscribe {
         desc: RelationDesc,
         tag: String,
-        rx: RowBatchStream,
+        rx: RecordFirstRowStream,
     },
 }
 
@@ -300,8 +328,8 @@ pub enum SqlResult {
         tag: String,
         /// The result rows.
         rows: Vec<Vec<serde_json::Value>>,
-        /// The name of the columns in the row.
-        col_names: Vec<String>,
+        /// Information about each column.
+        desc: Description,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -330,12 +358,12 @@ impl SqlResult {
         client: &mut SessionClient,
         tag: String,
         rows: Vec<Vec<serde_json::Value>>,
-        col_names: Vec<String>,
+        desc: RelationDesc,
     ) -> SqlResult {
         SqlResult::Rows {
             tag,
             rows,
-            col_names,
+            desc: Description::from(&desc),
             notices: make_notices(client),
         }
     }
@@ -370,8 +398,7 @@ impl From<AdapterError> for SqlError {
     fn from(err: AdapterError) -> Self {
         SqlError {
             message: err.to_string(),
-            // TODO: Move codes out of pgwire so they can be shared here.
-            code: SqlState::INTERNAL_ERROR.code().to_string(),
+            code: err.code().code().to_string(),
             detail: err.detail(),
             hint: err.hint(),
         }
@@ -406,7 +433,7 @@ impl From<anyhow::Error> for SqlError {
 pub enum WebSocketResponse {
     ReadyForQuery(String),
     Notice(Notice),
-    Rows(Vec<String>),
+    Rows(Description),
     Row(Vec<serde_json::Value>),
     CommandStarting(CommandStarting),
     CommandComplete(String),
@@ -432,6 +459,37 @@ impl Notice {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Description {
+    pub columns: Vec<Column>,
+}
+
+impl From<&RelationDesc> for Description {
+    fn from(desc: &RelationDesc) -> Self {
+        let columns = desc
+            .iter()
+            .map(|(name, typ)| {
+                let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                Column {
+                    name: name.to_string(),
+                    type_oid: pg_type.oid(),
+                    type_len: pg_type.typlen(),
+                    type_mod: pg_type.typmod(),
+                }
+            })
+            .collect();
+        Description { columns }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Column {
+    pub name: String,
+    pub type_oid: u32,
+    pub type_len: i16,
+    pub type_mod: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ParameterStatus {
     name: String,
     value: String,
@@ -453,25 +511,49 @@ pub struct CommandStarting {
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender {
-    /// Adds a result to the client. Returns Err if sending to the client
-    /// produced an error and the server should disconnect. Returns Ok(Err) if
-    /// the statement produced an error and should error the transaction, but
-    /// remain connected. Returns Ok(Ok(())) if the statement succeeded.
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error>;
-    /// Awaits a future while also able to check the status of the client
-    /// connection. Should return an error if the client connection has gone
-    /// away.
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
+trait ResultSender: Send {
+    /// Adds a result to the client. `canceled` is a function that returns a future that resolves if
+    /// a cancellation request was issued for this connection. Returns Err if sending to the client
+    /// produced an error and the server should disconnect. Returns Ok(Err) if the statement
+    /// produced an error and should error the transaction, but remain connected. Returns Ok(Ok(()))
+    /// if the statement succeeded.
+    async fn add_result<C, F>(
+        &mut self,
+        canceled: C,
+        res: StatementResult,
+    ) -> Result<Result<(), ()>, anyhow::Error>
     where
-        F: Future<Output = R> + Send;
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send;
+    /// Returns a future that resolves only when the client connection has gone away.
+    fn connection_error(&mut self) -> BoxFuture<anyhow::Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
+
+    async fn await_rows<C, F, R>(&mut self, cancelled: C, f: F) -> Result<R, anyhow::Error>
+    where
+        C: Future<Output = ()> + Send,
+        F: Future<Output = R> + Send,
+    {
+        tokio::select! {
+            _ = cancelled => anyhow::bail!("query canceled"),
+            e = self.connection_error() => Err(e),
+            r = f => Ok(r),
+        }
+    }
 }
 
 #[async_trait]
 impl ResultSender for SqlResponse {
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
+    async fn add_result<C, F>(
+        &mut self,
+        _canceled: C,
+        res: StatementResult,
+    ) -> Result<Result<(), ()>, anyhow::Error>
+    where
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send,
+    {
         Ok(match res {
             StatementResult::SqlResult(res) => {
                 let is_err = matches!(res, SqlResult::Err { .. });
@@ -492,11 +574,8 @@ impl ResultSender for SqlResponse {
         })
     }
 
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        Ok(f.await)
+    fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
+        Box::pin(futures::future::pending())
     }
 
     fn allow_subscribe(&self) -> bool {
@@ -506,7 +585,15 @@ impl ResultSender for SqlResponse {
 
 #[async_trait]
 impl ResultSender for WebSocket {
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
+    async fn add_result<C, F>(
+        &mut self,
+        canceled: C,
+        res: StatementResult,
+    ) -> Result<Result<(), ()>, anyhow::Error>
+    where
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send,
+    {
         async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), anyhow::Error> {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
@@ -531,10 +618,10 @@ impl ResultSender for WebSocket {
             StatementResult::SqlResult(SqlResult::Rows {
                 tag,
                 rows,
-                col_names,
+                desc,
                 notices,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(col_names)];
+                let mut msgs = vec![WebSocketResponse::Rows(desc)];
                 msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
                 msgs.push(WebSocketResponse::CommandComplete(tag));
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
@@ -559,18 +646,16 @@ impl ResultSender for WebSocket {
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (true, msgs)
             }
-            StatementResult::Subscribe { desc, tag, mut rx } => {
-                send(
-                    self,
-                    WebSocketResponse::Rows(
-                        desc.iter_names().map(|name| name.to_string()).collect(),
-                    ),
-                )
-                .await?;
+            StatementResult::Subscribe {
+                ref desc,
+                tag,
+                mut rx,
+            } => {
+                send(self, WebSocketResponse::Rows(desc.into())).await?;
 
                 let mut datum_vec = mz_repr::DatumVec::new();
                 loop {
-                    match self.await_rows(rx.recv()).await? {
+                    match self.await_rows(canceled(), rx.recv()).await? {
                         Some(PeekResponseUnary::Rows(rows)) => {
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
@@ -610,25 +695,17 @@ impl ResultSender for WebSocket {
 
     // Send a websocket Ping every second to verify the client is still
     // connected.
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        let pinger = async {
+    fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
+        Box::pin(async {
             let mut tick = time::interval(Duration::from_secs(1));
             tick.tick().await;
             loop {
                 tick.tick().await;
                 if let Err(err) = self.send(Message::Ping(Vec::new())).await {
-                    return err;
+                    return anyhow::anyhow!(err);
                 }
             }
-        };
-
-        tokio::select! {
-            err = pinger => Err(err.into()),
-            data = f => Ok(data),
-        }
+        })
     }
 
     fn allow_subscribe(&self) -> bool {
@@ -640,31 +717,33 @@ impl ResultSender for WebSocket {
 async fn execute_stmt_group<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
-    stmt_group: Vec<(Statement<Raw>, Vec<Option<String>>)>,
+    stmt_group: Vec<(Statement<Raw>, String, Vec<Option<String>>)>,
 ) -> Result<Result<(), ()>, anyhow::Error> {
     let num_stmts = stmt_group.len();
-    for (stmt, params) in stmt_group {
+    for (stmt, sql, params) in stmt_group {
         assert!(num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
         );
 
         let is_aborted_txn = matches!(client.session().transaction(), TransactionStatus::Failed(_));
         if is_aborted_txn && !is_txn_exit_stmt(&stmt) {
-            let _ = sender.add_result(SqlResult::err(
+            let err = SqlResult::err(
                 client,
                 "current transaction is aborted, commands ignored until end of transaction block",
-            ).into()).await?;
+            );
+            let _ = sender.add_result(|| client.canceled(), err.into()).await?;
             return Ok(Err(()));
         }
 
         // Mirror the behavior of the PostgreSQL simple query protocol.
         // See the pgwire::protocol::StateMachine::query method for details.
         if let Err(e) = client.start_transaction(Some(num_stmts)) {
-            let _ = sender.add_result(SqlResult::err(client, e).into()).await?;
+            let err = SqlResult::err(client, e);
+            let _ = sender.add_result(|| client.canceled(), err.into()).await?;
             return Ok(Err(()));
         }
-        let res = execute_stmt(client, sender, stmt, params).await?;
-        let is_err = sender.add_result(res).await?;
+        let res = execute_stmt(client, sender, stmt, sql, params).await?;
+        let is_err = sender.add_result(|| client.canceled(), res).await?;
         if is_err.is_err() {
             // Mirror StateMachine::error, which sometimes will clean up the
             // transaction state instead of always leaving it in Failed.
@@ -676,9 +755,8 @@ async fn execute_stmt_group<S: ResultSender>(
                 // In Started (i.e., a single statement) and implicit transactions cleanup themselves.
                 TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => {
                     if let Err(err) = client.end_transaction(EndTransactionAction::Rollback).await {
-                        let _ = sender
-                            .add_result(SqlResult::err(client, err.to_string()).into())
-                            .await?;
+                        let err = SqlResult::err(client, err.to_string());
+                        let _ = sender.add_result(|| client.canceled(), err.into()).await?;
                     }
                 }
                 // Explicit transactions move to failed.
@@ -738,9 +816,12 @@ async fn execute_request<S: ResultSender>(
         Ok(())
     }
 
-    fn parse(query: &str) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
-        match mz_sql::parse::parse_with_limit(query) {
-            Ok(result) => result.map_err(|e| anyhow!(e)),
+    fn parse<'a>(
+        client: &mut SessionClient,
+        query: &'a str,
+    ) -> Result<Vec<StatementParseResult<'a>>, anyhow::Error> {
+        match client.parse(query) {
+            Ok(result) => result.map_err(|e| anyhow!(e.error)),
             Err(e) => Err(anyhow!(e)),
         }
     }
@@ -749,17 +830,17 @@ async fn execute_request<S: ResultSender>(
 
     match request {
         SqlRequest::Simple { query } => {
-            let stmts = parse(&query)?;
+            let stmts = parse(client, &query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
-            for stmt in stmts {
+            for StatementParseResult { ast: stmt, sql } in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
-                stmt_group.push((stmt, vec![]));
+                stmt_group.push((stmt, sql.to_string(), vec![]));
             }
             stmt_groups.push(stmt_group);
         }
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = parse(&query)?;
+                let mut stmts = parse(client, &query)?;
                 if stmts.len() != 1 {
                     anyhow::bail!(
                         "each query must contain exactly 1 statement, but \"{}\" contains {}",
@@ -768,25 +849,30 @@ async fn execute_request<S: ResultSender>(
                     );
                 }
 
-                let stmt = stmts.pop().unwrap();
+                let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
                 check_prohibited_stmts(sender, &stmt)?;
 
-                stmt_groups.push(vec![(stmt, params)]);
+                stmt_groups.push(vec![(stmt, sql.to_string(), params)]);
             }
         }
     }
 
     for stmt_group in stmt_groups {
-        if execute_stmt_group(client, sender, stmt_group)
-            .await?
-            .is_err()
-        {
+        let executed = execute_stmt_group(client, sender, stmt_group).await;
+        // At the end of each group, commit implicit transactions. Do that here so that any `?`
+        // early return can still be handled here.
+        if client.session().transaction().is_implicit() {
+            let ended = client.end_transaction(EndTransactionAction::Commit).await;
+            if let Err(err) = ended {
+                let err = SqlResult::err(client, err);
+                let _ = sender
+                    .add_result(|| client.canceled(), StatementResult::SqlResult(err))
+                    .await?;
+            }
+        }
+        if executed?.is_err() {
             break;
         }
-    }
-
-    if client.session().transaction().is_implicit() {
-        client.end_transaction(EndTransactionAction::Commit).await?;
     }
 
     Ok(())
@@ -797,11 +883,12 @@ async fn execute_stmt<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
     stmt: Statement<Raw>,
+    sql: String,
     raw_params: Vec<Option<String>>,
 ) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
-        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
         .await
     {
         return Ok(SqlResult::err(client, e).into());
@@ -862,10 +949,12 @@ async fn execute_stmt<S: ResultSender>(
     let desc = prep_stmt.desc().clone();
     let revision = prep_stmt.catalog_revision;
     let stmt = prep_stmt.stmt().cloned();
+    let logging = Arc::clone(prep_stmt.logging());
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
         stmt,
+        logging,
         params,
         result_formats,
         revision,
@@ -880,7 +969,7 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client
+    let (res, execute_started) = match client
         .execute(EMPTY_PORTAL.into(), futures::future::pending())
         .await
     {
@@ -888,10 +977,6 @@ async fn execute_stmt<S: ResultSender>(
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
         }
-    };
-    let col_names = match &desc.relation_desc {
-        Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
-        None => vec![],
     };
     let tag = res.tag();
 
@@ -936,6 +1021,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::AlteredRole
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
+        | ExecuteResponse::ValidatedConnection
+        | ExecuteResponse::CreatedWebhookSource
         | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
         ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
             let notify_set: mz_ore::collections::HashSet<String> = client
@@ -962,8 +1049,11 @@ async fn execute_stmt<S: ResultSender>(
             future: rows,
             span: _,
         } => {
-            let rows = match sender.await_rows(rows).await? {
-                PeekResponseUnary::Rows(rows) => rows,
+            let rows = match sender.await_rows(client.canceled(), rows).await? {
+                PeekResponseUnary::Rows(rows) => {
+                    RecordFirstRowStream::record(execute_started, client);
+                    rows
+                },
                 PeekResponseUnary::Error(e) => {
                     return Ok(SqlResult::err(client, e).into());
                 }
@@ -973,16 +1063,21 @@ async fn execute_stmt<S: ResultSender>(
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let mut datum_vec = mz_repr::DatumVec::new();
+            let desc = desc.relation_desc.expect("RelationDesc must exist");
+            let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                let types = &desc.relation_desc.as_ref().unwrap().typ().column_types;
                 sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
-            SqlResult::rows(client, tag, sql_rows, col_names).into()
+            SqlResult::rows(client, tag, sql_rows, desc).into()
         }
         ExecuteResponse::Subscribing { rx }  => {
-            StatementResult::Subscribe { tag:"SUBSCRIBE".into(), desc: desc.relation_desc.unwrap(), rx }
+            StatementResult::Subscribe {
+                tag: "SUBSCRIBE".into(),
+                desc: desc.relation_desc.unwrap(),
+                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client),
+            }
         },
         res @ (ExecuteResponse::Fetch { .. }
         | ExecuteResponse::CopyTo { .. }

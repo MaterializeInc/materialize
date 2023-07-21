@@ -563,7 +563,8 @@ where
             // seeds that would be given by `AHash` via ahash::AHasher::default() so as
             // to avoid a different selection due to compile-time features being differently
             // selected in other dependencies using `AHash` vis-à-vis cargo's strategy
-            // of unioning features. This implies that we end up employ the fallback
+            // of unioning features.
+            // NOTE: Depending on target features, we may end up employing the fallback
             // hasher of `AHash`, but it should be sufficient for our needs.
             let random_state = ahash::RandomState::with_seeds(
                 0x243f_6a88_85a3_08d3,

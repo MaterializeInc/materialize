@@ -9,9 +9,10 @@
 
 syntax = "proto3";
 
+import "tracing/src/params.proto";
 import "proto/src/proto.proto";
 import "persist-client/src/cfg.proto";
-import "rocksdb/src/config.proto";
+import "rocksdb-types/src/config.proto";
 
 package mz_storage_client.types.parameters;
 
@@ -20,9 +21,12 @@ message ProtoStorageParameters {
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
     ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
     uint64 keep_n_source_status_history_entries = 4;
-    mz_rocksdb.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
+    mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
     uint64 keep_n_sink_status_history_entries = 7;
+    mz_tracing.params.ProtoTracingParameters tracing = 8;
+    ProtoUpsertAutoSpillConfig upsert_auto_spill_config = 9;
+    optional uint64 storage_dataflow_max_inflight_bytes = 10;
 }
 
 
@@ -32,4 +36,9 @@ message ProtoPgReplicationTimeouts {
     optional mz_proto.ProtoDuration keepalives_idle = 3;
     optional mz_proto.ProtoDuration keepalives_interval = 4;
     optional mz_proto.ProtoDuration tcp_user_timeout = 5;
+}
+
+message ProtoUpsertAutoSpillConfig {
+    bool allow_spilling_to_disk = 1;
+    uint64 spill_to_disk_threshold_bytes = 2;
 }

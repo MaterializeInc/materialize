@@ -313,7 +313,7 @@ Explained Query:
               %5[#0]UKA » %0:item[#0]UKlf » %2:stock[#0, #1]KKlf » %1:supplier[#0]UKlf » %3:nation[#0]UKlf » %4:l0[#0]UKlf
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
-                Filter "%b" ~~(padchar(#4)) // { arity: 5 }
+                Filter like["%b"](padchar(#4)) // { arity: 5 }
                   Get materialize.public.item // { arity: 5 }
             ArrangeBy keys=[[#0]] // { arity: 6 }
               Project (#0..=#4, #6) // { arity: 6 }
@@ -343,13 +343,13 @@ Explained Query:
       cte l0 =
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Project (#0) // { arity: 1 }
-            Filter "EUROP%" ~~(padchar(#1)) // { arity: 3 }
+            Filter like["EUROP%"](padchar(#1)) // { arity: 3 }
               Get materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  filter=("%b" ~~(padchar(#4)))
+  filter=(like["%b"](padchar(#4)))
 Source materialize.public.region
-  filter=("EUROP%" ~~(padchar(#1)))
+  filter=(like["EUROP%"](padchar(#1)))
 
 Used Indexes:
   - materialize.public.fk_stock_supplier
@@ -388,7 +388,7 @@ Explained Query:
                 %0:customer[#2, #1, #0]UKKKlf » %2:order[#2, #1, #3]KKKAlif » %1:neworder[#0..=#2]UKKKlif » %3:orderline[#2, #1, #0]KKKAlif
               ArrangeBy keys=[[#2, #1, #0]] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
-                  Filter "A%" ~~(padchar(#9)) // { arity: 22 }
+                  Filter like["A%"](padchar(#9)) // { arity: 22 }
                     Get materialize.public.customer // { arity: 22 }
               ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
                 Get materialize.public.neworder // { arity: 3 }
@@ -675,7 +675,7 @@ Explained Query:
                   %4:order[#3, #1, #2]KKKiif » %5:customer[#0..=#2]UKKKiif » %6:nation[#0]UKiif » %8:region[#0]UKeiif » %3:orderline[#2, #1, #0]KKKAeiiif » %2:stock[#0, #1]UKKeiiiif » %0:item[#0]UKeliiiiif » %1:supplier[#0]UKeliiiiif » %7:nation[#0]UKeliiiiif
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
-                    Filter (#0 < 1000) AND "%b" ~~(padchar(#4)) // { arity: 5 }
+                    Filter (#0 < 1000) AND like["%b"](padchar(#4)) // { arity: 5 }
                       Get materialize.public.item // { arity: 5 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #3) // { arity: 2 }
@@ -707,7 +707,7 @@ Explained Query:
                       Get materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  filter=((#0 < 1000) AND "%b" ~~(padchar(#4)))
+  filter=((#0 < 1000) AND like["%b"](padchar(#4)))
 Source materialize.public.region
   filter=((#1 = "EUROPE"))
 
@@ -750,7 +750,7 @@ Explained Query:
               %4:order[#2, #1, #0]UKKK » %3:orderline[#2, #1, #0]KKKA » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UKlf » %5:nation[#0]UKlf
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter "%BB" ~~(padchar(#4)) // { arity: 5 }
+                Filter like["%BB"](padchar(#4)) // { arity: 5 }
                   Get materialize.public.item // { arity: 5 }
             ArrangeBy keys=[[#0, #1]] // { arity: 3 }
               Project (#0, #1, #17) // { arity: 3 }
@@ -768,7 +768,7 @@ Explained Query:
                 Get materialize.public.nation // { arity: 4 }
 
 Source materialize.public.item
-  filter=("%BB" ~~(padchar(#4)))
+  filter=(like["%BB"](padchar(#4)))
 
 Used Indexes:
   - materialize.public.fk_order_customer
@@ -997,7 +997,7 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[sum(case when "PR%" ~~(padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
+      Reduce aggregates=[sum(case when like["PR%"](padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
         Project (#8, #11) // { arity: 2 }
           Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL // { arity: 13 }
             Map (date_to_timestamp(#6)) // { arity: 13 }
@@ -1124,7 +1124,7 @@ Explained Query:
                         Get l1 // { arity: 1 }
                       ArrangeBy keys=[[#0]] // { arity: 1 }
                         Project (#0) // { arity: 1 }
-                          Filter "%bad%" ~~(padchar(#6)) // { arity: 7 }
+                          Filter like["%bad%"](padchar(#6)) // { arity: 7 }
                             Get materialize.public.supplier // { arity: 7 }
                 Get l1 // { arity: 1 }
     With
@@ -1141,11 +1141,11 @@ Explained Query:
               Get materialize.public.stock // { arity: 18 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
               Project (#0, #2..=#4) // { arity: 4 }
-                Filter NOT("zz%" ~~(padchar(#4))) // { arity: 5 }
+                Filter NOT(like["zz%"](padchar(#4))) // { arity: 5 }
                   Get materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  filter=(NOT("zz%" ~~(padchar(#4))))
+  filter=(NOT(like["zz%"](padchar(#4))))
 
 Used Indexes:
   - materialize.public.fk_stock_item
@@ -1200,7 +1200,7 @@ Explained Query:
                           %0:item[#0]UKlf » %1:l0[#4]KAlf
                         ArrangeBy keys=[[#0]] // { arity: 1 }
                           Project (#0) // { arity: 1 }
-                            Filter "%b" ~~(padchar(#4)) // { arity: 5 }
+                            Filter like["%b"](padchar(#4)) // { arity: 5 }
                               Get materialize.public.item // { arity: 5 }
                         Get l0 // { arity: 10 }
     cte l0 =
@@ -1208,7 +1208,7 @@ Explained Query:
         Get materialize.public.orderline // { arity: 10 }
 
 Source materialize.public.item
-  filter=("%b" ~~(padchar(#4)))
+  filter=(like["%b"](padchar(#4)))
 
 Used Indexes:
   - materialize.public.fk_orderline_item
@@ -1298,7 +1298,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
-          Filter (#7 <= 10) AND (#7 >= 1) AND (#4) IS NOT NULL AND (#12 OR #13 OR #14 OR #15 OR #16) AND (("%a" ~~(#17) AND (#12 OR #13 OR #14)) OR ("%b" ~~(#17) AND (#12 OR #13 OR #15)) OR ("%c" ~~(#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
+          Filter (#7 <= 10) AND (#7 >= 1) AND (#4) IS NOT NULL AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
             Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
               Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
@@ -1307,12 +1307,12 @@ Explained Query:
                   Get materialize.public.orderline // { arity: 10 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #4) // { arity: 2 }
-                    Filter (#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)) // { arity: 6 }
+                    Filter (#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)) // { arity: 6 }
                       Map (padchar(#4)) // { arity: 6 }
                         Get materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  filter=((#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)))
+  filter=((#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)))
   map=(padchar(#4))
 
 Used Indexes:
@@ -1367,7 +1367,7 @@ Explained Query:
                             Get materialize.public.orderline // { arity: 10 }
                           ArrangeBy keys=[[#0]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
-                              Filter "co%" ~~(padchar(#4)) // { arity: 5 }
+                              Filter like["co%"](padchar(#4)) // { arity: 5 }
                                 Get materialize.public.item // { arity: 5 }
     With
       cte l0 =
@@ -1383,7 +1383,7 @@ Explained Query:
                   Get materialize.public.nation // { arity: 4 }
 
 Source materialize.public.item
-  filter=("co%" ~~(padchar(#4)))
+  filter=(like["co%"](padchar(#4)))
 
 Used Indexes:
   - materialize.public.fk_orderline_item

@@ -22,7 +22,7 @@ use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
 use tracing::warn;
 
 use crate::monotonic::MonotonicFlag;
-use crate::{IndexOracle, Optimizer, TransformArgs, TransformError};
+use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformArgs, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -38,6 +38,7 @@ use crate::{IndexOracle, Optimizer, TransformArgs, TransformError};
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
+    stats: &dyn StatisticsOracle,
 ) -> Result<(), TransformError> {
     let ctx = crate::typecheck::empty_context();
 
@@ -45,7 +46,12 @@ pub fn optimize_dataflow(
     inline_views(dataflow)?;
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer(&ctx))?;
+    optimize_dataflow_relations(
+        dataflow,
+        indexes,
+        stats,
+        &Optimizer::logical_optimizer(&ctx),
+    )?;
 
     optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
@@ -61,11 +67,17 @@ pub fn optimize_dataflow(
     optimize_dataflow_relations(
         dataflow,
         indexes,
+        stats,
         &Optimizer::logical_cleanup_pass(&ctx, false),
     )?;
 
     // Physical optimization pass
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer(&ctx))?;
+    optimize_dataflow_relations(
+        dataflow,
+        indexes,
+        stats,
+        &Optimizer::physical_optimizer(&ctx),
+    )?;
 
     optimize_dataflow_monotonic(dataflow)?;
 
@@ -192,6 +204,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
+    stats: &dyn StatisticsOracle,
     optimizer: &Optimizer,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
@@ -202,7 +215,7 @@ fn optimize_dataflow_relations(
         // Re-run all optimizations on the composite views.
         optimizer.transform(
             object.plan.as_inner_mut(),
-            TransformArgs::with_id(indexes, &object.id),
+            TransformArgs::with_id_and_stats(indexes, stats, &object.id),
         )?;
     }
 

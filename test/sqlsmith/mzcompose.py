@@ -65,6 +65,7 @@ known_errors = [
     "function array_position(",  # insufficient type system, parameter types have to match
     "function list_append(",  # insufficient type system, parameter types have to match
     "function list_prepend(",  # insufficient type system, parameter types have to match
+    "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
     "range lower bound must be less than or equal to range upper bound",
@@ -129,10 +130,26 @@ known_errors = [
     "unrecognized configuration parameter",
     "numeric field overflow",
     "bigint out of range",
+    "smallint out of range",
     "uint8 out of range",
+    "uint4 out of range",
+    "uint2 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
     "not supported for type time",
+    "coalesce types text and text list cannot be matched",  # Bad typing for ||
+    "coalesce types text list and text cannot be matched",  # Bad typing for ||
+    "is out of range for type numeric: exceeds maximum precision",
+    "CAST does not support casting from ",  # TODO: Improve type system
+    "SET clause does not support casting from ",  # TODO: Improve type system
+    "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
+    "coalesce types interval and integer cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
+    "requested length too large",
+    "number of columns must be a positive integer literal",
+    "regex_extract requires a string literal as its first argument",
+    "out of valid range",
+    '" does not exist',  # role does not exist
+    "csv_extract number of columns too large",
 ]
 
 
@@ -192,9 +209,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
               FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.0001)
               WITH (SIZE = '1');
 
-            CREATE TABLE t (a int, b int);
-            INSERT INTO t VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16);
-            CREATE MATERIALIZED VIEW mv AS SELECT a + b FROM t;
+            CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
+            INSERT INTO t VALUES (1, 2, 3, 4, 5, 6, '7'), (3, 4, 5, 6, 7, 8, '9'), (5, 6, 7, 8, 9, 10, '11'), (7, 8, 9, 10, 11, 12, '13'), (9, 10, 11, 12, 13, 14, '15'), (11, 12, 13, 14, 15, 16, '17'), (13, 14, 15, 16, 17, 18, '19'), (15, 16, 17, 18, 19, 20, '21');
+            CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t;
             CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
             CREATE DEFAULT INDEX ON mv;
             """,

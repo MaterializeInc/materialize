@@ -20,6 +20,7 @@ import "repr/src/row.proto";
 import "cluster-client/src/client.proto";
 import "storage-client/src/client.proto";
 import "storage-client/src/types/parameters.proto";
+import "tracing/src/params.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -66,4 +67,5 @@ message ProtoComputeParameters {
     mz_persist_client.cfg.ProtoPersistParameters persist = 2;
     optional uint64 dataflow_max_inflight_bytes = 3;
     optional bool enable_mz_join_core = 4;
+    mz_tracing.params.ProtoTracingParameters tracing = 5;
 }

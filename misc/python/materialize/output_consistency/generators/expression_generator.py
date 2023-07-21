@@ -9,6 +9,7 @@
 
 from typing import Callable, Dict, List, Optional
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -110,15 +111,47 @@ class ExpressionGenerator:
             types_with_values.append(data_type_with_values)
             self.types_with_values_by_category[category] = types_with_values
 
-    def pick_random_operation(self, include_aggregates: bool) -> DbOperationOrFunction:
-        weights = (
+    def pick_random_operation(
+        self,
+        include_aggregates: bool,
+        accept_op_filter: Optional[Callable[[DbOperationOrFunction], bool]] = None,
+    ) -> DbOperationOrFunction:
+        all_weights = (
             self.operation_weights
             if include_aggregates
             else self.operation_weights_no_aggregates
         )
 
-        return self.randomized_picker.random_operation(
-            self.selectable_operations, weights
+        if accept_op_filter:
+            selected_operations = []
+            weights = []
+            for index, operation in enumerate(self.selectable_operations):
+                if accept_op_filter(operation):
+                    selected_operations.append(operation)
+                    weights.append(all_weights[index])
+        else:
+            selected_operations = self.selectable_operations
+            weights = all_weights
+
+        return self.randomized_picker.random_operation(selected_operations, weights)
+
+    def generate_boolean_expression(
+        self,
+        use_aggregation: bool,
+        storage_layout: Optional[ValueStorageLayout],
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> Optional[ExpressionWithArgs]:
+        def accept_op(operation: DbOperationOrFunction) -> bool:
+            if operation.is_aggregation != use_aggregation:
+                return False
+
+            # Simplification: This will only include operations defined to return a boolean value but not generic
+            # operations that might return a boolean value depending on the input.
+            return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
+
+        boolean_operation = self.pick_random_operation(use_aggregation, accept_op)
+        return self.generate_expression(
+            boolean_operation, storage_layout, nesting_level
         )
 
     def generate_expression(
@@ -153,15 +186,19 @@ class ExpressionGenerator:
             # results in (an unexpected) error. Furthermore, in case of an error, error messages of non-aggregate
             # expressions can only be compared in HORIZONTAL layout (because the row processing order of an
             # evaluation strategy is not defined).)
-            if self.randomized_picker.random_boolean(0.9):
+            if self.randomized_picker.random_boolean(
+                probability.HORIZONTAL_LAYOUT_WHEN_NOT_AGGREGATED
+            ):
                 return ValueStorageLayout.HORIZONTAL
             else:
                 return ValueStorageLayout.VERTICAL
 
         # strongly prefer vertical storage for aggregations but allow some variance
 
-        if self.randomized_picker.random_boolean(0.1):
-            # Use horizontal layout in 10 % different of the cases
+        if self.randomized_picker.random_boolean(
+            probability.HORIZONTAL_LAYOUT_WHEN_AGGREGATED
+        ):
+            # Use horizontal layout in some cases
             return ValueStorageLayout.HORIZONTAL
 
         return ValueStorageLayout.VERTICAL
@@ -229,7 +266,9 @@ class ExpressionGenerator:
 
         create_complex_arg = (
             arg_context.requires_aggregation()
-            or self.randomized_picker.random_boolean(0.2)
+            or self.randomized_picker.random_boolean(
+                probability.CREATE_COMPLEX_EXPRESSION
+            )
         )
 
         if create_complex_arg:

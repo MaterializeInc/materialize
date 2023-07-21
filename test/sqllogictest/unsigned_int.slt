@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
+----
+COMPLETE 0
+
 query I
 SELECT 42::uint2
 ----
@@ -1332,7 +1337,7 @@ SELECT STDDEV(a) FROM t4
 query error cannot take square root
 SELECT STDDEV(a) FROM t8
 
-# Avoid overflow (known issue https://github.com/MaterializeInc/materialize/issues/14695)
+# Avoid overflow (known issue https://github.com/MaterializeInc/materialize/issues/15186)
 statement ok
 DROP TABLE t8
 

@@ -61,7 +61,7 @@ prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
-rocksdb = { version = "0.21.0", default-features = false, features = ["snappy"] }
+rocksdb = { version = "0.21.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }

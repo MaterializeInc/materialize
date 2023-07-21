@@ -89,6 +89,16 @@ parse-scalar
 Value(Number("9007199254740993.0"))
 
 parse-scalar
+X'deadbeef'
+----
+Value(HexString("deadbeef"))
+
+parse-scalar roundtrip
+X'deadbeef'
+----
+X'deadbeef'
+
+parse-scalar
 'one'
 ----
 Value(String("one"))
@@ -170,6 +180,36 @@ INTERVAL 'invalid interval' YEAR
 ----
 Value(Interval(IntervalValue { value: "invalid interval", precision_high: Year, precision_low: Year, fsec_max_precision: None }))
 
+parse-scalar roundtrip
+INTERVAL '1' YEAR
+----
+INTERVAL '1' YEAR
+
+parse-scalar roundtrip
+INTERVAL '1' MONTH
+----
+INTERVAL '1' MONTH
+
+parse-scalar roundtrip
+INTERVAL '1' DAY
+----
+INTERVAL '1' DAY
+
+parse-scalar roundtrip
+INTERVAL '1' HOUR
+----
+INTERVAL '1' HOUR
+
+parse-scalar roundtrip
+INTERVAL '1' MINUTE
+----
+INTERVAL '1' MINUTE
+
+parse-scalar roundtrip
+INTERVAL '1' SECOND
+----
+INTERVAL '1'
+
 parse-scalar
 INTERVAL '1 year'
 ----
@@ -239,6 +279,31 @@ parse-scalar
 INTERVAL '01:01:01.111111111' SECOND (5)
 ----
 Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Year, precision_low: Second, fsec_max_precision: Some(5) }))
+
+parse-scalar roundtrip
+INTERVAL '01:01:01.111111111' SECOND(5)
+----
+INTERVAL '01:01:01.111111111' SECOND(5)
+
+parse-scalar
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND (2)
+----
+Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Minute, precision_low: Second, fsec_max_precision: Some(2) }))
+
+parse-scalar roundtrip
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND(2)
+----
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND(2)
+
+parse-scalar
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND
+----
+Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Minute, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar roundtrip
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND
+----
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND
 
 # Lists
 

@@ -49,6 +49,10 @@ impl Coordinator {
             SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
             SourceSinkClusterConfig::Existing { id } => return Ok(*id),
         };
+        let disk = self
+            .catalog()
+            .system_config()
+            .disk_cluster_replicas_default();
         let id = self.catalog().allocate_user_cluster_id().await?;
         let name = self.catalog().resolve_full_name(name, None);
         let name = format!("{}_{}_{}", name.database, name.schema, name.item);
@@ -64,7 +68,7 @@ impl Coordinator {
                 variant: ClusterVariant::Unmanaged,
             },
         });
-        self.create_linked_cluster_replica_op(id, size, ops, *session.current_role_id())
+        self.create_linked_cluster_replica_op(id, size, disk, ops, *session.current_role_id())
             .await?;
         Ok(id)
     }
@@ -75,6 +79,7 @@ impl Coordinator {
         &mut self,
         cluster_id: ClusterId,
         size: String,
+        disk: bool,
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
@@ -86,6 +91,7 @@ impl Coordinator {
             size: size.to_string(),
             availability_zone,
             az_user_specified: false,
+            disk,
         };
         let location = self.catalog().concretize_replica_location(
             location,
@@ -146,9 +152,14 @@ impl Coordinator {
                         coord_bail!("cannot change the cluster of a source or sink")
                     }
                 };
+                let disk = self
+                    .catalog()
+                    .system_config()
+                    .disk_cluster_replicas_default();
                 self.create_linked_cluster_replica_op(
                     linked_cluster.id,
                     size,
+                    disk,
                     &mut ops,
                     linked_cluster.owner_id,
                 )

@@ -25,14 +25,14 @@ use futures::StreamExt;
 use futures_util::future::Either;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::vec::VecExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
@@ -42,7 +42,7 @@ use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::stats::PartStats;
-use crate::{PersistLocation, ShardId};
+use crate::{Diagnostics, PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -66,19 +66,22 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, F, G>(
-    scope: &mut G,
+pub fn shard_source<'g, K, V, T, D, F, DT, G>(
+    scope: &mut Child<'g, G, T>,
     name: &str,
     clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
-    flow_control: Option<FlowControl<G>>,
+    desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     should_fetch_part: F,
-) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
+) -> (
+    Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
+    Rc<dyn Any>,
+)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -87,6 +90,15 @@ where
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    T: Refines<G::Timestamp>,
+    DT: FnOnce(
+        Child<'g, G, T>,
+        &Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        usize,
+    ) -> (
+        Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        Rc<dyn Any>,
+    ),
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -108,32 +120,44 @@ where
     // we can safely pass along a zero summary from this feedback edge,
     // as the input is disconnected from the operator's output
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
-        scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
+        scope.feedback(T::Summary::default());
 
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
-        scope,
+        &scope.parent,
         name,
         Arc::clone(&clients),
         location.clone(),
         shard_id.clone(),
         as_of,
         until,
-        flow_control,
-        completed_fetches_feedback_stream,
+        completed_fetches_feedback_stream.leave(),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
         should_fetch_part,
     );
+    let descs = descs.enter(scope);
+    let (descs, backpressure_token) = match desc_transformer {
+        Some(desc_transformer) => desc_transformer(scope.clone(), &descs, chosen_worker),
+        None => {
+            let token: Rc<dyn Any> = Rc::new(());
+            (descs, token)
+        }
+    };
+
     let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
     );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
 
-    (parts, Rc::new((descs_token, fetch_token)))
+    (
+        parts,
+        Rc::new((descs_token, fetch_token, backpressure_token)),
+    )
 }
 
 /// Flow control configuration.
+/// TODO(guswynn): move to `persist_source`
 #[derive(Debug)]
 pub struct FlowControl<G: Scope> {
     /// Stream providing in-flight frontier updates.
@@ -144,6 +168,8 @@ pub struct FlowControl<G: Scope> {
     pub progress_stream: Stream<G, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
+    /// TODO(guswynn): explain
+    pub summary: <G::Timestamp as Timestamp>::Summary,
 }
 
 #[derive(Debug)]
@@ -167,7 +193,6 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
-    flow_control: Option<FlowControl<G>>,
     completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
@@ -192,30 +217,10 @@ where
     // values that are `yield`-ed from it's body.
     let name_owned = name.to_owned();
 
-    let (flow_control_stream, flow_control_bytes) = match flow_control {
-        Some(fc) => (fc.progress_stream, Some(fc.max_inflight_bytes)),
-        None => (
-            timely::dataflow::operators::generic::operator::empty(scope),
-            None,
-        ),
-    };
-
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
     let (mut descs_output, descs_stream) = builder.new_output();
 
-    let mut flow_control_input = builder.new_input_connection(
-        &flow_control_stream,
-        Pipeline,
-        // Disconnect the flow_control_input from the output capabilities of the
-        // operator. We could leave it connected without risking deadlock so
-        // long as there is a non zero summary on the feedback edge. But it may
-        // be less efficient because the pipeline will be moving in increments
-        // of SUMMARY even though we have potentially dumped a lot more data in
-        // the pipeline because of batch boundaries. Leaving it unconnected
-        // means the pipeline will be able to retire bigger chunks of work.
-        vec![Antichain::new()],
-    );
     let mut completed_fetches = builder.new_input_connection(
         &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
@@ -246,11 +251,6 @@ where
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
-        let mut inflight_bytes = 0;
-        let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
-
-        let max_inflight_bytes = flow_control_bytes.unwrap_or(usize::MAX);
-
         // Only one worker is responsible for distributing parts
         if worker_index != chosen_worker {
             trace!(
@@ -271,9 +271,12 @@ where
             let read = client
                 .open_leased_reader::<K, V, G::Timestamp, D>(
                     shard_id,
-                    &format!("shard_source({})", name_owned),
                     key_schema,
                     val_schema,
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source({})", name_owned),
+                    }
                 )
                 .await
                 .expect("could not open persist shard");
@@ -393,11 +396,6 @@ where
         loop {
             // Notes on this select!:
             //
-            // We have two mutually exclusive preconditions based on our flow
-            // control state to determine whether we emit new batch parts, vs
-            // applying flow control and waiting for downstream operators to
-            // complete their work.
-            //
             // We use a `biased` select, not for correctness, but to minimize
             // the work we need to do (e.g. check if the dataflow has been
             // dropped before reading more data from CRDB).
@@ -435,77 +433,59 @@ where
                         }
                     }
                 }
-                // While we have budget left for fetching more parts, read from the
-                // subscription and pass them on.
+                // Read from the subscription and pass them on.
                 //
                 // NB: StreamExt::next is cancel safe
-                event = subscription_stream.next(), if inflight_bytes < max_inflight_bytes => {
+                event = subscription_stream.next() => {
                     match event {
                         Some(ListenEvent::Updates(mut parts)) => {
                             batch_parts.append(&mut parts);
                         }
                         Some(ListenEvent::Progress(progress)) => {
+                            // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
+                            // operator will refine this further, if its enabled.
                             let session_cap = cap_set.delayed(&current_ts);
 
-                            let bytes_emitted = {
-                                let mut bytes_emitted = 0;
-                                for mut part_desc in std::mem::take(&mut batch_parts) {
-                                    // TODO: Push the filter down into the Subscribe?
-                                    if cfg.dynamic.stats_filter_enabled() {
-                                        let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                                            should_fetch_part(&stats.decode())
-                                        });
-                                        let bytes = u64::cast_from(part_desc.encoded_size_bytes);
-                                        if should_fetch {
-                                            metrics.pushdown.parts_fetched_count.inc();
-                                            metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                            for mut part_desc in std::mem::take(&mut batch_parts) {
+                                // TODO: Push the filter down into the Subscribe?
+                                if cfg.dynamic.stats_filter_enabled() {
+                                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
+                                        should_fetch_part(&stats.decode())
+                                    });
+                                    let bytes = u64::cast_from(part_desc.encoded_size_bytes);
+                                    if should_fetch {
+                                        metrics.pushdown.parts_fetched_count.inc();
+                                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                                    } else {
+                                        metrics.pushdown.parts_filtered_count.inc();
+                                        metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                                        let should_audit = {
+                                            let mut h = DefaultHasher::new();
+                                            part_desc.key.hash(&mut h);
+                                            usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
+                                        };
+                                        if should_audit {
+                                            metrics.pushdown.parts_audited_count.inc();
+                                            metrics.pushdown.parts_audited_bytes.inc_by(bytes);
+                                            part_desc.request_filter_pushdown_audit();
                                         } else {
-                                            metrics.pushdown.parts_filtered_count.inc();
-                                            metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                                            let should_audit = {
-                                                let mut h = DefaultHasher::new();
-                                                part_desc.key.hash(&mut h);
-                                                usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
-                                            };
-                                            if should_audit {
-                                                metrics.pushdown.parts_audited_count.inc();
-                                                metrics.pushdown.parts_audited_bytes.inc_by(bytes);
-                                                part_desc.request_filter_pushdown_audit();
-                                            } else {
-                                                debug!("skipping part because of stats filter {:?}", part_desc.stats);
-                                                lease_returner.return_leased_part(part_desc);
-                                                continue;
-                                            }
+                                            debug!("skipping part because of stats filter {:?}", part_desc.stats);
+                                            lease_returner.return_leased_part(part_desc);
+                                            continue;
                                         }
                                     }
-
-                                    bytes_emitted += part_desc.encoded_size_bytes();
-                                    // Give the part to a random worker. This isn't
-                                    // round robin in an attempt to avoid skew issues:
-                                    // if your parts alternate size large, small, then
-                                    // you'll end up only using half of your workers.
-                                    //
-                                    // There's certainly some other things we could be
-                                    // doing instead here, but this has seemed to work
-                                    // okay so far. Continue to revisit as necessary.
-                                    let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                    descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                                 }
-                                bytes_emitted
-                            };
 
-                            // Only track in-flight parts if flow control is enabled. Otherwise we
-                            // would leak memory, as tracked parts would never be drained.
-                            if flow_control_bytes.is_some() && bytes_emitted > 0 {
-                                inflight_parts.push((progress.clone(), bytes_emitted));
-                                inflight_bytes += bytes_emitted;
-                                trace!(
-                                    "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                    shard_id,
-                                    bytes_emitted,
-                                    inflight_bytes,
-                                    progress,
-                                );
+                                // Give the part to a random worker. This isn't
+                                // round robin in an attempt to avoid skew issues:
+                                // if your parts alternate size large, small, then
+                                // you'll end up only using half of your workers.
+                                //
+                                // There's certainly some other things we could be
+                                // doing instead here, but this has seemed to work
+                                // okay so far. Continue to revisit as necessary.
+                                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                                descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                             }
 
                             cap_set.downgrade(progress.iter());
@@ -526,44 +506,6 @@ where
                             break 'emitting_parts;
                         }
                     }
-                }
-                // We've exhausted our budget, listen for updates to the flow_control
-                // input's frontier until we free up new budget. Progress ChangeBatches
-                // are consumed even if you don't interact with the handle, so even if
-                // we never make it to this block (e.g. budget of usize::MAX), because
-                // the stream has no data, we don't cause unbounded buffering in timely.
-                //
-                // NB: AsyncInputHandle::next is cancel safe
-                flow_control_upper = flow_control_input.next(), if inflight_bytes >= max_inflight_bytes => {
-                    // We can never get here when flow control is disabled, as we are not tracking
-                    // in-flight bytes in this case.
-                    assert!(flow_control_bytes.is_some());
-
-                    // Get an upper bound until which we should produce data
-                    let flow_control_upper = match flow_control_upper {
-                        Some(Event::Progress(frontier)) => frontier,
-                        Some(Event::Data(_, _)) => unreachable!("flow_control_input should not contain data"),
-                        None => Antichain::new(),
-                    };
-
-                    let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
-                        PartialOrder::less_equal(&*upper, &flow_control_upper)
-                    });
-
-                    for (_upper, size_in_bytes) in retired_parts {
-                        inflight_bytes -= size_in_bytes;
-                        trace!(
-                            "shard {} returning {} bytes. total: {}. batch frontier {:?} less_equal to {:?}",
-                            shard_id,
-                            size_in_bytes,
-                            inflight_bytes,
-                            _upper,
-                            flow_control_upper,
-                        );
-                    }
-                }
-                else => {
-                    break 'emitting_parts;
                 }
             }
         }
@@ -611,7 +553,8 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    G: Scope<Timestamp = T>,
+    G: Scope,
+    G::Timestamp: Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
@@ -621,6 +564,7 @@ where
     );
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
@@ -629,7 +573,15 @@ where
                 .await
                 .expect("location should be valid");
             client
-                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
+                .create_batch_fetcher::<K, V, T, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+                    },
+                )
                 .await
         };
 
@@ -667,14 +619,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::Arc;
 
+    use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
+    use timely::dataflow::Scope;
     use timely::progress::Antichain;
 
     use crate::cache::PersistClientCache;
     use crate::operators::shard_source::shard_source;
-    use crate::{PersistLocation, ShardId};
+    use crate::{Diagnostics, PersistLocation, ShardId};
 
     /// Verifies that a `shard_source` will downgrade it's output frontier to
     /// the `since` of the shard when no explicit `as_of` is given. Even if
@@ -702,19 +657,30 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = shard_source::<String, String, u64, _, _>(
-                    scope,
-                    "test_source",
-                    persist_clients,
-                    location,
-                    shard_id,
-                    None, // No explicit as_of!
-                    until,
-                    None,
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    |_fetch| true,
-                );
+                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs: &Stream<_, _>, _| {
+                        let token: Rc<dyn Any> = Rc::new(());
+                        (descs.clone(), token)
+                    };
+                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _>(
+                        scope,
+                        "test_source",
+                        persist_clients,
+                        location,
+                        shard_id,
+                        None, // No explicit as_of!
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        |_fetch| true,
+                    );
+                    (stream.leave(), token)
+                });
 
                 let probe = stream.probe();
 
@@ -760,19 +726,30 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = shard_source::<String, String, u64, _, _>(
-                    scope,
-                    "test_source",
-                    persist_clients,
-                    location,
-                    shard_id,
-                    Some(as_of), // We specify the as_of explicitly!
-                    until,
-                    None,
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    |_fetch| true,
-                );
+                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs: &Stream<_, _>, _| {
+                        let token: Rc<dyn Any> = Rc::new(());
+                        (descs.clone(), token)
+                    };
+                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _>(
+                        scope,
+                        "test_source",
+                        persist_clients,
+                        location,
+                        shard_id,
+                        Some(as_of), // We specify the as_of explicitly!
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        |_fetch| true,
+                    );
+                    (stream.leave(), token)
+                });
 
                 let probe = stream.probe();
 
@@ -806,9 +783,9 @@ mod tests {
         let mut read_handle = persist_client
             .open_leased_reader::<String, String, u64, u64>(
                 shard_id,
-                "tests",
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
                 Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("invalid usage");

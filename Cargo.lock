@@ -1982,6 +1982,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "exclusion-set"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c3708c48ed7245587498d116a41566942d6d9943f5b3207fbf522e2bd0b72d0"
+dependencies = [
+ "loom",
+]
+
+[[package]]
 name = "fail"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2268,6 +2277,19 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
+]
+
+[[package]]
+name = "generator"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc16584ff22b460a382b7feec54b23d2908d858152e5739a120b949293bd74e"
+dependencies = [
+ "cc",
+ "libc",
+ "log",
+ "rustversion",
+ "windows",
 ]
 
 [[package]]
@@ -3110,6 +3132,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff50ecb28bb86013e935fb6683ab1f6d3a20016f123c76fd4c27470076ac30f5"
+dependencies = [
+ "cfg-if",
+ "generator",
+ "scoped-tls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lru"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3418,7 +3453,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-rocksdb",
+ "mz-rocksdb-types",
  "mz-secrets",
  "mz-segment",
  "mz-sql",
@@ -3426,6 +3461,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-stash",
  "mz-storage-client",
+ "mz-tracing",
  "mz-transform",
  "once_cell",
  "opentelemetry",
@@ -3433,6 +3469,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "qcell",
  "rand",
  "rdkafka",
  "regex",
@@ -3440,6 +3477,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "serde_plain",
  "smallvec",
  "thiserror",
  "timely",
@@ -3668,7 +3706,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.59.0-dev"
+version = "0.62.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3764,6 +3802,7 @@ dependencies = [
  "mz-service",
  "mz-storage-client",
  "mz-timely-util",
+ "mz-tracing",
  "once_cell",
  "prometheus",
  "proptest",
@@ -3818,7 +3857,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.59.0-dev"
+version = "0.62.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3837,6 +3876,7 @@ dependencies = [
  "futures",
  "headers",
  "http",
+ "http-body",
  "humantime",
  "hyper",
  "hyper-openssl",
@@ -3850,6 +3890,7 @@ dependencies = [
  "mz-build-info",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-expr",
  "mz-frontegg-auth",
  "mz-http-util",
  "mz-interchange",
@@ -3879,12 +3920,14 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "opentelemetry",
+ "pin-project",
  "postgres",
  "postgres-openssl",
  "postgres-protocol",
  "postgres_array",
  "predicates",
  "prometheus",
+ "proptest",
  "rand",
  "rdkafka-sys",
  "regex",
@@ -3896,6 +3939,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "shell-words",
+ "similar-asserts",
  "socket2 0.4.9",
  "sysctl",
  "tempfile",
@@ -3905,6 +3949,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-postgres",
  "tokio-stream",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-core",
@@ -4262,6 +4307,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-service",
+ "mz-tracing",
  "opentelemetry",
  "sentry-tracing",
  "tracing",
@@ -4362,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.59.0-dev"
+version = "0.62.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4506,6 +4552,7 @@ dependencies = [
  "postgres",
  "tokio",
  "tokio-openssl",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "workspace-hack",
@@ -4636,7 +4683,6 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
- "serde_regex",
  "smallvec",
  "thiserror",
  "timely",
@@ -4670,6 +4716,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-proto",
+ "mz-rocksdb-types",
  "num_cpus",
  "once_cell",
  "prometheus",
@@ -4686,6 +4733,25 @@ dependencies = [
  "tokio",
  "tonic-build",
  "tracing",
+ "uncased",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-rocksdb-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-proto",
+ "num_cpus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tonic-build",
  "uncased",
  "workspace-hack",
 ]
@@ -4797,11 +4863,12 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-rocksdb",
+ "mz-rocksdb-types",
  "mz-secrets",
  "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
+ "mz-tracing",
  "once_cell",
  "paste",
  "proptest",
@@ -4813,12 +4880,27 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "static_assertions",
  "thiserror",
  "tokio",
  "tokio-postgres",
  "tracing",
+ "tracing-subscriber",
  "uncased",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-sql-lexer"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "phf",
+ "phf_codegen",
+ "serde",
+ "uncased",
  "workspace-hack",
 ]
 
@@ -4832,9 +4914,9 @@ dependencies = [
  "enum-kinds",
  "itertools",
  "mz-ore",
+ "mz-sql-lexer",
  "mz-walkabout",
  "phf",
- "phf_codegen",
  "serde",
  "tracing",
  "uncased",
@@ -5079,12 +5161,13 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-rocksdb",
+ "mz-rocksdb-types",
  "mz-secrets",
  "mz-service",
  "mz-ssh-util",
  "mz-stash",
  "mz-timely-util",
+ "mz-tracing",
  "once_cell",
  "openssh",
  "prometheus",
@@ -5098,6 +5181,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
+ "static_assertions",
  "thiserror",
  "timely",
  "tokio",
@@ -5226,6 +5310,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-tracing"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-proto",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tonic-build",
+ "tracing",
+ "tracing-subscriber",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-transform"
 version = "0.0.0"
 dependencies = [
@@ -5239,9 +5342,11 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist-client",
  "mz-repr",
  "num-derive",
  "num-traits",
+ "ordered-float",
  "proc-macro2",
  "serde_json",
  "tracing",
@@ -6308,6 +6413,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qcell"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f6c04aa3dea4dab485f6d87449ba94d5664c388c0f1fe2b07c4891175513345"
+dependencies = [
+ "exclusion-set",
+ "once_cell",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6701,6 +6816,12 @@ dependencies = [
  "serde_derive_internals",
  "syn 1.0.107",
 ]
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
 name = "scopeguard"
@@ -7594,7 +7715,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#53adc68bb890c1ce60f0b507d6a4996a3d577f21"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7612,12 +7733,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#53adc68bb890c1ce60f0b507d6a4996a3d577f21"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#53adc68bb890c1ce60f0b507d6a4996a3d577f21"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7633,7 +7754,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#53adc68bb890c1ce60f0b507d6a4996a3d577f21"
 dependencies = [
  "columnation",
  "serde",
@@ -7642,7 +7763,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#15ac623dba44463e15b8bb7dd06be2b37edc28ad"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#53adc68bb890c1ce60f0b507d6a4996a3d577f21"
 
 [[package]]
 name = "tiny-keccak"
@@ -8450,6 +8571,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
+name = "windows"
+version = "0.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e686886bc078bc1b0b600cac0147aadb815089b6e4da64016cbd754b6342700f"
+dependencies = [
+ "windows-targets 0.48.0",
+]
+
+[[package]]
 name = "windows-sys"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8609,6 +8739,7 @@ dependencies = [
 name = "workspace-hack"
 version = "0.0.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "aws-credential-types",
  "aws-sdk-sts",

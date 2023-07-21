@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_format_json = true
-
 # The expected number of rows in system tables depends on the number of replicas
 $ skip-if
 SELECT ${arg.replicas} > 1;
@@ -112,7 +109,7 @@ contains:cannot modify linked cluster "materialize_public_lg1"
   FORMAT JSON ENVELOPE DEBEZIUM
 contains:cannot modify linked cluster "materialize_public_lg1"
 > SET cluster = materialize_public_lg2
-! SELECT 1
+! SELECT generate_series(0, 10)
 contains:cannot execute queries on cluster containing sources or sinks
 ! SUBSCRIBE v
 contains:cannot execute queries on cluster containing sources or sinks

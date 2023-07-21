@@ -21,6 +21,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::pg_legacy_name::PgLegacyName;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -31,7 +32,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
+use crate::scalar::func::{array_create_scalar, format, EagerUnaryFunc, LazyUnaryFunc};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -49,6 +50,14 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastPgLegacyCharToString)]
     fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
         PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_name"]
+    #[preserves_uniqueness = true]
+    fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
+        PgLegacyName(strconv::parse_pg_legacy_name(a))
     }
 );
 
@@ -206,6 +215,23 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
+    // TODO: Pretty sure this preserves uniqueness, but not 100%.
+    //
+    // Ironically, even though this has "monotonic" in the name, it's not quite
+    // eligible for `#[is_monotone = true]` because any input could also be
+    // mapped to null. So, handle it via SpecialUnary in the interpreter.
+    fn try_parse_monotonic_iso8601_timestamp<'a>(
+        a: &'a str,
+    ) -> Option<CheckedTimestamp<NaiveDateTime>> {
+        let ts = format::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = CheckedTimestamp::from_timestamplike(ts)
+            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
+        Some(ts)
+    }
+);
+
+sqlfunc!(
     #[sqlname = "text_to_timestamp_with_time_zone"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastTimestampTzToString)]
@@ -254,7 +280,7 @@ impl LazyUnaryFunc for CastStringToArray {
         if a.is_null() {
             return Ok(Datum::Null);
         }
-        let datums = strconv::parse_array(
+        let (datums, dims) = strconv::parse_array(
             a.unwrap_str(),
             || Datum::Null,
             |elem_text| {
@@ -266,7 +292,8 @@ impl LazyUnaryFunc for CastStringToArray {
                     .eval(&[Datum::String(elem_text)], temp_storage)
             },
         )?;
-        array_create_scalar(&datums, temp_storage)
+
+        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, datums))?)
     }
 
     /// The output ColumnType of this function
@@ -800,7 +827,12 @@ impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
 
 impl fmt::Display for IsLikeMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ~~", self.0.pattern.quoted())
+        write!(
+            f,
+            "{}like[{}]",
+            if self.0.case_insensitive { "i" } else { "" },
+            self.0.pattern.quoted()
+        )
     }
 }
 
@@ -822,7 +854,12 @@ impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
 
 impl fmt::Display for IsRegexpMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ~", self.0.as_str().quoted())
+        write!(
+            f,
+            "is_regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
     }
 }
 
@@ -910,7 +947,12 @@ impl LazyUnaryFunc for RegexpMatch {
 
 impl fmt::Display for RegexpMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "regexp_match[{}]", self.0.as_str())
+        write!(
+            f,
+            "regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
     }
 }
 

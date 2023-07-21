@@ -14,6 +14,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -23,7 +24,7 @@ use mz_pgrepr::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
-use mz_sql::plan::{Params, PlanContext, StatementDesc};
+use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYSTEM_USER};
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
@@ -32,13 +33,16 @@ pub use mz_sql::session::vars::{
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
+use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
+use uuid::Uuid;
 
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, RecordFirstRowStream};
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::statement_logging::PreparedStatementLoggingInfo;
+use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
@@ -55,9 +59,13 @@ struct RoleMetadata {
 }
 
 /// A session holds per-connection state.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
     conn_id: ConnectionId,
+    /// A globally unique identifier for the session. Not to be confused
+    /// with `conn_id`, which may be reused.
+    uuid: Uuid,
     /// The time when the session's connection was initiated.
     connect_time: EpochMillis,
     prepared_statements: BTreeMap<String, PreparedStatement>,
@@ -84,6 +92,19 @@ pub struct Session<T = mz_repr::Timestamp> {
     secret_key: u32,
     external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
     external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
+    // Token allowing us to access `Arc<QCell<StatementLogging>>`
+    // metadata. We want these to be reference-counted, because the same
+    // statement might be referenced from multiple portals simultaneously.
+    //
+    // However, they can't be `Rc<RefCell<StatementLogging>>`, because
+    // the `Session` is sent around to different threads.
+    //
+    // On the other hand, they don't need to be
+    // `Arc<Mutex<StatementLogging>>`, because they will always be
+    // accessed from the same thread that the `Session` is currently
+    // on. We express this by gating access with this token.
+    #[derivative(Debug = "ignore")]
+    qcell_owner: QCellOwner,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -96,6 +117,41 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, conn_id, user, connect_time)
+    }
+
+    /// Creates new statement logging metadata for a one-off
+    /// statement.
+    // Normally, such logging information would be created as part of
+    // allocating a new prepared statement, and a refcounted handle
+    // would be copied from that prepared statement to portals during
+    // binding. However, we also support (via `Command::declare`)
+    // binding a statement directly to a portal without creating an
+    // intermediate prepared statement. Thus, for those cases, a
+    // mechanism for generating the logging metadata directly is needed.
+    pub(crate) fn mint_logging(&self, sql: String) -> Arc<QCell<PreparedStatementLoggingInfo>> {
+        Arc::new(QCell::new(
+            &self.qcell_owner,
+            PreparedStatementLoggingInfo::StillToLog {
+                sql,
+                session_id: self.uuid,
+                prepared_at: Utc::now()
+                    .timestamp_millis()
+                    .try_into()
+                    .expect("sane system time"),
+                name: "".to_string(),
+                accounted: false,
+            },
+        ))
+    }
+
+    pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
+        self.qcell_owner.rw(&*cell)
+    }
+
+    /// Returns a unique ID for the session.
+    /// Not to be confused with `connection_id`, which can be reused.
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
     }
 
     /// Creates a new dummy session.
@@ -130,6 +186,7 @@ impl<T: TimestampManipulation> Session<T> {
         }
         Session {
             conn_id,
+            uuid: Uuid::new_v4(),
             connect_time,
             transaction: TransactionStatus::Default,
             pcx: None,
@@ -143,6 +200,7 @@ impl<T: TimestampManipulation> Session<T> {
             secret_key: rand::thread_rng().gen(),
             external_metadata_tx,
             external_metadata_rx,
+            qcell_owner: QCellOwner::new(),
         }
     }
 
@@ -306,18 +364,21 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         *ops = add_ops;
                     }
-                    TransactionOps::Peeks(txn_timestamp_context) => match add_ops {
-                        TransactionOps::Peeks(add_timestamp_context) => {
-                            match (&txn_timestamp_context, add_timestamp_context) {
+                    TransactionOps::Peeks(determination) => match add_ops {
+                        TransactionOps::Peeks(add_timestamp_determination) => {
+                            match (
+                                &determination.timestamp_context,
+                                &add_timestamp_determination.timestamp_context,
+                            ) {
                                 (
                                     TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
                                     TimestampContext::TimelineTimestamp(add_timeline, add_ts),
                                 ) => {
-                                    assert_eq!(*txn_timeline, add_timeline);
-                                    assert_eq!(*txn_ts, add_ts);
+                                    assert_eq!(txn_timeline, add_timeline);
+                                    assert_eq!(txn_ts, add_ts);
                                 }
-                                (TimestampContext::NoTimestamp, add_timestamp_context) => {
-                                    *txn_timestamp_context = add_timestamp_context
+                                (TimestampContext::NoTimestamp, _) => {
+                                    *determination = add_timestamp_determination
                                 }
                                 (_, TimestampContext::NoTimestamp) => {}
                             };
@@ -326,7 +387,7 @@ impl<T: TimestampManipulation> Session<T> {
                         // they are constant), we can switch to a write
                         // transaction.
                         writes @ TransactionOps::Writes(..)
-                            if !txn_timestamp_context.contains_timestamp() =>
+                            if !determination.timestamp_context.contains_timestamp() =>
                         {
                             *ops = writes;
                         }
@@ -354,8 +415,8 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.
-                        TransactionOps::Peeks(timestamp_context)
-                            if !timestamp_context.contains_timestamp() => {}
+                        TransactionOps::Peeks(determination)
+                            if !determination.timestamp_context.contains_timestamp() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }
@@ -442,7 +503,11 @@ impl<T: TimestampManipulation> Session<T> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks(_) = ops {
                 let ops = std::mem::take(ops);
-                Some(ops.timestamp_context().expect("checked above"))
+                Some(
+                    ops.timestamp_determination()
+                        .expect("checked above")
+                        .timestamp_context,
+                )
             } else {
                 None
             }
@@ -451,19 +516,19 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the transaction's read timestamp context, if set.
+    /// Returns the transaction's read timestamp determination, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_context(&self) -> Option<TimestampContext<T>> {
+    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination<T>> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(timestamp_context),
+                ops: TransactionOps::Peeks(determination),
                 write_lock_guard: _,
                 access: _,
                 id: _,
-            }) => Some(timestamp_context.clone()),
+            }) => Some(determination.clone()),
             _ => None,
         }
     }
@@ -474,7 +539,10 @@ impl<T: TimestampManipulation> Session<T> {
             self.transaction.inner(),
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(TimestampContext::TimelineTimestamp(_, _)),
+                ops: TransactionOps::Peeks(TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                    ..
+                }),
                 write_lock_guard: _,
                 access: _,
                 id: _,
@@ -483,7 +551,31 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Registers the prepared statement under `name`.
-    pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
+    pub fn set_prepared_statement(
+        &mut self,
+        name: String,
+        stmt: Option<Statement<Raw>>,
+        // TODO[btv] - This will be used by statement logging
+        sql: String,
+        desc: StatementDesc,
+        catalog_revision: u64,
+        now: EpochMillis,
+    ) {
+        let statement = PreparedStatement {
+            stmt,
+            desc,
+            catalog_revision,
+            logging: Arc::new(QCell::new(
+                &self.qcell_owner,
+                PreparedStatementLoggingInfo::StillToLog {
+                    sql,
+                    name: name.clone(),
+                    prepared_at: now,
+                    session_id: self.uuid,
+                    accounted: false,
+                },
+            )),
+        };
         self.prepared_statements.insert(name, statement);
     }
 
@@ -537,6 +629,7 @@ impl<T: TimestampManipulation> Session<T> {
         portal_name: String,
         desc: StatementDesc,
         stmt: Option<Statement<Raw>>,
+        logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<mz_pgrepr::Format>,
         catalog_revision: u64,
@@ -557,6 +650,7 @@ impl<T: TimestampManipulation> Session<T> {
                 },
                 result_formats: result_formats.into_iter().map(Into::into).collect(),
                 state: PortalState::NotStarted,
+                logging,
             },
         );
         Ok(())
@@ -587,6 +681,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn create_new_portal(
         &mut self,
         stmt: Option<Statement<Raw>>,
+        logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
@@ -606,6 +701,7 @@ impl<T: TimestampManipulation> Session<T> {
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
+                        logging,
                     });
                     return Ok(name);
                 }
@@ -716,28 +812,18 @@ impl<T: TimestampManipulation> Session<T> {
 }
 
 /// A prepared statement.
-#[derive(Debug, Clone)]
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct PreparedStatement {
     stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
     pub catalog_revision: u64,
+    #[derivative(Debug = "ignore")]
+    logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
 
 impl PreparedStatement {
-    /// Constructs a new prepared statement.
-    pub fn new(
-        stmt: Option<Statement<Raw>>,
-        desc: StatementDesc,
-        catalog_revision: u64,
-    ) -> PreparedStatement {
-        PreparedStatement {
-            stmt,
-            desc,
-            catalog_revision,
-        }
-    }
-
     /// Returns the AST associated with this prepared statement,
     /// if the prepared statement was not the empty query.
     pub fn stmt(&self) -> Option<&Statement<Raw>> {
@@ -747,6 +833,11 @@ impl PreparedStatement {
     /// Returns the description of the prepared statement.
     pub fn desc(&self) -> &StatementDesc {
         &self.desc
+    }
+
+    /// Returns a handle to the metadata for statement logging.
+    pub fn logging(&self) -> &Arc<QCell<PreparedStatementLoggingInfo>> {
+        &self.logging
     }
 }
 
@@ -764,6 +855,9 @@ pub struct Portal {
     pub parameters: Params,
     /// The desired output format for each column in the result set.
     pub result_formats: Vec<mz_pgrepr::Format>,
+    /// A handle to metadata needed for statement logging.
+    #[derivative(Debug = "ignore")]
+    pub logging: Arc<QCell<PreparedStatementLoggingInfo>>,
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,
@@ -787,12 +881,12 @@ pub struct InProgressRows {
     /// The current batch of rows.
     pub current: Option<Vec<Row>>,
     /// A stream from which to fetch more row batches.
-    pub remaining: RowBatchStream,
+    pub remaining: RecordFirstRowStream,
 }
 
 impl InProgressRows {
     /// Creates a new InProgressRows from a batch stream.
-    pub fn new(remaining: RowBatchStream) -> Self {
+    pub fn new(remaining: RecordFirstRowStream) -> Self {
         Self {
             current: None,
             remaining,
@@ -889,6 +983,11 @@ impl<T> TransactionStatus<T> {
         }
     }
 
+    /// Whether the transaction is in a multi-statement, immediate transaction.
+    pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
+        self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
+    }
+
     /// Grants the write lock to the inner transaction.
     ///
     /// # Panics
@@ -961,9 +1060,10 @@ impl<T> Transaction<T> {
     /// The timeline of the transaction, if one exists.
     fn timeline(&self) -> Option<Timeline> {
         match &self.ops {
-            TransactionOps::Peeks(TimestampContext::TimelineTimestamp(timeline, _)) => {
-                Some(timeline.clone())
-            }
+            TransactionOps::Peeks(TimestampDetermination {
+                timestamp_context: TimestampContext::TimelineTimestamp(timeline, _),
+                ..
+            }) => Some(timeline.clone()),
             TransactionOps::Peeks(_)
             | TransactionOps::None
             | TransactionOps::Subscribe
@@ -1022,7 +1122,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
@@ -1031,7 +1131,7 @@ pub enum TransactionOps<T> {
     /// is has a timestamp, it must only do other peeks. However, if it doesn't
     /// have a timestamp (i.e. the values are constants), the transaction can still
     /// perform writes.
-    Peeks(TimestampContext<T>),
+    Peeks(TimestampDetermination<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
@@ -1040,9 +1140,9 @@ pub enum TransactionOps<T> {
 }
 
 impl<T> TransactionOps<T> {
-    fn timestamp_context(self) -> Option<TimestampContext<T>> {
+    fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
         match self {
-            TransactionOps::Peeks(timestamp_context) => Some(timestamp_context),
+            TransactionOps::Peeks(determination) => Some(determination),
             TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
         }
     }

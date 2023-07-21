@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import os
+from inspect import Traceback
 from typing import Optional
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
@@ -48,6 +49,7 @@ class Testdrive(K8sPod):
         input: Optional[str] = None,
         no_reset: bool = False,
         seed: Optional[int] = None,
+        caller: Optional[Traceback] = None,
     ) -> None:
         wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
@@ -71,6 +73,7 @@ class Testdrive(K8sPod):
             # "--aws-secret-access-key=minio123",
             *(["--no-reset"] if no_reset else []),
             *([f"--seed={seed}"] if seed else []),
+            *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
             *args,
             input=input,
         )

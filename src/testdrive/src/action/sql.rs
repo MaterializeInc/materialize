@@ -13,7 +13,7 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -39,7 +39,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
     }
-    let stmt = stmts.into_element();
+    let stmt = stmts.into_element().ast;
     if let SqlOutput::Full { expected_rows, .. } = &mut cmd.expected_output {
         // TODO(benesch): one day we'll support SQL queries where order matters.
         expected_rows.sort();
@@ -127,10 +127,12 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::CreateSource { .. }
         | Statement::CreateTable { .. }
         | Statement::CreateView { .. }
+        | Statement::CreateMaterializedView { .. }
         | Statement::DropObjects { .. } => {
             let disk_state = state
                 .with_catalog_copy(|catalog| catalog.state().dump())
-                .await?;
+                .await
+                .map_err(|e| anyhow!("failed to dump on-disk catalog state: {e}"))?;
             if let Some(disk_state) = disk_state {
                 let mem_state = reqwest::get(&format!(
                     "http://{}/api/catalog",
@@ -342,7 +344,7 @@ pub async fn run_fail_sql(
             if s.len() != 1 {
                 bail!("expected one statement, but got {}", s.len());
             }
-            Some(s.into_element())
+            Some(s.into_element().ast)
         }
         Err(_) => None,
     };

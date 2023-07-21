@@ -44,12 +44,12 @@ Explained Query:
               Filter (#0 <= #0) AND (#0 >= #0)
                 Get materialize.public.t5
           ArrangeBy keys=[[]]
-            Filter (#1 = text_to_char(text_to_varchar(boolean_to_text("0.31161855206970124" ~~(padchar(#1))))))
+            Filter (#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1))))))
               Get materialize.public.t3
           ArrangeBy keys=[[]]
             Get materialize.public.t5
 
 Source materialize.public.t3
-  filter=((#1 = text_to_char(text_to_varchar(boolean_to_text("0.31161855206970124" ~~(padchar(#1)))))))
+  filter=((#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1)))))))
 
 EOF

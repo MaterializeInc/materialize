@@ -172,7 +172,9 @@ pub struct ExplainConfig {
     /// Show the `type` attribute in the explanation.
     pub types: bool,
     /// Show MFP pushdown information.
-    pub mfp_pushdown: bool,
+    pub filter_pushdown: bool,
+    /// Show cardinality information.
+    pub cardinality: bool,
 }
 
 impl Default for ExplainConfig {
@@ -189,14 +191,20 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
-            mfp_pushdown: false,
+            filter_pushdown: false,
+            cardinality: false,
         }
     }
 }
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size || self.non_negative || self.arity || self.types || self.keys
+        self.subtree_size
+            || self.non_negative
+            || self.arity
+            || self.types
+            || self.keys
+            || self.cardinality
     }
 }
 
@@ -221,7 +229,8 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
-            mfp_pushdown: flags.remove("mfp_pushdown"),
+            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
+            cardinality: flags.remove("cardinality"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -483,6 +492,7 @@ pub struct Attributes {
     pub arity: Option<usize>,
     pub types: Option<String>,
     pub keys: Option<String>,
+    pub cardinality: Option<String>,
 }
 
 impl fmt::Display for Attributes {
@@ -502,6 +512,9 @@ impl fmt::Display for Attributes {
         }
         if let Some(keys) = &self.keys {
             builder.field("keys", keys);
+        }
+        if let Some(cardinality) = &self.cardinality {
+            builder.field("cardinality", cardinality);
         }
         builder.finish()
     }
@@ -620,7 +633,8 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
-            mfp_pushdown: false,
+            filter_pushdown: false,
+            cardinality: false,
         };
         let context = ExplainContext {
             env,

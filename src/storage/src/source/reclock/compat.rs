@@ -21,15 +21,14 @@ use futures::stream::LocalBoxStream;
 use futures::StreamExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::PersistClient;
+use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc};
-use mz_storage_client::controller::{CollectionMetadata, PersistEpoch};
+use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sources::{SourceData, SourceTimestamp};
 use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 use timely::order::PartialOrder;
@@ -77,6 +76,7 @@ where
         //
         // TODO(guswynn): use the type-system to prevent misuse here.
         remap_relation_desc: RelationDesc,
+        remap_collection_id: GlobalId,
     ) -> anyhow::Result<Self> {
         let remap_shard = metadata.remap_shard.ok_or_else(|| {
             anyhow!("cannot create remap PersistHandle for collection without remap shard")
@@ -87,32 +87,29 @@ where
             .await
             .context("error creating persist client")?;
 
-        let since_handle: SinceHandle<SourceData, (), IntoTime, Diff, PersistEpoch> =
-            persist_client
-                .open_critical_since(
-                    remap_shard,
-                    PersistClient::CONTROLLER_CRITICAL_SINCE,
-                    &format!("reclock {}", id),
-                )
-                .await
-                .expect("invalid persist usage");
-
-        let since = since_handle.since();
-
         let (write_handle, mut read_handle) = persist_client
             .open(
                 remap_shard,
-                &format!("reclock {}", id),
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: remap_collection_id.to_string(),
+                    handle_purpose: format!("reclock for {}", id),
+                },
             )
             .await
             .context("error opening persist shard")?;
 
         let upper = write_handle.upper();
+        // We want a leased reader because elsewhere in the code the `as_of`
+        // time may also be determined by another `ReadHandle`, and the pair of
+        // them offer the invariant that we need (that the `as_of` if <= this
+        // `since`). Using a `SinceHandle` here does not offer the same
+        // invariant when paired with a `ReadHandle`.
+        let since = read_handle.since();
 
         // Allow manually simulating the scenario where the since of the remap
-        // shard has advanced to far.
+        // shard has advanced too far.
         fail_point!("invalid_remap_as_of");
         assert!(
             PartialOrder::less_equal(since, &as_of),

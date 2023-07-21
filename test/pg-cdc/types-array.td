@@ -282,5 +282,10 @@ INSERT INTO t_integer_array VALUES ('{{1},{2}}');
 
 INSERT INTO t_integer_array SELECT * FROM t_integer_array;
 
-! SELECT * FROM t_integer_array;
-contains:invalid input syntax for type array
+> SELECT * FROM t_integer_array;
+ {1,2}
+ {1,2}
+ {1,2}
+ {1,2}
+ {{1},{2}}
+ {{1},{2}}

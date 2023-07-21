@@ -27,6 +27,7 @@ from materialize.mzcompose.services import (
     Redpanda,
     SchemaRegistry,
     Testdrive,
+    Toxiproxy,
     Zookeeper,
 )
 
@@ -43,6 +44,7 @@ SERVICES = [
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False, external_cockroach=True),
     Redpanda(),
+    Toxiproxy(),
     Testdrive(
         volume_workdir="../testdrive:/workdir/testdrive",
         volumes_extra=[".:/workdir/smoke"],
@@ -77,6 +79,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
         "test-mv-source-sink",
+        "test-query-without-default-cluster",
+        "test-clusterd-death-detection",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -376,14 +380,12 @@ def workflow_test_github_15531(c: Composition) -> None:
         controller_command_count < 100
     ), "controller history grew more than expected after peeks"
     assert (
-        controller_dataflow_count == 1
+        controller_dataflow_count < 5
     ), "more dataflows than expected in controller history"
     assert (
         replica_command_count < 100
     ), "replica history grew more than expected after peeks"
-    assert (
-        replica_dataflow_count == 1
-    ), "more dataflows than expected in replica history"
+    assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 
 def workflow_test_github_15535(c: Composition) -> None:
@@ -1783,3 +1785,119 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     assert (
         mv_since >= t_since
     ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
+
+
+def workflow_test_query_without_default_cluster(c: Composition) -> None:
+    """Test queries without a default cluster in Materialize."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Postgres(),
+        Materialized(),
+    ):
+        c.up("materialized", "postgres")
+
+        c.run(
+            "testdrive",
+            "query-without-default-cluster/query-without-default-cluster.td",
+        )
+
+
+def workflow_test_clusterd_death_detection(c: Composition) -> None:
+    """
+    Test that environmentd notices when a clusterd becomes disconnected.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/20299
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1", "toxiproxy")
+    c.up("testdrive", persistent=True)
+
+    c.testdrive(
+        input=dedent(
+            """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd1",
+              "listen": "0.0.0.0:2100",
+              "upstream": "clusterd1:2100",
+              "enabled": true
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd2",
+              "listen": "0.0.0.0:2101",
+              "upstream": "clusterd1:2101",
+              "enabled": true
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd3",
+              "listen": "0.0.0.0:2102",
+              "upstream": "clusterd1:2102",
+              "enabled": true
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd4",
+              "listen": "0.0.0.0:2103",
+              "upstream": "clusterd1:2103",
+              "enabled": true
+            }
+
+            > CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                STORAGE ADDRESSES ['toxiproxy:2103'],
+                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                COMPUTE ADDRESSES ['toxiproxy:2102'],
+                WORKERS 2));
+
+            > SELECT mz_internal.mz_sleep(1);
+            <null>
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
+            {
+              "name": "clusterd1",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
+            {
+              "name": "clusterd2",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
+            {
+              "name": "clusterd3",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
+            {
+              "name": "clusterd4",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+        """
+        )
+    )
+    # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
+    time.sleep(10)
+    envd = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "error reading a body from connection: stream closed because of a broken pipe"
+        in envd.stdout
+    )

@@ -8,14 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::pin;
+use std::pin::{self};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
+use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdHandle};
@@ -24,20 +26,25 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
+use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, INTROSPECTION_USER};
+use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
+use prometheus::Histogram;
+use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
 
 use crate::command::{
-    Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse, Response,
-    StartupResponse,
+    AppendWebhookResponse, Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse,
+    Response, StartupResponse,
 };
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::PeekResponseUnary;
 
 /// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
@@ -89,6 +96,8 @@ pub struct Client {
     id_alloc: IdAllocator<ConnectionIdType>,
     now: NowFn,
     metrics: Metrics,
+    environment_id: EnvironmentId,
+    segment_client: Option<mz_segment::Client>,
 }
 
 impl Client {
@@ -97,6 +106,8 @@ impl Client {
         cmd_tx: mpsc::UnboundedSender<Command>,
         metrics: Metrics,
         now: NowFn,
+        environment_id: EnvironmentId,
+        segment_client: Option<mz_segment::Client>,
     ) -> Client {
         Client {
             build_info,
@@ -104,6 +115,8 @@ impl Client {
             id_alloc: IdAllocator::new(1, 1 << 16),
             now,
             metrics,
+            environment_id,
+            segment_client,
         }
     }
 
@@ -149,6 +162,8 @@ impl Client {
             cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
             timeouts: Timeout::new(),
+            environment_id: self.environment_id.clone(),
+            segment_client: self.segment_client.clone(),
         };
         let response = client
             .send(|tx, session| Command::Startup {
@@ -190,18 +205,18 @@ impl Client {
         if stmts.len() != 1 {
             bail!("must supply exactly one query");
         }
-        let stmt = stmts.into_element();
+        let StatementParseResult { ast: stmt, sql } = stmts.into_element();
 
         const EMPTY_PORTAL: &str = "";
         session_client.start_transaction(Some(1))?;
         session_client
-            .declare(EMPTY_PORTAL.into(), stmt, vec![])
+            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string(), vec![])
             .await?;
         match session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending())
             .await?
         {
-            ExecuteResponse::SendingRows { future, span: _ } => match future.await {
+            (ExecuteResponse::SendingRows { future, span: _ }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
@@ -213,6 +228,32 @@ impl Client {
     /// Returns the metrics associated with the adapter layer.
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
+    }
+
+    pub async fn append_webhook(
+        &self,
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+    ) -> Result<AppendWebhookResponse, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+
+        // Send our request.
+        self.send(Command::AppendWebhook {
+            database,
+            schema,
+            name,
+            conn_id,
+            tx,
+        });
+
+        // Using our one shot channel to get the result, returning an error if the sender dropped.
+        let response = rx.await.map_err(|_| {
+            AdapterError::Internal("failed to receive webhook response".to_string())
+        })?;
+
+        response
     }
 
     fn send(&self, cmd: Command) {
@@ -236,9 +277,59 @@ pub struct SessionClient {
     cancel_tx: Arc<watch::Sender<Canceled>>,
     cancel_rx: watch::Receiver<Canceled>,
     timeouts: Timeout,
+    segment_client: Option<mz_segment::Client>,
+    environment_id: EnvironmentId,
 }
 
 impl SessionClient {
+    /// Parses a SQL expression, reporting failures as a telemetry event if
+    /// possible.
+    pub fn parse<'a>(
+        &self,
+        sql: &'a str,
+    ) -> Result<Result<Vec<StatementParseResult<'a>>, ParserStatementError>, String> {
+        match mz_sql::parse::parse_with_limit(sql) {
+            Ok(Err(e)) => {
+                self.track_statement_parse_failure(&e);
+                Ok(Err(e))
+            }
+            r => r,
+        }
+    }
+
+    fn track_statement_parse_failure(&self, parse_error: &ParserStatementError) {
+        let session = self.session.as_ref().expect("session invariant violated");
+        let Some(user_id) = session.user().external_metadata.as_ref().map(|m| m.user_id) else {
+            return;
+        };
+        let Some(segment_client) = &self.segment_client else {
+            return;
+        };
+        let Some(statement_kind) = parse_error.statement else {
+            return;
+        };
+        let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind) else {
+            return;
+        };
+        let event_type = StatementFailureType::ParseFailure;
+        let event_name = format!(
+            "{} {} {}",
+            object_type.as_title_case(),
+            action.as_title_case(),
+            event_type.as_title_case(),
+        );
+        segment_client.environment_track(
+            &self.environment_id,
+            session.application_name(),
+            user_id,
+            event_name,
+            json!({
+                "statement_kind": statement_kind,
+                "error": &parse_error.error,
+            }),
+        );
+    }
+
     pub fn canceled(&self) -> impl Future<Output = ()> + Send {
         let mut cancel_rx = self.cancel_rx.clone();
         async move {
@@ -286,11 +377,13 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Prepare {
             name,
             stmt,
+            sql,
             param_types,
             session,
             tx,
@@ -303,11 +396,13 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Statement<Raw>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Declare {
             name,
             stmt,
+            inner_sql: sql,
             param_types,
             session,
             tx,
@@ -322,17 +417,20 @@ impl SessionClient {
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.send_with_cancel(
-            |tx, session| Command::Execute {
-                portal_name,
-                session,
-                tx,
-                span: tracing::Span::current(),
-            },
-            cancel_future,
-        )
-        .await
+    ) -> Result<(ExecuteResponse, Instant), AdapterError> {
+        let execute_started = Instant::now();
+        let response = self
+            .send_with_cancel(
+                |tx, session| Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    span: tracing::Span::current(),
+                },
+                cancel_future,
+            )
+            .await?;
+        Ok((response, execute_started))
     }
 
     fn now(&self) -> EpochMillis {
@@ -485,6 +583,7 @@ impl SessionClient {
             match cmd {
                 Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
+                Command::AppendWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
                 | Command::Prepare { .. }
                 | Command::VerifyPreparedStatement { .. }
@@ -656,5 +755,65 @@ impl Timeout {
         for pending_timeout in timeouts {
             self.tx.send(pending_timeout).expect("rx is in this struct");
         }
+    }
+}
+
+/// A wrapper around an UnboundedReceiver of PeekResponseUnary that records when it sees the
+/// first row data in the given histogram
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct RecordFirstRowStream {
+    #[derivative(Debug = "ignore")]
+    pub rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
+    pub execute_started: Instant,
+    pub time_to_first_row_seconds: Histogram,
+    saw_rows: bool,
+}
+
+impl RecordFirstRowStream {
+    /// Create a new [`RecordFirstRowStream`]
+    pub fn new(
+        rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
+        execute_started: Instant,
+        client: &SessionClient,
+    ) -> Self {
+        let histogram = Self::histogram(client);
+        Self {
+            rows,
+            execute_started,
+            time_to_first_row_seconds: histogram,
+            saw_rows: false,
+        }
+    }
+
+    fn histogram(client: &SessionClient) -> Histogram {
+        let isolation_level = *client
+            .session
+            .as_ref()
+            .expect("session invariant")
+            .vars()
+            .transaction_isolation();
+
+        client
+            .inner()
+            .metrics()
+            .time_to_first_row_seconds
+            .with_label_values(&[isolation_level.as_str()])
+    }
+
+    /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
+    /// a UnboundedReceiver, you can tell it when to record an observation.
+    pub fn record(execute_started: Instant, client: &SessionClient) {
+        Self::histogram(client).observe(execute_started.elapsed().as_secs_f64());
+    }
+
+    pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
+        let msg = self.rows.next().await;
+        if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
+            self.saw_rows = true;
+            self.time_to_first_row_seconds
+                .observe(self.execute_started.elapsed().as_secs_f64());
+        }
+        msg
     }
 }

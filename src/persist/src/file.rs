@@ -246,7 +246,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn file_blob() -> Result<(), ExternalError> {
         let temp_dir = tempfile::tempdir().map_err(Error::from)?;
         blob_impl_test(move |path| {

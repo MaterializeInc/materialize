@@ -32,7 +32,7 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
 use crate::cfg::MB;
 use crate::fetch::{fetch_batch_part, EncodedPart};
@@ -72,16 +72,19 @@ pub struct CompactRes<T> {
 #[derive(Debug, Clone)]
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
+    pub(crate) compaction_yield_after_n_updates: usize,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
 }
 
-impl From<&PersistConfig> for CompactConfig {
-    fn from(value: &PersistConfig) -> Self {
+impl CompactConfig {
+    /// Initialize the compaction config from Persist configuration.
+    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
         CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
+            compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::from(value),
+            batch: BatchBuilderConfig::new(value, writer_id),
         }
     }
 }
@@ -125,7 +128,7 @@ where
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
@@ -177,7 +180,7 @@ where
 
                 let cfg = machine.applier.cfg.clone();
                 let blob = Arc::clone(&machine.applier.state_versions.blob);
-                let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
+                let isolated_runtime = Arc::clone(&isolated_runtime);
                 let writer_id = writer_id.clone();
                 let schemas = schemas.clone();
 
@@ -190,7 +193,7 @@ where
                         cfg,
                         blob,
                         metrics,
-                        cpu_heavy_runtime,
+                        isolated_runtime,
                         req,
                         writer_id,
                         schemas,
@@ -269,7 +272,7 @@ where
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
@@ -304,18 +307,17 @@ where
         let compact_span = debug_span!("compact::consolidate");
         let res = tokio::time::timeout(
             timeout,
-            // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
-            cpu_heavy_runtime
+            // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
+            isolated_runtime
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        CompactConfig::from(&cfg),
+                        CompactConfig::new(&cfg, &writer_id),
                         Arc::clone(&blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
-                        Arc::clone(&cpu_heavy_runtime),
+                        Arc::clone(&isolated_runtime),
                         req,
-                        writer_id,
                         schemas.clone(),
                     )
                     .instrument(compact_span),
@@ -414,9 +416,8 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
-        writer_id: WriterId,
         schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
@@ -482,8 +483,7 @@ where
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&shard_metrics),
-                Arc::clone(&cpu_heavy_runtime),
-                writer_id.clone(),
+                Arc::clone(&isolated_runtime),
                 schemas.clone(),
             )
             .await?;
@@ -646,8 +646,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-        writer_id: WriterId,
+        isolated_runtime: Arc<IsolatedRuntime>,
         real_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
@@ -693,10 +692,9 @@ where
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
-            cpu_heavy_runtime,
+            isolated_runtime,
             shard_id.clone(),
             cfg.version.clone(),
-            writer_id,
             desc.since().clone(),
             Some(desc.upper().clone()),
             true,
@@ -730,6 +728,7 @@ where
                 // once after this initial heap population.
                 timings.part_fetching += start.elapsed();
                 let start = Instant::now();
+                let mut updates_decoded = 0;
                 while let Some((k, v, mut t, d)) = part.next() {
                     t.advance_by(desc.since().borrow());
                     let d = D::decode(d);
@@ -738,6 +737,11 @@ where
                     // default heap ordering is descending
                     sorted_updates.push(Reverse((((k, v), t, d), index)));
                     remaining_updates_by_run[index] += 1;
+
+                    updates_decoded += 1;
+                    if updates_decoded % cfg.compaction_yield_after_n_updates == 0 {
+                        tokio::task::yield_now().await;
+                    }
                 }
                 timings.heap_population += start.elapsed();
             }
@@ -755,6 +759,7 @@ where
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
         // consumed.
+        let mut updates_encoded = 0;
         while let Some(Reverse((((k, v), t, d), index))) = sorted_updates.pop() {
             remaining_updates_by_run[index] -= 1;
             if remaining_updates_by_run[index] == 0 {
@@ -781,6 +786,7 @@ where
                     );
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
+                    let mut updates_decoded = 0;
                     while let Some((k, v, mut t, d)) = part.next() {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);
@@ -789,12 +795,22 @@ where
                         // default heap ordering is descending
                         sorted_updates.push(Reverse((((k, v), t, d), index)));
                         remaining_updates_by_run[index] += 1;
+
+                        updates_decoded += 1;
+                        if updates_decoded % cfg.compaction_yield_after_n_updates == 0 {
+                            tokio::task::yield_now().await;
+                        }
                     }
                     timings.heap_population += start.elapsed();
                 }
             }
 
             batch.add(&real_schemas, &k, &v, &t, &d).await?;
+
+            updates_encoded += 1;
+            if updates_encoded % cfg.compaction_yield_after_n_updates == 0 {
+                tokio::task::yield_now().await;
+            }
         }
 
         let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
@@ -999,7 +1015,6 @@ mod tests {
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_minimum_since() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1041,13 +1056,12 @@ mod tests {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::from(&write.cfg),
+            CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
-            write.metrics.shards.shard(&write.machine.shard_id()),
-            Arc::new(CpuHeavyRuntime::new()),
+            write.metrics.shards.shard(&write.machine.shard_id(), ""),
+            Arc::new(IsolatedRuntime::new()),
             req.clone(),
-            write.writer_id.clone(),
             schemas,
         )
         .await
@@ -1067,7 +1081,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn compaction_partial_order() {
         let data = vec![
             (
@@ -1127,13 +1140,12 @@ mod tests {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), CodecProduct, i64>::compact(
-            CompactConfig::from(&write.cfg),
+            CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
-            write.metrics.shards.shard(&write.machine.shard_id()),
-            Arc::new(CpuHeavyRuntime::new()),
+            write.metrics.shards.shard(&write.machine.shard_id(), ""),
+            Arc::new(IsolatedRuntime::new()),
             req.clone(),
-            write.writer_id.clone(),
             schemas,
         )
         .await
@@ -1153,7 +1165,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn prefetches() {
         let desc = Description::new(
             Antichain::from_elem(0u64),
@@ -1211,7 +1222,7 @@ mod tests {
         let shard_id = ShardId::new();
         let blob = &client.blob;
         let metrics = &client.metrics;
-        let shard_metrics = &client.metrics.shards.shard(&shard_id);
+        let shard_metrics = &client.metrics.shards.shard(&shard_id, "");
 
         // NB: In the below, parts within a run are separated by `,` and runs
         // are separated by `|`. Example: `r0p0,r0p1|r1p0|r2p0,r2p1,r2p2`

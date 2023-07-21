@@ -689,6 +689,19 @@ Add partitions to an existing topic
 
 Create a Kafka topic
 
+#### `$ kafka-delete-topic-flaky`
+
+Delete a Kafka topic
+
+Even though `kafka-delete-topic-flaky` ensures that the topic no longer exists
+in the broker metadata there is still work to be done asychnronously before
+it's truly gone that must complete before we attempt to recreate it. There is
+no way to observe this work completing so the only option left is sleeping for
+a while after executing this command.
+
+For this reason this command must be used with great care or not at all,
+otherwise there is a risk of introducing flakiness in CI.
+
 #### `$ kafka-ingest topic=... schema=... ...`
 
 Sends the data provided to a kafka topic. This action has many arguments:
@@ -832,9 +845,11 @@ Debezium, to upload a particular schema.
 
 ## Actions on REST services
 
-#### `$ http-request method=(GET|POST|PUT) url=... content-type=...`
+#### `$ http-request method=(GET|POST|PUT) url=... content-type=... [accept-additional-status-codes=404,409]`
 
-Issue a HTTP request against a third-party server. The body of the command is used as a body of the request. This is generally used when communicating with REST services such as Debezium and Toxiproxy. See `test/debezium-avro/debezium-postgres.td.initialize` and `test/pg-cdc-resumption/configure-toxiproxy.td`
+Issue an HTTP request against a third-party server. The body of the command is used as a body of the request. This is
+generally used when communicating with REST services such as Debezium and Toxiproxy. See
+`test/debezium-avro/debezium-postgres.td.initialize` and `test/pg-cdc-resumption/configure-toxiproxy.td`
 
 ```
 $ http-request method=POST url=http://example/com content-type=application/json
@@ -843,7 +858,26 @@ $ http-request method=POST url=http://example/com content-type=application/json
 }
 ```
 
-The test will fail unless the HTTP status code of the response is in the 200 range.
+The test will fail unless the HTTP status code of the response is in the 200 range. If further status codes shall be
+accepted, use the parameter `accept-additional-status-codes`, which takes a comma-separated list.
+
+## Actions on Webhook Sources
+
+#### `$ webhook-append name=... [database=...] [schema=...] [status=404] [header_name=header_value, ...]`
+
+Issues an HTTP POST request to a webhook source at `<database>.<schema>.<name>`, by default
+`database` is `materialize` and `schema` is `public`. The body of the command is used as the body
+of the request. You can optionally specify an expected response status code, by default we expect a
+status of 200. Any remaining arguments are appended to the request as headers.
+
+See `webhook.td` for more examples.
+
+```
+$ webhook-append database=materialize schema=public name=webhook_json app_name=test_drive
+{
+  "hello": "world"
+}
+```
 
 ## Actions with `psql`
 

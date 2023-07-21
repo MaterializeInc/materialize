@@ -614,11 +614,11 @@ GRANT CREATEROLE ON SYSTEM TO joe
 GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([CREATEROLE]), target: System, roles: [Ident("joe")] })
 
 parse-statement
-GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO joe, mike
+GRANT CREATEROLE, CREATECLUSTER, CREATEDB ON SYSTEM TO joe, mike
 ----
-GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO joe, mike
+GRANT CREATEROLE, CREATECLUSTER, CREATEDB ON SYSTEM TO joe, mike
 =>
-GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([CREATEROLE, CREATECLUSTER]), target: System, roles: [Ident("joe"), Ident("mike")] })
+GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([CREATEROLE, CREATECLUSTER, CREATEDB]), target: System, roles: [Ident("joe"), Ident("mike")] })
 
 parse-statement
 GRANT ALL PRIVILEGES ON SYSTEM TO joe
@@ -1088,6 +1088,13 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO joe
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO joe
 =>
 AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: AllRoles, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([SELECT]), object_type: Table, grantees: [Ident("joe")] }) })
+
+parse-statement
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO joe
+----
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO joe
+=>
+AlterDefaultPrivileges(AlterDefaultPrivilegesStatement { target_roles: CurrentRole, target_objects: All, grant_or_revoke: Grant(AbbreviatedGrantStatement { privileges: Privileges([SELECT]), object_type: Table, grantees: [Ident("joe")] }) })
 
 parse-statement
 ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM joe

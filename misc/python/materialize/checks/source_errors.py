@@ -19,14 +19,6 @@ class SourceErrors(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE SECRET source_errors_secret AS 'postgres';
-
-                > CREATE CONNECTION source_errors_connection FOR POSTGRES
-                  HOST 'postgres',
-                  DATABASE postgres,
-                  USER source_errors_user1,
-                  PASSWORD SECRET source_errors_secret
-
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 # In order to avoid conflicts, user must be unique
                 CREATE USER source_errors_user1 WITH SUPERUSER PASSWORD 'postgres';
@@ -43,6 +35,14 @@ class SourceErrors(Check):
 
                 CREATE PUBLICATION source_errors_publicationA FOR ALL TABLES;
                 CREATE PUBLICATION source_errors_publicationB FOR ALL TABLES;
+
+                > CREATE SECRET source_errors_secret AS 'postgres';
+
+                > CREATE CONNECTION source_errors_connection FOR POSTGRES
+                  HOST 'postgres',
+                  DATABASE postgres,
+                  USER source_errors_user1,
+                  PASSWORD SECRET source_errors_secret
 
                 > CREATE SOURCE source_errors_sourceA
                   FROM POSTGRES CONNECTION source_errors_connection

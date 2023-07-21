@@ -418,3 +418,6 @@ query T
 SHOW SCHEMA
 ----
 public
+
+query error db error: ERROR: SHOW variable in subqueries not yet supported
+SELECT * FROM (show client_encoding)

@@ -108,14 +108,14 @@ build
 (join
     [(get y) (get y)]
     [[#0 #3]]
-    (delta_query [[[0 [#0] (false 1 true (false false false 0 false) 0)] [1 [#0] (false 1 true (false false false 0 false) 0)]]
-                  [[1 [#0] (false 1 true (false false false 0 false) 0)] [0 [#0] (false 1 true (false false false 0 false) 0)]]]))
+    (delta_query [[[0 [#0] (false 1 true 1 (false false false 0 false) 0)] [1 [#0] (false 1 true 1 (false false false 0 false) 0)]]
+                  [[1 [#0] (false 1 true 1 (false false false 0 false) 0)] [0 [#0] (false 1 true 1 (false false false 0 false) 0)]]]))
 ----
 ----
 Join on=(#0 = #3) type=delta
   implementation
-    %0:u1 » %0:u1[#0]KA » %1:u1[#0]KA
-    %1:u1 » %1:u1[#0]KA » %0:u1[#0]KA
+    %0:u1 » %0:u1[#0]KA|1| » %1:u1[#0]KA|1|
+    %1:u1 » %1:u1[#0]KA|1| » %0:u1[#0]KA|1|
   Get u1
   Get u1
 

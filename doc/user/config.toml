@@ -100,22 +100,28 @@ name = "Serve results"
 weight= 13
 
 [[menu.main]]
-name = "Query for results (`SELECT`)"
+name = "Query using `SELECT`"
 parent = "serve"
 url = "/sql/select/"
 weight= 5
 
 [[menu.main]]
+name = "Query using BI tools"
+identifier = "bi-tools"
+parent = "serve"
+weight= 10
+
+[[menu.main]]
 name = "Subscribe to results (`SUBSCRIBE`)"
 parent = "serve"
 url = "/sql/subscribe/"
-weight= 10
+weight= 15
 
 [[menu.main]]
 name = "Sink results to Kafka"
 parent = "serve"
 url = "/sql/create-sink"
-weight= 15
+weight= 20
 
 #
 # Manage Materialize

@@ -11,7 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::DurationRound;
 use mz_controller::clusters::ClusterEvent;
@@ -20,6 +20,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
@@ -28,13 +29,13 @@ use tracing::{event, warn, Instrument, Level};
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
-use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PeekStage, PeekStageFinish, PeekValidity,
-    PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
+    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
+    PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
+    SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
+use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -50,8 +51,11 @@ impl Coordinator {
                     self.message_controller(m).await
                 }
             }
-            Message::CreateSourceStatementReady(ready) => {
-                self.message_create_source_statement_ready(ready).await
+            Message::PurifiedStatementReady(ready) => {
+                self.message_purified_statement_ready(ready).await
+            }
+            Message::CreateConnectionValidationReady(ready) => {
+                self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
             Message::Execute {
@@ -355,16 +359,16 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip(self, ctx))]
-    async fn message_create_source_statement_ready(
+    async fn message_purified_statement_ready(
         &mut self,
-        CreateSourceStatementReady {
+        PurifiedStatementReady {
             mut ctx,
             result,
             params,
-            depends_on,
+            resolved_ids,
             original_stmt,
             otel_ctx,
-        }: CreateSourceStatementReady,
+        }: PurifiedStatementReady,
     ) {
         otel_ctx.attach_as_parent();
 
@@ -376,7 +380,8 @@ impl Coordinator {
         //
         // WARNING: If we support `ALTER CONNECTION`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if !depends_on
+        if !resolved_ids
+            .0
             .iter()
             .all(|id| self.catalog().try_get_entry(id).is_some())
         {
@@ -394,7 +399,7 @@ impl Coordinator {
 
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {
-            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
+            let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
             let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
                 Err(e) => return ctx.retire(Err(e.into())),
@@ -411,7 +416,11 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push((source_id, plan, depends_on).into());
+            plans.push(CreateSourcePlans {
+                source_id,
+                plan,
+                resolved_ids,
+            });
         }
 
         // Then, we'll rewrite the source statement to point to the newly minted global ids and
@@ -420,24 +429,92 @@ impl Coordinator {
             Ok(ok) => ok,
             Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
-        let source_id = match self.catalog_mut().allocate_user_id().await {
-            Ok(id) => id,
-            Err(e) => return ctx.retire(Err(e.into())),
-        };
-        let plan =
-            match self.plan_statement(ctx.session_mut(), Statement::CreateSource(stmt), &params) {
-                Ok(Plan::CreateSource(plan)) => plan,
-                Ok(_) => {
-                    unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
-                }
-                Err(e) => return ctx.retire(Err(e)),
-            };
-        plans.push((source_id, plan, depends_on).into());
 
-        // Finally, sequence all plans in one go
-        self.sequence_plan(ctx, Plan::CreateSources(plans), Vec::new())
+        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+
+        match self.plan_statement(ctx.session_mut(), stmt, &params) {
+            Ok(Plan::CreateSource(plan)) => {
+                let source_id = match self.catalog_mut().allocate_user_id().await {
+                    Ok(id) => id,
+                    Err(e) => return ctx.retire(Err(e.into())),
+                };
+
+                plans.push(CreateSourcePlans {
+                    source_id,
+                    plan,
+                    resolved_ids,
+                });
+
+                // Finally, sequence all plans in one go
+                self.sequence_plan(
+                    ctx,
+                    Plan::CreateSources(plans),
+                    ResolvedIds(BTreeSet::new()),
+                )
+                .await;
+            }
+            Ok(Plan::AlterSource(alter_source)) => {
+                self.sequence_plan(
+                    ctx,
+                    Plan::PurifiedAlterSource {
+                        alter_source,
+                        subsources: plans,
+                    },
+                    ResolvedIds(BTreeSet::new()),
+                )
+                .await;
+            }
+            Ok(plan @ Plan::AlterNoop(..)) => {
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await
+            }
+            Ok(p) => {
+                unreachable!("{:?} is not purified", p)
+            }
+            Err(e) => ctx.retire(Err(e)),
+        };
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_create_connection_validation_ready(
+        &mut self,
+        CreateConnectionValidationReady {
+            mut ctx,
+            result,
+            connection_gid,
+            mut plan_validity,
+            otel_ctx,
+        }: CreateConnectionValidationReady,
+    ) {
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            let _ = self.secrets_controller.delete(connection_gid).await;
+            return ctx.retire(Err(e));
+        }
+
+        let plan = match result {
+            Ok(ok) => ok,
+            Err(e) => {
+                let _ = self.secrets_controller.delete(connection_gid).await;
+                return ctx.retire(Err(e));
+            }
+        };
+
+        let result = self
+            .sequence_create_connection_stage_finish(
+                ctx.session_mut(),
+                connection_gid,
+                plan,
+                ResolvedIds(plan_validity.dependency_ids),
+            )
             .await;
+        ctx.retire(result);
     }
 
     #[tracing::instrument(level = "debug", skip(self, ctx))]
@@ -524,10 +601,15 @@ impl Coordinator {
             match ready {
                 Deferred::Plan(mut ready) => {
                     ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    // Write statements never need to track catalog
-                    // dependencies.
-                    let depends_on = vec![];
-                    self.sequence_plan(ready.ctx, ready.plan, depends_on).await;
+                    if let Err(e) = ready.validity.check(self.catalog()) {
+                        ready.ctx.retire(Err(e))
+                    } else {
+                        // Write statements never need to track resolved IDs (NOTE: This is not the
+                        // same thing as plan dependencies, which we do need to re-validate).
+                        let resolved_ids = ResolvedIds(BTreeSet::new());
+                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
+                            .await;
+                    }
                 }
                 Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }
@@ -586,9 +668,9 @@ impl Coordinator {
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
-        for read_txn in pending_read_txns {
+        for mut read_txn in pending_read_txns {
             if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.timestamp_context()
+                read_txn.txn.timestamp_context()
             {
                 let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
@@ -599,6 +681,7 @@ impl Coordinator {
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
+                    read_txn.num_requeues += 1;
                     deferred_txns.push(read_txn);
                 }
             } else {
@@ -611,8 +694,20 @@ impl Coordinator {
                 .confirm_leadership()
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
+            let now = Instant::now();
             for ready_txn in ready_txns {
-                if let Some((ctx, result)) = ready_txn.finish() {
+                self.metrics
+                    .linearize_message_seconds
+                    .with_label_values(&[
+                        ready_txn.txn.label(),
+                        if ready_txn.num_requeues == 0 {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ])
+                    .observe((now - ready_txn.created).as_secs_f64());
+                if let Some((ctx, result)) = ready_txn.txn.finish() {
                     ctx.retire(result);
                 }
             }
@@ -639,7 +734,7 @@ impl Coordinator {
         &mut self,
         conn_id: ConnectionId,
         real_time_recency_ts: mz_repr::Timestamp,
-        mut validity: PeekValidity,
+        mut validity: PlanValidity,
     ) {
         let real_time_recency_context =
             match self.pending_real_time_recency_timestamp.remove(&conn_id) {
@@ -696,6 +791,7 @@ impl Coordinator {
                         copy_to,
                         dataflow,
                         cluster_id,
+                        id_bundle: None,
                         when,
                         target_replica,
                         view_id,

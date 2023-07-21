@@ -76,6 +76,7 @@
 use mz_expr_parser::{handle_define, handle_roundtrip, TestCatalog};
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn run_roundtrip_tests() {
     // Interpret datadriven tests.
     datadriven::walk("tests/test_mir_parser", |f| {

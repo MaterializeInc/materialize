@@ -22,7 +22,6 @@ use futures::FutureExt;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_ore::task::spawn;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -31,6 +30,7 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
 
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
@@ -51,11 +51,12 @@ use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
 use crate::rpc::PubSubSender;
 use crate::write::WriterId;
-use crate::{PersistConfig, ShardId};
+use crate::{Diagnostics, PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
     pub(crate) applier: Applier<K, V, T, D>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 }
 
 // Impl Clone regardless of the type params.
@@ -63,6 +64,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             applier: self.applier.clone(),
+            isolated_runtime: Arc::clone(&self.isolated_runtime),
         }
     }
 }
@@ -81,6 +83,8 @@ where
         state_versions: Arc<StateVersions>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        diagnostics: Diagnostics,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(
             cfg,
@@ -89,9 +93,13 @@ where
             state_versions,
             shared_states,
             pubsub_sender,
+            diagnostics,
         )
         .await?;
-        Ok(Machine { applier })
+        Ok(Machine {
+            applier,
+            isolated_runtime,
+        })
     }
 
     pub fn shard_id(&self) -> ShardId {
@@ -401,7 +409,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                            inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
                         };
                         compact_reqs.push(req);
                     }
@@ -892,7 +900,13 @@ where
         gc: GarbageCollector<K, V, T, D>,
     ) -> JoinHandle<()> {
         let mut machine = self;
-        spawn(|| "persist::heartbeat_read", async move {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let name = format!(
+            "persist::heartbeat_read({},{})",
+            machine.shard_id(),
+            reader_id
+        );
+        isolated_runtime.spawn_named(|| name, async move {
             let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
             loop {
                 let before_sleep = Instant::now();
@@ -937,7 +951,13 @@ where
         gc: GarbageCollector<K, V, T, D>,
     ) -> JoinHandle<()> {
         let mut machine = self;
-        spawn(|| "persist::heartbeat_write", async move {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let name = format!(
+            "persist::heartbeat_write({},{})",
+            machine.shard_id(),
+            writer_id
+        );
+        isolated_runtime.spawn_named(|| name, async move {
             let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
             loop {
                 let before_sleep = Instant::now();
@@ -1125,10 +1145,12 @@ pub mod datadriven {
                 Arc::clone(&state_versions),
                 Arc::clone(&client.shared_states),
                 Arc::new(NoopPubSubSender),
+                Arc::clone(&client.isolated_runtime),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codecs should match");
-            let gc = GarbageCollector::new(machine.clone());
+            let gc = GarbageCollector::new(machine.clone(), Arc::clone(&client.isolated_runtime));
             MachineState {
                 shard_id,
                 client,
@@ -1353,7 +1375,7 @@ pub mod datadriven {
         let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
-        let mut cfg = BatchBuilderConfig::from(&datadriven.client.cfg);
+        let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1369,10 +1391,9 @@ pub mod datadriven {
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
-            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            Arc::clone(&datadriven.client.isolated_runtime),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
-            WriterId::new(),
             since,
             Some(upper.clone()),
             consolidate,
@@ -1531,13 +1552,12 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::from(&cfg),
+            CompactConfig::new(&cfg, &writer_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
-            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            Arc::clone(&datadriven.client.isolated_runtime),
             req,
-            writer_id,
             schemas,
         )
         .await?;
@@ -1636,9 +1656,9 @@ pub mod datadriven {
             .client
             .open_leased_reader::<String, (), u64, i64>(
                 datadriven.shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("invalid shard types");
@@ -1882,7 +1902,7 @@ pub mod tests {
     use crate::ShardId;
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
@@ -1938,7 +1958,7 @@ pub mod tests {
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn regression_gc_skipped_req_and_interrupted() {
         let mut client = new_test_client().await;
         let intercept = InterceptHandle::default();

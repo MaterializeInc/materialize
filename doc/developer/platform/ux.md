@@ -74,8 +74,8 @@ concepts](#user-facing-concepts) section below.
 
 ### Web UI
 
-We will evolve the existing Materialize Cloud web UI
-(<https://cloud.materialize.com>) to reflect the new hierarchy of concepts. The
+We will evolve the existing Materialize web UI
+(<https://console.materialize.com>) to reflect the new hierarchy of concepts. The
 following wireframe is a very rough sketch of what the Materialize Platform
 UI could look like:
 
@@ -118,7 +118,7 @@ authentication. Here is a rough sketch of the interface:
 
 ```shell
 $ mzcloud login aj@foocorp.com
-Opening https://cloud.materialize.com/login/SFB33-47281 in your browser...
+Opening https://console.materialize.com/login/SFB33-47281 in your browser...
 $ mzcloud connect aws:us-east-1
 psql (14.1)
 Type "help" for help.

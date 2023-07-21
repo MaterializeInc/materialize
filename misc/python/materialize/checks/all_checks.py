@@ -67,4 +67,5 @@ from materialize.checks.update import *  # noqa: F401 F403
 from materialize.checks.upsert import *  # noqa: F401 F403
 from materialize.checks.upsert_shrink_grow import *  # noqa: F401 F403
 from materialize.checks.uuid import *  # noqa: F401 F403
+from materialize.checks.webhook import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403

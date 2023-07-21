@@ -24,14 +24,21 @@
             d.name as table_database,
             s.name as table_schema,
             o.name as table_name,
-            case when o.type = 'materialized-view' then 'materializedview' else o.type end as table_type,
+            case when o.type = 'materialized-view' then 'materializedview'
+                 --This macro is used for the dbt documentation. We use
+                 --the source type in mz_sources here instead of that
+                 --in mz_objects to correctly report subsources.
+                 when o.type = 'source' then so.type
+                 else o.type end as table_type,
             '' as table_comment,
             c.name as column_name,
             c.position as column_index,
             c.type as column_type,
             '' as column_comment,
-            '' as table_owner
+            r.name as table_owner
         from mz_objects o
+        left join mz_sources so on o.id = so.id
+        join mz_roles r on o.owner_id = r.id
         join mz_schemas s on o.schema_id = s.id
         join mz_databases d on s.database_id = d.id and d.name = '{{ database }}'
         join mz_columns c on c.id = o.id

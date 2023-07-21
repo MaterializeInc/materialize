@@ -19,9 +19,11 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -49,7 +51,7 @@ use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, AdapterError, AdapterNotice};
+use crate::{catalog, flags, AdapterError, AdapterNotice};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -102,6 +104,7 @@ impl Coordinator {
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut peeks_to_drop = vec![];
+        let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
@@ -185,6 +188,7 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
@@ -193,6 +197,7 @@ impl Coordinator {
                     // Assume they all need to be updated.
                     // We could see if the config's have actually changed, but
                     // this is simpler.
+                    update_tracing_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
@@ -248,7 +253,13 @@ impl Coordinator {
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
-                peeks_to_drop.push((name.to_string(), uuid.clone()));
+                peeks_to_drop.push((
+                    format!("relation {}", name.to_string().quoted()),
+                    uuid.clone(),
+                ));
+            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
+                let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
+                peeks_to_drop.push((format!("cluster {}", name.quoted()), uuid.clone()));
             }
         }
 
@@ -439,6 +450,9 @@ impl Coordinator {
             }
             if update_metrics_retention {
                 self.update_metrics_retention();
+            }
+            if update_tracing_config {
+                self.update_tracing_config();
             }
         }
         .await;
@@ -655,13 +669,18 @@ impl Coordinator {
             .expect("unable to drop temporary items for conn_id");
     }
 
+    fn update_tracing_config(&mut self) {
+        let tracing = flags::tracing_config(self.catalog().system_config());
+        tracing.apply(&self.tracing_handle);
+    }
+
     fn update_compute_config(&mut self) {
-        let config_params = self.catalog().compute_config();
+        let config_params = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(config_params);
     }
 
     fn update_storage_config(&mut self) {
-        let config_params = self.catalog().storage_config();
+        let config_params = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(config_params);
     }
 

@@ -30,22 +30,25 @@ use mz_proto::RustType;
 use prost::Message;
 use serde_json::json;
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::{
-    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
+    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
 use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
 
+// BuildInfo with a larger version than any version we expect to see in prod,
+// to ensure that any data read is from a smaller version and does not trigger
+// alerts.
 const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "10000000.0.0+test",
+    version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
     time: "",
 };
@@ -578,8 +581,15 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     }
 
     let mut unreferenced_blobs = UnreferencedBlobs::default();
+    // In the future, this is likely to include a "grace period" so recent but non-current
+    // versions are also considered live
+    let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
-        if !known_writers.contains(&writer) && !known_parts.contains(&part) {
+        let is_unreferenced = match writer {
+            WriterKey::Id(writer) => !known_writers.contains(&writer),
+            version @ WriterKey::Version(_) => version < minimum_version,
+        };
+        if is_unreferenced && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
     }
@@ -605,7 +615,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new());
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),
@@ -616,7 +626,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         blob,
         consensus,
         metrics,
-        cpu_heavy_runtime,
+        isolated_runtime,
         state_cache,
         Arc::new(NoopPubSubSender),
     )?);

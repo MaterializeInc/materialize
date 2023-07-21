@@ -104,7 +104,7 @@ impl AclMode {
             CREATE_ROLE_STR => Ok(AclMode::CREATE_ROLE),
             CREATE_DB_STR => Ok(AclMode::CREATE_DB),
             CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
-            _ => Err(anyhow!("unrecognized privilege type: {}", s.quoted())),
+            _ => Err(anyhow!("{}", s.quoted())),
         }
     }
 
@@ -118,6 +118,10 @@ impl AclMode {
     }
 
     pub fn to_error_string(&self) -> String {
+        self.to_full_length_strings().join(", ")
+    }
+
+    pub fn to_full_length_strings(&self) -> Vec<&'static str> {
         let mut privileges = Vec::new();
         if self.contains(AclMode::SELECT) {
             privileges.push(SELECT_STR);
@@ -146,7 +150,7 @@ impl AclMode {
         if self.contains(AclMode::CREATE_CLUSTER) {
             privileges.push(CREATE_CLUSTER_STR);
         }
-        privileges.join(", ")
+        privileges
     }
 }
 
@@ -305,17 +309,23 @@ impl FromStr for MzAclItem {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<_> = s.split(&['=', '/']).collect();
-        if parts.len() != 3 {
+        let parts: Vec<_> = s.split('=').collect();
+        let &[grantee, rest] = parts.as_slice() else {
             return Err(anyhow!("invalid mz_aclitem '{s}'"));
-        }
-        let grantee: RoleId = if parts[0].is_empty() {
+        };
+
+        let parts: Vec<_> = rest.split('/').collect();
+        let &[acl_mode, grantor] = parts.as_slice() else {
+            return Err(anyhow!("invalid mz_aclitem '{s}'"));
+        };
+
+        let grantee: RoleId = if grantee.is_empty() {
             RoleId::Public
         } else {
-            parts[0].parse()?
+            grantee.parse()?
         };
-        let acl_mode: AclMode = parts[1].parse()?;
-        let grantor: RoleId = parts[2].parse()?;
+        let acl_mode: AclMode = acl_mode.parse()?;
+        let grantor: RoleId = grantor.parse()?;
 
         Ok(MzAclItem {
             grantee,
@@ -565,6 +575,7 @@ fn test_mz_acl_parsing() {
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
+    assert!("u42/rw=u666".parse::<MzAclItem>().is_err());
     assert!("u32=C/".parse::<MzAclItem>().is_err());
     assert!("=/".parse::<MzAclItem>().is_err());
     assert!("f62hfiuew827fhh".parse::<MzAclItem>().is_err());

@@ -150,7 +150,7 @@ mod tests {
     use crate::cfg::{PersistConfig, PersistParameters, RetryParameters};
     use crate::internal::state::TypedState;
     use crate::tests::new_test_client;
-    use crate::ShardId;
+    use crate::{Diagnostics, ShardId};
 
     use super::*;
 
@@ -164,14 +164,18 @@ mod tests {
         let cache = StateCache::new_no_metrics();
         let shard_id = ShardId::new();
         let state = cache
-            .get::<(), (), u64, i64, _, _>(shard_id, || async {
-                Ok(TypedState::new(
-                    DUMMY_BUILD_INFO.semver_version(),
-                    shard_id,
-                    "host".to_owned(),
-                    0u64,
-                ))
-            })
+            .get::<(), (), u64, i64, _, _>(
+                shard_id,
+                || async {
+                    Ok(TypedState::new(
+                        DUMMY_BUILD_INFO.semver_version(),
+                        shard_id,
+                        "host".to_owned(),
+                        0u64,
+                    ))
+                },
+                &Diagnostics::for_tests(),
+            )
             .await
             .unwrap();
         assert_eq!(state.read_lock(&metrics.locks.watch, |x| x.seqno), SeqNo(0));
@@ -201,6 +205,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn state_watch_concurrency() {
         mz_ore::test::init_logging();
         let metrics = Arc::new(Metrics::new(
@@ -210,14 +215,18 @@ mod tests {
         let cache = StateCache::new_no_metrics();
         let shard_id = ShardId::new();
         let state = cache
-            .get::<(), (), u64, i64, _, _>(shard_id, || async {
-                Ok(TypedState::new(
-                    DUMMY_BUILD_INFO.semver_version(),
-                    shard_id,
-                    "host".to_owned(),
-                    0u64,
-                ))
-            })
+            .get::<(), (), u64, i64, _, _>(
+                shard_id,
+                || async {
+                    Ok(TypedState::new(
+                        DUMMY_BUILD_INFO.semver_version(),
+                        shard_id,
+                        "host".to_owned(),
+                        0u64,
+                    ))
+                },
+                &Diagnostics::for_tests(),
+            )
             .await
             .unwrap();
         assert_eq!(state.read_lock(&metrics.locks.watch, |x| x.seqno), SeqNo(0));

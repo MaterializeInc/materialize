@@ -10,6 +10,11 @@
 # Test requires stable object IDs
 reset-server
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (
   a int,
@@ -40,6 +45,46 @@ CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
+
+statement ok
+CREATE VIEW hierarchical_group_by AS
+SELECT
+  a,
+  MIN(b),
+  MAX(DISTINCT b)
+FROM t
+GROUP BY a
+
+statement ok
+CREATE VIEW hierarchical_global AS
+SELECT
+  MIN(b),
+  MAX(DISTINCT b)
+FROM t
+
+statement ok
+CREATE VIEW collated_group_by AS
+SELECT
+  a,
+  COUNT(DISTINCT b),
+  STRING_AGG(b::text || '1',  ',') AS b1,
+  MIN(b),
+  MAX(DISTINCT b),
+  SUM(b),
+  STRING_AGG(b::text || '2',  ',') AS b2
+FROM t
+GROUP BY a
+
+statement ok
+CREATE VIEW collated_global AS
+SELECT
+  COUNT(DISTINCT b),
+  STRING_AGG(b::text || '1',  ',') as b1,
+  MIN(b),
+  MAX(DISTINCT b),
+  SUM(b),
+  STRING_AGG(b::text || '2',  ',') as b2
+FROM t
 
 mode cockroach
 
@@ -379,12 +424,12 @@ EOF
 # TopKBasic plan.
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
-SELECT * FROM ov
+VIEW ov
 ----
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "materialize.public.ov",
       "plan": {
         "TopK": {
           "input": {
@@ -465,6 +510,96 @@ SELECT * FROM ov
                 256,
                 16
               ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# MonotonicTopK plan (one-shot).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
+SELECT * FROM ov
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "TopK": {
+          "input": {
+            "ArrangeBy": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0,
+                          "1": 1
+                        },
+                        [
+                          1
+                        ]
+                      ]
+                    ]
+                  },
+                  "plan": "PassArrangements"
+                }
+              },
+              "forms": {
+                "raw": true,
+                "arranged": []
+              },
+              "input_key": [
+                {
+                  "Column": 0
+                }
+              ],
+              "input_mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              }
+            }
+          },
+          "top_k_plan": {
+            "MonotonicTopK": {
+              "group_key": [],
+              "order_key": [
+                {
+                  "column": 1,
+                  "desc": false,
+                  "nulls_last": true
+                },
+                {
+                  "column": 0,
+                  "desc": true,
+                  "nulls_last": false
+                }
+              ],
+              "limit": 5,
+              "arity": 2,
+              "must_consolidate": true
             }
           }
         }
@@ -1933,17 +2068,12 @@ EOF
 # Test Reduce::Hierarchical (with GROUP BY).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-SELECT
-  a,
-  MIN(b),
-  MAX(DISTINCT b)
-FROM t
-GROUP BY a
+VIEW hierarchical_group_by
 ----
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "materialize.public.hierarchical_group_by",
       "plan": {
         "Reduce": {
           "input": {
@@ -2034,18 +2164,106 @@ GROUP BY a
 }
 EOF
 
-# Test Reduce::Hierarchical (global aggregate).
+# Test Reduce::Hierarchical (with GROUP BY, one-shot).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-SELECT
-  MIN(b),
-  MAX(DISTINCT b)
-FROM t
+SELECT * FROM hierarchical_group_by
 ----
 {
   "plans": [
     {
       "id": "Explained Query",
+      "plan": {
+        "Reduce": {
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0,
+                      "1": 1
+                    },
+                    [
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "plan": "PassArrangements"
+            }
+          },
+          "key_val_plan": {
+            "key_plan": {
+              "mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0
+                ],
+                "input_arity": 2
+              }
+            },
+            "val_plan": {
+              "mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  1,
+                  1
+                ],
+                "input_arity": 2
+              }
+            }
+          },
+          "plan": {
+            "Hierarchical": {
+              "Monotonic": {
+                "aggr_funcs": [
+                  "MinInt32",
+                  "MaxInt32"
+                ],
+                "skips": [
+                  0,
+                  0
+                ],
+                "must_consolidate": true
+              }
+            }
+          },
+          "input_key": [
+            {
+              "Column": 0
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Reduce::Hierarchical (global aggregate).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS JSON FOR
+VIEW hierarchical_global
+----
+{
+  "plans": [
+    {
+      "id": "materialize.public.hierarchical_global",
       "plan": {
         "Let": {
           "id": 0,
@@ -2138,6 +2356,266 @@ FROM t
                       256,
                       16
                     ]
+                  }
+                }
+              },
+              "input_key": null
+            }
+          },
+          "body": {
+            "Union": {
+              "inputs": [
+                {
+                  "ArrangeBy": {
+                    "input": {
+                      "Get": {
+                        "id": {
+                          "Local": 0
+                        },
+                        "keys": {
+                          "raw": false,
+                          "arranged": [
+                            [
+                              [],
+                              {
+                                "0": 0,
+                                "1": 1
+                              },
+                              [
+                                0,
+                                1
+                              ]
+                            ]
+                          ]
+                        },
+                        "plan": "PassArrangements"
+                      }
+                    },
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "input_key": [],
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    }
+                  }
+                },
+                {
+                  "Mfp": {
+                    "input": {
+                      "Union": {
+                        "inputs": [
+                          {
+                            "Negate": {
+                              "input": {
+                                "Get": {
+                                  "id": {
+                                    "Local": 0
+                                  },
+                                  "keys": {
+                                    "raw": false,
+                                    "arranged": [
+                                      [
+                                        [],
+                                        {
+                                          "0": 0,
+                                          "1": 1
+                                        },
+                                        [
+                                          0,
+                                          1
+                                        ]
+                                      ]
+                                    ]
+                                  },
+                                  "plan": {
+                                    "Arrangement": [
+                                      [],
+                                      null,
+                                      {
+                                        "expressions": [],
+                                        "predicates": [],
+                                        "projection": [],
+                                        "input_arity": 2
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "Constant": {
+                              "rows": {
+                                "Ok": [
+                                  [
+                                    {
+                                      "data": []
+                                    },
+                                    0,
+                                    1
+                                  ]
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "mfp": {
+                      "expressions": [
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ]
+                        }
+                      ],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 0
+                    },
+                    "input_key_val": null
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Reduce::Hierarchical (global aggregate, one-shot).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS JSON FOR
+SELECT * FROM hierarchical_global
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Let": {
+          "id": 0,
+          "value": {
+            "Reduce": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0,
+                          "1": 1
+                        },
+                        [
+                          1
+                        ]
+                      ]
+                    ]
+                  },
+                  "plan": {
+                    "Arrangement": [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      null,
+                      {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    ]
+                  }
+                }
+              },
+              "key_val_plan": {
+                "key_plan": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [],
+                    "input_arity": 1
+                  }
+                },
+                "val_plan": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0,
+                      0
+                    ],
+                    "input_arity": 1
+                  }
+                }
+              },
+              "plan": {
+                "Hierarchical": {
+                  "Monotonic": {
+                    "aggr_funcs": [
+                      "MinInt32",
+                      "MaxInt32"
+                    ],
+                    "skips": [
+                      0,
+                      0
+                    ],
+                    "must_consolidate": true
                   }
                 }
               },
@@ -3295,21 +3773,12 @@ EOF
 # Test Reduce::Collated (with GROUP BY).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-SELECT
-  a,
-  COUNT(DISTINCT b),
-  STRING_AGG(b::text || '1',  ','),
-  MIN(b),
-  MAX(DISTINCT b),
-  SUM(b),
-  STRING_AGG(b::text || '2',  ',')
-FROM t
-GROUP BY a
+VIEW collated_group_by
 ----
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "materialize.public.collated_group_by",
       "plan": {
         "Reduce": {
           "input": {
@@ -3785,22 +4254,491 @@ GROUP BY a
 }
 EOF
 
-# Test Reduce::Collated (global aggregate).
+# Test Reduce::Collated (with GROUP BY, one-shot).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-SELECT
-  COUNT(DISTINCT b),
-  STRING_AGG(b::text || '1',  ','),
-  MIN(b),
-  MAX(DISTINCT b),
-  SUM(b),
-  STRING_AGG(b::text || '2',  ',')
-FROM t
+SELECT * FROM collated_group_by
 ----
 {
   "plans": [
     {
       "id": "Explained Query",
+      "plan": {
+        "Reduce": {
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0,
+                      "1": 1
+                    },
+                    [
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "plan": "PassArrangements"
+            }
+          },
+          "key_val_plan": {
+            "key_plan": {
+              "mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0
+                ],
+                "input_arity": 2
+              }
+            },
+            "val_plan": {
+              "mfp": {
+                "expressions": [
+                  {
+                    "CallUnary": {
+                      "func": {
+                        "CastInt32ToString": null
+                      },
+                      "expr": {
+                        "Column": 1
+                      }
+                    }
+                  },
+                  {
+                    "CallVariadic": {
+                      "func": {
+                        "RecordCreate": {
+                          "field_names": [
+                            ""
+                          ]
+                        }
+                      },
+                      "exprs": [
+                        {
+                          "CallVariadic": {
+                            "func": {
+                              "RecordCreate": {
+                                "field_names": [
+                                  "value",
+                                  "sep"
+                                ]
+                              }
+                            },
+                            "exprs": [
+                              {
+                                "CallBinary": {
+                                  "func": "TextConcat",
+                                  "expr1": {
+                                    "Column": 2
+                                  },
+                                  "expr2": {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            19,
+                                            1,
+                                            49
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "String",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "Literal": [
+                                  {
+                                    "Ok": {
+                                      "data": [
+                                        19,
+                                        1,
+                                        44
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "scalar_type": "String",
+                                    "nullable": false
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "CallVariadic": {
+                      "func": {
+                        "RecordCreate": {
+                          "field_names": [
+                            ""
+                          ]
+                        }
+                      },
+                      "exprs": [
+                        {
+                          "CallVariadic": {
+                            "func": {
+                              "RecordCreate": {
+                                "field_names": [
+                                  "value",
+                                  "sep"
+                                ]
+                              }
+                            },
+                            "exprs": [
+                              {
+                                "CallBinary": {
+                                  "func": "TextConcat",
+                                  "expr1": {
+                                    "Column": 2
+                                  },
+                                  "expr2": {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            19,
+                                            1,
+                                            50
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "String",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "Literal": [
+                                  {
+                                    "Ok": {
+                                      "data": [
+                                        19,
+                                        1,
+                                        44
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "scalar_type": "String",
+                                    "nullable": false
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "predicates": [],
+                "projection": [
+                  1,
+                  3,
+                  1,
+                  1,
+                  1,
+                  4
+                ],
+                "input_arity": 2
+              }
+            }
+          },
+          "plan": {
+            "Collation": {
+              "accumulable": {
+                "full_aggrs": [
+                  {
+                    "func": "Count",
+                    "expr": {
+                      "Column": 1
+                    },
+                    "distinct": true
+                  },
+                  {
+                    "func": "SumInt32",
+                    "expr": {
+                      "Column": 1
+                    },
+                    "distinct": false
+                  }
+                ],
+                "simple_aggrs": [
+                  [
+                    1,
+                    4,
+                    {
+                      "func": "SumInt32",
+                      "expr": {
+                        "Column": 1
+                      },
+                      "distinct": false
+                    }
+                  ]
+                ],
+                "distinct_aggrs": [
+                  [
+                    0,
+                    0,
+                    {
+                      "func": "Count",
+                      "expr": {
+                        "Column": 1
+                      },
+                      "distinct": true
+                    }
+                  ]
+                ]
+              },
+              "hierarchical": {
+                "Monotonic": {
+                  "aggr_funcs": [
+                    "MinInt32",
+                    "MaxInt32"
+                  ],
+                  "skips": [
+                    2,
+                    0
+                  ],
+                  "must_consolidate": true
+                }
+              },
+              "basic": {
+                "Multiple": [
+                  [
+                    1,
+                    {
+                      "func": {
+                        "StringAgg": {
+                          "order_by": []
+                        }
+                      },
+                      "expr": {
+                        "CallVariadic": {
+                          "func": {
+                            "RecordCreate": {
+                              "field_names": [
+                                ""
+                              ]
+                            }
+                          },
+                          "exprs": [
+                            {
+                              "CallVariadic": {
+                                "func": {
+                                  "RecordCreate": {
+                                    "field_names": [
+                                      "value",
+                                      "sep"
+                                    ]
+                                  }
+                                },
+                                "exprs": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "TextConcat",
+                                      "expr1": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "CastInt32ToString": null
+                                          },
+                                          "expr": {
+                                            "Column": 1
+                                          }
+                                        }
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                19,
+                                                1,
+                                                49
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "String",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            19,
+                                            1,
+                                            44
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "String",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "distinct": false
+                    }
+                  ],
+                  [
+                    5,
+                    {
+                      "func": {
+                        "StringAgg": {
+                          "order_by": []
+                        }
+                      },
+                      "expr": {
+                        "CallVariadic": {
+                          "func": {
+                            "RecordCreate": {
+                              "field_names": [
+                                ""
+                              ]
+                            }
+                          },
+                          "exprs": [
+                            {
+                              "CallVariadic": {
+                                "func": {
+                                  "RecordCreate": {
+                                    "field_names": [
+                                      "value",
+                                      "sep"
+                                    ]
+                                  }
+                                },
+                                "exprs": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "TextConcat",
+                                      "expr1": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "CastInt32ToString": null
+                                          },
+                                          "expr": {
+                                            "Column": 1
+                                          }
+                                        }
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                19,
+                                                1,
+                                                50
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "String",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            19,
+                                            1,
+                                            44
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "String",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "distinct": false
+                    }
+                  ]
+                ]
+              },
+              "aggregate_types": [
+                "Accumulable",
+                "Basic",
+                "Hierarchical",
+                "Hierarchical",
+                "Accumulable",
+                "Basic"
+              ]
+            }
+          },
+          "input_key": [
+            {
+              "Column": 0
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Reduce::Collated (global aggregate).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS JSON FOR
+VIEW collated_global
+----
+{
+  "plans": [
+    {
+      "id": "materialize.public.collated_global",
       "plan": {
         "Let": {
           "id": 0,
@@ -4091,6 +5029,743 @@ FROM t
                         256,
                         16
                       ]
+                    }
+                  },
+                  "basic": {
+                    "Multiple": [
+                      [
+                        1,
+                        {
+                          "func": {
+                            "StringAgg": {
+                              "order_by": []
+                            }
+                          },
+                          "expr": {
+                            "CallVariadic": {
+                              "func": {
+                                "RecordCreate": {
+                                  "field_names": [
+                                    ""
+                                  ]
+                                }
+                              },
+                              "exprs": [
+                                {
+                                  "CallVariadic": {
+                                    "func": {
+                                      "RecordCreate": {
+                                        "field_names": [
+                                          "value",
+                                          "sep"
+                                        ]
+                                      }
+                                    },
+                                    "exprs": [
+                                      {
+                                        "CallBinary": {
+                                          "func": "TextConcat",
+                                          "expr1": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "CastInt32ToString": null
+                                              },
+                                              "expr": {
+                                                "Column": 0
+                                              }
+                                            }
+                                          },
+                                          "expr2": {
+                                            "Literal": [
+                                              {
+                                                "Ok": {
+                                                  "data": [
+                                                    19,
+                                                    1,
+                                                    49
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "scalar_type": "String",
+                                                "nullable": false
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                19,
+                                                1,
+                                                44
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "String",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "distinct": false
+                        }
+                      ],
+                      [
+                        5,
+                        {
+                          "func": {
+                            "StringAgg": {
+                              "order_by": []
+                            }
+                          },
+                          "expr": {
+                            "CallVariadic": {
+                              "func": {
+                                "RecordCreate": {
+                                  "field_names": [
+                                    ""
+                                  ]
+                                }
+                              },
+                              "exprs": [
+                                {
+                                  "CallVariadic": {
+                                    "func": {
+                                      "RecordCreate": {
+                                        "field_names": [
+                                          "value",
+                                          "sep"
+                                        ]
+                                      }
+                                    },
+                                    "exprs": [
+                                      {
+                                        "CallBinary": {
+                                          "func": "TextConcat",
+                                          "expr1": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "CastInt32ToString": null
+                                              },
+                                              "expr": {
+                                                "Column": 0
+                                              }
+                                            }
+                                          },
+                                          "expr2": {
+                                            "Literal": [
+                                              {
+                                                "Ok": {
+                                                  "data": [
+                                                    19,
+                                                    1,
+                                                    50
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "scalar_type": "String",
+                                                "nullable": false
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                19,
+                                                1,
+                                                44
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "String",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "distinct": false
+                        }
+                      ]
+                    ]
+                  },
+                  "aggregate_types": [
+                    "Accumulable",
+                    "Basic",
+                    "Hierarchical",
+                    "Hierarchical",
+                    "Accumulable",
+                    "Basic"
+                  ]
+                }
+              },
+              "input_key": null
+            }
+          },
+          "body": {
+            "Union": {
+              "inputs": [
+                {
+                  "ArrangeBy": {
+                    "input": {
+                      "Get": {
+                        "id": {
+                          "Local": 0
+                        },
+                        "keys": {
+                          "raw": false,
+                          "arranged": [
+                            [
+                              [],
+                              {
+                                "0": 0,
+                                "1": 1,
+                                "2": 2,
+                                "3": 3,
+                                "4": 4,
+                                "5": 5
+                              },
+                              [
+                                0,
+                                1,
+                                2,
+                                3,
+                                4,
+                                5
+                              ]
+                            ]
+                          ]
+                        },
+                        "plan": "PassArrangements"
+                      }
+                    },
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "input_key": [],
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                      ],
+                      "input_arity": 6
+                    }
+                  }
+                },
+                {
+                  "Mfp": {
+                    "input": {
+                      "Union": {
+                        "inputs": [
+                          {
+                            "Negate": {
+                              "input": {
+                                "Get": {
+                                  "id": {
+                                    "Local": 0
+                                  },
+                                  "keys": {
+                                    "raw": false,
+                                    "arranged": [
+                                      [
+                                        [],
+                                        {
+                                          "0": 0,
+                                          "1": 1,
+                                          "2": 2,
+                                          "3": 3,
+                                          "4": 4,
+                                          "5": 5
+                                        },
+                                        [
+                                          0,
+                                          1,
+                                          2,
+                                          3,
+                                          4,
+                                          5
+                                        ]
+                                      ]
+                                    ]
+                                  },
+                                  "plan": {
+                                    "Arrangement": [
+                                      [],
+                                      null,
+                                      {
+                                        "expressions": [],
+                                        "predicates": [],
+                                        "projection": [],
+                                        "input_arity": 6
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "Constant": {
+                              "rows": {
+                                "Ok": [
+                                  [
+                                    {
+                                      "data": []
+                                    },
+                                    0,
+                                    1
+                                  ]
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "mfp": {
+                      "expressions": [
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  5,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int64",
+                              "nullable": false
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "String",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int64",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "String",
+                              "nullable": true
+                            }
+                          ]
+                        }
+                      ],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                      ],
+                      "input_arity": 0
+                    },
+                    "input_key_val": null
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Reduce::Collated (global aggregate, one-shot).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS JSON FOR
+SELECT * FROM collated_global
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Let": {
+          "id": 0,
+          "value": {
+            "Reduce": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0,
+                          "1": 1
+                        },
+                        [
+                          1
+                        ]
+                      ]
+                    ]
+                  },
+                  "plan": {
+                    "Arrangement": [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      null,
+                      {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    ]
+                  }
+                }
+              },
+              "key_val_plan": {
+                "key_plan": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [],
+                    "input_arity": 1
+                  }
+                },
+                "val_plan": {
+                  "mfp": {
+                    "expressions": [
+                      {
+                        "CallUnary": {
+                          "func": {
+                            "CastInt32ToString": null
+                          },
+                          "expr": {
+                            "Column": 0
+                          }
+                        }
+                      },
+                      {
+                        "CallVariadic": {
+                          "func": {
+                            "RecordCreate": {
+                              "field_names": [
+                                ""
+                              ]
+                            }
+                          },
+                          "exprs": [
+                            {
+                              "CallVariadic": {
+                                "func": {
+                                  "RecordCreate": {
+                                    "field_names": [
+                                      "value",
+                                      "sep"
+                                    ]
+                                  }
+                                },
+                                "exprs": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "TextConcat",
+                                      "expr1": {
+                                        "Column": 1
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                19,
+                                                1,
+                                                49
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "String",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            19,
+                                            1,
+                                            44
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "String",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "CallVariadic": {
+                          "func": {
+                            "RecordCreate": {
+                              "field_names": [
+                                ""
+                              ]
+                            }
+                          },
+                          "exprs": [
+                            {
+                              "CallVariadic": {
+                                "func": {
+                                  "RecordCreate": {
+                                    "field_names": [
+                                      "value",
+                                      "sep"
+                                    ]
+                                  }
+                                },
+                                "exprs": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "TextConcat",
+                                      "expr1": {
+                                        "Column": 1
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                19,
+                                                1,
+                                                50
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "String",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            19,
+                                            1,
+                                            44
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "String",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ],
+                    "predicates": [],
+                    "projection": [
+                      0,
+                      2,
+                      0,
+                      0,
+                      0,
+                      3
+                    ],
+                    "input_arity": 1
+                  }
+                }
+              },
+              "plan": {
+                "Collation": {
+                  "accumulable": {
+                    "full_aggrs": [
+                      {
+                        "func": "Count",
+                        "expr": {
+                          "Column": 0
+                        },
+                        "distinct": true
+                      },
+                      {
+                        "func": "SumInt32",
+                        "expr": {
+                          "Column": 0
+                        },
+                        "distinct": false
+                      }
+                    ],
+                    "simple_aggrs": [
+                      [
+                        1,
+                        4,
+                        {
+                          "func": "SumInt32",
+                          "expr": {
+                            "Column": 0
+                          },
+                          "distinct": false
+                        }
+                      ]
+                    ],
+                    "distinct_aggrs": [
+                      [
+                        0,
+                        0,
+                        {
+                          "func": "Count",
+                          "expr": {
+                            "Column": 0
+                          },
+                          "distinct": true
+                        }
+                      ]
+                    ]
+                  },
+                  "hierarchical": {
+                    "Monotonic": {
+                      "aggr_funcs": [
+                        "MinInt32",
+                        "MaxInt32"
+                      ],
+                      "skips": [
+                        2,
+                        0
+                      ],
+                      "must_consolidate": true
                     }
                   },
                   "basic": {

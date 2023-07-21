@@ -222,6 +222,7 @@ DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 ----
 db error: ERROR: transaction in read-only mode
+DETAIL: SELECT queries cannot be combined with other query types, including SUBSCRIBE.
 
 # Using an AS OF in the SELECT or SUBSCRIBE allows lifting that restriction.
 

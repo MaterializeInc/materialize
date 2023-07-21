@@ -71,7 +71,7 @@ use std::net::Ipv4Addr;
 use std::ops::Neg;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -93,17 +93,17 @@ use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
-use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
+use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::names::Aug;
-use mz_sql::plan::{CopyFormat, Params, QueryWhen};
+use mz_sql::names::{Aug, ResolvedIds};
+use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
@@ -137,10 +137,11 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::AdapterNotice;
+use crate::{flags, AdapterNotice};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
+pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
@@ -183,7 +184,8 @@ pub const DUMMY_AVAILABILITY_ZONE: &str = "";
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
     ControllerReady,
-    CreateSourceStatementReady(CreateSourceStatementReady),
+    PurifiedStatementReady(PurifiedStatementReady),
+    CreateConnectionValidationReady(CreateConnectionValidationReady),
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
@@ -208,7 +210,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         real_time_recency_ts: Timestamp,
-        validity: PeekValidity,
+        validity: PlanValidity,
     },
 
     // Like Command::Execute, but its context has already been allocated.
@@ -227,19 +229,29 @@ pub enum Message<T = mz_repr::Timestamp> {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CreateSourceStatementReady {
+pub struct BackgroundWorkResult<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
-    pub result: Result<
-        (
-            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-            CreateSourceStatement<Aug>,
-        ),
-        AdapterError,
-    >,
+    pub result: Result<T, AdapterError>,
     pub params: Params,
-    pub depends_on: Vec<GlobalId>,
+    pub resolved_ids: ResolvedIds,
     pub original_stmt: Statement<Raw>,
+    pub otel_ctx: OpenTelemetryContext,
+}
+
+pub type PurifiedStatementReady = BackgroundWorkResult<(
+    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+    Statement<Aug>,
+)>;
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct CreateConnectionValidationReady {
+    #[derivative(Debug = "ignore")]
+    pub ctx: ExecuteContext,
+    pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub connection_gid: GlobalId,
+    pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
 }
 
@@ -299,7 +311,7 @@ pub enum PeekStage {
 }
 
 impl PeekStage {
-    fn validity(&mut self) -> Option<&mut PeekValidity> {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Optimize(PeekStageOptimize { validity, .. })
@@ -317,7 +329,7 @@ pub struct PeekStageValidate {
 
 #[derive(Debug)]
 pub struct PeekStageOptimize {
-    validity: PeekValidity,
+    validity: PlanValidity,
     source: MirRelationExpr,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -333,7 +345,7 @@ pub struct PeekStageOptimize {
 
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
-    validity: PeekValidity,
+    validity: PlanValidity,
     dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -341,6 +353,7 @@ pub struct PeekStageTimestamp {
     index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
     cluster_id: ClusterId,
+    id_bundle: CollectionIdBundle,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -351,11 +364,12 @@ pub struct PeekStageTimestamp {
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
-    validity: PeekValidity,
+    validity: PlanValidity,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
     pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     pub cluster_id: ClusterId,
+    pub id_bundle: Option<CollectionIdBundle>,
     pub when: QueryWhen,
     pub target_replica: Option<ReplicaId>,
     pub view_id: GlobalId,
@@ -379,19 +393,19 @@ pub enum TargetCluster {
     Active,
 }
 
-/// A struct to hold information about the validity of peeks and if they should be abandoned after
+/// A struct to hold information about the validity of plans and if they should be abandoned after
 /// doing work off of the Coordinator thread.
 #[derive(Debug)]
-pub struct PeekValidity {
-    /// The most recent revision at which this peek was verified as valid.
+pub struct PlanValidity {
+    /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
-    /// Objects on which the peek depends.
-    source_ids: BTreeSet<GlobalId>,
-    cluster_id: ComputeInstanceId,
+    /// Objects on which the plan depends.
+    dependency_ids: BTreeSet<GlobalId>,
+    cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
 }
 
-impl PeekValidity {
+impl PlanValidity {
     /// Returns an error if the current catalog no longer has all dependencies.
     fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
@@ -399,19 +413,22 @@ impl PeekValidity {
         }
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
-        let Some(cluster) = catalog.try_get_cluster(self.cluster_id) else {
-            return Err(AdapterError::ChangedPlan);
-        };
-        if let Some(replica_id) = self.replica_id {
-            if !cluster.replicas_by_id.contains_key(&replica_id) {
+        if let Some(cluster_id) = self.cluster_id {
+            let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
                 return Err(AdapterError::ChangedPlan);
+            };
+
+            if let Some(replica_id) = self.replica_id {
+                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                    return Err(AdapterError::ChangedPlan);
+                }
             }
         }
         // It is sufficient to check that all the source_ids still exist because we assume:
         // - Ids do not mutate.
         // - Ids are not reused.
         // - If an id was dropped, this will detect it and error.
-        for id in &self.source_ids {
+        for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan);
             }
@@ -447,6 +464,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub tracing_handle: TracingHandle,
 }
 
 /// Soft-state metadata about a compute replica
@@ -536,8 +554,21 @@ impl From<PendingTxnResponse> for ExecuteResponse {
 }
 
 #[derive(Debug)]
+/// A pending read transaction waiting to be linearized along with metadata about it's state
+pub struct PendingReadTxn {
+    /// The transaction type
+    txn: PendingRead,
+    /// When we created this pending txn, when the transaction ends. Only used for metrics.
+    created: Instant,
+    /// Number of times we requeued the processing of this pending read txn.
+    /// Requeueing is necessary if the time we executed the query is after the current oracle time;
+    /// see [`Coordinator::message_linearize_reads`] for more details.
+    num_requeues: u64,
+}
+
+#[derive(Debug)]
 /// A pending read transaction waiting to be linearized.
-pub enum PendingReadTxn {
+enum PendingRead {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
@@ -552,14 +583,14 @@ pub enum PendingReadTxn {
     },
 }
 
-impl PendingReadTxn {
+impl PendingRead {
     /// Return the timestamp context of the pending read transaction.
     pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
         match &self {
-            PendingReadTxn::Read {
+            PendingRead::Read {
                 timestamp_context, ..
             } => timestamp_context.clone(),
-            PendingReadTxn::ReadThenWrite {
+            PendingRead::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
             } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
@@ -572,7 +603,7 @@ impl PendingReadTxn {
     /// (execution context and result)
     pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
-            PendingReadTxn::Read {
+            PendingRead::Read {
                 txn:
                     PendingTxn {
                         mut ctx,
@@ -590,11 +621,18 @@ impl PendingReadTxn {
 
                 Some((ctx, response))
             }
-            PendingReadTxn::ReadThenWrite { tx, .. } => {
+            PendingRead::ReadThenWrite { tx, .. } => {
                 // Ignore errors if the caller has hung up.
                 let _ = tx.send(());
                 None
             }
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            PendingRead::Read { .. } => "read",
+            PendingRead::ReadThenWrite { .. } => "read_then_write",
         }
     }
 }
@@ -818,6 +856,9 @@ pub struct Coordinator {
 
     /// Coordinator metrics.
     metrics: Metrics,
+
+    /// Tracing handle.
+    tracing_handle: TracingHandle,
 }
 
 impl Coordinator {
@@ -833,9 +874,9 @@ impl Coordinator {
         info!("coordinator init: beginning bootstrap");
 
         // Inform the controllers about their initial configuration.
-        let compute_config = self.catalog().compute_config();
+        let compute_config = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
-        let storage_config = self.catalog().storage_config();
+        let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
@@ -911,7 +952,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().to_vec();
+                let remaining_deps = entry.uses().0.iter().copied().collect::<Vec<_>>();
                 (entry, remaining_deps)
             })
             .collect();
@@ -1017,6 +1058,9 @@ impl Coordinator {
                 ),
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                DataSourceDesc::Webhook { .. } => {
+                    (DataSource::Webhook, source_status_collection_id)
+                }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Introspection(introspection) => {
                     (DataSource::Introspection(*introspection), None)
@@ -1457,6 +1501,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1593,6 +1638,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_frontend,
         active_connection_count,
+        tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1636,7 +1682,7 @@ pub async fn serve(
             unsafe_mode,
             all_features,
             build_info,
-            environment_id,
+            environment_id: environment_id.clone(),
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -1666,6 +1712,7 @@ pub async fn serve(
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
+    let segment_client_clone = segment_client.clone();
     let span = tracing::Span::current();
     let coord_now = now.clone();
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
@@ -1717,6 +1764,7 @@ pub async fn serve(
                 storage_usage_collection_interval,
                 segment_client,
                 metrics,
+                tracing_handle,
             };
             let bootstrap = handle.block_on(async {
                 coord
@@ -1750,7 +1798,14 @@ pub async fn serve(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone, now);
+            let client = Client::new(
+                build_info,
+                cmd_tx.clone(),
+                metrics_clone,
+                now,
+                environment_id,
+                segment_client_clone,
+            );
             Ok((handle, client))
         }
         Err(e) => Err(e),

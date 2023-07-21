@@ -11,13 +11,15 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
 };
 use mz_adapter::{
     AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
@@ -30,13 +32,16 @@ use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
-use tokio::time::{self, Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::{self};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
@@ -572,14 +577,14 @@ where
         }
     }
 
-    async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
+    async fn one_query(&mut self, stmt: Statement<Raw>, sql: String) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         let param_types = vec![];
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .adapter_client
-            .declare(EMPTY_PORTAL.to_string(), stmt, param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt, sql, param_types)
             .await
         {
             return self
@@ -618,7 +623,7 @@ where
             .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
             .await
         {
-            Ok(response) => {
+            Ok((response, execute_started)) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
@@ -628,6 +633,7 @@ where
                     portal_exec_message,
                     None,
                     ExecuteTimeout::None,
+                    execute_started,
                 )
                 .await
             }
@@ -651,12 +657,24 @@ where
         assert!(res.is_ok());
     }
 
+    fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
+        match self.adapter_client.parse(sql) {
+            Ok(result) => result.map_err(|e| {
+                // Convert our 0-based byte position to pgwire's 1-based character
+                // position.
+                let pos = sql[..e.error.pos].chars().count() + 1;
+                ErrorResponse::error(SqlState::SYNTAX_ERROR, e.error.message).with_position(pos)
+            }),
+            Err(msg) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, msg)),
+        }
+    }
+
     // See "Multiple Statements in a Simple Query" which documents how implicit
     // transactions are handled.
     // From https://www.postgresql.org/docs/current/protocol-flow.html
     async fn query(&mut self, sql: String) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 self.error(err).await?;
@@ -667,7 +685,7 @@ where
         let num_stmts = stmts.len();
 
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
-        for stmt in stmts {
+        for StatementParseResult { ast: stmt, sql } in stmts {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             if self.is_aborted_txn() && !is_txn_exit_stmt(Some(&stmt)) {
                 self.aborted_txn_error().await?;
@@ -683,7 +701,7 @@ where
             // statement.
             self.start_transaction(Some(num_stmts));
 
-            match self.one_query(stmt).await? {
+            match self.one_query(stmt, sql.to_string()).await? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
@@ -739,7 +757,7 @@ where
             }
         }
 
-        let stmts = match parse_sql(&sql) {
+        let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 return self.error(err).await;
@@ -753,13 +771,16 @@ where
                 ))
                 .await;
         }
-        let maybe_stmt = stmts.into_iter().next();
+        let (maybe_stmt, sql) = match stmts.into_iter().next() {
+            None => (None, ""),
+            Some(StatementParseResult { ast, sql }) => (Some(ast), sql),
+        };
         if self.is_aborted_txn() && !is_txn_exit_stmt(maybe_stmt.as_ref()) {
             return self.aborted_txn_error().await;
         }
         match self
             .adapter_client
-            .prepare(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, sql.to_string(), param_types)
             .await
         {
             Ok(()) => {
@@ -905,11 +926,13 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
+        let logging = Arc::clone(stmt.logging());
         let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
             stmt,
+            logging,
             params,
             result_formats,
             revision,
@@ -958,7 +981,6 @@ where
             }
 
             let row_desc = portal.desc.relation_desc.clone();
-
             match &mut portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one. Postgres does this both here and
@@ -966,13 +988,12 @@ where
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
                     self.start_transaction(Some(1));
-
                     match self
                         .adapter_client
                         .execute(portal_name.clone(), self.conn.wait_closed())
                         .await
                     {
-                        Ok(response) => {
+                        Ok((response, execute_started)) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
@@ -982,6 +1003,7 @@ where
                                 get_response,
                                 fetch_portal_name,
                                 timeout,
+                                execute_started,
                             )
                             .await
                         }
@@ -1227,7 +1249,7 @@ where
         &'s mut self,
         parent: &'p tracing::Span,
         mut rows: RowsFuture,
-    ) -> Result<RowBatchStream, io::Error>
+    ) -> Result<UnboundedReceiver<PeekResponseUnary>, io::Error>
     where
         'p: 's,
     {
@@ -1266,6 +1288,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
+        execute_started: Instant,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
 
@@ -1322,10 +1345,15 @@ where
 
                 let span = tracing::debug_span!(parent: &span, "send_execute_response");
                 let rows = self.row_future_to_stream(&span, rx).await?;
+
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(rows),
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        Box::new(UnboundedReceiverStream::new(rows)),
+                        execute_started,
+                        &self.adapter_client,
+                    )),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1370,11 +1398,15 @@ where
                     self.conn.flush().await?;
                 }
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::Tailing");
+                    row_desc.expect("missing row description for ExecuteResponse::Subscribing");
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(rx),
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        Box::new(UnboundedReceiverStream::new(rx)),
+                        execute_started,
+                        &self.adapter_client,
+                    )),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1400,7 +1432,16 @@ where
                             .await;
                     }
                 };
-                self.copy_rows(format, row_desc, rows).await
+                self.copy_rows(
+                    format,
+                    row_desc,
+                    RecordFirstRowStream::new(
+                        Box::new(UnboundedReceiverStream::new(rows)),
+                        execute_started,
+                        &self.adapter_client,
+                    ),
+                )
+                .await
             }
             ExecuteResponse::CopyFrom {
                 id,
@@ -1455,6 +1496,7 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
+            | ExecuteResponse::CreatedWebhookSource
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll
@@ -1470,7 +1512,8 @@ where
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
-            | ExecuteResponse::Updated(..) => {
+            | ExecuteResponse::Updated(..)
+            | ExecuteResponse::ValidatedConnection => {
                 command_complete!()
             }
         };
@@ -1509,9 +1552,10 @@ where
 
         let (mut wait_once, mut deadline) = match timeout {
             ExecuteTimeout::None => (false, None),
-            ExecuteTimeout::Seconds(t) => {
-                (false, Some(Instant::now() + Duration::from_secs_f64(t)))
-            }
+            ExecuteTimeout::Seconds(t) => (
+                false,
+                Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs_f64(t)),
+            ),
             ExecuteTimeout::WaitOnce => (true, None),
         };
 
@@ -1546,7 +1590,7 @@ where
                 let cancel_fut = self.adapter_client.canceled();
                 let notice_fut = self.adapter_client.session().recv_notice();
                 tokio::select! {
-                    _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                    _ = time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     notice = notice_fut => {
                         FetchResult::Notice(notice)
                     }
@@ -1600,11 +1644,10 @@ where
                     // deadline == None). The second time this fn is called it should behave the
                     // same a 0s timeout.
                     if wait_once && !batch_rows.is_empty() {
-                        deadline = Some(Instant::now());
+                        deadline = Some(tokio::time::Instant::now());
                         wait_once = false;
                     }
 
-                    //  let mut batch_rows = batch_rows;
                     // Drain panics if it's > len, so cap it.
                     let drain_rows = cmp::min(want_rows, batch_rows.len());
                     self.send_all(batch_rows.drain(..drain_rows).map(|row| {
@@ -1670,7 +1713,7 @@ where
         &mut self,
         format: CopyFormat,
         row_desc: RelationDesc,
-        mut stream: RowBatchStream,
+        mut stream: RecordFirstRowStream,
     ) -> Result<State, io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
@@ -1946,18 +1989,6 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> Ba
             BackendMessage::RowDescription(message::encode_row_description(desc, formats))
         }
         _ => BackendMessage::NoData,
-    }
-}
-
-fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
-    match mz_sql::parse::parse_with_limit(sql) {
-        Ok(result) => result.map_err(|e| {
-            // Convert our 0-based byte position to pgwire's 1-based character
-            // position.
-            let pos = sql[..e.pos].chars().count() + 1;
-            ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
-        }),
-        Err(e) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, e)),
     }
 }
 

@@ -19,7 +19,8 @@ use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::ast::{Ident, QualifiedReplica, UnresolvedDatabaseName};
 use crate::catalog::{
-    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, SystemObjectType,
+    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
+    ErrorMessageObjectDescription, ObjectType, SystemObjectType,
 };
 use crate::names::{
     Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedRoleName, SchemaSpecifier, SystemObjectId,
@@ -544,11 +545,11 @@ fn plan_update_privilege(
         let all_object_privileges = scx.catalog.all_object_privileges(reference_object_type);
         let invalid_privileges = acl_mode.difference(all_object_privileges);
         if !invalid_privileges.is_empty() {
-            let object_name = Some(scx.catalog.get_system_object_name(&target_id));
+            let object_description =
+                ErrorMessageObjectDescription::from_id(&target_id, scx.catalog);
             return Err(PlanError::InvalidPrivilegeTypes {
                 invalid_privileges,
-                object_type: actual_object_type,
-                object_name,
+                object_description,
             });
         }
 
@@ -670,10 +671,11 @@ pub fn plan_alter_default_privileges(
         .all_object_privileges(SystemObjectType::Object(object_type));
     let invalid_privileges = acl_mode.difference(all_object_privileges);
     if !invalid_privileges.is_empty() {
+        let object_description =
+            ErrorMessageObjectDescription::from_object_type(SystemObjectType::Object(object_type));
         return Err(PlanError::InvalidPrivilegeTypes {
             invalid_privileges,
-            object_type: SystemObjectType::Object(object_type),
-            object_name: None,
+            object_description,
         });
     }
 

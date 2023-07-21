@@ -13,8 +13,7 @@ menu:
 
 A [sink](../../get-started/key-concepts/#sinks) describes an external system you
 want Materialize to write data to, and provides details about how to encode
-that data. To create a sink, you must specify a [connector](#connectors), a
-[format](#formats) and an [envelope](#envelopes).
+that data.
 
 ## Connectors
 
@@ -30,72 +29,6 @@ systems:
 
 For details on the syntax, supported formats and features of each connector,
 check out the dedicated `CREATE SINK` documentation pages.
-
-## Formats
-
-To write to an external data sink, you must specify the format Materialize
-should use to encode ouput data. This is handled by specifying a `FORMAT` in
-the `CREATE SINK` statement.
-
-### Avro
-
-<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT AVRO</code></p>
-
-Materialize can encode output data as Avro messages, and automatically publish a
-schema to a schema registry based on the columns and data types in the source,
-table or materialized view you want to send to the sink.
-
-### JSON
-
-<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
-
-Materialize can encode output data as JSON messages. Publishing schemas to a
-schema registry is not supported yet for JSON-formatted sinks {{% gh 7186 %}}.
-
-## Envelopes
-
-In addition to determining how to encode output data, Materialize also needs to
-understand the desired behaviour of sinked events in the downstream external
-system. Whether a change is simply emitted as an event with a diff structure,
-or actively inserts, updates, or deletes existing data downstream depends on
-the `ENVELOPE` specified in the `CREATE SINK` statement.
-
-### Upsert envelope
-
-<p style="font-size:14px"><b>Syntax:</b> <code>ENVELOPE UPSERT</code></p>
-
-The upsert envelope treats all records as having a **key** and a **value**, and
-supports inserts, updates and deletes in the sink:
-
-- If the key does not match a preexisting record downstream, it inserts the
-  record's key and value.
-
-- If the key matches a preexisting record downstream and the value
-  is _non-null_, Materialize updates the existing record with the new value.
-
-- If the key matches a preexisting record downstream and the value is _null_,
-  Materialize deletes the record.
-
-[//]: # "TODO(morsapaes) Add information about upsert key selection"
-
-### Debezium envelope
-
-<p style="font-size:14px"><b>Syntax:</b> <code>ENVELOPE DEBEZIUM</code></p>
-
-Materialize provides a dedicated envelope that describes the decoded records'
-old and new values with a Debezium-like diff structure, representing inserts,
-updates, or deletes to the underlying source, table or materialized view being
-written to the sink:
-
-- If the `before` field is _null_, the record represents an insert.
-
-- If the `before` and `after` fields are _non-null_, the record represents an
-  update.
-
-- If the `after` field is _null_, the record represents a delete.
-
-[//]: # "TODO(morsapaes) Add more specific information about envelope
-semantics + example output."
 
 ## Best practices
 
@@ -119,6 +52,20 @@ when you have many low-traffic sinks that occasionally need some burst
 capacity.
 
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
+
+## Privileges
+
+{{< private-preview />}}
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `SELECT` privileges on the item being written out to an external system.
+  - NOTE: if the item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the sink definition.
 
 ## Related pages
 

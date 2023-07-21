@@ -23,9 +23,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
+    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
+    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -88,15 +88,17 @@ pub fn unresolved_schema_name(
 ///
 /// Qualified operators outside of the pg_catalog schema are rejected.
 pub fn op(op: &Op) -> Result<&str, PlanError> {
-    if !op.namespace.is_empty()
-        && (op.namespace.len() != 1
-            || op.namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
-    {
-        sql_bail!(
-            "operator does not exist: {}.{}",
-            op.namespace.iter().map(|n| n.to_string()).join("."),
-            op.op,
-        )
+    if let Some(namespace) = &op.namespace {
+        if namespace.len() != 0
+            && (namespace.len() != 1
+                || namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
+        {
+            sql_bail!(
+                "operator does not exist: {}.{}",
+                namespace.iter().map(|n| n.to_string()).join("."),
+                op.op,
+            )
+        }
     }
     Ok(&op.op)
 }
@@ -314,6 +316,18 @@ pub fn create_statement(
             *if_not_exists = false;
         }
 
+        Statement::CreateWebhookSource(CreateWebhookSourceStatement {
+            name,
+            if_not_exists,
+            include_headers: _,
+            body_format: _,
+            validate_using: _,
+            in_cluster: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+
         Statement::CreateSink(CreateSinkStatement {
             name,
             in_cluster: _,
@@ -409,6 +423,7 @@ pub fn create_statement(
         Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection: _,
+            with_options: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;

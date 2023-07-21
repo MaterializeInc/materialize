@@ -75,6 +75,7 @@ wrappers = [
     "env_logger",
     "eventsource-client",
     "fail",
+    "generator",
     "globset",
     "hyper-rustls",
     "jsonpath_lib",
