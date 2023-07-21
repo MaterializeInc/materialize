@@ -149,6 +149,7 @@ known_errors = [
     "regex_extract requires a string literal as its first argument",
     "out of valid range",
     '" does not exist',  # role does not exist
+    "csv_extract number of columns too large",
 ]
 
 
