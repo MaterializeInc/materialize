@@ -1785,30 +1785,31 @@ impl MirRelationExpr {
         (size, max_depth)
     }
 
-    /// Returns whether a expression can run an expensive function. We err on returning false.
-    /// The goal is to be a heuristic for "this expression is cheap to evaluate:
-    /// ideally not creating a dataflow at all when optimized".
+    /// The MirRelationExpr is considered potentially expensive if and only if at least one of the
+    ///  following conditions is true:
+    ///  - It contains at least one FlatMap or a Reduce operator.
+    ///  - It contains at least one MirScalarExpr with a function call.
     pub fn could_run_expensive_function(&self) -> bool {
-        self.try_could_run_expensive_function().unwrap_or(true)
-    }
-    fn try_could_run_expensive_function(&self) -> Result<bool, RecursionLimitError> {
         let mut result = false;
-        self.try_visit_pre(&mut |e| {
+        self.visit_pre(&mut |e: &MirRelationExpr| {
             use MirRelationExpr::*;
             use MirScalarExpr::*;
+            if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
+                result |= match scalar {
+                    Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                    // Function calls are considered expensive
+                    CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
+                };
+                Ok(())
+            }) {
+                // Conservatively set `true` if on RecursionLimitError.
+                result = true;
+            }
             // FlatMap has a table function; Reduce has an aggregate function.
             // Other constructs use MirScalarExpr to run a function
-            result = result || matches!(e, FlatMap { .. } | Reduce { .. });
-            self.try_visit_scalars(&mut |scalar| {
-                result = result
-                    || match scalar {
-                        Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
-                        CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
-                    };
-                Ok(())
-            })
-        })?;
-        Ok(result)
+            result |= matches!(e, FlatMap { .. } | Reduce { .. });
+        });
+        result
     }
 }
 
