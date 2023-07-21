@@ -534,6 +534,7 @@ impl Coordinator {
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
+                    | Statement::AlterSetCluster(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)

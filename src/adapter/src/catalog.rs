@@ -116,6 +116,7 @@ mod error;
 mod migrate;
 
 pub mod builtin;
+mod inner;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
@@ -898,6 +899,36 @@ impl CatalogState {
                 );
             }
         }
+    }
+
+    /// Move item `id` into the bound objects of cluster `in_cluster`, removes it from the old
+    /// cluster.
+    ///
+    /// Panics if
+    /// * the item doesn't exist,
+    /// * the item is not bound to the old cluster,
+    /// * the new cluster doesn't exist,
+    /// * the item is already bound to the new cluster.
+    pub(super) fn move_item(&mut self, id: GlobalId, in_cluster: ClusterId) {
+        let metadata = self.entry_by_id.get_mut(&id).expect("catalog out of sync");
+        if let Some(cluster_id) = metadata.item.cluster_id() {
+            assert!(
+                self.clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .remove(&id),
+                "catalog out of sync"
+            );
+        }
+        assert!(
+            self.clusters_by_id
+                .get_mut(&in_cluster)
+                .expect("catalog out of sync")
+                .bound_objects
+                .insert(id),
+            "catalog out of sync"
+        );
     }
 
     fn get_database(&self, database_id: &DatabaseId) -> &Database {
@@ -5437,6 +5468,17 @@ impl Catalog {
 
                     info!("update role {name} ({id})");
                 }
+                Op::AlterSetCluster { id, cluster } => Self::transact_alter_set_cluster(
+                    state,
+                    tx,
+                    builtin_table_updates,
+                    oracle_write_ts,
+                    &drop_ids,
+                    audit_events,
+                    session,
+                    id,
+                    cluster,
+                )?,
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
@@ -7745,6 +7787,10 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterSetCluster {
+        id: GlobalId,
+        cluster: ClusterId,
+    },
     AlterSink {
         id: GlobalId,
         cluster_config: plan::SourceSinkClusterConfig,

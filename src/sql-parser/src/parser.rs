@@ -4322,6 +4322,13 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
+                    if let Some(stmt) = self.maybe_parse_alter_set_cluster(
+                        if_exists,
+                        &source_name,
+                        ObjectType::Source,
+                    ) {
+                        return stmt;
+                    }
                     self.expect_token(&Token::LParen)
                         .map_parser_err(StatementKind::AlterSource)?;
                     let set_options = self
@@ -4546,6 +4553,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
+                    if let Some(result) =
+                        self.maybe_parse_alter_set_cluster(if_exists, &name, ObjectType::Sink)
+                    {
+                        return result;
+                    }
                     self.expect_token(&Token::LParen)
                         .map_parser_err(StatementKind::AlterSink)?;
                     let set_options = self
@@ -4756,37 +4768,72 @@ impl<'a> Parser<'a> {
         object_type: ObjectType,
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
-        let name =
-            UnresolvedObjectName::Item(self.parse_item_name().map_no_statement_parser_err()?);
+        let name = self.parse_item_name().map_no_statement_parser_err()?;
         let action = self
-            .expect_one_of_keywords(&[RENAME, OWNER])
+            .expect_one_of_keywords(&[SET, RENAME, OWNER])
             .map_no_statement_parser_err()?;
-        self.expect_keyword(TO).map_no_statement_parser_err()?;
         match action {
             RENAME => {
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
                 let to_item_name = self
                     .parse_identifier()
                     .map_parser_err(StatementKind::AlterObjectRename)?;
                 Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type,
                     if_exists,
-                    name,
+                    name: UnresolvedObjectName::Item(name),
                     to_item_name,
                 }))
             }
+            SET => self.parse_alter_set_cluster(if_exists, name, object_type),
             OWNER => {
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
                 let new_owner = self
                     .parse_identifier()
                     .map_parser_err(StatementKind::AlterOwner)?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
                     if_exists,
-                    name,
+                    name: UnresolvedObjectName::Item(name),
                     new_owner,
                 }))
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Parses `CLUSTER name` fragments into a [`AlterSetClusterStatement`] if `CLUSTER` is found.
+    fn maybe_parse_alter_set_cluster(
+        &mut self,
+        if_exists: bool,
+        name: &UnresolvedItemName,
+        object_type: ObjectType,
+    ) -> Option<Result<Statement<Raw>, ParserStatementError>> {
+        if self.peek_keyword(CLUSTER) {
+            Some(self.parse_alter_set_cluster(if_exists, name.clone(), object_type))
+        } else {
+            None
+        }
+    }
+
+    /// Parses `IN CLUSTER name` fragments into a [`AlterSetClusterStatement`].
+    fn parse_alter_set_cluster(
+        &mut self,
+        if_exists: bool,
+        name: UnresolvedItemName,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserStatementError> {
+        self.expect_keyword(CLUSTER)
+            .map_parser_err(StatementKind::AlterSetCluster)?;
+        let set_cluster = self
+            .parse_raw_ident()
+            .map_parser_err(StatementKind::AlterSetCluster)?;
+        Ok(Statement::AlterSetCluster(AlterSetClusterStatement {
+            name,
+            if_exists,
+            set_cluster,
+            object_type,
+        }))
     }
 
     /// Parse a copy statement
