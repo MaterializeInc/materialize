@@ -139,6 +139,7 @@ use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice};
 
+pub(crate) mod dataflows;
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
@@ -147,7 +148,6 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
-mod dataflows;
 mod ddl;
 mod indexes;
 mod introspection;
