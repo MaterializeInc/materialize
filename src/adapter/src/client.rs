@@ -24,6 +24,7 @@ use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
+use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -213,7 +214,7 @@ impl Client {
             .declare(EMPTY_PORTAL.into(), stmt, sql.to_string(), vec![])
             .await?;
         match session_client
-            .execute(EMPTY_PORTAL.into(), futures::future::pending())
+            .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
             (ExecuteResponse::SendingRows { future, span: _ }, _) => match future.await {
@@ -417,6 +418,7 @@ impl SessionClient {
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
+        outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
         let response = self
@@ -426,6 +428,7 @@ impl SessionClient {
                     session,
                     tx,
                     span: tracing::Span::current(),
+                    outer_ctx_extra,
                 },
                 cancel_future,
             )
@@ -483,6 +486,19 @@ impl SessionClient {
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
             .await
+    }
+
+    /// Tells the coordinator a statement has finished execution, in the cases
+    /// where we have no other reason to communicate with the coordinator.
+    pub fn retire_execute(
+        &mut self,
+        data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
+    ) {
+        if !data.is_trivial() {
+            let cmd = Command::RetireExecute { data, reason };
+            self.inner_mut().send(cmd);
+        }
     }
 
     /// Inserts a set of rows into the given table.
@@ -594,7 +610,8 @@ impl SessionClient {
                 | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
-                | Command::Terminate { .. } => {}
+                | Command::Terminate { .. }
+                | Command::RetireExecute { .. } => {}
             };
             cmd
         });

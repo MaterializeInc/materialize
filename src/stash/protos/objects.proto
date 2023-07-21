@@ -580,3 +580,56 @@ message AuditLogEventV1 {
         SchemaV2 schema_v2 = 19;
     }
 }
+
+message StatementLoggingEvent {
+    message StatementPrepared {
+        string id = 1;
+        string name = 2;
+        string sql = 3;
+        string session_id = 4;
+        EpochMillis prepared_at = 5;
+    }
+    message StatementBeganExecution {
+        string id = 1;
+        string prepared_statement_id = 2;
+        // logically a double, but that causes issues due to
+        // not implementing eq/ord.
+        string sample_rate = 3;
+        message Param {
+            oneof param {
+                string param_inner = 4;
+            }
+        }
+        repeated Param params = 5;
+        EpochMillis began_at = 6;
+    }
+    message StatementEndedExecution {
+        enum ExecutionStrategy {
+            EXECUTION_STRATEGY_STANDARD = 0;
+            EXECUTION_STRATEGY_FAST_PATH = 1;
+            EXECUTION_STRATEGY_CONSTANT = 2;
+        }
+        message Success {
+            optional uint64 rows_returned = 1;
+            optional ExecutionStrategy execution_strategy = 2;
+        }
+        message Canceled {}
+        message Errored {
+            string error = 1;
+        }
+        message Aborted {}
+        oneof reason {
+            Success success = 1;
+            Canceled canceled = 2;
+            Errored errored = 3;
+            Aborted aborted = 4;
+        }
+        string id = 5;
+        EpochMillis ended_at = 6;
+    }
+    oneof value {
+        StatementPrepared prepared = 1;
+        StatementBeganExecution began_execution = 2;
+        StatementEndedExecution ended_execution = 3;
+    }
+}

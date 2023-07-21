@@ -1000,6 +1000,7 @@ impl<'a> RunnerInner<'a> {
             tracing_handle: TracingHandle::disabled(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
+            statement_logging_retention_period: Duration::from_secs(30 * 24 * 60 * 60),
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,

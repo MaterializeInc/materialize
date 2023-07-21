@@ -1474,7 +1474,7 @@ impl CatalogState {
                 "success",
                 None,
                 rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                Some(execution_strategy.name()),
+                execution_strategy.map(|es| es.name()),
             ),
             StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
             StatementEndedExecutionReason::Errored { error } => {

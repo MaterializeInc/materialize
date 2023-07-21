@@ -46,6 +46,7 @@ use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
+use mz_repr::statement_logging::StatementLoggingEvent;
 use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
@@ -3860,6 +3861,17 @@ impl Catalog {
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
+        let (prepared_statement_log, executed_statement_log) = catalog
+            .storage()
+            .await
+            .fetch_and_prune_statement_log(config.statement_logging_retention_period)
+            .await?;
+        for ps in prepared_statement_log {
+            builtin_table_updates.push(catalog.state.pack_statement_prepared_update(&ps))
+        }
+        for (be, ee) in executed_statement_log {
+            builtin_table_updates.push(catalog.state.pack_full_statement_execution_update(&be, &ee))
+        }
 
         for ip in &catalog.state.egress_ips {
             builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
@@ -4644,6 +4656,7 @@ impl Catalog {
             system_parameter_frontend: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
+            statement_logging_retention_period: Duration::from_secs(30 * 24 * 60 * 60),
             connection_context: None,
             active_connection_count,
         })
@@ -4815,6 +4828,16 @@ impl Catalog {
         self.storage()
             .await
             .persist_timestamp(timeline, timestamp)
+            .await
+    }
+
+    pub async fn append_statement_log_events(
+        &self,
+        events: Vec<StatementLoggingEvent>,
+    ) -> Result<(), Error> {
+        self.storage()
+            .await
+            .append_statement_log_events(events)
             .await
     }
 

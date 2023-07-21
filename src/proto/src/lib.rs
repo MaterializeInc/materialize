@@ -77,7 +77,7 @@
 
 use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::{NonZeroU64, TryFromIntError};
+use std::num::{NonZeroU64, ParseFloatError, TryFromIntError};
 
 use mz_ore::cast::CastFrom;
 use proptest::prelude::Strategy;
@@ -130,6 +130,10 @@ pub enum TryFromProtoError {
     InvalidBitFlags(String),
     /// Failed to deserialize a LIKE/ILIKE pattern.
     LikePatternDeserializationError(String),
+    /// Failed to parse Uuid
+    InvalidUuid(uuid::Error),
+    /// Failed to parse double
+    InvalidF64(ParseFloatError),
 }
 
 impl TryFromProtoError {
@@ -214,6 +218,8 @@ impl std::fmt::Display for TryFromProtoError {
                 "Protobuf deserialization failed for a LIKE/ILIKE pattern: `{}`",
                 inner_error
             ),
+            InvalidUuid(error) => error.fmt(f),
+            InvalidF64(error) => error.fmt(f),
         }
     }
 }
@@ -247,6 +253,8 @@ impl std::error::Error for TryFromProtoError {
             InvalidUrl(error) => Some(error),
             InvalidBitFlags(_) => None,
             LikePatternDeserializationError(_) => None,
+            InvalidUuid(error) => Some(error),
+            InvalidF64(error) => Some(error),
         }
     }
 }

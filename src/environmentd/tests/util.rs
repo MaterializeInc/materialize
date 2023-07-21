@@ -451,6 +451,7 @@ impl Listeners {
                     config_sync_loop_interval: None,
                     bootstrap_role: config.bootstrap_role,
                     deploy_generation: config.deploy_generation,
+                    statement_logging_retention_period: Duration::from_secs(30 * 24 * 60 * 60),
                 })
                 .await
         })?;

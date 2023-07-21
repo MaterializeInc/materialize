@@ -22,6 +22,7 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -75,6 +76,7 @@ pub enum Command {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        outer_ctx_extra: Option<ExecuteContextExtra>,
         span: tracing::Span,
     },
 
@@ -130,6 +132,17 @@ pub enum Command {
         session: Session,
         tx: Option<oneshot::Sender<Response<()>>>,
     },
+
+    /// Performs any cleanup and logging actions necessary for
+    /// finalizing a statement execution.
+    ///
+    /// Only used for cases that terminate in the protocol layer and
+    /// otherwise have no reason to hand control back to the coordinator.
+    /// In other cases, we piggy-back on another command.
+    RetireExecute {
+        data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
+    },
 }
 
 impl Command {
@@ -147,8 +160,9 @@ impl Command {
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
-            | Command::PrivilegedCancelRequest { .. } => None,
+            | Command::RetireExecute { .. } => None,
         }
     }
 
@@ -166,8 +180,9 @@ impl Command {
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
-            | Command::PrivilegedCancelRequest { .. } => None,
+            | Command::RetireExecute { .. } => None,
         }
     }
 }
@@ -560,6 +575,7 @@ pub enum ExecuteResponse {
         count: Option<FetchDirection>,
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
+        ctx_extra: ExecuteContextExtra,
     },
     /// The requested privilege was granted.
     GrantedPrivilege,
@@ -584,6 +600,13 @@ pub enum ExecuteResponse {
         #[derivative(Debug = "ignore")]
         span: tracing::Span,
     },
+    /// Like `SendingRows`, but the rows are known to be available
+    /// immediately, and thus the execution is considered ended in the coordinator.
+    SendingRowsImmediate {
+        rows: Vec<Row>,
+        #[derivative(Debug = "ignore")]
+        span: tracing::Span,
+    },
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,
@@ -594,7 +617,10 @@ pub enum ExecuteResponse {
     StartedTransaction,
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
-    Subscribing { rx: RowBatchStream },
+    Subscribing {
+        rx: RowBatchStream,
+        ctx_extra: ExecuteContextExtra,
+    },
     /// The active transaction committed.
     TransactionCommitted {
         /// Session parameters that changed because the transaction ended.
@@ -678,6 +704,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::TransactionRolledBack => Err(()),
             ExecuteResponseKind::Updated => Err(()),
             ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
+            ExecuteResponseKind::SendingRowsImmediate => Err(()),
         }
     }
 }
@@ -737,7 +764,7 @@ impl ExecuteResponse {
             ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
-            SendingRows { .. } => None,
+            SendingRows { .. } | SendingRowsImmediate { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
@@ -803,14 +830,20 @@ impl ExecuteResponse {
             DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             Explain | Select | ShowAllVariables | ShowCreate | ShowVariable | InspectShard => {
-                vec![CopyTo, SendingRows]
+                vec![CopyTo, SendingRows, SendingRowsImmediate]
             }
-            Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
+            Execute | ReadThenWrite => vec![
+                Deleted,
+                Inserted,
+                SendingRows,
+                SendingRowsImmediate,
+                Updated,
+            ],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
             CopyRows => vec![Inserted],
-            Insert => vec![Inserted, SendingRows],
+            Insert => vec![Inserted, SendingRows, SendingRowsImmediate],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
             PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],

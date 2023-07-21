@@ -47,7 +47,7 @@ impl StatementExecutionStrategy {
 pub enum StatementEndedExecutionReason {
     Success {
         rows_returned: Option<u64>,
-        execution_strategy: StatementExecutionStrategy,
+        execution_strategy: Option<StatementExecutionStrategy>,
     },
     Canceled,
     Errored {
