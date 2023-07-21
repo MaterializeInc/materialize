@@ -34,6 +34,7 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{NewReplicaId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -280,14 +281,15 @@ pub trait StorageController: Debug + Send {
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
-
-    /// Disconnects the storage instance from the specified replica.
-    fn drop_replica(
+    fn connect_replica(
         &mut self,
         instance_id: StorageInstanceId,
-        replica_id: mz_cluster_client::ReplicaId,
+        replica_id: ReplicaId,
+        location: ClusterReplicaLocation,
     );
+
+    /// Disconnects the storage instance from the specified replica.
+    fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
 
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
@@ -845,6 +847,8 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
+    /// For each storage instance the ID of its replica, if any.
+    replicas: BTreeMap<StorageInstanceId, ReplicaId>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
@@ -1117,6 +1121,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             clients: BTreeMap::new(),
+            replicas: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
         }
@@ -1201,26 +1206,31 @@ where
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation) {
-        let client = self
-            .state
-            .clients
-            .get_mut(&id)
-            .unwrap_or_else(|| panic!("instance {id} does not exist"));
-        client.connect(location);
-    }
-
-    fn drop_replica(
+    fn connect_replica(
         &mut self,
         instance_id: StorageInstanceId,
-        _replica_id: mz_cluster_client::ReplicaId,
+        replica_id: ReplicaId,
+        location: ClusterReplicaLocation,
     ) {
         let client = self
             .state
             .clients
             .get_mut(&instance_id)
             .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
+        client.connect(location);
+
+        self.state.replicas.insert(instance_id, replica_id);
+    }
+
+    fn drop_replica(&mut self, instance_id: StorageInstanceId, _replica_id: ReplicaId) {
+        let client = self
+            .state
+            .clients
+            .get_mut(&instance_id)
+            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
         client.reset();
+
+        self.state.replicas.remove(&instance_id);
     }
 
     // Add new migrations below and precede them with a short summary of the
@@ -2139,9 +2149,14 @@ where
 
                 // Make sure we also send `AllowCompaction` commands for sinks,
                 // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) = exports_net
-                    .entry(key)
-                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), export.cluster_id()));
+                let (changes, frontier, _cluster_id) =
+                    exports_net.entry(key).or_insert_with(|| {
+                        (
+                            ChangeBatch::new(),
+                            Antichain::new(),
+                            Some(export.cluster_id()),
+                        )
+                    });
 
                 changes.extend(update.drain());
                 *frontier = export.read_capability.clone();
@@ -2430,11 +2445,32 @@ where
         // Make `replica_id` optional, to account for storage objects that are not installed on
         // replicas.
         let mut frontiers = BTreeMap::new();
+        let mut external_ids = HashSet::with_capacity(frontiers.len());
         for ((object_id, replica_id), frontier) in external_frontiers {
             frontiers.insert((object_id, Some(replica_id)), frontier);
+            external_ids.insert(object_id);
         }
 
-        // TODO: enrich `frontiers` with storage frontiers
+        // Enrich `frontiers` with storage frontiers.
+        // Make sure to not add frontiers for objects already present in `frontiers`
+        for (object_id, collection) in &self.state.collections {
+            if !external_ids.contains(object_id) {
+                let replica_id = collection
+                    .cluster_id()
+                    .and_then(|c| self.state.replicas.get(&c))
+                    .copied();
+                let frontier = collection.write_frontier.clone();
+                frontiers.insert((*object_id, replica_id), frontier);
+            }
+        }
+        for (object_id, export) in &self.state.exports {
+            if !external_ids.contains(object_id) {
+                let cluster_id = export.cluster_id();
+                let replica_id = self.state.replicas.get(&cluster_id).copied();
+                let frontier = export.write_frontier.clone();
+                frontiers.insert((*object_id, replica_id), frontier);
+            }
+        }
 
         let mut updates = Vec::new();
         let mut push_update = |(object_id, replica_id): (GlobalId, Option<ReplicaId>),
@@ -3476,9 +3512,9 @@ impl<T: Timestamp> ExportState<T> {
         }
     }
 
-    /// Returns the cluster to which the export is bound, if applicable.
-    fn cluster_id(&self) -> Option<StorageInstanceId> {
-        Some(self.description.instance_id)
+    /// Returns the cluster to which the export is bound.
+    fn cluster_id(&self) -> StorageInstanceId {
+        self.description.instance_id
     }
 }
 

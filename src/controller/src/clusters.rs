@@ -352,11 +352,13 @@ where
         drop(replica_stream);
 
         for (cluster_id, replicas) in replicas {
+            let last_replica = replicas.last().unwrap();
             // We only connect to the last replica (chosen arbitrarily)
             // for storage, until we support multi-replica storage objects
             self.storage.connect_replica(
                 cluster_id,
-                replicas.last().unwrap().storage_location.clone(),
+                last_replica.replica_id,
+                last_replica.storage_location.clone(),
             );
 
             for ReplicaInfo {
