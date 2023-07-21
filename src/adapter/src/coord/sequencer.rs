@@ -15,6 +15,7 @@
 use inner::return_if_err;
 use mz_controller::clusters::ClusterId;
 use mz_expr::OptimizedMirRelationExpr;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
@@ -559,6 +560,7 @@ impl Coordinator {
                     action: EndTransactionAction::Commit,
                     session,
                     tx: sub_tx,
+                    otel_ctx: OpenTelemetryContext::obtain(),
                 }));
                 let Ok(commit_response) = sub_rx.await else {
                     // Coordinator went away.

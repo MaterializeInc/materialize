@@ -24,6 +24,7 @@ use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -468,6 +469,7 @@ impl SessionClient {
             action,
             session,
             tx,
+            otel_ctx: OpenTelemetryContext::obtain(),
         })
         .await
     }

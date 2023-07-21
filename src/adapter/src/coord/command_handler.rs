@@ -248,7 +248,9 @@ impl Coordinator {
                 action,
                 session,
                 tx,
+                otel_ctx,
             } => {
+                otel_ctx.attach_as_parent();
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 // We reach here not through a statement execution, but from the
                 // "commit" pgwire command. Thus, we just generate a default statement
@@ -273,6 +275,7 @@ impl Coordinator {
                     }
                 };
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .instrument(tracing::debug_span!("message_command (commit)"))
                     .await;
             }
 

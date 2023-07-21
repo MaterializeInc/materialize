@@ -118,7 +118,7 @@ use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Instrument, Level};
+use tracing::{debug_span, info, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -193,7 +193,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate,
+    GroupCommitInitiate(Span),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -1616,7 +1616,11 @@ impl Coordinator {
                 }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = self.advance_timelines_interval.tick() => Message::GroupCommitInitiate,
+                _ = self.advance_timelines_interval.tick() => {
+                    let span = debug_span!(parent: None, "advance_timelines_interval");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span)
+                },
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
                 // `recv()` on `Receiver` is cancellation safe:
