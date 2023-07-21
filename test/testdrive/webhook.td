@@ -130,7 +130,7 @@ null
 
 > CREATE SOURCE webhook_bytes_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = 'test' );
+  CHECK ( headers->'signature' = 'test' );
 
 $ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=test
 123
@@ -140,7 +140,7 @@ $ webhook-append database=materialize schema=public name=webhook_bytes_with_vali
 
 > CREATE SOURCE webhook_bytes_with_hmac IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING (
+  CHECK (
     decode(headers->'x-signature', 'base64') = hmac('body=' || convert_from(body, 'utf-8'), 'test_key', 'sha256')
   );
 
@@ -159,7 +159,7 @@ did_not_include_necessary_header
 
 > CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  VALIDATE USING (
+  CHECK (
     decode(split_part(headers->'x-buildkite-signature', 'signature::', 2), 'hex')
       =
     hmac(split_part(split_part(headers->'x-buildkite-signature', 'timestamp::', 2), ',', 1) || '.' || convert_from(body, 'utf-8'), 'test_key', 'sha256')
@@ -173,7 +173,7 @@ i hope this works
 
 > CREATE SOURCE webhook_hex IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  VALIDATE USING ( decode(convert_from(body, 'utf-8'), 'hex') = '\x42' );
+  CHECK ( decode(convert_from(body, 'utf-8'), 'hex') = '\x42' );
 
 $ webhook-append name=webhook_hex status=400
 # 'z' is an invalid character in hex which causes an evaluation failure.
@@ -189,7 +189,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 # Note: if you change the message in the panic, then you need to update ci_logged_errors_detect.py.
 > CREATE SOURCE webhook_validation_panic IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  VALIDATE USING ( mz_internal.mz_panic('webhook panic test') = headers::text );
+  CHECK ( mz_internal.mz_panic('webhook panic test') = headers::text );
 
 $ webhook-append name=webhook_validation_panic status=503
 abc

@@ -905,7 +905,7 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
-/// Plans an expression in the VALIDATE USING position of a `CREATE SOURCE ... FROM WEBHOOK`.
+/// Plans an expression in the CHECK position of a `CREATE SOURCE ... FROM WEBHOOK`.
 pub fn plan_webhook_validate_using(
     scx: &StatementContext,
     mut expr: Expr<Aug>,
@@ -937,7 +937,7 @@ pub fn plan_webhook_validate_using(
 
     let ecx = &ExprContext {
         qcx: &qcx,
-        name: "VALIDATE USING",
+        name: "CHECK",
         scope: &scope,
         relation_type: desc.typ(),
         allow_aggregates: false,

@@ -551,10 +551,10 @@ impl fmt::Display for PlanError {
             ),
             Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
             Self::WebhookValidationDoesNotUseColumns => f.write_str(
-                "expression provided in VALIDATE USING does not reference any columns"
+                "expression provided in CHECK does not reference any columns"
             ),
             Self::WebhookValidationNonDeterministic => f.write_str(
-                "expression provided in VALIDATE USING is not deterministic"
+                "expression provided in CHECK is not deterministic"
             ),
         }
     }

@@ -319,16 +319,16 @@ CREATE SOURCE webhook_avro IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT A
                                                                                ^
 
 parse-statement
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = 'test' )
 ----
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = 'test' )
 =>
 CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) }), in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = hmac(sha256, 'body=' || body) )
 ----
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON VALIDATE USING ( headers['signature'] = hmac(sha256, 'body=' || body) )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = hmac(sha256, 'body=' || body) )
 =>
 CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) }), in_cluster: Unresolved(Ident("webhook_cluster")) })
 
@@ -347,10 +347,10 @@ CREATE SOURCE webhook_include_headers_no_cluster FROM WEBHOOK BODY FORMAT TEXT I
                                                  ^
 
 parse-statement
-CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT VALIDATE USING ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT CHECK ( headers['signature'] = 'test' )
 ----
 error: Expected IN CLUSTER, found FROM
-CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT VALIDATE USING ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT CHECK ( headers['signature'] = 'test' )
                                             ^
 
 parse-statement

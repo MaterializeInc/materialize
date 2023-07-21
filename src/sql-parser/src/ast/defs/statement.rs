@@ -684,7 +684,7 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         }
 
         if let Some(validate) = &self.validate_using {
-            f.write_str(" VALIDATE USING ");
+            f.write_str(" CHECK ");
             f.write_str("( ");
             f.write_node(validate);
             f.write_str(" )");

@@ -112,14 +112,14 @@ CREATE SOURCE IF NOT EXISTS webhook_text_include_headers IN CLUSTER webhook_clus
 statement ok
 CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
-    VALIDATE USING (
+    CHECK (
         decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || '.' || convert_from(body, 'utf-8'), 'key', 'sha256')
     )
 
 statement ok
 CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON
-  VALIDATE USING (
+  CHECK (
     decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
       split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || convert_from(body, 'utf-8'),
       'test_key',
@@ -130,39 +130,39 @@ CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
 statement error column "field_that_does_not_exist" does not exist
 CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
-    VALIDATE USING (
+    CHECK (
         decode(headers->'signature', 'base64') = hmac(field_that_does_not_exist, 'key', 'sha256')
     )
 
-statement error VALIDATE USING must have type boolean, not type text
+statement error CHECK must have type boolean, not type text
 CREATE SOURCE webhook_validation_returns_non_bool IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
-    VALIDATE USING ( 'foo' || 'bar' )
+    CHECK ( 'foo' || 'bar' )
 
-statement error expression provided in VALIDATE USING does not reference any columns
+statement error expression provided in CHECK does not reference any columns
 CREATE SOURCE webhook_json_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT JSON
-    VALIDATE USING ( 'a' = 'test' )
+    CHECK ( 'a' = 'test' )
 
-statement error VALIDATE USING does not allow subqueries
+statement error CHECK does not allow subqueries
 CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' IN (select * from mz_tables) )
+  CHECK ( headers->'signature' IN (select * from mz_tables) )
 
-statement error expression provided in VALIDATE USING is not deterministic
+statement error expression provided in CHECK is not deterministic
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS') )
+  CHECK ( headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS') )
 
-statement error expression provided in VALIDATE USING is not deterministic
+statement error expression provided in CHECK is not deterministic
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = mz_now()::text )
+  CHECK ( headers->'signature' = mz_now()::text )
 
-statement error expression provided in VALIDATE USING is not deterministic
+statement error expression provided in CHECK is not deterministic
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = current_timestamp()::text )
+  CHECK ( headers->'signature' = current_timestamp()::text )
 
 statement error unknown cluster 'i_do_not_exist'
 CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBHOOK
