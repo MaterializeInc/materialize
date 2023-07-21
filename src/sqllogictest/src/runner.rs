@@ -1777,14 +1777,23 @@ pub async fn run_string(
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
+                if !outcome.failure() {
+                    writeln!(
+                        runner.config.stdout,
+                        "{}",
+                        util::indent("Warning detected for: ", 4)
+                    );
+                }
                 print_record(runner.config, &record);
             }
-            writeln!(
-                runner.config.stdout,
-                "{}",
-                util::indent(&outcome.to_string(), 4)
-            );
-            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            if runner.config.verbosity >= 2 || outcome.failure() {
+                writeln!(
+                    runner.config.stdout,
+                    "{}",
+                    util::indent(&outcome.to_string(), 4)
+                );
+                writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            }
         }
 
         outcomes.0[outcome.code()] += 1;
