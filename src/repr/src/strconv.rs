@@ -53,7 +53,7 @@ use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
-use crate::adt::mz_acl_item::MzAclItem;
+use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
@@ -1708,6 +1708,22 @@ pub fn parse_mz_acl_item(s: &str) -> Result<MzAclItem, ParseError> {
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("mz_aclitem", s).with_details(e))
+}
+
+/// Writes an `acl_item` to `buf`.
+pub fn format_acl_item<F>(buf: &mut F, acl_item: AclItem) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{acl_item}");
+    Nestable::Yes
+}
+
+/// Parses an AclItem from `s`.
+pub fn parse_acl_item(s: &str) -> Result<AclItem, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("aclitem", s).with_details(e))
 }
 
 pub trait ElementEscaper {

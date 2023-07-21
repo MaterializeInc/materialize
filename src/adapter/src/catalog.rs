@@ -4092,6 +4092,7 @@ impl Catalog {
         name_to_id_map: &BTreeMap<&str, GlobalId>,
     ) -> BuiltinType<IdReference> {
         let typ: CatalogType<IdReference> = match &builtin.details.typ {
+            CatalogType::AclItem => CatalogType::AclItem,
             CatalogType::Array { element_reference } => CatalogType::Array {
                 element_reference: name_to_id_map[element_reference],
             },

@@ -57,7 +57,7 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
@@ -415,6 +415,9 @@ impl<'a> FromSql<'a> for Slt {
         mut raw: &'a [u8],
     ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
         Ok(match *ty {
+            PgType::ACLITEM => Self(Value::AclItem(AclItem::decode_binary(
+                types::bytea_from_sql(raw),
+            )?)),
             PgType::BOOL => Self(Value::Bool(types::bool_from_sql(raw)?)),
             PgType::BYTEA => Self(Value::Bytea(types::bytea_from_sql(raw).to_vec())),
             PgType::CHAR => Self(Value::Char(u8::from_be_bytes(
@@ -533,7 +536,8 @@ impl<'a> FromSql<'a> for Slt {
         }
         matches!(
             *ty,
-            PgType::BOOL
+            PgType::ACLITEM
+                | PgType::BOOL
                 | PgType::BYTEA
                 | PgType::CHAR
                 | PgType::DATE

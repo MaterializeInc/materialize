@@ -1229,6 +1229,28 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
+    name: "aclitem",
+    schema: PG_CATALOG_SCHEMA,
+    oid: 1033,
+    details: CatalogTypeDetails {
+        typ: CatalogType::AclItem,
+        array_id: None,
+    },
+};
+
+pub const TYPE_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_aclitem",
+    schema: PG_CATALOG_SCHEMA,
+    oid: 1034,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_ACL_ITEM.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4119,6 +4141,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_TSTZ_RANGE_ARRAY),
         Builtin::Type(&TYPE_MZ_ACL_ITEM),
         Builtin::Type(&TYPE_MZ_ACL_ITEM_ARRAY),
+        Builtin::Type(&TYPE_ACL_ITEM),
+        Builtin::Type(&TYPE_ACL_ITEM_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -5032,7 +5056,8 @@ mod tests {
                         | typ @ ScalarType::MzAclItem => {
                             panic!("{typ:?} type found in {full_name}");
                         }
-                        ScalarType::Bool
+                        ScalarType::AclItem
+                        | ScalarType::Bool
                         | ScalarType::Int16
                         | ScalarType::Int32
                         | ScalarType::Int64

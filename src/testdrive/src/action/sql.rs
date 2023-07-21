@@ -580,6 +580,7 @@ pub fn decode_row(
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
         let mut value: String = match *ty {
+            Type::ACLITEM => row.get::<_, Option<AclItem>>(i).map(|x| x.0),
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
             Type::BPCHAR | Type::TEXT | Type::VARCHAR => row.get::<_, Option<String>>(i),
             Type::TEXT_ARRAY => row
@@ -743,6 +744,18 @@ impl<'a> FromSql<'a> for MzAclItem {
 
     fn accepts(ty: &Type) -> bool {
         ty.oid() == mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_OID
+    }
+}
+
+struct AclItem(String);
+
+impl<'a> FromSql<'a> for AclItem {
+    fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(AclItem(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == 1033
     }
 }
 

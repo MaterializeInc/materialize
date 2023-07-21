@@ -117,5 +117,6 @@ message ProtoScalarType {
         ProtoRange Range = 33;
         google.protobuf.Empty MzAclItem = 34;
         google.protobuf.Empty PgLegacyName = 35;
+        google.protobuf.Empty AclItem = 36;
     }
 }

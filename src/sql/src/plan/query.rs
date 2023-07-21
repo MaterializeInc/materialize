@@ -5196,6 +5196,7 @@ fn scalar_type_from_catalog(
                         custom_id: Some(id),
                     })
                 }
+                CatalogType::AclItem => Ok(ScalarType::AclItem),
                 CatalogType::Bool => Ok(ScalarType::Bool),
                 CatalogType::Bytes => Ok(ScalarType::Bytes),
                 CatalogType::Date => Ok(ScalarType::Date),

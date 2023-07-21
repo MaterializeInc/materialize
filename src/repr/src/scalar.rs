@@ -34,7 +34,7 @@ use crate::adt::char::{Char, CharLength};
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
-use crate::adt::mz_acl_item::{AclMode, MzAclItem};
+use crate::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::pg_legacy_name::PgLegacyName;
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
@@ -127,8 +127,12 @@ pub enum Datum<'a> {
     MzTimestamp(crate::Timestamp),
     /// A range of values, e.g. [-1, 1).
     Range(Range<DatumNested<'a>>),
-    /// A list of privileges granted to a user.
+    /// A list of privileges granted to a user, that uses [`RoleId`]s for role
+    /// references.
     MzAclItem(MzAclItem),
+    /// A list of privileges granted to a user that uses [`Oid`]s for role references.
+    /// This type is used primarily for compatibility with PostgreSQL.
+    AclItem(AclItem),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -877,6 +881,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the acl_item value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::AclItem`].
+    #[track_caller]
+    pub fn unwrap_acl_item(&self) -> AclItem {
+        match self {
+            Datum::AclItem(acl_item) => *acl_item,
+            _ => panic!("Datum::unwrap_acl_item called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -995,6 +1012,8 @@ impl<'a> Datum<'a> {
                     (Datum::Range(_), _) => false,
                     (Datum::MzAclItem(_), ScalarType::MzAclItem) => true,
                     (Datum::MzAclItem(_), _) => false,
+                    (Datum::AclItem(_), ScalarType::AclItem) => true,
+                    (Datum::AclItem(_), _) => false,
                 }
             }
         }
@@ -1319,6 +1338,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Dummy => f.write_str("dummy"),
             Datum::Range(i) => write!(f, "{}", i),
             Datum::MzAclItem(mz_acl_item) => write!(f, "{mz_acl_item}"),
+            Datum::AclItem(acl_item) => write!(f, "{acl_item}"),
         }
     }
 }
@@ -1462,6 +1482,8 @@ pub enum ScalarType {
     },
     /// The type of [`Datum::MzAclItem`]
     MzAclItem,
+    /// The type of [`Datum::AclItem`]
+    AclItem,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1549,6 +1571,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                     element_type: Some(element_type.into_proto()),
                 })),
                 ScalarType::MzAclItem => MzAclItem(()),
+                ScalarType::AclItem => AclItem(()),
             }),
         }
     }
@@ -1630,6 +1653,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ),
             }),
             MzAclItem(()) => Ok(ScalarType::MzAclItem),
+            AclItem(()) => Ok(ScalarType::AclItem),
         }
     }
 }
@@ -2290,6 +2314,29 @@ impl<'a, E> DatumType<'a, E> for MzAclItem {
     }
 }
 
+impl AsColumnType for AclItem {
+    fn as_column_type() -> ColumnType {
+        ScalarType::AclItem.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for AclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::AclItem(acl_item)) => Ok(acl_item),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::AclItem(self))
+    }
+}
+
 impl<'a> ScalarType {
     /// Returns the contained numeric maximum scale.
     ///
@@ -2935,6 +2982,8 @@ impl<'a> ScalarType {
                 }),
             ])
         });
+        // aclitem has no binary encoding so we can't test it here.
+        static ACLITEM: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
 
         match self {
             ScalarType::Bool => (*BOOL).iter(),
@@ -2972,6 +3021,7 @@ impl<'a> ScalarType {
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
             ScalarType::Range { .. } => (*RANGE).iter(),
             ScalarType::MzAclItem { .. } => (*MZACLITEM).iter(),
+            ScalarType::AclItem { .. } => (*ACLITEM).iter(),
         }
     }
 
@@ -3016,6 +3066,7 @@ impl<'a> ScalarType {
             ScalarType::Int2Vector,
             ScalarType::MzTimestamp,
             ScalarType::MzAclItem,
+            ScalarType::AclItem,
             // TODO: Fill in some variants of these.
             /*
             ScalarType::Array(_),
@@ -3044,7 +3095,8 @@ impl<'a> ScalarType {
     /// If the type is not compatible with making an array, returns in the error position.
     pub fn array_of_self_elem_type(self) -> Result<ScalarType, ScalarType> {
         match self {
-            t @ (ScalarType::Bool
+            t @ (ScalarType::AclItem
+            | ScalarType::Bool
             | ScalarType::Int16
             | ScalarType::Int32
             | ScalarType::Int64

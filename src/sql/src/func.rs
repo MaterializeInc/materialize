@@ -73,9 +73,11 @@ impl TypeCategory {
         match typ {
             ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
             ScalarType::Bool => Self::Boolean,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid | ScalarType::MzAclItem => {
-                Self::UserDefined
-            }
+            ScalarType::AclItem
+            | ScalarType::Bytes
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::MzAclItem => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
             | ScalarType::Timestamp
@@ -132,7 +134,7 @@ impl TypeCategory {
         }
     }
 
-    /// Like `from_type`, but for catalog types.
+    /// Like [`TypeCategory::from_type`], but for catalog types.
     // TODO(benesch): would be nice to figure out how to share code with
     // `from_type`, but the refactor to enable that would be substantial.
     pub fn from_catalog_type<T>(catalog_type: &CatalogType<T>) -> Self
@@ -143,7 +145,8 @@ impl TypeCategory {
         match catalog_type {
             CatalogType::Array { .. } | CatalogType::Int2Vector => Self::Array,
             CatalogType::Bool => Self::Boolean,
-            CatalogType::Bytes
+            CatalogType::AclItem
+            | CatalogType::Bytes
             | CatalogType::Jsonb
             | CatalogType::Uuid
             | CatalogType::MzAclItem => Self::UserDefined,
@@ -843,6 +846,7 @@ impl From<ScalarBaseType> for ParamType {
             Array | List | Map | Record | Range => {
                 panic!("use polymorphic parameters rather than {:?}", s);
             }
+            AclItem => ScalarType::AclItem,
             Bool => ScalarType::Bool,
             Int16 => ScalarType::Int16,
             Int32 => ScalarType::Int32,

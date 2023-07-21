@@ -15,12 +15,14 @@ use std::mem::size_of;
 use std::ops::BitOrAssign;
 use std::str::FromStr;
 
+use crate::adt::system::Oid;
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
+use proptest::proptest;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -57,6 +59,10 @@ const CREATE_STR: &str = "CREATE";
 const CREATE_ROLE_STR: &str = "CREATEROLE";
 const CREATE_DB_STR: &str = "CREATEDB";
 const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
+
+/// The OID used to represent the PUBLIC role. See:
+/// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
+pub const PUBLIC_ROLE_OID: Oid = Oid(0);
 
 bitflags! {
     /// A bit flag representing all the privileges that can be granted to a role.
@@ -371,6 +377,146 @@ impl Columnation for MzAclItem {
     type InnerRegion = CloneRegion<MzAclItem>;
 }
 
+/// A list of privileges granted to a role.
+///
+/// This is primarily used for compatibility in PostgreSQL.
+///
+/// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+)]
+pub struct AclItem {
+    /// Role that this item grants privileges to.
+    pub grantee: Oid,
+    /// Grantor of privileges.
+    pub grantor: Oid,
+    /// Privileges bit flag.
+    pub acl_mode: AclMode,
+}
+
+impl AclItem {
+    pub fn empty(grantee: Oid, grantor: Oid) -> AclItem {
+        AclItem {
+            grantee,
+            grantor,
+            acl_mode: AclMode::empty(),
+        }
+    }
+}
+
+// PostgreSQL has no stable binary encoding for AclItems. However, we need to be able to convert
+// types to and from binary, to pack a Datum in a row, so we invent our own encoding. The encoding
+// matches the in memory format that PostgreSQL uses, which is (Oid, Oid, AclMode).
+impl AclItem {
+    pub fn encode_binary(&self) -> Vec<u8> {
+        let mut res = Vec::with_capacity(Self::binary_size());
+        res.extend_from_slice(&self.grantee.0.to_le_bytes());
+        res.extend_from_slice(&self.grantor.0.to_le_bytes());
+        res.extend_from_slice(&self.acl_mode.bits().to_le_bytes());
+        res
+    }
+
+    pub fn decode_binary(raw: &[u8]) -> Result<AclItem, Error> {
+        if raw.len() != AclItem::binary_size() {
+            return Err(anyhow!(
+                "invalid binary size, expecting {}, found {}",
+                AclItem::binary_size(),
+                raw.len()
+            ));
+        }
+
+        let oid_size = size_of::<u32>();
+
+        let grantee = Oid(u32::from_le_bytes(raw[0..oid_size].try_into()?));
+        let raw = &raw[oid_size..];
+        let grantor = Oid(u32::from_le_bytes(raw[0..oid_size].try_into()?));
+        let raw = &raw[oid_size..];
+        let acl_mode = u64::from_le_bytes(raw.try_into()?);
+
+        Ok(AclItem {
+            grantee,
+            grantor,
+            acl_mode: AclMode { bits: acl_mode },
+        })
+    }
+
+    pub const fn binary_size() -> usize {
+        size_of::<u32>() + size_of::<u32>() + size_of::<u64>()
+    }
+}
+
+impl FromStr for AclItem {
+    type Err = Error;
+
+    /// For the PostgreSQL implementation see:
+    ///   * <https://github.com/postgres/postgres/blob/9089287aa037fdecb5a52cec1926e5ae9569e9f9/src/backend/utils/adt/acl.c#L580-L609>
+    ///   * <https://github.com/postgres/postgres/blob/9089287aa037fdecb5a52cec1926e5ae9569e9f9/src/backend/utils/adt/acl.c#L223-L390>
+    ///   * <https://github.com/postgres/postgres/blob/9089287aa037fdecb5a52cec1926e5ae9569e9f9/src/backend/utils/adt/acl.c#L127-L187>
+    ///
+    /// PostgreSQL is able to look up OIDs in the catalog while parsing, so it accepts aclitems that
+    /// contain role OIDs or role names. We have no way to access the catalog here, so we can only
+    /// accept oids. Therefore our implementation is much simpler than PostgreSQL's.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<_> = s.split('=').collect();
+        let &[grantee, rest] = parts.as_slice() else {
+            return Err(anyhow!("invalid aclitem '{s}'"));
+        };
+
+        let parts: Vec<_> = rest.split('/').collect();
+        let &[acl_mode, grantor] = parts.as_slice() else {
+            return Err(anyhow!("invalid mz_aclitem '{s}'"));
+        };
+
+        let grantee: Oid = if grantee.is_empty() {
+            PUBLIC_ROLE_OID
+        } else {
+            Oid(grantee.parse()?)
+        };
+        let acl_mode: AclMode = acl_mode.parse()?;
+        let grantor: Oid = Oid(grantor.parse()?);
+
+        Ok(AclItem {
+            grantee,
+            grantor,
+            acl_mode,
+        })
+    }
+}
+
+impl fmt::Display for AclItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.grantee != PUBLIC_ROLE_OID {
+            write!(f, "{}", self.grantee.0)?;
+        }
+        write!(f, "={}/{}", self.acl_mode, self.grantor.0)
+    }
+}
+
+impl RustType<ProtoAclItem> for AclItem {
+    fn into_proto(&self) -> ProtoAclItem {
+        ProtoAclItem {
+            grantee: self.grantee.0,
+            grantor: self.grantor.0,
+            acl_mode: Some(self.acl_mode.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoAclItem) -> Result<Self, TryFromProtoError> {
+        match proto.acl_mode {
+            Some(acl_mode) => Ok(AclItem {
+                grantee: Oid(proto.grantee),
+                grantor: Oid(proto.grantor),
+                acl_mode: AclMode::from_proto(acl_mode)?,
+            }),
+            None => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
+        }
+    }
+}
+
+impl Columnation for AclItem {
+    type InnerRegion = CloneRegion<AclItem>;
+}
+
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct PrivilegeMap(BTreeMap<RoleId, Vec<MzAclItem>>);
@@ -636,4 +782,164 @@ fn test_mz_acl_item_binary() {
 #[mz_ore::test]
 fn test_mz_acl_item_binary_size() {
     assert_eq!(26, MzAclItem::binary_size());
+}
+
+#[mz_ore::test]
+fn test_acl_parsing() {
+    let s = "42=rw/666";
+    let acl: AclItem = s.parse().unwrap();
+    assert_eq!(42, acl.grantee.0);
+    assert_eq!(666, acl.grantor.0);
+    assert!(!acl.acl_mode.contains(AclMode::INSERT));
+    assert!(acl.acl_mode.contains(AclMode::SELECT));
+    assert!(acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!acl.acl_mode.contains(AclMode::DELETE));
+    assert!(!acl.acl_mode.contains(AclMode::USAGE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, acl.to_string());
+
+    let s = "=UC/4";
+    let acl: AclItem = s.parse().unwrap();
+    assert_eq!(PUBLIC_ROLE_OID, acl.grantee);
+    assert_eq!(4, acl.grantor.0);
+    assert!(!acl.acl_mode.contains(AclMode::INSERT));
+    assert!(!acl.acl_mode.contains(AclMode::SELECT));
+    assert!(!acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!acl.acl_mode.contains(AclMode::DELETE));
+    assert!(acl.acl_mode.contains(AclMode::USAGE));
+    assert!(acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, acl.to_string());
+
+    let s = "7=/12";
+    let acl: AclItem = s.parse().unwrap();
+    assert_eq!(7, acl.grantee.0);
+    assert_eq!(12, acl.grantor.0);
+    assert!(!acl.acl_mode.contains(AclMode::INSERT));
+    assert!(!acl.acl_mode.contains(AclMode::SELECT));
+    assert!(!acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!acl.acl_mode.contains(AclMode::DELETE));
+    assert!(!acl.acl_mode.contains(AclMode::USAGE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, acl.to_string());
+
+    let s = "=/100";
+    let acl: AclItem = s.parse().unwrap();
+    assert_eq!(PUBLIC_ROLE_OID, acl.grantee);
+    assert_eq!(100, acl.grantor.0);
+    assert!(!acl.acl_mode.contains(AclMode::INSERT));
+    assert!(!acl.acl_mode.contains(AclMode::SELECT));
+    assert!(!acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!acl.acl_mode.contains(AclMode::DELETE));
+    assert!(!acl.acl_mode.contains(AclMode::USAGE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, acl.to_string());
+
+    let s = "1=RBN/2";
+    let acl: AclItem = s.parse().unwrap();
+    assert_eq!(1, acl.grantee.0);
+    assert_eq!(2, acl.grantor.0);
+    assert!(!acl.acl_mode.contains(AclMode::INSERT));
+    assert!(!acl.acl_mode.contains(AclMode::SELECT));
+    assert!(!acl.acl_mode.contains(AclMode::UPDATE));
+    assert!(!acl.acl_mode.contains(AclMode::DELETE));
+    assert!(!acl.acl_mode.contains(AclMode::USAGE));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE));
+    assert!(acl.acl_mode.contains(AclMode::CREATE_ROLE));
+    assert!(acl.acl_mode.contains(AclMode::CREATE_DB));
+    assert!(acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert_eq!(s, acl.to_string());
+
+    assert!("42/rw=666".parse::<AclItem>().is_err());
+    assert!("u42=rw/u666".parse::<AclItem>().is_err());
+    assert!("s42=rw/s666".parse::<AclItem>().is_err());
+    assert!("u32=C/".parse::<AclItem>().is_err());
+    assert!("=/".parse::<AclItem>().is_err());
+    assert!("f62hfiuew827fhh".parse::<AclItem>().is_err());
+    assert!("u2=rw/s66=CU/u33".parse::<AclItem>().is_err());
+}
+
+#[mz_ore::test]
+fn test_acl_item_binary() {
+    use std::ops::BitAnd;
+
+    let acl_item = AclItem {
+        grantee: Oid(42),
+        grantor: Oid(666),
+        acl_mode: AclMode::empty()
+            .bitand(AclMode::SELECT)
+            .bitand(AclMode::UPDATE),
+    };
+    assert_eq!(
+        acl_item,
+        AclItem::decode_binary(&acl_item.encode_binary()).unwrap()
+    );
+
+    let acl_item = AclItem {
+        grantee: PUBLIC_ROLE_OID,
+        grantor: Oid(4),
+        acl_mode: AclMode::empty()
+            .bitand(AclMode::USAGE)
+            .bitand(AclMode::CREATE),
+    };
+    assert_eq!(
+        acl_item,
+        AclItem::decode_binary(&acl_item.encode_binary()).unwrap()
+    );
+
+    let acl_item = AclItem {
+        grantee: Oid(7),
+        grantor: Oid(12),
+        acl_mode: AclMode::empty(),
+    };
+    assert_eq!(
+        acl_item,
+        AclItem::decode_binary(&acl_item.encode_binary()).unwrap()
+    );
+
+    let acl_item = AclItem {
+        grantee: PUBLIC_ROLE_OID,
+        grantor: Oid(100),
+        acl_mode: AclMode::empty(),
+    };
+    assert_eq!(
+        acl_item,
+        AclItem::decode_binary(&acl_item.encode_binary()).unwrap()
+    );
+
+    assert!(AclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
+}
+
+#[mz_ore::test]
+fn test_acl_item_binary_size() {
+    assert_eq!(16, AclItem::binary_size());
+}
+
+proptest! {
+  #[mz_ore::test]
+  #[cfg_attr(miri, ignore)] // slow
+  fn proptest_acl_item_binary_encoding_roundtrip(acl_item: AclItem) {
+      let encoded = acl_item.encode_binary();
+      let decoded = AclItem::decode_binary(&encoded).unwrap();
+      assert_eq!(acl_item, decoded);
+  }
+
+  #[mz_ore::test]
+  #[cfg_attr(miri, ignore)] // slow
+  fn proptest_valid_acl_item_str(acl_item: AclItem) {
+      let encoded = acl_item.to_string();
+      let decoded = AclItem::from_str(&encoded).unwrap();
+      assert_eq!(acl_item, decoded);
+  }
 }
