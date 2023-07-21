@@ -168,15 +168,6 @@ impl<'a> TransformArgs<'a> {
         }
     }
 
-    /// Generates a `TransformArgs` instance for the given `IndexOracle` with a `GlobalId`
-    pub fn with_id(indexes: &'a dyn IndexOracle, global_id: &'a GlobalId) -> Self {
-        Self {
-            indexes,
-            stats: &EmptyStatisticsOracle,
-            global_id: Some(global_id),
-        }
-    }
-
     /// Geneates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with a `GlobalId`
     pub fn with_id_and_stats(
         indexes: &'a dyn IndexOracle,
