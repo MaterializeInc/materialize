@@ -10,6 +10,7 @@
 //! A source that reads from an a persist shard.
 
 use std::any::Any;
+use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,13 +18,13 @@ use std::time::Instant;
 use differential_dataflow::lattice::Lattice;
 use futures::{future::Either, StreamExt};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::operators::shard_source::shard_source;
-pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
@@ -59,6 +60,7 @@ use tracing::error;
 use tracing::trace;
 
 use crate::controller::CollectionMetadata;
+use crate::metrics::BackpressureMetrics;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
@@ -118,6 +120,7 @@ where
                     progress_stream: fc.progress_stream.enter(scope),
                     max_inflight_bytes: fc.max_inflight_bytes,
                     summary: Refines::to_inner(fc.summary),
+                    metrics: fc.metrics,
                 }),
                 yield_fn,
             );
@@ -604,6 +607,26 @@ impl Backpressureable for (usize, SerdeLeasedBatchPart) {
     }
 }
 
+/// Flow control configuration.
+/// TODO(guswynn): move to `persist_source`
+#[derive(Debug)]
+pub struct FlowControl<G: Scope> {
+    /// Stream providing in-flight frontier updates.
+    ///
+    /// As implied by its type, this stream never emits data, only progress updates.
+    ///
+    /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
+    pub progress_stream: Stream<G, Infallible>,
+    /// Maximum number of in-flight bytes.
+    pub max_inflight_bytes: usize,
+    /// The minimum range of timestamps (be they granular or not) that must be emitted,
+    /// ignoring `max_inflight_bytes` to ensure forward progress is made.
+    pub summary: <G::Timestamp as TimelyTimestamp>::Summary,
+
+    /// Optional metrics for the `backpressure` operator to keep up-to-date.
+    pub metrics: Option<BackpressureMetrics>,
+}
+
 /// Apply flow control to the `data` input, based on the given `FlowControl`.
 ///
 /// The `FlowControl` should have a `progress_stream` that is the pristine, unaltered
@@ -632,9 +655,10 @@ where
 {
     let worker_index = scope.index();
 
-    let (flow_control_stream, flow_control_max_bytes) = (
+    let (flow_control_stream, flow_control_max_bytes, metrics) = (
         flow_control.progress_stream,
         flow_control.max_inflight_bytes,
+        flow_control.metrics,
     );
 
     // Both the `flow_control` input and the data input are disconnected from the output. We manually
@@ -799,6 +823,7 @@ where
                         }
                     };
 
+                let byte_size = part.byte_size();
                 // Store the value with the _frontier_ the `flow_control_input` must reach
                 // to retire it. Note that if this `results_in` is `None`, then we
                 // are at `T::MAX`, and give up on flow_control entirely.
@@ -809,15 +834,25 @@ where
                 //
                 // Also note that we don't attempt to handle overflowing the `u64` part counter.
                 if let Some(emission_ts) = flow_control.summary.results_in(&time) {
-                    inflight_parts.push((emission_ts, part.byte_size()));
+                    inflight_parts.push((emission_ts, byte_size));
                 }
 
                 // Emit the data at the given time, and update the frontier and capabilities
                 // to just beyond the part.
                 data_output.give(&cap_set.delayed(&time), part).await;
+
+                if let Some(metrics) = &metrics {
+                    metrics.emitted_bytes.inc_by(u64::cast_from(byte_size))
+                }
+
                 output_frontier = next_frontier;
                 cap_set.downgrade(output_frontier.iter())
             } else {
+                if let Some(metrics) = &metrics {
+                    metrics
+                        .last_backpressured_bytes
+                        .set(u64::cast_from(inflight_bytes))
+                }
                 let parts_count = inflight_parts.len();
                 // We've exhausted our budget, listen for updates to the flow_control
                 // input's frontier until we free up new budget. If we don't interact with
@@ -847,6 +882,10 @@ where
                     retired_size,
                     flow_control_frontier,
                 );
+
+                if let Some(metrics) = &metrics {
+                    metrics.retired_bytes.inc_by(u64::cast_from(retired_size))
+                }
 
                 // Optionally emit some information for tests to examine.
                 if let Some(probe) = probe.as_ref() {
@@ -1228,6 +1267,7 @@ mod tests {
                                     progress_stream: non_granular_feedback.unwrap().enter(scope),
                                     max_inflight_bytes,
                                     summary,
+                                    metrics: None
                                 },
                                 None,
                             )
@@ -1239,6 +1279,7 @@ mod tests {
                                     progress_stream: granular_feedback,
                                     max_inflight_bytes,
                                     summary,
+                                    metrics: None,
                                 },
                                 Some(granular_feedback_handle),
                             )

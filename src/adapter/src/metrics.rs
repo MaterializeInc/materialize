@@ -29,15 +29,20 @@ pub struct Metrics {
     pub canceled_peeks: IntCounterVec,
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
+    pub statement_logging_unsampled_bytes: IntCounterVec,
 }
 
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
+        // Note: In a couple of these metrics we log `application_name`, but we need to be __VERY__
+        // careful when doing so because it can have a high cardinality! If you need to add
+        // `application_name` to another metric please consider using `ApplicationNameHint` which
+        // maps to a known set of names, or consule with the Cloud Team.
         Self {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
-                var_labels: ["session_type", "statement_type"],
+                var_labels: ["session_type", "statement_type", "application_name"],
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
@@ -96,6 +101,10 @@ impl Metrics {
                 var_labels: ["isolation_level"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
             }),
+            statement_logging_unsampled_bytes: registry.register(metric!(
+                name: "mz_statement_logging_unsampled_bytes",
+                help: "The total amount of SQL text that would have been logged if statement logging were unsampled.",
+            )),
         }
     }
 }

@@ -21,6 +21,7 @@ use futures::future::FutureExt;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_storage_client::metrics::BackpressureMetrics;
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_client::types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{
@@ -146,6 +147,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
+    backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
@@ -157,6 +159,7 @@ where
         &source_config.base_metrics,
         source_config.id,
         source_config.worker_id,
+        backpressure_metrics,
     );
 
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {

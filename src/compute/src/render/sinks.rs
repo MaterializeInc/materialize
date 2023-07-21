@@ -100,9 +100,8 @@ where
                     needed_tokens.push(sink_token);
                 }
 
-                compute_state
-                    .sink_tokens
-                    .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
+                let collection = compute_state.expect_collection_mut(sink_id);
+                collection.sink_token = Some(SinkToken::new(Box::new(needed_tokens)));
             });
     }
 }

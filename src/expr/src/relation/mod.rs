@@ -1785,36 +1785,30 @@ impl MirRelationExpr {
         (size, max_depth)
     }
 
-    /// Returns whether a expression can run an expensive function. We err on returning false.
-    /// The goal is to be a heuristic for "this expression is cheap to evaluate:
-    /// ideally not creating a dataflow at all when optimized".
+    /// The MirRelationExpr is considered potentially expensive if and only if at least one of the
+    ///  following conditions is true:
+    ///  - It contains at least one FlatMap or a Reduce operator.
+    ///  - It contains at least one MirScalarExpr with a function call.
     pub fn could_run_expensive_function(&self) -> bool {
-        /// Returns whether a scalar expression can run an expensive function
-        fn scalar_could_run_expensive_function(scalar: &MirScalarExpr) -> bool {
-            match scalar {
-                MirScalarExpr::Column(_)
-                | MirScalarExpr::Literal(_, _)
-                | MirScalarExpr::CallUnmaterializable(_) => false,
-                MirScalarExpr::CallUnary { .. }
-                | MirScalarExpr::CallBinary { .. }
-                | MirScalarExpr::CallVariadic { .. } => true,
-                MirScalarExpr::If { cond, then, els } => {
-                    scalar_could_run_expensive_function(cond)
-                        || scalar_could_run_expensive_function(then)
-                        || scalar_could_run_expensive_function(els)
-                }
+        let mut result = false;
+        self.visit_pre(&mut |e: &MirRelationExpr| {
+            use MirRelationExpr::*;
+            use MirScalarExpr::*;
+            if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
+                result |= match scalar {
+                    Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                    // Function calls are considered expensive
+                    CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
+                };
+                Ok(())
+            }) {
+                // Conservatively set `true` if on RecursionLimitError.
+                result = true;
             }
-        }
-
-        // FlapMap has a table function while all other constructs use MirScalarExpr to run a function
-        let mut result = match self {
-            MirRelationExpr::FlatMap { .. } => true,
-            _ => false,
-        };
-        self.visit_scalars(&mut |scalar| {
-            result = result || scalar_could_run_expensive_function(scalar)
+            // FlatMap has a table function; Reduce has an aggregate function.
+            // Other constructs use MirScalarExpr to run a function
+            result |= matches!(e, FlatMap { .. } | Reduce { .. });
         });
-        self.visit_children(|e| result = result || e.could_run_expensive_function());
         result
     }
 }

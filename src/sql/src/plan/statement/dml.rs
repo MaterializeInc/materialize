@@ -280,7 +280,7 @@ pub fn plan_explain(
             }
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
-            let query = match parsed.into_last() {
+            let query = match parsed.into_last().ast {
                 Statement::CreateView(CreateViewStatement {
                     definition: ViewDefinition { query, .. },
                     ..
@@ -305,7 +305,7 @@ pub fn plan_explain(
             }
             let parsed = crate::parse::parse(mview.create_sql())
                 .expect("Sql for existing materialized view should be valid sql");
-            let query = match parsed.into_last() {
+            let query = match parsed.into_last().ast {
                 Statement::CreateMaterializedView(CreateMaterializedViewStatement {
                     query,
                     ..

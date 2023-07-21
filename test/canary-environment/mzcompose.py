@@ -11,7 +11,7 @@ import os
 from textwrap import dedent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Dbt, Materialized, Testdrive
+from materialize.mzcompose.services import Dbt, Materialized, Postgres, Testdrive
 
 # The FieldEng cluster in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
@@ -30,37 +30,86 @@ CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD = os.environ[
     "CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD"
 ]
 
-SERVICES = [Materialized(), Dbt(), Testdrive(no_reset=True)]
+SERVICES = [Materialized(), Dbt(), Testdrive(no_reset=True), Postgres()]
+
+POSTGRES_RANGE = 1024
+POSTGRES_RANGE_FUNCTION = "FLOOR(RANDOM() * (SELECT MAX(id) FROM people))"
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("materialized")
+    c.up("materialized", "postgres")
     c.up("dbt", persistent=True)
     c.up("testdrive", persistent=True)
 
     c.testdrive(
         input=dedent(
             f"""
-        > CREATE SECRET IF NOT EXISTS kafka_username AS '{CONFLUENT_CLOUD_FIELDENG_KAFKA_USERNAME}'
-        > CREATE SECRET IF NOT EXISTS kafka_password AS '{CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD}'
+            > CREATE SECRET IF NOT EXISTS kafka_username AS '{CONFLUENT_CLOUD_FIELDENG_KAFKA_USERNAME}'
+            > CREATE SECRET IF NOT EXISTS kafka_password AS '{CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD}'
 
+            > CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (
+              BROKER '{KAFKA_BOOTSTRAP_SERVER}',
+              SASL MECHANISMS = 'PLAIN',
+              SASL USERNAME = SECRET kafka_username,
+              SASL PASSWORD = SECRET kafka_password
+              )
 
-        > CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (
-          BROKER '{KAFKA_BOOTSTRAP_SERVER}',
-          SASL MECHANISMS = 'PLAIN',
-          SASL USERNAME = SECRET kafka_username,
-          SASL PASSWORD = SECRET kafka_password
-          )
+            > CREATE SECRET IF NOT EXISTS csr_username AS '{CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME}'
+            > CREATE SECRET IF NOT EXISTS csr_password AS '{CONFLUENT_CLOUD_FIELDENG_CSR_PASSWORD}'
 
-        > CREATE SECRET IF NOT EXISTS csr_username AS '{CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME}'
-        > CREATE SECRET IF NOT EXISTS csr_password AS '{CONFLUENT_CLOUD_FIELDENG_CSR_PASSWORD}'
-
-        > CREATE CONNECTION IF NOT EXISTS csr_connection TO CONFLUENT SCHEMA REGISTRY (
-          URL '{SCHEMA_REGISTRY_ENDPOINT}',
-          USERNAME = SECRET csr_username,
-          PASSWORD = SECRET csr_password
-          )
+            > CREATE CONNECTION IF NOT EXISTS csr_connection TO CONFLUENT SCHEMA REGISTRY (
+              URL '{SCHEMA_REGISTRY_ENDPOINT}',
+              USERNAME = SECRET csr_username,
+              PASSWORD = SECRET csr_password
+              )
         """
+        )
+    )
+
+    c.testdrive(
+        input=dedent(
+            f"""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER USER postgres WITH replication;
+
+            DROP SCHEMA IF EXISTS public CASCADE;
+            CREATE SCHEMA public;
+
+            CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY, name TEXT DEFAULT REPEAT('a', 16), incarnation INTEGER DEFAULT 1);
+            ALTER TABLE people REPLICA IDENTITY FULL;
+
+            CREATE TABLE IF NOT EXISTS relationships (a INTEGER, b INTEGER, incarnation INTEGER DEFAULT 1, PRIMARY KEY (a,b));
+            ALTER TABLE relationships REPLICA IDENTITY FULL;
+
+            DROP PUBLICATION IF EXISTS mz_source;
+            CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+            CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+            SELECT cron.schedule('insert-people', '1 seconds', 'INSERT INTO people (id) SELECT FLOOR(RANDOM() * {POSTGRES_RANGE}) FROM generate_series(1,2) ON CONFLICT (id) DO UPDATE SET incarnation = people.incarnation + 1');
+            SELECT cron.schedule('update-people-name', '1 seconds', 'UPDATE people SET name = REPEAT(id::text, 16) WHERE id = {POSTGRES_RANGE_FUNCTION}');
+            SELECT cron.schedule('update-people-incarnation', '1 seconds', 'UPDATE people SET incarnation = incarnation + 1 WHERE id = {POSTGRES_RANGE_FUNCTION}');
+            SELECT cron.schedule('delete-people', '1 seconds', 'DELETE FROM people WHERE id = {POSTGRES_RANGE_FUNCTION}');
+
+            -- MOD() is used to prevent truly random relationships from being created, as this overwhelms WMR
+            -- See https://materialize.com/docs/sql/recursive-ctes/#queries-with-update-locality
+            SELECT cron.schedule('insert-relationships', '1 seconds', 'INSERT INTO relationships (a,b) SELECT MOD({POSTGRES_RANGE_FUNCTION}::INTEGER, 10), {POSTGRES_RANGE_FUNCTION} FROM generate_series(1,2) ON CONFLICT (a, b) DO UPDATE SET incarnation = relationships.incarnation + 1');
+            SELECT cron.schedule('update-relationships-incarnation', '1 seconds', 'UPDATE relationships SET incarnation = incarnation + 1 WHERE a = {POSTGRES_RANGE_FUNCTION} AND b = {POSTGRES_RANGE_FUNCTION}');
+
+            SELECT cron.schedule('delete-relationships', '1 seconds', 'DELETE FROM relationships WHERE a = {POSTGRES_RANGE_FUNCTION} AND b = {POSTGRES_RANGE_FUNCTION}');
+
+            > CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'
+
+            > CREATE CONNECTION IF NOT EXISTS pg TO POSTGRES (
+              HOST postgres,
+              DATABASE postgres,
+              USER postgres,
+              PASSWORD SECRET pgpass
+              )
+
+            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            ALTER SYSTEM SET enable_with_mutually_recursive = true
+            """
         )
     )
 

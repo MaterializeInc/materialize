@@ -1084,7 +1084,8 @@ macro_rules! feature_flags {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
                     description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true                };
+                    internal: true
+                };
 
                 pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                     flag: &[<$name:upper _VAR>],
@@ -1269,7 +1270,7 @@ impl OwnedVarInput {
 
 /// Session variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
@@ -1761,7 +1762,7 @@ impl DropConnection {
 
 /// On disk variables.
 ///
-/// See the `mz_sql::session` module documentation for more details on the
+/// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {

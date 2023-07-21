@@ -7,6 +7,9 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{{ config(materialized='source', indexes=[{'default': True}]) }}
+{{ config(materialized='source') }}
 
-{{ create_loadgen_source(this) }}
+CREATE SOURCE {{ this }}
+FROM POSTGRES
+CONNECTION pg (PUBLICATION 'mz_source')
+FOR TABLES (people, relationships)

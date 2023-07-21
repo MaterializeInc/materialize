@@ -48,6 +48,7 @@ pub enum Command {
     Declare {
         name: String,
         stmt: Statement<Raw>,
+        inner_sql: String,
         param_types: Vec<Option<ScalarType>>,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
@@ -56,6 +57,7 @@ pub enum Command {
     Prepare {
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
         session: Session,
         tx: oneshot::Sender<Response<()>>,

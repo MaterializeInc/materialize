@@ -1250,7 +1250,7 @@ impl<'a> RunnerInner<'a> {
         };
         let statement = match &*statements {
             [] => bail!("Got zero statements?"),
-            [statement] => statement,
+            [statement] => &statement.ast,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
         let (is_select, num_attributes) = match statement {
@@ -1781,14 +1781,23 @@ pub async fn run_string(
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
+                if !outcome.failure() {
+                    writeln!(
+                        runner.config.stdout,
+                        "{}",
+                        util::indent("Warning detected for: ", 4)
+                    );
+                }
                 print_record(runner.config, &record);
             }
-            writeln!(
-                runner.config.stdout,
-                "{}",
-                util::indent(&outcome.to_string(), 4)
-            );
-            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            if runner.config.verbosity >= 2 || outcome.failure() {
+                writeln!(
+                    runner.config.stdout,
+                    "{}",
+                    util::indent(&outcome.to_string(), 4)
+                );
+                writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            }
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -2052,7 +2061,7 @@ fn generate_view_sql(
     // DDL cost drops dramatically in the future.
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     assert!(stmts.len() == 1);
-    let (query, query_as_of) = match &stmts[0] {
+    let (query, query_as_of) = match &stmts[0].ast {
         Statement::Select(stmt) => (&stmt.query, &stmt.as_of),
         _ => unreachable!("This function should only be called for SELECTs"),
     };
@@ -2327,7 +2336,7 @@ fn mutate(sql: &str) -> Vec<String> {
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     let mut additional = Vec::new();
     for stmt in stmts {
-        match stmt {
+        match stmt.ast {
             AstStatement::CreateTable(stmt) => additional.push(
                 // CREATE TABLE -> CREATE INDEX. Specify all columns manually in case CREATE
                 // DEFAULT INDEX ever goes away.

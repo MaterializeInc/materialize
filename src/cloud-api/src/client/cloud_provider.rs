@@ -51,10 +51,10 @@ pub struct CloudProvider {
     ///
     /// E.g.: `us-east-1` or `eu-west-1`
     pub name: String,
-    /// Contains the complete region controller url.
+    /// Contains the complete Region API url.
     ///
-    /// E..g: `https://rc.eu-west-1.aws.cloud.materialize.com`
-    pub api_url: Url,
+    /// E..g: `https://api.eu-west-1.aws.cloud.materialize.com`
+    pub url: Url,
     /// Contains the cloud provider name.
     ///
     /// E.g.: `aws` or `gcp`

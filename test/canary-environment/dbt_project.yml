@@ -28,3 +28,5 @@ models:
       schema: loadgen
     tpch:
       schema: tpch
+    pg_cdc:
+      schema: pg_cdc

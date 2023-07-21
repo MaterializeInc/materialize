@@ -7,6 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{{ config(materialized='source', indexes=[{'default': True}]) }}
-
-{{ create_loadgen_source(this) }}
+select *
+from mz_internal.mz_compute_frontiers
+where to_timestamp(time::text::bigint/1000) < to_timestamp(mz_now()::text::bigint/1000) - INTERVAL '1 minute'

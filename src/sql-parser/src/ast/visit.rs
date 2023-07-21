@@ -91,7 +91,7 @@
 //!
 //!     let mut counter = SubqueryCounter { count: 0 };
 //!     for stmt in &stmts {
-//!         counter.visit_statement(stmt);
+//!         counter.visit_statement(&stmt.ast);
 //!     }
 //!     assert_eq!(counter.count, 5);
 //!     Ok(())
@@ -135,7 +135,7 @@
 //!
 //!     let mut collector = IdentCollector { idents: vec![] };
 //!     for stmt in &stmts {
-//!         collector.visit_statement(stmt);
+//!         collector.visit_statement(&stmt.ast);
 //!     }
 //!     assert_eq!(collector.idents, &[
 //!         &Ident::new("a"), &Ident::new("b"), &Ident::new("c"),

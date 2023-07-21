@@ -29,7 +29,7 @@ use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, INTROSPECTION_USER};
-use mz_sql_parser::parser::ParserStatementError;
+use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -205,12 +205,12 @@ impl Client {
         if stmts.len() != 1 {
             bail!("must supply exactly one query");
         }
-        let stmt = stmts.into_element();
+        let StatementParseResult { ast: stmt, sql } = stmts.into_element();
 
         const EMPTY_PORTAL: &str = "";
         session_client.start_transaction(Some(1))?;
         session_client
-            .declare(EMPTY_PORTAL.into(), stmt, vec![])
+            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string(), vec![])
             .await?;
         match session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending())
@@ -284,10 +284,10 @@ pub struct SessionClient {
 impl SessionClient {
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
-    pub fn parse(
+    pub fn parse<'a>(
         &self,
-        sql: &str,
-    ) -> Result<Result<Vec<Statement<Raw>>, ParserStatementError>, String> {
+        sql: &'a str,
+    ) -> Result<Result<Vec<StatementParseResult<'a>>, ParserStatementError>, String> {
         match mz_sql::parse::parse_with_limit(sql) {
             Ok(Err(e)) => {
                 self.track_statement_parse_failure(&e);
@@ -377,11 +377,13 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Prepare {
             name,
             stmt,
+            sql,
             param_types,
             session,
             tx,
@@ -394,11 +396,13 @@ impl SessionClient {
         &mut self,
         name: String,
         stmt: Statement<Raw>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         self.send(|tx, session| Command::Declare {
             name,
             stmt,
+            inner_sql: sql,
             param_types,
             session,
             tx,
