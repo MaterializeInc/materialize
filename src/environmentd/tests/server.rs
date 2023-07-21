@@ -93,7 +93,9 @@ use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
 use mz_environmentd::WebSocketResponse;
+use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
+use mz_ore::cast::TryCastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -189,6 +191,78 @@ fn test_persistence() {
             .collect::<Vec<String>>(),
         vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
     );
+}
+
+#[mz_ore::test]
+fn test_statement_logging_unsampled_metrics() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // TODO[btv]
+    //
+    // The point of these metrics is to show how much SQL text we
+    // would have logged had statement logging been turned on.
+    // Since there is no way (yet) to turn statement logging off or on,
+    // this test is valid as-is currently. However, once we turn statement logging on,
+    // we should make sure to turn it _off_ in this test.
+    let batch_queries = [
+        "SELECT 'Hello, world!';SELECT 1;;",
+        "SELECT 'Hello, world again!'",
+    ];
+    let batch_total: usize = batch_queries
+        .iter()
+        .map(|s| s.as_bytes().iter().filter(|&&ch| ch != b';').count())
+        .sum();
+    let single_queries = ["SELECT 'foo'", "SELECT 'bar';;;"];
+    let single_total: usize = single_queries
+        .iter()
+        .map(|s| s.as_bytes().iter().filter(|&&ch| ch != b';').count())
+        .sum();
+    let prepared_queries = ["SELECT 'baz';;;", "SELECT 'quux';"];
+    let prepared_total: usize = prepared_queries
+        .iter()
+        .map(|s| s.as_bytes().iter().filter(|&&ch| ch != b';').count())
+        .sum();
+
+    let named_prepared_inner = "SELECT 42";
+    let named_prepared_outer = format!("PREPARE p AS {named_prepared_inner};EXECUTE p;");
+    let named_prepared_total = named_prepared_inner.len()
+        + named_prepared_outer
+            .as_bytes()
+            .iter()
+            .filter(|&&ch| ch != b';')
+            .count();
+
+    for q in batch_queries {
+        client.batch_execute(q).unwrap();
+    }
+
+    for q in single_queries {
+        client.execute(q, &[]).unwrap();
+    }
+
+    for q in prepared_queries {
+        let s = client.prepare(q).unwrap();
+        client.execute(&s, &[]).unwrap();
+    }
+
+    client.batch_execute(&named_prepared_outer).unwrap();
+
+    // This should NOT be logged, since we never actually execute it.
+    client.prepare("SELECT 'Hello, not counted!'").unwrap();
+
+    let expected_total = batch_total + single_total + prepared_total + named_prepared_total;
+    let metric_value = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|m| m.get_name() == "mz_statement_logging_unsampled_bytes")
+        .unwrap()
+        .take_metric()[0]
+        .get_counter()
+        .get_value();
+    let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
+    assert_eq!(expected_total, metric_value);
 }
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of

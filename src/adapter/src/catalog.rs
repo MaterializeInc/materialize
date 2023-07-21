@@ -717,7 +717,7 @@ impl CatalogState {
         // case during catalog rehydration in order to avoid panics.
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
@@ -2473,7 +2473,8 @@ impl CatalogItem {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
             let mut create_stmt = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
-                .into_element();
+                .into_element()
+                .ast;
             if rename_self {
                 mz_sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
             }
@@ -3068,7 +3069,8 @@ impl CatalogItemRebuilder {
             assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
             let mut create_stmt = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
-                .into_element();
+                .into_element()
+                .ast;
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
             Self::Object {
                 id,
@@ -5447,7 +5449,8 @@ impl Catalog {
                     // (And then make any other changes to the source definition to match.)
                     let mut stmt = mz_sql::parse::parse(&old_sink.create_sql)
                         .expect("invalid create sql persisted to catalog")
-                        .into_element();
+                        .into_element()
+                        .ast;
 
                     let create_stmt = match &mut stmt {
                         Statement::CreateSink(s) => s,
@@ -5537,7 +5540,8 @@ impl Catalog {
                     // (And then make any other changes to the source definition to match.)
                     let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
                         .expect("invalid create sql persisted to catalog")
-                        .into_element();
+                        .into_element()
+                        .ast;
 
                     let create_stmt = match &mut stmt {
                         Statement::CreateSource(s) => s,
@@ -7313,7 +7317,7 @@ impl Catalog {
         // case during catalog rehydration in order to avoid panics.
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
@@ -9693,7 +9697,8 @@ mod tests {
                 "create view public.foo as select 1 as bar",
             )
             .expect("")
-            .into_element();
+            .into_element()
+            .ast;
 
             let (stmt, _) = names::resolve(scx.catalog, parsed).expect("");
 

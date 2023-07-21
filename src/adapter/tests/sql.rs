@@ -179,7 +179,7 @@ async fn datadriven() {
                             let pcx = &PlanContext::zero();
                             let scx = StatementContext::new(Some(pcx), &catalog);
                             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
-                            let q = parsed[0].clone();
+                            let q = parsed[0].ast.clone();
                             let q = match q {
                                 Statement::Select(s) => s.query,
                                 _ => unreachable!(),

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
@@ -112,7 +113,7 @@ use crate::util::{
 };
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
-/// Attempts to execute an expression. If an error is returned then the error is sent
+/// Attempts to evaluate an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {
     ($expr:expr, $ctx:expr) => {
@@ -3785,6 +3786,7 @@ impl Coordinator {
             let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
+                .ast
             {
                 Statement::CreateSource(stmt) => stmt,
                 _ => unreachable!("proved type is source"),
@@ -4401,7 +4403,8 @@ impl Coordinator {
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
+        let logging = Arc::clone(ps.logging());
+        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
     }
 
     pub(super) async fn sequence_grant_privileges(

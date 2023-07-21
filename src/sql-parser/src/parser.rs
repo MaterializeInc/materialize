@@ -56,6 +56,20 @@ macro_rules! parser_err {
     };
 }
 
+/// The result of successfully parsing a statement:
+/// both the AST and the SQL text that it corresponds to
+#[derive(Debug, Clone)]
+pub struct StatementParseResult<'a> {
+    pub ast: Statement<Raw>,
+    pub sql: &'a str,
+}
+
+impl<'a> StatementParseResult<'a> {
+    pub fn new(ast: Statement<Raw>, sql: &'a str) -> Self {
+        Self { ast, sql }
+    }
+}
+
 trait ParserStatementErrorMapper<T> {
     /// Wrap a `ParserError` within a `ParserStatementError` alongside the provided `StatementKind`
     fn map_parser_err(self, statement_kind: StatementKind) -> Result<T, ParserStatementError>;
@@ -91,7 +105,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements_with_limit(
     sql: &str,
-) -> Result<Result<Vec<Statement<Raw>>, ParserStatementError>, String> {
+) -> Result<Result<Vec<StatementParseResult>, ParserStatementError>, String> {
     if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
@@ -103,7 +117,7 @@ pub fn parse_statements_with_limit(
 
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
+pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,
@@ -305,7 +319,7 @@ impl<'a> Parser<'a> {
         ParserError { pos, message }
     }
 
-    fn parse_statements(&mut self) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
+    fn parse_statements(&mut self) -> Result<Vec<StatementParseResult<'a>>, ParserStatementError> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         loop {
@@ -322,16 +336,28 @@ impl<'a> Parser<'a> {
                     .map_no_statement_parser_err();
             }
 
-            let statement = self.parse_statement()?;
-            stmts.push(statement);
+            let s = self.parse_statement()?;
+            stmts.push(s);
             expecting_statement_delimiter = true;
         }
         Ok(stmts)
     }
+    /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
+    /// stopping before the statement separator, if any. Returns the parsed statement and the SQL
+    /// fragment corresponding to it.
+    fn parse_statement(&mut self) -> Result<StatementParseResult<'a>, ParserStatementError> {
+        let before = self.peek_pos();
+        let statement = self.parse_statement_inner()?;
+        let after = self.peek_pos();
+        Ok(StatementParseResult::new(
+            statement,
+            self.sql[before..after].trim(),
+        ))
+    }
 
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any.
-    fn parse_statement(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+    fn parse_statement_inner(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.next_token() {
             Some(t) => match t {
                 Token::Keyword(SELECT) | Token::Keyword(WITH) | Token::Keyword(VALUES) => {
@@ -4693,7 +4719,7 @@ impl<'a> Parser<'a> {
     /// Parse a copy statement
     fn parse_copy(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let relation = if self.consume_token(&Token::LParen) {
-            let query = self.parse_statement()?;
+            let query = self.parse_statement()?.ast;
             self.expect_token(&Token::RParen)
                 .map_parser_err(StatementKind::Copy)?;
             match query {
@@ -6645,10 +6671,11 @@ impl<'a> Parser<'a> {
         let _ = self.parse_keywords(&[WITHOUT, HOLD]);
         self.expect_keyword(FOR)
             .map_parser_err(StatementKind::Declare)?;
-        let stmt = self.parse_statement()?;
+        let StatementParseResult { ast, sql } = self.parse_statement()?;
         Ok(Statement::Declare(DeclareStatement {
             name,
-            stmt: Box::new(stmt),
+            stmt: Box::new(ast),
+            sql: sql.to_string(),
         }))
     }
 
@@ -6669,19 +6696,20 @@ impl<'a> Parser<'a> {
             .map_parser_err(StatementKind::Prepare)?;
         let pos = self.peek_pos();
         //
-        let stmt = match self.parse_statement()? {
-            stmt @ Statement::Select(_)
-            | stmt @ Statement::Insert(_)
-            | stmt @ Statement::Delete(_)
-            | stmt @ Statement::Update(_) => stmt,
-            _ => {
-                return parser_err!(self, pos, "unpreparable statement")
-                    .map_no_statement_parser_err()
-            }
-        };
+        let StatementParseResult { ast, sql } = self.parse_statement()?;
+        if !matches!(
+            ast,
+            Statement::Select(_)
+                | Statement::Insert(_)
+                | Statement::Delete(_)
+                | Statement::Update(_),
+        ) {
+            return parser_err!(self, pos, "unpreparable statement").map_no_statement_parser_err();
+        }
         Ok(Statement::Prepare(PrepareStatement {
             name,
-            stmt: Box::new(stmt),
+            stmt: Box::new(ast),
+            sql: sql.to_string(),
         }))
     }
 

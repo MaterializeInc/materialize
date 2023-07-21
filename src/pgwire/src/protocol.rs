@@ -32,6 +32,7 @@ use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
+use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
@@ -576,14 +577,14 @@ where
         }
     }
 
-    async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
+    async fn one_query(&mut self, stmt: Statement<Raw>, sql: String) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         let param_types = vec![];
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .adapter_client
-            .declare(EMPTY_PORTAL.to_string(), stmt, param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt, sql, param_types)
             .await
         {
             return self
@@ -656,7 +657,7 @@ where
         assert!(res.is_ok());
     }
 
-    fn parse_sql(&self, sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
+    fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
         match self.adapter_client.parse(sql) {
             Ok(result) => result.map_err(|e| {
                 // Convert our 0-based byte position to pgwire's 1-based character
@@ -684,7 +685,7 @@ where
         let num_stmts = stmts.len();
 
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
-        for stmt in stmts {
+        for StatementParseResult { ast: stmt, sql } in stmts {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             if self.is_aborted_txn() && !is_txn_exit_stmt(Some(&stmt)) {
                 self.aborted_txn_error().await?;
@@ -700,7 +701,7 @@ where
             // statement.
             self.start_transaction(Some(num_stmts));
 
-            match self.one_query(stmt).await? {
+            match self.one_query(stmt, sql.to_string()).await? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
@@ -770,13 +771,16 @@ where
                 ))
                 .await;
         }
-        let maybe_stmt = stmts.into_iter().next();
+        let (maybe_stmt, sql) = match stmts.into_iter().next() {
+            None => (None, ""),
+            Some(StatementParseResult { ast, sql }) => (Some(ast), sql),
+        };
         if self.is_aborted_txn() && !is_txn_exit_stmt(maybe_stmt.as_ref()) {
             return self.aborted_txn_error().await;
         }
         match self
             .adapter_client
-            .prepare(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, sql.to_string(), param_types)
             .await
         {
             Ok(()) => {
@@ -922,11 +926,13 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
+        let logging = Arc::clone(stmt.logging());
         let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
             stmt,
+            logging,
             params,
             result_formats,
             revision,
