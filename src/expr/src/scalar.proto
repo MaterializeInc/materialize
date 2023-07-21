@@ -428,6 +428,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty try_parse_monotonic_iso8601_timestamp = 299;
         google.protobuf.Empty mz_validate_role_privilege = 300;
         google.protobuf.Empty mz_format_privileges = 301;
+        google.protobuf.Empty acl_item_grantor = 302;
+        google.protobuf.Empty acl_item_grantee = 303;
+        google.protobuf.Empty acl_item_privileges = 304;
     }
 }
 
@@ -668,6 +671,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty date_diff_date = 35;
         google.protobuf.Empty date_diff_time = 36;
         google.protobuf.Empty timezone_time = 37;
+        google.protobuf.Empty make_acl_item = 38;
     }
 }
 

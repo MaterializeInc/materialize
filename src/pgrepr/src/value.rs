@@ -531,7 +531,7 @@ impl Value {
                 buf.extend_from_slice(&mz_acl_item.encode_binary());
                 Ok(postgres_types::IsNull::No)
             }
-            Value::AclItem(_acl_item) => Err("aclitem has no binary encoding".into()),
+            Value::AclItem(_) => Err("aclitem has no binary encoding".into()),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {

@@ -2986,7 +2986,6 @@ impl<'a> ScalarType {
         static ACLITEM: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
 
         match self {
-            ScalarType::AclItem => (*ACLITEM).iter(),
             ScalarType::Bool => (*BOOL).iter(),
             ScalarType::Int16 => (*INT16).iter(),
             ScalarType::Int32 => (*INT32).iter(),

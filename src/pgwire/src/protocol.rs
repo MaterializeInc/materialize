@@ -919,6 +919,14 @@ where
                             ))
                             .await;
                     }
+                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::AclItem) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                "binary encoding of aclitem types does not exist",
+                            ))
+                            .await;
+                    }
                     _ => (),
                 }
             }

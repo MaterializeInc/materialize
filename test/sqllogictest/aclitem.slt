@@ -178,17 +178,168 @@ SELECT mz_internal.mz_acl_item_contains_privilege(NULL, NULL)
 ----
 NULL
 
-# Test aclitem
+# Test aclitem type and functions
 
 statement ok
 CREATE TABLE t (a aclitem)
 
 query T
-SELECT * from t
+SELECT a::text from t
 ----
 
 statement ok
 DROP TABLE t
+
+query error binary encoding of aclitem types does not exist
+SELECT makeaclitem(1, 2, 'CREATE', false)
+
+query T
+SELECT makeaclitem(1, 2, 'CREATE', false)::text
+----
+1=C/2
+
+query T
+SELECT makeaclitem(1, 2, 'CREATE, USAGE', false)::text
+----
+1=UC/2
+
+query T
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE', false)::text
+----
+materialize=C/test_role
+
+query T
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::text
+----
+materialize=UC/test_role
+
+query T
+SELECT makeaclitem(0, 2, 'CREATE', false)::text
+----
+=C/2
+
+query T
+SELECT makeaclitem(0, 2, 'CREATE, USAGE', false)::text
+----
+=UC/2
+
+query T
+SELECT makeaclitem(0, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'SELECT', false)::text
+----
+=r/test_role
+
+query T
+SELECT makeaclitem(0, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'INSERT, SELECT', false)::text
+----
+=ar/test_role
+
+query B
+SELECT makeaclitem(1, 2, 'DELETE', false) = makeaclitem(1, 2, 'DELETE', false)
+----
+true
+
+query B
+SELECT makeaclitem(3, 2, 'DELETE', false) = makeaclitem(1, 2, 'DELETE', false)
+----
+false
+
+query B
+SELECT makeaclitem(1, 3, 'DELETE', false) = makeaclitem(1, 2, 'DELETE', false)
+----
+false
+
+query B
+SELECT makeaclitem(1, 3, 'DELETE, USAGE', false) = makeaclitem(1, 2, 'DELETE', false)
+----
+false
+
+# Role OIDs that don't exist are printed as IDs instead of names
+
+query T
+SELECT makeaclitem(99991, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE', false)::text
+----
+99991=C/test_role
+
+query T
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), 87398, 'CREATE', false)::text
+----
+materialize=C/87398
+
+query T
+SELECT makeaclitem(3251, 345, 'CREATE', false)::text
+----
+3251=C/345
+
+# Test parsing errors
+
+query error unrecognized privilege type: "asdfa ljefioj"
+SELECT makeaclitem(1, 1, 'asdfa ljefioj', false)::text
+
+# GRANT OPTION isn't implemented.
+
+query error GRANT OPTION not yet supported
+SELECT makeaclitem(1, 2, 'CREATE', true)::text
+
+# aclexplode
+
+query T
+SELECT aclexplode(ARRAY[makeaclitem(1, 2, 'SELECT, INSERT, DELETE', false)])
+----
+(2,1,DELETE,f)
+(2,1,INSERT,f)
+(2,1,SELECT,f)
+
+# Test casting to/from aclitem and mz_aclitem
+
+query B
+SELECT mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE, USAGE')::aclitem = makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)
+----
+true
+
+query B
+SELECT mz_internal.make_mz_aclitem('p', 'u2', 'CREATE, USAGE')::aclitem = makeaclitem(0, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)
+----
+true
+
+query B
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::mz_aclitem = mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE, USAGE')
+----
+true
+
+query B
+SELECT makeaclitem(0, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::mz_aclitem = mz_internal.make_mz_aclitem('p', 'u2', 'CREATE, USAGE')
+----
+true
+
+query T
+SELECT mz_internal.make_mz_aclitem('u99991', 'u2', 'CREATE')::aclitem::text
+----
+NULL
+
+query T
+SELECT mz_internal.make_mz_aclitem('u1', 'u87398', 'CREATE')::aclitem::text
+----
+NULL
+
+query T
+SELECT mz_internal.make_mz_aclitem('u3251', 's345', 'CREATE')::aclitem::text
+----
+NULL
+
+query T
+SELECT makeaclitem(99991, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE', false)::mz_aclitem
+----
+NULL
+
+query T
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), 87398, 'CREATE', false)::mz_aclitem
+----
+NULL
+
+query T
+SELECT makeaclitem(3251, 345, 'CREATE', false)::mz_aclitem
+----
+NULL
 
 # Disable rbac checks.
 

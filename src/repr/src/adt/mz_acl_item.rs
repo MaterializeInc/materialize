@@ -124,10 +124,10 @@ impl AclMode {
     }
 
     pub fn to_error_string(&self) -> String {
-        self.to_full_length_strings().join(", ")
+        self.explode().join(", ")
     }
 
-    pub fn to_full_length_strings(&self) -> Vec<&'static str> {
+    pub fn explode(&self) -> Vec<&'static str> {
         let mut privileges = Vec::new();
         if self.contains(AclMode::SELECT) {
             privileges.push(SELECT_STR);
