@@ -931,14 +931,14 @@ proptest! {
   #[cfg_attr(miri, ignore)] // slow
   fn proptest_acl_item_binary_encoding_roundtrip(acl_item: AclItem) {
       let encoded = acl_item.encode_binary();
-      let decoded = AclItem::decode_binary(encoded);
-      assert_eq(acl_item, decoded);
+      let decoded = AclItem::decode_binary(&encoded).unwrap();
+      assert_eq!(acl_item, decoded);
   }
 
   #[mz_ore::test]
   #[cfg_attr(miri, ignore)] // slow
-  fn proptest_valid_acl_item_str(s: "[\d]?=[arwdUCRBN]\/[\d]+") {
-      let acl_item = AclItem::from_str(s);
-      assert!(acl_item.is_ok());
+  fn proptest_valid_acl_item_str(s in "[\\d]?=[arwdUCRBN]\\/[\\d]+") {
+      let acl_item = AclItem::from_str(&s).unwrap();
+      assert_eq!(s, acl_item.to_string());
   }
 }
