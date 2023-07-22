@@ -5116,6 +5116,49 @@ ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO mz_system
 statement error role name "mz_introspection" is reserved
 ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CLUSTERS FROM mz_introspection
 
+# Test that we don't retain dangling pointers in default privileges
+
+statement ok
+CREATE DATABASE d
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN DATABASE d GRANT SELECT ON TABLES TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL  NULL  type   PUBLIC  U
+materialize  d     NULL  table  PUBLIC  r
+
+statement ok
+DROP DATABASE d
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  type  PUBLIC  U
+
+statement ok
+CREATE SCHEMA s
+
+statement ok
+ALTER DEFAULT PRIVILEGES IN SCHEMA s GRANT SELECT ON TABLES TO PUBLIC
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC       NULL         NULL  type   PUBLIC  U
+materialize  materialize  s     table  PUBLIC  r
+
+statement ok
+DROP SCHEMA s
+
+query TTTTTT
+SELECT * FROM default_privileges
+----
+PUBLIC  NULL  NULL  type  PUBLIC  U
+
+
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;

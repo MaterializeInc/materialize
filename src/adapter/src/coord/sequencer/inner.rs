@@ -1433,43 +1433,16 @@ impl Coordinator {
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
+        let mut dropped_roles = BTreeMap::new();
+        let mut dropped_databases = BTreeSet::new();
+        let mut dropped_schemas = BTreeSet::new();
         // Dropping either the group role or the member role of a role membership will trigger a
         // revoke role. We use a Set for the revokes to avoid trying to attempt to revoke the same
         // role membership twice.
-        let mut revokes = BTreeSet::new();
-
-        let mut dropped_roles: BTreeMap<_, _> = ids
-            .iter()
-            .filter_map(|id| match id {
-                ObjectId::Role(role_id) => Some(role_id),
-                _ => None,
-            })
-            .map(|id| {
-                let name = self.catalog().get_role(id).name();
-                (*id, name)
-            })
-            .collect();
-        for role_id in dropped_roles.keys() {
-            self.catalog().ensure_not_reserved_role(role_id)?;
-        }
-        self.validate_dropped_role_ownership(session, &dropped_roles)?;
-        // If any role is a member of a dropped role, then we must revoke that membership.
-        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
-        for role in self.catalog().user_roles() {
-            for dropped_role_id in
-                dropped_role_ids.intersection(&role.membership.map.keys().collect())
-            {
-                revokes.insert((
-                    **dropped_role_id,
-                    role.id(),
-                    *role
-                        .membership
-                        .map
-                        .get(*dropped_role_id)
-                        .expect("included in keys above"),
-                ));
-            }
-        }
+        let mut role_revokes = BTreeSet::new();
+        // Dropping a database or a schema will revoke all default roles associated with that
+        // database or schema.
+        let mut default_privilege_revokes = BTreeSet::new();
 
         for id in &ids {
             match id {
@@ -1477,6 +1450,12 @@ impl Coordinator {
                     let name = self.catalog().get_database(id).name();
                     if name == session.vars().database() {
                         dropped_active_db = true;
+                    }
+                    dropped_databases.insert(id);
+                }
+                ObjectId::Schema((_, spec)) => {
+                    if let SchemaSpecifier::Id(id) = spec {
+                        dropped_schemas.insert(id);
                     }
                 }
                 ObjectId::Cluster(id) => {
@@ -1497,20 +1476,64 @@ impl Coordinator {
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
-                        revokes.insert((*group_id, *id, *grantor_id));
+                        role_revokes.insert((*group_id, *id, *grantor_id));
                     }
                 }
                 _ => {}
             }
         }
 
-        let ops = revokes
+        for role_id in dropped_roles.keys() {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+        self.validate_dropped_role_ownership(session, &dropped_roles)?;
+        // If any role is a member of a dropped role, then we must revoke that membership.
+        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
+        for role in self.catalog().user_roles() {
+            for dropped_role_id in
+                dropped_role_ids.intersection(&role.membership.map.keys().collect())
+            {
+                role_revokes.insert((
+                    **dropped_role_id,
+                    role.id(),
+                    *role
+                        .membership
+                        .map
+                        .get(*dropped_role_id)
+                        .expect("included in keys above"),
+                ));
+            }
+        }
+
+        for (default_privilege_object, default_privilege_acls) in
+            self.catalog().default_privileges()
+        {
+            if matches!(&default_privilege_object.database_id, Some(database_id) if dropped_databases.contains(database_id))
+                || matches!(&default_privilege_object.schema_id, Some(schema_id) if dropped_schemas.contains(schema_id))
+            {
+                for default_privilege_acl in default_privilege_acls {
+                    default_privilege_revokes.insert((
+                        default_privilege_object.clone(),
+                        default_privilege_acl.clone(),
+                    ));
+                }
+            }
+        }
+
+        let ops = role_revokes
             .into_iter()
             .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
                 role_id,
                 member_id,
                 grantor_id,
             })
+            .chain(default_privilege_revokes.into_iter().map(
+                |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
+                    privilege_object,
+                    privilege_acl_item,
+                    variant: UpdatePrivilegeVariant::Revoke,
+                },
+            ))
             .chain(ids.into_iter().map(catalog::Op::DropObject))
             .collect();
 
