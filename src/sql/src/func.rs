@@ -3532,9 +3532,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => sql_impl_func("has_cluster_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID;
         },
         "has_connection_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(String, String, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_connection_oid($2), $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_OID_TEXT_OID;
-            params!(Oid, String, String) => sql_impl_func("has_connection_privilege($1, $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("has_connection_privilege($1, mz_internal.mz_connection_oid($2), $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID;
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_connection_privilege", "mz_connections")) => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_OID;
@@ -3548,9 +3548,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, String) => sql_impl_func("pg_has_role($1, $2)") => Bool, oid::FUNC_HAS_ROLE_OID_TEXT_OID;
         },
         "has_secret_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_secret_oid($2), $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_OID_TEXT_OID;
-            params!(Oid, String, String) => sql_impl_func("has_secret_privilege($1, $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("has_secret_privilege($1, mz_internal.mz_secret_oid($2), $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_TEXT_OID;
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_secret_privilege", "mz_secrets")) => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_OID;
@@ -3586,9 +3586,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
         },
         "has_type_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 3138;
+            params!(String, String, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2::regtype::oid, $3)") => Bool, 3138;
             params!(String, Oid, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 3139;
-            params!(Oid, String, String) => sql_impl_func("has_type_privilege($1, $2::regclass::oid, $3)") => Bool, 3140;
+            params!(Oid, String, String) => sql_impl_func("has_type_privilege($1, $2::regtype::oid, $3)") => Bool, 3140;
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_type_privilege", "mz_types")) => Bool, 3141;
             params!(String, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3142;
             params!(Oid, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3143;
@@ -3786,6 +3786,23 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         },
         "mz_aclitem_privileges" => Scalar {
             params!(MzAclItem) => UnaryFunc::MzAclItemPrivileges(func::MzAclItemPrivileges) => String, oid::FUNC_MZ_ACL_ITEM_PRIVILEGES_OID;
+        },
+        // There is no regclass equivalent for roles to look up connections, so we
+        // have this helper function instead.
+        //
+        // TODO: invent an OID alias for connections
+        "mz_connection_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_catalog.mz_objects WHERE name = $1 AND type = 'connection'),
+                        'connection \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_CONNECTION_OID_OID;
         },
         "mz_format_privileges" => Scalar {
             params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
@@ -4030,6 +4047,23 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 )
                 END
             ") => Oid, oid::FUNC_ROLE_OID_OID;
+        },
+        // There is no regclass equivalent for roles to look up secrets, so we
+        // have this helper function instead.
+        //
+        // TODO: invent an OID alias for secrets
+        "mz_secret_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_catalog.mz_objects WHERE name = $1 AND type = 'secret'),
+                        'secret \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_SECRET_OID_OID;
         },
         // This ought to be exposed in `mz_catalog`, but its name is rather
         // confusing. It does not identify the SQL session, but the
