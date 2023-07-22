@@ -4411,10 +4411,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use mz_expr::MirScalarExpr;
-    use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
+    use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
-    use mz_repr::{Datum, RowArena};
+    use mz_repr::{Datum, RowArena, Timestamp};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::func::{Func, OP_IMPLS};
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
@@ -4426,6 +4426,8 @@ mod tests {
     use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
+    use crate::coord::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+    use crate::session::Session;
 
     use super::*;
 
@@ -4813,6 +4815,14 @@ mod tests {
                 allow_windows: false,
             };
             let arena = RowArena::new();
+            let mut session = Session::dummy();
+            session
+                .start_transaction(to_datetime(0), None, None)
+                .expect("must succeed");
+            let prep_style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Time(Timestamp::MIN),
+                session: &session,
+            };
             // Extracted during planning; always panics when executed.
             let ignore_names = BTreeSet::from([
                 "avg",
@@ -4907,7 +4917,11 @@ mod tests {
                         let start = Instant::now();
                         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
                         if let Ok(hir) = res {
-                            if let Ok(mir) = hir.lower_uncorrelated() {
+                            if let Ok(mut mir) = hir.lower_uncorrelated() {
+                                // Populate unmaterialized functions.
+                                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
+                                    .expect("must succeed");
+
                                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                                     if let Some(return_styp) = return_styp {
                                         let mir_typ = mir.typ(&[]);

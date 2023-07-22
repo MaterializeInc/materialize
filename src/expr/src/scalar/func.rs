@@ -7332,7 +7332,7 @@ impl VariadicFunc {
                 timezone_time(
                     tz,
                     ds[1].unwrap_time(),
-                    &ds[1].unwrap_timestamptz().naive_utc(),
+                    &ds[2].unwrap_timestamptz().naive_utc(),
                 )
                 .into()
             }),
