@@ -152,6 +152,9 @@ def prioritize_pipeline(pipeline: Any) -> None:
 
     if priority is not None:
         for config in pipeline["steps"]:
+            if "trigger" in config:
+                # Trigger steps do not allow priorities.
+                continue
             config["priority"] = config.get("priority", 0) + priority
 
 
