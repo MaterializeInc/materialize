@@ -205,7 +205,6 @@ system.
 <!-- have one or more corresponding executions in inclusion in -->
 <!-- [`mz_statement_execution_history`](#mz_statement_execution_history). -->
 
-<!-- <\!-- RELATION_SPEC mz_internal.mz_prepared_statement_history -\-> -->
 <!-- | Field         | Type                         | Meaning                                                                                                                           | -->
 <!-- |---------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------| -->
 <!-- | `id`          | [`uuid`]                     | The globally ID of the prepared statement.                                                                                        | -->
@@ -221,7 +220,6 @@ system.
 <!-- referenced from -->
 <!-- [`mz_prepared_statement_history`](#mz_prepared_statement_history). -->
 
-<!-- <\!-- RELATION_SPEC mz_internal.mz_session_history -\-> -->
 <!-- | Field          | Type                         | Meaning                                                                                                                           | -->
 <!-- |----------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------| -->
 <!-- | `id`           | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. | -->
@@ -589,7 +587,6 @@ messages and additional metadata helpful for debugging.
 <!-- than `statement_logging_max_sample_rate` (which is set by Materialize -->
 <!-- and cannot be changed by users), the latter is used instead. -->
 
-<!-- <\!-- RELATION_SPEC mz_internal.mz_statement_execution_history -\-> -->
 <!-- | Field                   | Type                         | Meaning                                                                                                                                                                                                                        | -->
 <!-- |-------------------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------| -->
 <!-- | `id`                    | [`uuid`]                     | The ID of the execution event.                                                                                                                                                                                                 | -->
