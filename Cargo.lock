@@ -8880,6 +8880,7 @@ dependencies = [
  "prost-types",
  "quote",
  "rand",
+ "rand_chacha",
  "rdkafka-sys",
  "regex",
  "regex-syntax",
