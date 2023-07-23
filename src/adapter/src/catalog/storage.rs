@@ -474,6 +474,7 @@ impl Connection {
         let boot_ts = self.boot_ts;
         let cutoff_ts = u128::from(boot_ts).saturating_sub(retention_period.as_millis());
         let is_recent_enough = move |ts_millis: u64| u128::from(ts_millis) >= cutoff_ts;
+        let is_readonly = self.stash.is_readonly();
 
         let out = self
             .stash
@@ -609,7 +610,9 @@ impl Connection {
                             );
                         }
                     }
-                    tx.append(vec![updates]).await?;
+                    if !is_readonly {
+                        tx.append(vec![updates]).await?;
+                    }
                     Ok((prepared_out, execution_out))
                 })
             })
