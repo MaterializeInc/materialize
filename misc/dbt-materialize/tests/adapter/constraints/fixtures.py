@@ -39,20 +39,11 @@ test_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
-test_materialized_table_index = """
-{{ config(
-    materialized='table',
-    indexes=[{'columns': ['a', 'length(a)'], 'name': 'a_idx'}]
-) }}
-
-    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
-"""
-
 test_source = """
 {{ config(
     materialized='source',
     database='materialize',
-    pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
+    pre_hook="CREATE CONNECTION kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
     )
 }}
 
@@ -70,18 +61,6 @@ test_source_index = """
 CREATE SOURCE {{ this }}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
 FORMAT BYTES
-"""
-
-test_subsources = """
-{{ config(
-    materialized='source',
-    database='materialize'
-    )
-}}
-
-CREATE SOURCE {{ this }}
-FROM LOAD GENERATOR AUCTION
-FOR ALL TABLES;
 """
 
 test_sink = """
@@ -112,7 +91,6 @@ test_materialized_view_index,1,1,,a_idx
 test_materialized_view_index,2,,pg_catalog.length(a),a_idx
 test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
-test_table_index,2,,pg_catalog.length(a),a_idx
 """.lstrip()
 
 not_null = """
