@@ -540,19 +540,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in &self.config.service_labels {
             labels.insert(key.clone(), value.clone());
         }
-        let mut limits = BTreeMap::new();
-        if let Some(memory_limit) = memory_limit {
-            limits.insert(
-                "memory".into(),
-                Quantity(memory_limit.0.as_u64().to_string()),
-            );
-        }
-        if let Some(cpu_limit) = cpu_limit {
-            limits.insert(
-                "cpu".into(),
-                Quantity(format!("{}m", cpu_limit.as_millicpus())),
-            );
-        }
+
         let service = K8sService {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
@@ -598,6 +586,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "--secrets-reader-kubernetes-context={}",
             self.config.context
         ));
+
+        let mut limits = BTreeMap::new();
+        if let Some(memory_limit) = memory_limit {
+            let memory_limit = memory_limit.0.as_u64();
+            limits.insert("memory".into(), Quantity(memory_limit.to_string()));
+            args.push(format!("--announce-memory-limit={}", memory_limit))
+        }
+        if let Some(cpu_limit) = cpu_limit {
+            limits.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_limit.as_millicpus())),
+            );
+        }
 
         let anti_affinity = anti_affinity
             .map(|label_selectors| -> Result<_, anyhow::Error> {

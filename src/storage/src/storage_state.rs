@@ -327,14 +327,21 @@ pub struct StorageInstanceContext {
     /// across sources!). This `Env` lets us control some resources (like background threads)
     /// process-wide.
     pub rocksdb_env: rocksdb::Env,
+    /// The memory limit of the materialize cluster replica. This will
+    /// be used to calculate and configure the maximum inflight bytes for backpressure
+    pub cluster_memory_limit: Option<usize>,
 }
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        scratch_directory: Option<PathBuf>,
+        cluster_memory_limit: Option<usize>,
+    ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
             rocksdb_env: rocksdb::Env::new()?,
+            cluster_memory_limit,
         })
     }
 
@@ -343,6 +350,7 @@ impl StorageInstanceContext {
         Self {
             scratch_directory: None,
             rocksdb_env,
+            cluster_memory_limit: None,
         }
     }
 }

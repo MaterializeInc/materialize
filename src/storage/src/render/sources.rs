@@ -380,7 +380,7 @@ where
                                             &storage_state
                                                 .dataflow_parameters
                                                 .storage_dataflow_max_inflight_bytes_config,
-                                            &None, // TODO: fix after revert
+                                            &storage_state.instance_context.cluster_memory_limit,
                                         );
 
                                     let (feedback_handle, flow_control, backpressure_metrics) =
