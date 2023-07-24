@@ -194,12 +194,16 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    let metrics_registry = MetricsRegistry::new();
     let (tracing_handle, _tracing_guard) = args
         .tracing
-        .configure_tracing(StaticTracingConfig {
-            service_name: "clusterd",
-            build_info: BUILD_INFO,
-        })
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "clusterd",
+                build_info: BUILD_INFO,
+            },
+            metrics_registry.clone(),
+        )
         .await?;
 
     if args.tracing.log_filter.is_some() {
@@ -228,7 +232,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     emit_boot_diagnostics!(&BUILD_INFO);
 
-    let metrics_registry = MetricsRegistry::new();
     mz_alloc::register_metrics_into(&metrics_registry).await;
 
     let mut _pid_file = None;

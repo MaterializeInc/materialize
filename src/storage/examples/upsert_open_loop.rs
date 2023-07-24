@@ -341,10 +341,13 @@ fn main() {
         .expect("Failed building the Runtime");
 
     let _ = runtime
-        .block_on(args.tracing.configure_tracing(StaticTracingConfig {
-            service_name: "upsert-open-loop",
-            build_info: BUILD_INFO,
-        }))
+        .block_on(args.tracing.configure_tracing(
+            StaticTracingConfig {
+                service_name: "upsert-open-loop",
+                build_info: BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        ))
         .expect("failed to init tracing");
 
     let root_span = info_span!("upsert_open_loop");

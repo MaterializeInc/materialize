@@ -382,6 +382,7 @@ impl Listeners {
                 build_version: mz_environmentd::BUILD_INFO.version,
                 build_sha: mz_environmentd::BUILD_INFO.sha,
                 build_time: mz_environmentd::BUILD_INFO.time,
+                registry: metrics_registry.clone(),
             };
             let (tracing_handle, tracing_guard) =
                 self.runtime.block_on(mz_ore::tracing::configure(config))?;
