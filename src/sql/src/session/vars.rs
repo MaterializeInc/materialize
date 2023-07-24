@@ -760,6 +760,25 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
     internal: true,
 });
 
+static ENABLE_COORDINATOR_SECRETS_CACHING: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_coordinator_secrets_caching"),
+    value: &true,
+    description: "Enables in-memory caching of secrets for some operations in the Coordinator.",
+    internal: true,
+};
+
+static DEFAULT_COORDINATOR_SECRETS_CACHING_TTL: Lazy<Duration> = Lazy::new(|| {
+    Duration::from_secs(
+        mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
+    )
+});
+static COORDINATOR_SECRETS_CACHING_TTL: Lazy<ServerVar<Duration>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("coordinator_secrets_caching_ttl"),
+    value: &DEFAULT_COORDINATOR_SECRETS_CACHING_TTL,
+    description: "Sets the time-to-live value for values in the Coordinator's secrets cache.",
+    internal: true,
+});
+
 static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
 static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
@@ -1882,7 +1901,9 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
-            .with_var(&OPENTELEMETRY_FILTER);
+            .with_var(&OPENTELEMETRY_FILTER)
+            .with_var(&ENABLE_COORDINATOR_SECRETS_CACHING)
+            .with_var(&COORDINATOR_SECRETS_CACHING_TTL);
         vars.refresh_internal_state();
         vars
     }
@@ -2417,6 +2438,14 @@ impl SystemVars {
 
     pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
         self.expect_value(&*OPENTELEMETRY_FILTER).clone()
+    }
+
+    pub fn enable_coordinator_secrets_caching(&self) -> bool {
+        *self.expect_value(&ENABLE_COORDINATOR_SECRETS_CACHING)
+    }
+
+    pub fn coordinator_secrets_caching_ttl(&self) -> Duration {
+        *self.expect_value(&*COORDINATOR_SECRETS_CACHING_TTL)
     }
 }
 
@@ -3785,6 +3814,12 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
+}
+
+/// Returns whether the named variable is a caching configuration parameter.
+pub fn is_caching_var(name: &str) -> bool {
+    name == ENABLE_COORDINATOR_SECRETS_CACHING.name()
+        || name == COORDINATOR_SECRETS_CACHING_TTL.name()
 }
 
 fn is_upsert_rocksdb_config_var(name: &str) -> bool {

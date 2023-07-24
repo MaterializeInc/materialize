@@ -99,6 +99,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
+use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -830,6 +831,8 @@ pub struct Coordinator {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Arc<dyn SecretsController>,
+    /// A secrets reader than maintains an in-memory cache, where values have a set TTL.
+    caching_secrets_reader: CachingSecretsReader,
 
     /// Handle to a manager that can create and delete kubernetes resources
     /// (ie: VpcEndpoint objects)
@@ -1737,6 +1740,7 @@ pub async fn serve(
                 ));
             }
 
+            let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
@@ -1760,6 +1764,7 @@ pub async fn serve(
                 pending_writes: Vec::new(),
                 advance_timelines_interval,
                 secrets_controller,
+                caching_secrets_reader,
                 cloud_resource_controller,
                 connection_context,
                 transient_replica_metadata: BTreeMap::new(),

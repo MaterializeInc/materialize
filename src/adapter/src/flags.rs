@@ -104,6 +104,13 @@ pub fn tracing_config(config: &SystemVars) -> TracingParameters {
     }
 }
 
+pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
+    mz_secrets::CachingPolicy {
+        enabled: config.enable_coordinator_secrets_caching(),
+        ttl: config.coordinator_secrets_caching_ttl(),
+    }
+}
+
 fn persist_config(config: &SystemVars) -> PersistParameters {
     PersistParameters {
         blob_target_size: Some(config.persist_blob_target_size()),
