@@ -463,6 +463,21 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE TABLE t (a ty);
 ----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE TABLE t (a ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE TABLE t (a ty);
+----
 db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
@@ -506,7 +521,7 @@ CREATE TABLE t1 (a ty);
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -519,6 +534,21 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE VIEW v AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE VIEW v AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -568,7 +598,7 @@ CREATE VIEW v1 AS SELECT ROW(1)::ty;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -581,6 +611,21 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -645,7 +690,7 @@ CREATE MATERIALIZED VIEW mv1 AS SELECT ROW(1)::ty;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -663,6 +708,21 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -727,7 +787,7 @@ CREATE INDEX i1 ON t (a::ty);
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -1161,21 +1221,6 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-SELECT a::ty FROM t;
-----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
@@ -1185,6 +1230,21 @@ db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=child,user=child
+SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 
@@ -1439,21 +1499,6 @@ COMPLETE 0
 simple conn=joe,user=joe
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
-----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
@@ -1463,6 +1508,21 @@ db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=child,user=child
+EXPLAIN SELECT a::ty FROM t;
+----
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 

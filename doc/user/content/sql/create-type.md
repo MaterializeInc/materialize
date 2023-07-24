@@ -150,6 +150,7 @@ The privileges required to execute this statement are:
 
 - `CREATE` privileges on the containing schema.
 - `USAGE` privileges on all types used in the type definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 

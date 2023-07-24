@@ -187,7 +187,9 @@ pub fn check_item_usage(
         .collect();
     let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
     let required_privileges =
-        generate_item_usage_privileges(catalog, &existing_resolved_ids, *current_role_id).collect();
+        generate_item_usage_privileges(catalog, &existing_resolved_ids, *current_role_id)
+            .into_iter()
+            .collect();
     check_object_privileges(
         catalog,
         required_privileges,
@@ -1254,29 +1256,23 @@ fn generate_read_privileges_inner(
     privileges
 }
 
-fn generate_item_usage_privileges<'a>(
-    catalog: &'a impl SessionCatalog,
-    ids: &'a ResolvedIds,
+fn generate_item_usage_privileges(
+    catalog: &impl SessionCatalog,
+    ids: &ResolvedIds,
     role_id: RoleId,
-) -> impl Iterator<Item = (SystemObjectId, AclMode, RoleId)> + 'a {
-    generate_item_usage_privileges_inner(catalog, ids, role_id, BTreeSet::new())
-}
-
-fn generate_item_usage_privileges_inner<'a>(
-    catalog: &'a impl SessionCatalog,
-    ids: &'a ResolvedIds,
-    role_id: RoleId,
-    seen: BTreeSet<GlobalId>,
-) -> impl Iterator<Item = (SystemObjectId, AclMode, RoleId)> + 'a {
-    // Use a `BTreeSet` to remove duplicate IDs.
+) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
+    // Use a `BTreeSet` to remove duplicate privileges.
     ids.0
         .iter()
-        .filter(move |id| !seen.contains(id))
         .filter_map(move |id| {
             let item = catalog.get_item(id);
             match item.item_type() {
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
-                    Some((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id))
+                    let schema_id = item.name().qualifiers.clone().into();
+                    Some([
+                        (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
+                        (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
+                    ])
                 }
                 CatalogItemType::Table
                 | CatalogItemType::Source
@@ -1287,6 +1283,8 @@ fn generate_item_usage_privileges_inner<'a>(
                 | CatalogItemType::Func => None,
             }
         })
+        .flatten()
+        .collect()
 }
 
 fn generate_cluster_usage_privileges(
