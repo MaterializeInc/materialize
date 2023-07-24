@@ -15,6 +15,7 @@ Users often seem to expect this same sort of behaviour when `relation` is a dura
 ## Goals
 
 - Fast responses to `SELECT * FROM large_collection LIMIT small_n` queries.
+  -  In particular, we want the cost of this query to be proportional to `small_n` and not the size of `large_collection`. (The constant factors may be much higher than the equivalent query against an index, though.)
 
 ## Non-Goals
 
@@ -31,12 +32,13 @@ Supporting a fast query path for select-limit queries against Persist shards wil
 
 ### Planning
 
-Today, `environmentd` will generate a fast-path plan when a dataflow can be represented as: a `Get` from an indexed collection, a map-filter-project stage, and some “finishing” logic including order-by/limit. We’ll change this to also allow the `Get` to get from a non-indexed collection backed by a Persist shard… as long as the MFP stage does not include any filters.
+Today, `environmentd` will generate a fast-path plan when a dataflow can be represented as: a `Get` from an indexed collection, a map-filter-project stage, and some “finishing” logic including order-by/limit. We’ll change this to also allow the `Get` to get from a non-indexed collection backed by a Persist shard.
 
-Why no filters?
+If we want to ensure that the cost of the query is proportional to the result set size and not the size of the collection, we'll need to introduce some additional restrictions:
+- No filters. Index-based fast-path queries are often used for single-key lookups, like `select * from indexed_collection where id = 'XXX'`. Persist cannot currently support efficient queries with this shape.
+- No `ORDER BY`. This would require us to load and sort the full collection, then apply the limit.
 
-- Index-based fast-path queries are often used for single-key lookups, like `select * from indexed_collection where id = 'XXX'`. Persist cannot currently support efficient queries with this shape.
-- In general, a query with a filter may need to do unbounded work to generate a finite result set size. (In the limit, we might need to scan the entire Persist shard to generate a result set of only a few rows!) If we disallow filters, we can effectively bound the amount of work we assign to `clusterd` by bounding the result set size.
+We may be able to relax these requirements in the future. (For example, if we order the Persist data by the data's "logical" ordering and not its serialized representation, we could support primary-key lookups more efficiently.)
 
 Today, every select query generates a peek request into an arrangement. (Even non-fast-path queries work by creating a new dataflow that writes out its data into an arrangement, then peeking into that arrangement.) This design introduces a second type of peek: one that peeks directly into the backing Persist shard. Concrentely, this means that `environmentd` will send `ComputeCommand::Peek` commands that reference a persisted collection’s `Id`, not the id of an index or arrangement.
 
@@ -46,7 +48,7 @@ When `clusterd` receives a peek command, it stores and tracks a `PendingPeek` st
 
 Since Persist’s API is asynchronous, one straightforward approach would be to fork off a new task for every incoming Peek, and hold on to the task handle. We can periodically poll the task for completion, and cancel it if the peek itself is cancelled by the user.
 
-When executing an ordinary peek, each worker reads a subset of the results out of their local arrangement… so much of the work is spread equally across all workers/processes of a replica. However, with Persist-backed peeks, we’d really only be doing the reading in *one* task running on a single node. We’ll need to take care to ensure these peek tasks are fairly distributed to avoid unduly skewing the workload.
+When executing an ordinary peek, each worker reads a subset of the results out of their local arrangement… so much of the work is spread equally across all workers/processes of a replica. However, with Persist-backed peeks, we’d really only be doing the reading in a single task running on just one of the replica's processes. We’ll need to take care to ensure these peek tasks are fairly distributed to avoid unduly skewing the workload. This will also shift work from the timely worker threads to the background task pool; we should likely cap the number of these peeks that run concurrently to avoid monopolizing these limited resources.
 
 ### Persist
 
@@ -55,7 +57,7 @@ For background on the relevant bits of Persist, see [the background section of t
 > A single worker can efficiently and fully consolidate a set of runs using a streaming merge: iterat[ing] through each of the runs concurrently, pulling from whichever run has the smallest next key-value, and consolidating updates with equal key-value-time as you go.
 >
 
-We can’t actually get away with this in the distributed context, since the Persist source is spread across many workers. However, for a little peek, running on a single node should be fine… and this approach is more or less what we intend to implement.
+We can’t actually get away with this in the distributed context, since the Persist source is spread across many workers. However, for a little peek, running in a single worker or task should be fine… and this approach is more or less what we intend to implement.
 
 Which is not to say this code is trivial: it’s still very correctness- and performance-sensitive, and requires managing a lot of concurrent work. However, the main consolidate on read implementation deals with many similar issues… and should be possible to hide this complexity behind a simpler API within the Persist codebase, to avoid exposing this complexity to Compute.
 
