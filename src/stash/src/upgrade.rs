@@ -40,6 +40,7 @@
 use std::collections::BTreeMap;
 
 use crate::objects::proto::{ConfigKey, ConfigValue};
+use crate::objects::WireCompatible;
 use crate::{
     AppendBatch, Data, InternalStashError, StashError, Transaction, TypedCollection,
     COLLECTION_CONFIG, USER_VERSION_KEY,
@@ -87,6 +88,70 @@ where
     {
         // Create a batch that we'll write to.
         let collection = tx.collection::<K, V>(self.name).await?;
+        let lower = tx.upper(collection.id).await?;
+        let mut batch = collection.make_batch_lower(lower)?;
+        let current = match tx.peek_one(collection).await {
+            Ok(set) => set,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    tx.append(vec![batch]).await?;
+                    let lower = tx.upper(collection.id).await?;
+                    batch = collection.make_batch_lower(lower)?;
+                    tx.peek_one(collection).await?
+                }
+                _ => return Err(err),
+            },
+        };
+
+        // Note: this method exists, instead of using `StashCollection::append_to_batch` so we can
+        // append types other than K or V.
+        fn append_to_batch<A, B>(batch: &mut AppendBatch, k: &A, v: &B, diff: i64)
+        where
+            A: ::prost::Message,
+            B: ::prost::Message,
+        {
+            let key = k.encode_to_vec();
+            let val = v.encode_to_vec();
+
+            batch.entries.push(((key, val), batch.timestamp, diff));
+        }
+
+        // Call the provided closure, generating a list of update actions.
+        for op in f(&current) {
+            match op {
+                MigrationAction::Delete(old_key) => {
+                    let old_value = current.get(&old_key).expect("key to exist");
+                    append_to_batch(&mut batch, &old_key, old_value, -1);
+                }
+                MigrationAction::Insert(key, value) => {
+                    append_to_batch(&mut batch, &key, &value, 1);
+                }
+                MigrationAction::Update(old_key, (new_key, new_value)) => {
+                    let old_value = current.get(&old_key).expect("key to exist");
+                    append_to_batch(&mut batch, &old_key, old_value, -1);
+                    append_to_batch(&mut batch, &new_key, &new_value, 1);
+                }
+            }
+        }
+
+        tx.append(vec![batch]).await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn migrate_compat<K2, V2>(
+        &self,
+        tx: &mut Transaction<'_>,
+        f: impl for<'a> FnOnce(&'a BTreeMap<K2, V2>) -> Vec<MigrationAction<K2, K2, V2>>,
+    ) -> Result<(), StashError>
+    where
+        K2: Data + WireCompatible<K>,
+        V2: Data + WireCompatible<V>,
+    {
+        // Create a batch that we'll write to.
+        let collection = tx.collection::<K2, V2>(self.name).await?;
         let lower = tx.upper(collection.id).await?;
         let mut batch = collection.make_batch_lower(lower)?;
         let current = match tx.peek_one(collection).await {

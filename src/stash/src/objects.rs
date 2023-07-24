@@ -176,6 +176,58 @@ impl From<String> for proto::StringWrapper {
     }
 }
 
+/// Denotes that `Self` is wire compatible with type `T`.
+///
+/// You should not implement this yourself, instead use the `wire_compatible!` macro.
+pub unsafe trait WireCompatible<T> {}
+
+/// Defines one protobuf type as wire compatible with another.
+/// 
+/// ```text
+/// wire_compatible!(objects_v28::DatabaseKey with objects_v27::DatabaseKey);
+/// ```
+/// 
+/// Internally this will implement the `WireCompatible<B> for <A>`, e.g. 
+/// `WireCompatible<objects_v27::DatabaseKey> for objects_v28::DatabaseKey` and generate `proptest`
+/// cases that will create arbitrary objects of type `B` and assert they can be deserialized with
+/// type `A`, and vice versa.
+macro_rules! wire_compatible {
+    ($a:ident $(:: $a_sub:ident)* with $b:ident $(:: $b_sub:ident)*) => {
+        ::static_assertions::assert_impl_all!(
+            $a $(::$a_sub)* : ::proptest::arbitrary::Arbitrary,
+            ::prost::Message
+        );
+        ::static_assertions::assert_impl_all!(
+            $b $(::$b_sub)*  : ::proptest::arbitrary::Arbitrary,
+            ::prost::Message
+        );
+
+        unsafe impl $crate::objects::WireCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
+        unsafe impl $crate::objects::WireCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
+
+        ::paste::paste! {
+            ::proptest::proptest! {
+                #[test]
+                fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
+                    use ::prost::Message;
+                    let bytes = a.encode_to_vec();
+                    let decoded = $b $(::$b_sub)*::decode(&bytes[..]);
+                    ::proptest::prelude::prop_assert!(decoded.is_ok());
+                }
+
+                #[test]
+                fn [<proptest_wire_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
+                    use ::prost::Message;
+                    let bytes = b.encode_to_vec();
+                    let decoded = $a $(::$a_sub)*::decode(&bytes[..]);
+                    ::proptest::prelude::prop_assert!(decoded.is_ok());
+                }
+            }
+        }
+    };
+}
+pub(crate) use wire_compatible;
+
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
