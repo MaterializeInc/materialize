@@ -244,8 +244,6 @@ capacity.
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATE` privileges on the containing schema.

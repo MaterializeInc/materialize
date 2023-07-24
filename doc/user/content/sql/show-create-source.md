@@ -30,8 +30,6 @@ SHOW CREATE SOURCE market_orders_raw;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schema containing the source.

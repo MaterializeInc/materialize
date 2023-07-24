@@ -25,8 +25,6 @@ ALTER SECRET upstash_kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the secret being altered.

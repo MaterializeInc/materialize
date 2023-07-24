@@ -37,8 +37,6 @@ REVOKE data_scientist FROM joe, mike;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATEROLE` privileges on the systems.

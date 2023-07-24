@@ -60,6 +60,12 @@ the following conditions are met:
 Note that the cluster will not have settings for the availability zones, and
 compute-specific settings. If needed, these can be set explicitly.
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the cluster.
+
 ## See also
 
 - [`CREATE CLUSTER`](/sql/create-cluster/)

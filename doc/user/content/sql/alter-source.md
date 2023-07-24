@@ -19,8 +19,6 @@ _value_ | The new value for the source size. Accepts values: `3xsmall`, `2xsmall
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the source being altered.

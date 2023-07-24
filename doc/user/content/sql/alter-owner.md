@@ -38,8 +38,6 @@ ALTER CLUSTER REPLICA production.r1 OWNER TO admin;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Role membership in `new_owner`.

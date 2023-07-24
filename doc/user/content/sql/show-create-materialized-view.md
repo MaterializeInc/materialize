@@ -29,8 +29,6 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schema containing the materialized view.

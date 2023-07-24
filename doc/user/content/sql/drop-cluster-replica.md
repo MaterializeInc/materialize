@@ -37,8 +37,6 @@ DROP CLUSTER REPLICA auction_house.bigger;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the dropped cluster replica.

@@ -45,8 +45,6 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the dropped materialized view.

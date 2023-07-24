@@ -114,8 +114,6 @@ CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATE` privileges on the containing cluster.
