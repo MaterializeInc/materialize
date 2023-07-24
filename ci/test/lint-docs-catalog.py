@@ -98,7 +98,7 @@ def main() -> None:
                 type_name = table_match[1]
                 # We currently cannot determine the type of lists from the catalog.
                 if type_name == "mz_aclitem array":
-                    type_name = "mz_aclitem_array"
+                    type_name = "mz_aclitem[]"
                 elif type_name == "text array":
                     type_name = "text[]"
                 elif "list" in type_name:

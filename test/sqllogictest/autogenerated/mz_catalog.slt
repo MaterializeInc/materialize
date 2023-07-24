@@ -73,7 +73,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  id  text
 2  name  text
 3  owner_id  text
-4  privileges  mz_aclitem_array
+4  privileges  mz_aclitem[]
 5  managed  boolean
 6  size  text
 7  replication_factor  uint4
@@ -100,7 +100,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem_array
+7  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_databases' ORDER BY position
@@ -109,7 +109,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 2  oid  oid
 3  name  text
 4  owner_id  text
-5  privileges  mz_aclitem_array
+5  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_default_privileges' ORDER BY position
@@ -194,7 +194,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 5  cluster_id  text
 6  definition  text
 7  owner_id  text
-8  privileges  mz_aclitem_array
+8  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_objects' ORDER BY position
@@ -205,7 +205,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem_array
+7  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_pseudo_types' ORDER BY position
@@ -221,7 +221,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem_array
+7  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_roles' ORDER BY position
@@ -246,7 +246,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 3  database_id  text
 4  name  text
 5  owner_id  text
-6  privileges  mz_aclitem_array
+6  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_secrets' ORDER BY position
@@ -256,7 +256,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 3  schema_id  text
 4  name  text
 5  owner_id  text
-6  privileges  mz_aclitem_array
+6  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_ssh_tunnel_connections' ORDER BY position
@@ -292,7 +292,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 8  envelope_type  text
 9  cluster_id  text
 10  owner_id  text
-11  privileges  mz_aclitem_array
+11  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_storage_usage' ORDER BY position
@@ -314,7 +314,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 3  schema_id  text
 4  name  text
 5  owner_id  text
-6  privileges  mz_aclitem_array
+6  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_types' ORDER BY position
@@ -325,7 +325,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  category  text
 6  owner_id  text
-7  privileges  mz_aclitem_array
+7  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_views' ORDER BY position
@@ -336,7 +336,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  definition  text
 6  owner_id  text
-7  privileges  mz_aclitem_array
+7  privileges  mz_aclitem[]
 
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_catalog') ORDER BY object
