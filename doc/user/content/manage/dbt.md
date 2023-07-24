@@ -290,7 +290,7 @@ Use the `database` option to specify the [database](/sql/namespaces/#database-de
 
 #### Indexes
 
-Use the `indexes` option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each index option can have the following components:
+Use the `indexes` option to define a list of [indexes](/sql/create-index/) on `source`, `view`, `table` or `materialized view` materializations. Each index option can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------
