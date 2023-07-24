@@ -44,7 +44,8 @@ impl Endpoint {
             .host()
             .to_owned()
             .expect("endpoint url has a valid host");
-        let url_str = format!("https://sync.{host}");
+
+        let url_str = format!("https://api.{host}");
         let mut url = Url::parse(&url_str).expect("sync endpoint name should be valid");
         url.path_segments_mut()
             .expect("constructor validated URL can be a base")
@@ -54,6 +55,7 @@ impl Endpoint {
 
     /// Returns the URL for the OAuth token exchange.
     pub fn web_login_url(&self, profile_name: &str, port: u16) -> Url {
+        println!("Self: {:?}", self);
         let mut url = self.with_path(&["account", "login"]);
         let mut query_pairs = url.query_pairs_mut();
         query_pairs.append_pair(

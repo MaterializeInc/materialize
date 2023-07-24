@@ -12,7 +12,7 @@ use std::fs::read_to_string;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use mz::api::{get_provider_region_environment, CloudProviderRegion};
+use mz::api::{get_region_info_by_cloud_provider, CloudProviderRegion};
 use mz::configuration::ValidProfile;
 use postgres_protocol::escape::{escape_identifier, escape_literal};
 use reqwest::Client;
@@ -194,13 +194,12 @@ async fn execute_query(
     cloud_provider_region: CloudProviderRegion,
     sql: Sql,
 ) -> Result<(), anyhow::Error> {
-    let environment =
-        get_provider_region_environment(client, valid_profile, &cloud_provider_region)
+    let region_info =
+        get_region_info_by_cloud_provider(client, valid_profile, &cloud_provider_region)
             .await
             .context("retrieving cloud provider region")?;
 
-    let endpoint = &environment.environmentd_https_address
-        [0..environment.environmentd_https_address.len() - 4];
+    let endpoint = &region_info.http_address[0..region_info.http_address.len() - 4];
     let url = format!("https://{endpoint}/api/sql");
 
     let results = client
