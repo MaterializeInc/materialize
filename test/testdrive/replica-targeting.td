@@ -23,6 +23,8 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # `mz_compute_frontiers_per_worker` always contains entries, because it tracks the
 # frontiers of introspection sources as well.
 
+> DROP CLUSTER IF EXISTS test
+
 > CREATE CLUSTER test REPLICAS (
       r1 (SIZE '1'),
       r2 (SIZE '2'),
