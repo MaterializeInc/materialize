@@ -46,5 +46,4 @@ message ProtoUpsertAutoSpillConfig {
 message ProtoStorageMaxInflightBytesConfig {
     optional uint64 max_in_flight_bytes_default = 1;
     optional uint64 max_in_flight_bytes_cluster_size_percent = 2;
-    map<string, uint64> cluster_size_memory_map = 3;
 }

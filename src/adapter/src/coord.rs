@@ -884,10 +884,7 @@ impl Coordinator {
         // Inform the controllers about their initial configuration.
         let compute_config = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
-        let storage_config = flags::storage_config(
-            self.catalog().system_config(),
-            self.catalog().cluster_replica_sizes(),
-        );
+        let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.

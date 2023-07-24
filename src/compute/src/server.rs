@@ -161,7 +161,6 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
         )>,
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
-        _cluster_size: Option<String>,
     ) {
         Worker {
             timely_worker,

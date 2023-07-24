@@ -380,7 +380,7 @@ where
                                             &storage_state
                                                 .dataflow_parameters
                                                 .storage_dataflow_max_inflight_bytes_config,
-                                            &storage_state.cluster_size,
+                                            &None, // TODO: fix after revert
                                         );
 
                                     let (feedback_handle, flow_control, backpressure_metrics) =
@@ -545,20 +545,17 @@ where
 // and the current cluster size
 fn get_backpressure_max_inflight_bytes(
     inflight_bytes_config: &StorageMaxInflightBytesConfig,
-    cluster_size: &Option<String>,
+    cluster_memory_limit: &Option<usize>,
 ) -> Option<usize> {
     let StorageMaxInflightBytesConfig {
         max_inflight_bytes_default,
         max_inflight_bytes_cluster_size_percent,
-        cluster_size_memory_map,
     } = inflight_bytes_config;
 
     // Will use backpressure only if the default inflight value is provided
     if max_inflight_bytes_default.is_some() {
-        let current_cluster_max_bytes_limit = cluster_size
-            .as_ref()
-            .and_then(|size| cluster_size_memory_map.get(size))
-            .and_then(|cluster_memory| {
+        let current_cluster_max_bytes_limit =
+            cluster_memory_limit.as_ref().and_then(|cluster_memory| {
                 max_inflight_bytes_cluster_size_percent
                     .map(|percent| cluster_memory * percent / 100)
             });
@@ -751,12 +748,11 @@ mod test {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: None,
             max_inflight_bytes_cluster_size_percent: Some(50),
-            cluster_size_memory_map: BTreeMap::from([("size_1".to_string(), 100)]),
         };
-        let cluster_size = Some("size_1".to_string());
+        let memory_limit = Some(1000);
 
         let backpressure_inflight_bytes_limit =
-            get_backpressure_max_inflight_bytes(&config, &cluster_size);
+            get_backpressure_max_inflight_bytes(&config, &memory_limit);
 
         assert_eq!(backpressure_inflight_bytes_limit, None)
     }
@@ -766,12 +762,9 @@ mod test {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: Some(10000),
             max_inflight_bytes_cluster_size_percent: Some(50),
-            cluster_size_memory_map: BTreeMap::from([("size_another".to_string(), 100)]),
         };
-        let cluster_size = Some("size_1".to_string());
 
-        let backpressure_inflight_bytes_limit =
-            get_backpressure_max_inflight_bytes(&config, &cluster_size);
+        let backpressure_inflight_bytes_limit = get_backpressure_max_inflight_bytes(&config, &None);
 
         assert_eq!(
             backpressure_inflight_bytes_limit,
@@ -784,12 +777,11 @@ mod test {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: Some(10000),
             max_inflight_bytes_cluster_size_percent: Some(50),
-            cluster_size_memory_map: BTreeMap::from([("size_1".to_string(), 2000)]),
         };
-        let cluster_size = Some("size_1".to_string());
+        let memory_limit = Some(2000);
 
         let backpressure_inflight_bytes_limit =
-            get_backpressure_max_inflight_bytes(&config, &cluster_size);
+            get_backpressure_max_inflight_bytes(&config, &memory_limit);
 
         // the limit should be 50% of 2000 i.e. 1000
         assert_eq!(backpressure_inflight_bytes_limit, Some(1000));

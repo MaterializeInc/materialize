@@ -40,7 +40,6 @@ pub trait AsRunnableWorker<C, R> {
         )>,
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
-        cluster_size: Option<String>,
     );
 }
 
