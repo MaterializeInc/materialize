@@ -32,9 +32,10 @@ rewrite=false
 if [[ "${1:-}" = --rewrite ]]; then
     shift
     rewrite=true
+    echo "Linting catalog docs"
+else
+    echo "Linting catalog docs, run with --rewrite to update .slt files"
 fi
-
-echo "Linting catalog docs, run with --rewrite to update .slt files"
 
 function generate_slt() {
   bin/pyactivate ci/test/lint-docs-catalog.py "$@"
