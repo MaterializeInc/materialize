@@ -1068,7 +1068,7 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|
     name: UncasedStr::new("statement_logging_sample_rate"),
     value: &DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE,
     description: "User-facing session variable indicating how many statement executions should be \
-    logged, subject to constraint by the system variable `statement_logging_max_sample_rate`.",
+    logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize).",
     internal: false,
 });
 
@@ -1096,15 +1096,15 @@ pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::n
     name: UncasedStr::new("statement_logging_max_sample_rate"),
     value: &DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE,
     description:
-        "The maximum value rate at which statements may be logged. If this value is less than \
-that of `statement_logging_sample_rate`, the latter is ignored.",
+        "The maximum rate at which statements may be logged. If this value is less than \
+that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
     internal: false,
 });
 
 pub static STATEMENT_LOGGING_FLUSH_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_logging_flush_interval"),
     value: &Duration::from_secs(30),
-    description: "The interval at which statement logs are flushed to the stash.",
+    description: "The interval at which statement logs are flushed to the stash (Materialize).",
     internal: false,
 };
 
