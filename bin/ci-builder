@@ -176,8 +176,8 @@ case "$cmd" in
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env NO_COLOR
             --env POLAR_SIGNALS_API_TOKEN
             --env PYPI_TOKEN
