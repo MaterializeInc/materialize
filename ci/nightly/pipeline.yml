@@ -369,7 +369,8 @@ steps:
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      # A larger instance is needed due to frequent OOMs
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -380,7 +381,8 @@ steps:
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      # A larger instance is needed due to frequent OOMs
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
