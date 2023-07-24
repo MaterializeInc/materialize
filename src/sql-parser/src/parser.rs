@@ -2845,7 +2845,7 @@ impl<'a> Parser<'a> {
         };
         let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
 
-        let validate_using = if self.parse_keywords(&[CHECK]) {
+        let validate_using = if self.parse_keyword(CHECK) {
             self.expect_token(&Token::LParen)?;
 
             let options = if self.parse_keyword(WITH) {
