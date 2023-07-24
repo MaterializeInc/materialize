@@ -680,6 +680,46 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                     (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id)
                 LEFT JOIN mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
                 LEFT JOIN mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
+            )"),
+        (MzAclItem, AclItem) => Explicit: sql_impl_cast("(
+                SELECT makeaclitem(
+                    (CASE mz_internal.mz_aclitem_grantee($1)
+                        WHEN 'p' THEN 0
+                        ELSE (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantee($1))
+                    END),
+                    (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantor($1)),
+                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges($1)), ',')),
+                    -- GRANT OPTION isn't implemented so we hardcode false.
+                    false
+                )
+            )"),
+
+        // AclItem
+        (AclItem, String) => Explicit: sql_impl_cast("(
+                SELECT
+                    (CASE grantee_oid
+                        WHEN 0 THEN ''
+                        ELSE COALESCE(grantee_role.name, grantee_oid::text)
+                    END)
+                    || '='
+                    || mz_internal.aclitem_privileges($1)
+                    || '/'
+                    || COALESCE(grantor_role.name, grantor_oid::text)
+                FROM
+                    (SELECT mz_internal.aclitem_grantee($1) AS grantee_oid),
+                    (SELECT mz_internal.aclitem_grantor($1) AS grantor_oid)
+                LEFT JOIN mz_roles AS grantee_role ON grantee_oid = grantee_role.oid
+                LEFT JOIN mz_roles AS grantor_role ON grantor_oid = grantor_role.oid
+            )"),
+        (AclItem, MzAclItem) => Explicit: sql_impl_cast("(
+                SELECT mz_internal.make_mz_aclitem(
+                    (CASE mz_internal.aclitem_grantee($1)
+                        WHEN 0 THEN 'p'
+                        ELSE (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantee($1))
+                    END),
+                    (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantor($1)),
+                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.aclitem_privileges($1)), ','))
+                )
             )")
     }
 });

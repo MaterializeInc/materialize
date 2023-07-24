@@ -39,7 +39,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::{any_regex, Regex};
@@ -68,6 +68,7 @@ mod format;
 pub(crate) mod impls;
 
 pub use impls::*;
+use mz_repr::adt::system::Oid;
 
 /// The maximum size of a newly allocated string. Chosen to be the smallest number to keep our tests
 /// passing without changing. 100MiB is probably higher than what we want, but it's better than no
@@ -4581,6 +4582,9 @@ derive_unary!(
     MzFormatPrivileges,
     MzValidatePrivileges,
     MzValidateRolePrivilege,
+    AclItemGrantor,
+    AclItemGrantee,
+    AclItemPrivileges,
     QuoteIdent,
     TryParseMonotonicIso8601Timestamp
 );
@@ -4987,6 +4991,9 @@ impl Arbitrary for UnaryFunc {
             MzFormatPrivileges::arbitrary().prop_map_into().boxed(),
             MzValidatePrivileges::arbitrary().prop_map_into().boxed(),
             MzValidateRolePrivilege::arbitrary().prop_map_into().boxed(),
+            AclItemGrantor::arbitrary().prop_map_into().boxed(),
+            AclItemGrantee::arbitrary().prop_map_into().boxed(),
+            AclItemPrivileges::arbitrary().prop_map_into().boxed(),
             QuoteIdent::arbitrary().prop_map_into().boxed(),
         ])
     }
@@ -5342,6 +5349,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzFormatPrivileges(_) => MzFormatPrivileges(()),
             UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
             UnaryFunc::MzValidateRolePrivilege(_) => MzValidateRolePrivilege(()),
+            UnaryFunc::AclItemGrantor(_) => AclItemGrantor(()),
+            UnaryFunc::AclItemGrantee(_) => AclItemGrantee(()),
+            UnaryFunc::AclItemPrivileges(_) => AclItemPrivileges(()),
             UnaryFunc::QuoteIdent(_) => QuoteIdent(()),
             UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => {
                 TryParseMonotonicIso8601Timestamp(())
@@ -5770,6 +5780,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzFormatPrivileges(_) => Ok(impls::MzFormatPrivileges.into()),
                 MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
                 MzValidateRolePrivilege(_) => Ok(impls::MzValidateRolePrivilege.into()),
+                AclItemGrantor(_) => Ok(impls::AclItemGrantor.into()),
+                AclItemGrantee(_) => Ok(impls::AclItemGrantee.into()),
+                AclItemPrivileges(_) => Ok(impls::AclItemPrivileges.into()),
                 QuoteIdent(_) => Ok(impls::QuoteIdent.into()),
                 TryParseMonotonicIso8601Timestamp(_) => {
                     Ok(impls::TryParseMonotonicIso8601Timestamp.into())
@@ -7071,6 +7084,27 @@ fn mz_render_typmod<'a>(
     Ok(Datum::String(temp_storage.push_string(s)))
 }
 
+fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let grantee = Oid(datums[0].unwrap_uint32());
+    let grantor = Oid(datums[1].unwrap_uint32());
+    let privileges = datums[2].unwrap_str();
+    let acl_mode = AclMode::parse_multiple_privileges(privileges)
+        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
+    let is_grantable = datums[3].unwrap_bool();
+    if is_grantable {
+        return Err(EvalError::Unsupported {
+            feature: "GRANT OPTION".to_string(),
+            issue_no: None,
+        });
+    }
+
+    Ok(Datum::AclItem(AclItem {
+        grantee,
+        grantor,
+        acl_mode,
+    }))
+}
+
 fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let grantee: RoleId = datums[0]
         .unwrap_str()
@@ -7238,6 +7272,7 @@ pub enum VariadicFunc {
     RangeCreate {
         elem_type: ScalarType,
     },
+    MakeAclItem,
     MakeMzAclItem,
     Translate,
     ArrayPosition,
@@ -7325,6 +7360,7 @@ impl VariadicFunc {
             VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffTime => date_diff_time(ds[0], ds[1], ds[2]),
             VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
+            VariadicFunc::MakeAclItem => make_acl_item(&ds),
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
@@ -7375,6 +7411,7 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffDate
             | VariadicFunc::DateDiffTime
             | VariadicFunc::RangeCreate { .. }
+            | VariadicFunc::MakeAclItem
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
             | VariadicFunc::ArrayFill { .. }
@@ -7456,6 +7493,7 @@ impl VariadicFunc {
                 element_type: Box::new(elem_type.clone()),
             }
             .nullable(false),
+            MakeAclItem => ScalarType::AclItem.nullable(true),
             MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
             ArrayPosition => ScalarType::Int32.nullable(true),
             ArrayFill { elem_type } => {
@@ -7525,6 +7563,7 @@ impl VariadicFunc {
             | RangeCreate { .. }
             | And
             | Or
+            | MakeAclItem
             | MakeMzAclItem
             | ArrayPosition
             | ArrayFill { .. }
@@ -7622,6 +7661,7 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestamp
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
+            | VariadicFunc::MakeAclItem
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::Translate
             | VariadicFunc::ArrayPosition
@@ -7680,6 +7720,7 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::TimestampTz => "tstzrange",
                 _ => unreachable!(),
             }),
+            VariadicFunc::MakeAclItem => f.write_str("makeaclitem"),
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
@@ -7712,6 +7753,7 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Replace).boxed(),
             Just(VariadicFunc::JsonbBuildArray).boxed(),
             Just(VariadicFunc::JsonbBuildObject).boxed(),
+            Just(VariadicFunc::MakeAclItem).boxed(),
             Just(VariadicFunc::MakeMzAclItem).boxed(),
             ScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayCreate { elem_type })
@@ -7794,6 +7836,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::And => And(()),
             VariadicFunc::Or => Or(()),
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
+            VariadicFunc::MakeAclItem => MakeAclItem(()),
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
             VariadicFunc::ArrayPosition => ArrayPosition(()),
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
@@ -7852,6 +7895,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 RangeCreate(elem_type) => Ok(VariadicFunc::RangeCreate {
                     elem_type: elem_type.into_rust()?,
                 }),
+                MakeAclItem(()) => Ok(VariadicFunc::MakeAclItem),
                 MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
                 ArrayPosition(()) => Ok(VariadicFunc::ArrayPosition),
                 ArrayFill(elem_type) => Ok(VariadicFunc::ArrayFill {

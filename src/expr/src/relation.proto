@@ -168,5 +168,6 @@ message ProtoTableFunc {
         ProtoWrap wrap = 13;
         google.protobuf.Empty generate_subscripts_array = 14;
         ProtoTabletizedScalar tabletized_scalar = 15;
+        google.protobuf.Empty acl_explode = 16;
     }
 }
