@@ -157,6 +157,21 @@ did_not_include_necessary_header
 "hello world"
 "another_request"
 
+> CREATE SECRET webhook_secret AS 'shared_key';
+
+> CREATE SOURCE webhook_bytes_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_secret BYTES )
+    decode(headers->'x-signature', 'base64') = hmac(body, webhook_secret, 'sha256')
+  )
+
+$ webhook-append name=webhook_bytes_with_secret x-signature=VNCe6bTKrlFO46GfiUYR/xFpeZ2H/KbLfR9oJKYAwkc=
+using an mz secret
+
+> SELECT * FROM webhook_bytes_with_secret;
+"using an mz secret"
+
 > CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
@@ -191,8 +206,30 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
   BODY FORMAT TEXT
   CHECK ( mz_internal.mz_panic('webhook panic test') = headers::text );
 
-$ webhook-append name=webhook_validation_panic status=503
+$ webhook-append name=webhook_validation_panic status=500
 abc
+
+# Can use SECRETs as both Bytes and Strings.
+
+> CREATE SECRET webhook_secret_bytes AS 'this_key_is_bytes';
+
+> CREATE SOURCE webhook_double_validation IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (
+      SECRET webhook_secret,
+      SECRET webhook_secret_bytes BYTES
+    )
+    decode(headers->'x-signature-sha256', 'hex') = hmac(convert_from(body, 'utf-8'), webhook_secret, 'sha256')
+      AND
+    decode(headers->'x-signature-md5', 'hex') = hmac(body, webhook_secret_bytes, 'md5')
+  )
+
+$ webhook-append name=webhook_double_validation x-signature-sha256=20460da764521c155989f9ede00d6047c459c87bca6712eef27f72ae32c62d3f x-signature-md5=c34fd128f787067796212d31fced1881
+materialize space monkey
+
+> SELECT * FROM webhook_double_validation;
+"materialize space monkey"
 
 # Dropping a webhook source should drop the underlying persist shards.
 

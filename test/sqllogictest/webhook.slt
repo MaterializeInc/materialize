@@ -172,6 +172,67 @@ CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBH
 statement error cannot drop cluster with active objects
 DROP CLUSTER webhook_cluster;
 
+# Create a webhook source that uses secrets when validating.
+
+statement ok
+CREATE SECRET webhook_shared_secret AS 'test_key';
+
+statement ok
+CREATE SOURCE webhook_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH ( SECRET webhook_shared_secret )
+    headers->'signature' = webhook_shared_secret
+  )
+
+statement ok
+CREATE SOURCE webhook_buildkite2 IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  CHECK (
+    WITH ( SECRET webhook_shared_secret )
+    decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
+      split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || convert_from(body, 'utf-8'),
+      webhook_shared_secret,
+      'sha256'
+    )
+  )
+
+statement ok
+CREATE SECRET other_secret AS 'another_one';
+
+statement ok
+CREATE SOURCE webhook_with_two_secrets IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (
+      SECRET webhook_shared_secret AS key,
+      SECRET other_secret BYTES
+    )
+    headers->'signature' = key AND body = other_secret
+  )
+
+statement error unknown catalog item 'non_existent_secret'
+CREATE SOURCE webhook_with_unknown_second_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (
+      SECRET webhook_shared_secret AS key,
+      SECRET non_existent_secret BYTES
+    )
+    headers->'signature' = key AND body = non_existent_secret
+  )
+
+statement error column reference "other_secret" is ambiguous
+CREATE SOURCE webhook_with_duplicate_secret_names IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (
+      SECRET webhook_shared_secret AS other_secret,
+      SECRET other_secret BYTES
+    )
+    headers->'signature' = other_secret AND body = other_secret
+  )
+
 # Try creating a webhook source in a compute cluster.
 
 statement ok
