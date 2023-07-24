@@ -486,7 +486,7 @@ where
                     image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
-                        vec![
+                        let mut args = vec![
                             format!(
                                 "--storage-controller-listen-addr={}",
                                 assigned["storagectl"]
@@ -499,7 +499,14 @@ where
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
-                        ]
+                        ];
+                        if let Some(memory_limit) = location.allocation.memory_limit {
+                            args.push(format!(
+                                "--announce-memory-limit={}",
+                                memory_limit.0.as_u64()
+                            ));
+                        }
+                        args
                     },
                     ports: vec![
                         ServicePort {
