@@ -3066,9 +3066,9 @@ impl<'a> ScalarType {
             ScalarType::Int2Vector,
             ScalarType::MzTimestamp,
             ScalarType::MzAclItem,
-            ScalarType::AclItem,
             // TODO: Fill in some variants of these.
             /*
+            ScalarType::AclItem,
             ScalarType::Array(_),
             ScalarType::List {
                 element_type: todo!(),
