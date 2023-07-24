@@ -151,6 +151,9 @@ where
         V2: Data + WireCompatible<V>,
     {
         // Create a batch that we'll write to.
+        //
+        // Note: this opens the collection with the NEW types that we're migrating to. This is okay
+        // though because the new types are defined as being wire compatible with the old types.
         let collection = tx.collection::<K2, V2>(self.name).await?;
         let lower = tx.upper(collection.id).await?;
         let mut batch = collection.make_batch_lower(lower)?;
