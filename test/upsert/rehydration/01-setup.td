@@ -9,12 +9,6 @@
 
 > DROP CLUSTER IF EXISTS storage_cluster CASCADE;
 
-> CREATE CLUSTER storage_cluster REPLICAS (
-    r1 (
-      STORAGECTL ADDRESSES ['clusterd1:2100'],
-      STORAGE ADDRESSES ['clusterd1:2103'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102'],
-      WORKERS 4
-    )
-  )
+# Using mem-2 because it has defined memory limits which will be passed for
+# backpressure inflight bytes configuration
+> CREATE CLUSTER storage_cluster SIZE 'mem-2', REPLICATION FACTOR 1

@@ -166,9 +166,11 @@ def workflow_rehydration(c: Composition) -> None:
                 ],
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
-                    "enable_unmanaged_cluster_replicas": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    "enable_managed_clusters": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
+                    "storage_dataflow_max_inflight_bytes_to_cluster_size_percent": "1",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -186,10 +188,10 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "true",
-                    "enable_unmanaged_cluster_replicas": "true",
+                    "enable_managed_clusters": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
+                    "storage_dataflow_max_inflight_bytes_to_cluster_size_percent": "1",
                 },
                 environment_extra=materialized_environment_extra,
             ),
