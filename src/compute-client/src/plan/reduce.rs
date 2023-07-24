@@ -368,9 +368,13 @@ pub struct MonotonicPlan {
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
     /// the input to extract the relevant datums.
     pub skips: Vec<usize>,
-    /// True if the input is logically but not physically monotonic,
-    /// and the operator must first consolidate the inputs to remove
-    /// potential negations.
+    /// True if the input is not physically monotonic, and the operator must perform
+    /// consolidation to remove potential negations. The operator implementation is
+    /// free to consolidate as late as possible while ensuring correctness, so it is
+    /// not a requirement that the input be directly subjected to consolidation.
+    /// More details in the monotonic one-shot `SELECT`s design doc.[^1]
+    ///
+    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
     pub must_consolidate: bool,
 }
 
