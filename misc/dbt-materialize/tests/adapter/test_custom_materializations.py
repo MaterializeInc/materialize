@@ -25,6 +25,7 @@ from fixtures import (
     test_source,
     test_source_index,
     test_subsources,
+    test_table_index,
     test_view_index,
 )
 
@@ -71,7 +72,8 @@ class TestCustomMaterializations:
         assert len(results) == 10
         # relations_equal
         check_relations_equal(
-            project.adapter, ["test_materialized_view_index", "test_view_index", "test_table_index"]
+            project.adapter,
+            ["test_materialized_view_index", "test_table_index"],
         )
 
         check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])

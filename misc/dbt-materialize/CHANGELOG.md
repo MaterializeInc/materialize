@@ -1,9 +1,5 @@
 # dbt-materialize Changelog
 
-## Unreleased
-
-* Enable the `indexes` config for `table` materializations.
-
 ## 1.5.0 - 2023-07-13
 
 * Upgrade to `dbt-postgres` v1.5.0. dbt contracts and dbt constraints are **not

@@ -39,10 +39,10 @@ test_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
-test_materialized_table_index = """
+test_table_index = """
 {{ config(
     materialized='table',
-    indexes=[{'columns': ['a', 'length(a)'], 'name': 'a_idx'}]
+    indexes=[{'columns': ['a', 'length(a)'], 'name': 'test_table_index_a_idx'}]
 ) }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
@@ -112,7 +112,8 @@ test_materialized_view_index,1,1,,a_idx
 test_materialized_view_index,2,,pg_catalog.length(a),a_idx
 test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
-test_table_index,2,,pg_catalog.length(a),a_idx
+test_table_index,1,1,,test_table_index_a_idx
+test_table_index,2,,pg_catalog.length(a),test_table_index_a_idx
 """.lstrip()
 
 not_null = """
