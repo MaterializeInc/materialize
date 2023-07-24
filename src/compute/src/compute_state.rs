@@ -39,7 +39,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
-use crate::metrics::ComputeMetrics;
+use crate::metrics::{CollectionMetrics, ComputeMetrics};
 use crate::render::LinearJoinImpl;
 
 /// Worker-local state that is maintained across dataflows.
@@ -232,8 +232,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             let dataflow_index = self.timely_worker.next_dataflow_index();
 
             // Initialize compute and logging state for each object.
+            let worker_id = self.timely_worker.index();
             for (object_id, collection_id) in exported_ids {
-                let mut collection = CollectionState::new();
+                let metrics = self
+                    .compute_state
+                    .metrics
+                    .for_collection(collection_id, worker_id);
+                let mut collection = CollectionState::new(metrics);
 
                 collection.reported_frontier = ReportedFrontier::NotReported {
                     lower: dataflow.as_of.clone().unwrap(),
@@ -381,9 +386,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
 
         // Initialize compute and logging state for each logging index.
+        let worker_id = self.timely_worker.index();
         let index_ids = config.index_logs.values().copied();
         for id in index_ids {
-            let collection = CollectionState::new();
+            let metrics = self.compute_state.metrics.for_collection(id, worker_id);
+            let collection = CollectionState::new(metrics);
 
             let existing = self.compute_state.collections.insert(id, collection);
             if existing.is_some() {
@@ -925,15 +932,20 @@ pub struct CollectionState {
     /// New dataflows that depend on this index are expected to report their output frontiers
     /// through these probe handles.
     pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
+    /// Metrics tracked for this collection.
+    ///
+    /// If this is `None`, no metrics are collected.
+    pub metrics: Option<CollectionMetrics>,
 }
 
 impl CollectionState {
-    fn new() -> Self {
+    fn new(metrics: Option<CollectionMetrics>) -> Self {
         Self {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
             index_flow_control_probes: Default::default(),
+            metrics,
         }
     }
 

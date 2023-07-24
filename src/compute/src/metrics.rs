@@ -11,6 +11,7 @@ use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
 use mz_ore::metrics::raw::{IntCounterVec, UIntGaugeVec};
 use mz_ore::metrics::{IntCounter, MetricsRegistry, UIntGauge};
+use mz_repr::GlobalId;
 
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
@@ -58,6 +59,22 @@ impl ComputeMetrics {
         }
     }
 
+    pub fn for_collection(
+        &self,
+        collection_id: GlobalId,
+        _worker_id: usize,
+    ) -> Option<CollectionMetrics> {
+        // In an effort to reduce the cardinality of timeseries created, we collect metrics only
+        // for non-transient dataflows. This is roughly equivalent to "long-lived" dataflows,
+        // with the exception of subscribes which may or may not be long-lived. We might want to
+        // change this policy in the future to track subscribes as well.
+        if collection_id.is_transient() {
+            return None;
+        }
+
+        Some(CollectionMetrics {})
+    }
+
     /// Record the reconciliation result for a single dataflow.
     ///
     /// Reconciliation is recorded as successful if the given properties all hold. Otherwise it is
@@ -85,3 +102,6 @@ impl ComputeMetrics {
         }
     }
 }
+
+/// Metrics maintained per compute collection.
+pub struct CollectionMetrics {}
