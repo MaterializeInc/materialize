@@ -93,3 +93,28 @@ query T
 SELECT pg_typeof(ROW('1', '2', 2.0)::other.composite)
 ----
 other.composite
+
+query T
+SELECT pg_typeof(ARRAY[1::uint2])
+----
+uint2[]
+
+query T
+SELECT pg_typeof(ARRAY[1::uint4])
+----
+uint4[]
+
+query T
+SELECT pg_typeof(ARRAY[1::uint8])
+----
+uint8[]
+
+query T
+SELECT pg_typeof(ARRAY[1::mz_timestamp])
+----
+mz_timestamp[]
+
+query T
+SELECT pg_typeof(ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE')])
+----
+mz_aclitem[]

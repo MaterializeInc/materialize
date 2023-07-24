@@ -433,7 +433,7 @@ pub static UINT8: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT2_ARRAY`].
 pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "uint2_array".to_owned(),
+        "_uint2".to_owned(),
         oid::TYPE_UINT2_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -443,7 +443,7 @@ pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT4_ARRAY`].
 pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "uint4_array".to_owned(),
+        "_uint4".to_owned(),
         oid::TYPE_UINT4_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -453,7 +453,7 @@ pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT8_ARRAY`].
 pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "uint8_array".to_owned(),
+        "_uint8".to_owned(),
         oid::TYPE_UINT8_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -473,7 +473,7 @@ pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
 pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "mz_timestamp_array".to_owned(),
+        "_mz_timestamp".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -493,7 +493,7 @@ pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
 pub static MZ_ACL_ITEM_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "mz_aclitem_array".to_owned(),
+        "_mz_aclitem".to_owned(),
         oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -777,6 +777,7 @@ impl Type {
         // postgres_types' `name()` uses the pg_catalog name, and not the pretty
         // SQL standard name.
         match self.inner() {
+            &postgres_types::Type::ACLITEM_ARRAY => "aclitem[]",
             &postgres_types::Type::BOOL_ARRAY => "boolean[]",
             &postgres_types::Type::BYTEA_ARRAY => "bytea[]",
             &postgres_types::Type::BPCHAR_ARRAY => "character[]",
@@ -810,7 +811,14 @@ impl Type {
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
             &postgres_types::Type::REGTYPE_ARRAY => "regtype[]",
             &postgres_types::Type::INT2_VECTOR => "int2vector",
-            other => other.name(),
+            other => match other.oid() {
+                oid::TYPE_UINT2_ARRAY_OID => "uint2[]",
+                oid::TYPE_UINT4_ARRAY_OID => "uint4[]",
+                oid::TYPE_UINT8_ARRAY_OID => "uint8[]",
+                oid::TYPE_MZ_TIMESTAMP_ARRAY_OID => "mz_timestamp[]",
+                oid::TYPE_MZ_ACL_ITEM_ARRAY_OID => "mz_aclitem[]",
+                _ => other.name(),
+            },
         }
     }
 
