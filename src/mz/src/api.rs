@@ -62,6 +62,8 @@ impl FromStr for CloudProviderRegion {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+
 pub struct RegionInfo {
     pub sql_address: String,
     pub http_address: String,
@@ -69,6 +71,7 @@ pub struct RegionInfo {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Region {
     pub region_info: Option<RegionInfo>,
 }
@@ -101,7 +104,7 @@ pub struct CloudProviderResponse {
 pub struct CloudProvider {
     pub id: String,
     pub name: String,
-    pub api_url: String,
+    pub url: String,
     pub cloud_provider: String,
 }
 
@@ -136,7 +139,7 @@ pub async fn enable_region(
     };
 
     client
-        .patch(format!("{:}/api/region", cloud_provider.api_url).as_str())
+        .patch(format!("{:}/api/region", cloud_provider.url).as_str())
         .authenticate(&valid_profile.frontegg_auth)
         .json(&body)
         .send()
@@ -156,7 +159,7 @@ pub async fn disable_region(
         .max_duration(Duration::from_secs(30))
         .retry_async(|_| async {
             client
-                .delete(format!("{:}/api/region", cloud_provider.api_url).as_str())
+                .delete(format!("{:}/api/region", cloud_provider.url).as_str())
                 .authenticate(&valid_profile.frontegg_auth)
                 .send()
                 .await?
@@ -172,7 +175,7 @@ pub async fn get_region(
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Region, anyhow::Error> {
-    let mut region_api_url = cloud_provider_region.api_url.clone();
+    let mut region_api_url = cloud_provider_region.url.clone();
     region_api_url.push_str("/api/region");
 
     let response = client
@@ -260,5 +263,7 @@ pub async fn get_region_info_by_cloud_provider(
         .await
         .with_context(|| "Retrieving region.")?;
 
-    Ok(region.region_info.with_context(|| "Retrieving region info.")?)
+    region
+        .region_info
+        .with_context(|| "Retrieving region info.")
 }

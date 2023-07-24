@@ -90,7 +90,7 @@ use utils::{ascii_validator, new_client};
 
 use mz::api::{
     disable_region, enable_region, get_cloud_provider, get_region,
-    list_cloud_providers, list_regions, CloudProviderRegion, get_region_info_by_cloud_provider,
+    get_region_info_by_cloud_provider, list_cloud_providers, list_regions, CloudProviderRegion,
 };
 use mz::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use mz::vault::Vault;
@@ -437,10 +437,13 @@ async fn main() -> Result<()> {
 
                 let valid_profile = profile.validate(&profile_name, &client).await?;
 
-                let region =
-                    get_region_info_by_cloud_provider(&client, &valid_profile, &cloud_provider_region)
-                        .await
-                        .with_context(|| "Retrieving cloud provider region.")?;
+                let region = get_region_info_by_cloud_provider(
+                    &client,
+                    &valid_profile,
+                    &cloud_provider_region,
+                )
+                .await
+                .with_context(|| "Retrieving cloud provider region.")?;
                 let health = check_region_health(&valid_profile, &region)?;
 
                 print_region_status(&valid_profile, region, health)

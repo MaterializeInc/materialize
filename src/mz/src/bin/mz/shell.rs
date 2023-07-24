@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{Context, Ok, Result};
-use mz::api::{CloudProviderRegion, RegionInfo, get_region_info_by_cloud_provider};
+use mz::api::{get_region_info_by_cloud_provider, CloudProviderRegion, RegionInfo};
 use mz::configuration::ValidProfile;
 use reqwest::Client;
 

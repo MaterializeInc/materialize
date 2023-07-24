@@ -52,7 +52,10 @@ pub(crate) fn print_region_status(
         "HTTPS address: \t\thttps://{}",
         &region_info.http_address[0..region_info.http_address.len() - 4]
     );
-    println!("SQL connection string: \t{}", region_info.sql_url(valid_profile));
+    println!(
+        "SQL connection string: \t{}",
+        region_info.sql_url(valid_profile)
+    );
 
     Ok(())
 }
