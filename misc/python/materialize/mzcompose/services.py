@@ -774,6 +774,11 @@ class Minio(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+                # Give minio the lowest possible priority,
+                # so that it does not starve out CRDB
+                "blkio_config": {
+                    "weight": 100,
+                },
             },
         )
 
