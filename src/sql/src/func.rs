@@ -3459,6 +3459,17 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_acl_item_contains_privilege" => Scalar {
             params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
         },
+        "mz_aclexplode" => Table {
+            params!(ScalarType::Array(Box::new(ScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::MzAclExplode,
+                        exprs: vec![mz_aclitems],
+                    },
+                    column_names: vec!["grantor".into(), "grantee".into(), "privilege_type".into(), "is_grantable".into()],
+                })
+            }) => ReturnType::set_of(RecordAny), oid::FUNC_MZ_ACL_ITEM_EXPLODE_OID;
+        },
         "mz_aclitem_grantor" => Scalar {
             params!(MzAclItem) => UnaryFunc::MzAclItemGrantor(func::MzAclItemGrantor) => String, oid::FUNC_MZ_ACL_ITEM_GRANTOR_OID;
         },
