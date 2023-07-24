@@ -293,7 +293,7 @@ SELECT aclexplode(ARRAY[makeaclitem(1, 2, 'SELECT, INSERT, DELETE', false), make
 # mz_aclexplode
 
 query T
-SELECT mz_aclexplode(ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'SELECT, INSERT, DELETE'), mz_internal.make_mz_aclitem('u3', 'u4', 'USAGE')])
+SELECT mz_internal.mz_aclexplode(ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'SELECT, INSERT, DELETE'), mz_internal.make_mz_aclitem('u3', 'u4', 'USAGE')])
 ----
 (u4,u3,USAGE,f)
 (u2,u1,DELETE,f)
