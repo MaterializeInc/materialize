@@ -659,7 +659,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub body_format: Format<T>,
     pub include_headers: bool,
-    pub validate_using: Option<Expr<T>>,
+    pub validate_using: Option<CreateWebhookSourceCheck<T>>,
     pub in_cluster: T::ClusterName,
 }
 
@@ -684,15 +684,80 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         }
 
         if let Some(validate) = &self.validate_using {
-            f.write_str(" CHECK ");
-            f.write_str("( ");
+            f.write_str(" ");
             f.write_node(validate);
-            f.write_str(" )");
         }
     }
 }
 
 impl_display_t!(CreateWebhookSourceStatement);
+
+/// `CHECK ( ... )`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceCheck<T: AstInfo> {
+    pub options: Option<CreateWebhookSourceCheckOptions<T>>,
+    pub using: Expr<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceCheck<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CHECK (");
+
+        if let Some(options) = &self.options {
+            f.write_node(options);
+            f.write_str(" ");
+        }
+
+        f.write_node(&self.using);
+        f.write_str(")");
+    }
+}
+
+impl_display_t!(CreateWebhookSourceCheck);
+
+/// `CHECK ( WITH ( ... ) )`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceCheckOptions<T: AstInfo> {
+    pub secrets: Vec<CreateWebhookSourceSecret<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceCheckOptions<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("WITH (");
+
+        f.write_node(&display::comma_separated(&self.secrets[..]));
+
+        f.write_str(")");
+    }
+}
+
+impl_display_t!(CreateWebhookSourceCheckOptions);
+
+/// `SECRET ... [AS ...] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceSecret<T: AstInfo> {
+    pub secret: T::ItemName,
+    pub alias: Option<Ident>,
+    pub use_bytes: bool,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceSecret<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SECRET ");
+        f.write_node(&self.secret);
+
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display_t!(CreateWebhookSourceSecret);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

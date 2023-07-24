@@ -321,16 +321,169 @@ CREATE SOURCE webhook_avro IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT A
 parse-statement
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = 'test' )
 ----
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = 'test' )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (headers['signature'] = 'test')
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: None, using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
 
 parse-statement
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = hmac(sha256, 'body=' || body) )
 ----
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = hmac(sha256, 'body=' || body) )
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (headers['signature'] = hmac(sha256, 'body=' || body))
 =>
-CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: None, using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET test_key )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key,
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key, SECRET other_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: None, use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key as foo,
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key AS foo, SECRET other_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: Some(Ident("foo")), use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key as foo
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+error: Expected right parenthesis, found SECRET
+            SECRET other_key
+            ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key AS bar,
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key AS bar, SECRET other_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: Some(Ident("bar")), use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET bytes_key BYTES )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET bytes_key BYTES) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("bytes_key")])), alias: None, use_bytes: true }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET bytes_key AS bytes )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET bytes_key AS bytes) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("bytes_key")])), alias: Some(Ident("bytes")), use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET bytes_key AS bytes bytes )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET bytes_key AS bytes BYTES) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("bytes_key")])), alias: Some(Ident("bytes")), use_bytes: true }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET secret_key, SECRET other_key AS foo BYTES )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET secret_key, SECRET other_key AS foo BYTES) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("secret_key")])), alias: None, use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: Some(Ident("foo")), use_bytes: true }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key AS bar
+            SECRET other_key,
+        )
+        headers['signature'] = 'test'
+    )
+----
+error: Expected right parenthesis, found SECRET
+            SECRET other_key,
+            ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK ( WITH ( SECRET test_key ) )
+----
+error: Expected an expression, found right parenthesis
+    CHECK ( WITH ( SECRET test_key ) )
+                                     ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK ( WITH ( SECRET test_key, ) )
+----
+error: Expected one of SECRET, found right parenthesis
+    CHECK ( WITH ( SECRET test_key, ) )
+                                    ^
 
 parse-statement
 CREATE SOURCE webhook_no_cluster FROM WEBHOOK BODY FORMAT TEXT
