@@ -1065,9 +1065,7 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
-    Webhook {
-        validate_using: Option<MirScalarExpr>,
-    },
+    Webhook(Option<WebhookValidation>),
 }
 
 #[derive(Clone, Debug)]
@@ -1076,6 +1074,24 @@ pub struct Ingestion {
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WebhookValidation {
+    /// The expression used to validate a request.
+    pub expression: MirScalarExpr,
+    /// Any secrets that are used in that validation.
+    pub secrets: Vec<WebhookValidationSecret>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WebhookValidationSecret {
+    /// Identifies the secret by [`GlobalId`].
+    pub id: GlobalId,
+    /// Column index for the expression context that this secret was originally evaluated in.
+    pub column_idx: usize,
+    /// Whether or not this secret should be provided to the expression as Bytes or a String.
+    pub use_bytes: bool,
 }
 
 #[derive(Clone, Debug)]

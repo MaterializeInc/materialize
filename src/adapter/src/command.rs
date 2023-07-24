@@ -17,15 +17,18 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_expr::EvalError;
+use mz_expr::MirScalarExpr;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{ColumnType, GlobalId, Row, ScalarType};
+use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_secrets::cache::CachingSecretsReader;
+use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, PlanKind};
+use mz_sql::plan::{ExecuteTimeout, PlanKind, WebhookValidationSecret};
 use mz_sql::session::vars::Var;
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{oneshot, watch};
@@ -280,18 +283,148 @@ impl IntoIterator for GetVariablesResponse {
     }
 }
 
-/// Type of closure that is called to validate a webhook request.
-pub type AppendWebhookValidation = Box<
-    dyn FnOnce(mz_repr::Datum, mz_repr::Datum) -> Result<bool, EvalError>
-        + Send
-        + std::panic::UnwindSafe,
->;
+/// Errors returns when running validation of a webhook request.
+#[derive(thiserror::Error, Debug)]
+pub enum AppendWebhookError {
+    // A secret that we need for validation has gone missing.
+    #[error("could not read a required secret")]
+    MissingSecret,
+    // Note: we should _NEVER_ add more detail to this error, including the actual error we got
+    // when running validation. This is because the error messages might contain info about the
+    // arguments provided to the validation expression, we could contains user SECRETs. So by
+    // including any more detail we might accidentally expose SECRETs.
+    #[error("validation failed")]
+    ValidationError,
+    // Note: we should _NEVER_ add more detail to this error, see above as to why.
+    #[error("internal error when validating request")]
+    InternalError,
+}
+
+/// Contains all of the components necessary for running webhook validation.
+///
+/// To actually validate a webhook request call [`AppendWebhookValidator::eval`].
+pub struct AppendWebhookValidator {
+    expr: MirScalarExpr,
+    secrets: Vec<WebhookValidationSecret>,
+    secrets_reader: CachingSecretsReader,
+}
+
+impl AppendWebhookValidator {
+    pub fn new(
+        expr: MirScalarExpr,
+        secrets: Vec<WebhookValidationSecret>,
+        secrets_reader: CachingSecretsReader,
+    ) -> Self {
+        AppendWebhookValidator {
+            expr,
+            secrets,
+            secrets_reader,
+        }
+    }
+
+    pub async fn eval(
+        self,
+        body: bytes::Bytes,
+        headers: Arc<BTreeMap<String, String>>,
+    ) -> Result<bool, AppendWebhookError> {
+        let AppendWebhookValidator {
+            expr,
+            secrets,
+            secrets_reader,
+        } = self;
+
+        // Use the secrets reader to get any secrets.
+        let mut secret_contents = BTreeMap::new();
+        for WebhookValidationSecret {
+            id,
+            column_idx,
+            use_bytes,
+        } in secrets
+        {
+            let secret = secrets_reader
+                .read(id)
+                .await
+                .map_err(|_| AppendWebhookError::MissingSecret)?;
+            secret_contents.insert(column_idx, (secret, use_bytes));
+        }
+
+        // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
+        // work.
+        let validate = move || {
+            // Use a RowPacker to form a Datum::Map.
+            let mut row = Row::with_capacity(1);
+            let mut packer = row.packer();
+            packer.push_dict(
+                headers
+                    .iter()
+                    .map(|(name, val)| (name.as_str(), Datum::String(val))),
+            );
+            let headers = row.unpack_first();
+            let body = Datum::Bytes(&body[..]);
+
+            // Gather our Datums for evaluation
+            //
+            // TODO(parkmycar): Re-use the RowArena when we implement rate limiting.
+            let temp_storage = RowArena::default();
+            let mut datums = Vec::with_capacity(2 + secret_contents.len());
+
+            datums.push(body);
+            datums.push(headers);
+
+            // Append all of our secrets to our datums, in the correct column order.
+            for column_idx in datums.len()..datums.len() + secret_contents.len() {
+                // Get the secret that corresponds with what is the next "column";
+                let (secret, use_bytes) = secret_contents
+                    .get(&column_idx)
+                    .expect("more secrets to provide, but none for the next column");
+
+                if *use_bytes {
+                    datums.push(Datum::Bytes(secret));
+                } else {
+                    let secret_str = std::str::from_utf8(&secret[..]).expect("valid UTF-8");
+                    datums.push(Datum::String(secret_str));
+                }
+            }
+
+            // Run our validation
+            let valid = expr
+                .eval(&datums[..], &temp_storage)
+                .map_err(|_| AppendWebhookError::ValidationError)?;
+            match valid {
+                Datum::True => Ok::<_, AppendWebhookError>(true),
+                Datum::False | Datum::Null => Ok(false),
+                _ => unreachable!("Creating a webhook source asserts we return a boolean"),
+            }
+        };
+
+        // Then run the validation itself.
+        let valid = mz_ore::task::spawn_blocking(
+            || "webhook-validator-expr",
+            move || {
+                // Since the validation expression is technically a user defined function, we want to
+                // be extra careful and guard against issues taking down the entire process.
+                mz_ore::panic::catch_unwind(validate).map_err(|_| {
+                    tracing::error!("panic while validating webhook request!");
+                    AppendWebhookError::InternalError
+                })
+            },
+        )
+        .await
+        .context("joining on validation")
+        .map_err(|e| {
+            tracing::error!("Failed to run validation for webhook, {e}");
+            AppendWebhookError::InternalError
+        })??;
+
+        valid
+    }
+}
 
 pub struct AppendWebhookResponse {
     pub tx: MonotonicAppender,
     pub body_ty: ColumnType,
     pub header_ty: Option<ColumnType>,
-    pub validate_expr: Option<AppendWebhookValidation>,
+    pub validator: Option<AppendWebhookValidator>,
 }
 
 impl fmt::Debug for AppendWebhookResponse {
