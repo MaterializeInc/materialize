@@ -141,6 +141,8 @@ where
         Ok(())
     }
 
+    /// Provided a closure, will migrate a [`TypedCollection`] of types `K` and `V` to
+    /// [`WireCompatible`] types `K2` and `V2`.
     pub(crate) async fn migrate_compat<K2, V2>(
         &self,
         tx: &mut Transaction<'_>,
@@ -172,33 +174,20 @@ where
             },
         };
 
-        // Note: this method exists, instead of using `StashCollection::append_to_batch` so we can
-        // append types other than K or V.
-        fn append_to_batch<A, B>(batch: &mut AppendBatch, k: &A, v: &B, diff: i64)
-        where
-            A: ::prost::Message,
-            B: ::prost::Message,
-        {
-            let key = k.encode_to_vec();
-            let val = v.encode_to_vec();
-
-            batch.entries.push(((key, val), batch.timestamp, diff));
-        }
-
         // Call the provided closure, generating a list of update actions.
         for op in f(&current) {
             match op {
                 MigrationAction::Delete(old_key) => {
                     let old_value = current.get(&old_key).expect("key to exist");
-                    append_to_batch(&mut batch, &old_key, old_value, -1);
+                    collection.append_to_batch(&mut batch, &old_key, old_value, -1);
                 }
                 MigrationAction::Insert(key, value) => {
-                    append_to_batch(&mut batch, &key, &value, 1);
+                    collection.append_to_batch(&mut batch, &key, &value, 1);
                 }
                 MigrationAction::Update(old_key, (new_key, new_value)) => {
                     let old_value = current.get(&old_key).expect("key to exist");
-                    append_to_batch(&mut batch, &old_key, old_value, -1);
-                    append_to_batch(&mut batch, &new_key, &new_value, 1);
+                    collection.append_to_batch(&mut batch, &old_key, old_value, -1);
+                    collection.append_to_batch(&mut batch, &new_key, &new_value, 1);
                 }
             }
         }

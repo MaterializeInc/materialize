@@ -182,12 +182,12 @@ impl From<String> for proto::StringWrapper {
 pub unsafe trait WireCompatible<T> {}
 
 /// Defines one protobuf type as wire compatible with another.
-/// 
+///
 /// ```text
 /// wire_compatible!(objects_v28::DatabaseKey with objects_v27::DatabaseKey);
 /// ```
-/// 
-/// Internally this will implement the `WireCompatible<B> for <A>`, e.g. 
+///
+/// Internally this will implement the `WireCompatible<B> for <A>`, e.g.
 /// `WireCompatible<objects_v27::DatabaseKey> for objects_v28::DatabaseKey` and generate `proptest`
 /// cases that will create arbitrary objects of type `B` and assert they can be deserialized with
 /// type `A`, and vice versa.
