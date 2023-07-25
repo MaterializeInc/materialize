@@ -91,8 +91,6 @@ REVOKE CREATEDB ON SYSTEM FROM joe;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of affected objects.

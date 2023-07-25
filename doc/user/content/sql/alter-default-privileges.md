@@ -80,8 +80,6 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Superuser user status.

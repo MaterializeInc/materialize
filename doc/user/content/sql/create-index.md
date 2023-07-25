@@ -163,8 +163,6 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of `obj_name`.

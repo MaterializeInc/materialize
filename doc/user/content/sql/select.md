@@ -242,8 +242,6 @@ knowledge.
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schemas that all relations in the query are contained in.

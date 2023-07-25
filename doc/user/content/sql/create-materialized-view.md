@@ -88,8 +88,6 @@ non-indexed, and so on."
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of existing `view_name` if `OR REPLACE` is specified.

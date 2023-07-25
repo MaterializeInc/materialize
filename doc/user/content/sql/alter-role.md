@@ -52,8 +52,6 @@ rj  true
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATEROLE` privileges on the system.

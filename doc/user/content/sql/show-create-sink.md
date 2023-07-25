@@ -40,8 +40,6 @@ SHOW CREATE SINK my_view_sink;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schema containing the sink.

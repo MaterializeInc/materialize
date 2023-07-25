@@ -57,8 +57,6 @@ SELECT name FROM mz_roles;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATEROLE` privileges on the system.

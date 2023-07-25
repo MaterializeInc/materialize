@@ -64,8 +64,6 @@ SHOW COLUMNS FROM my_source;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schema containing `item_ref`.
