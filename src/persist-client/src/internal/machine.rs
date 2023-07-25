@@ -249,13 +249,14 @@ where
                 .await;
             match res {
                 Ok(x) => return Ok(x),
-                Err(_current_upper) => {
+                Err((seqno, _current_upper)) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
                     // method has found out that it advanced via some some
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
+                    self.applier.fetch_and_update_state(Some(seqno)).await;
                     let current_upper = self.applier.clone_upper();
 
                     // We tried to to a compare_and_append with the wrong
@@ -281,7 +282,7 @@ where
         // making it a parameter allows us to simulate hitting an indeterminate
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
         let metrics = Arc::clone(&self.applier.metrics);
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
         // tricky (more discussion of this in #12797):
@@ -459,14 +460,14 @@ where
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.
-                        return Err(Upper(shard_upper));
+                        return Err((seqno, Upper(shard_upper)));
                     }
                     if indeterminate.is_none() {
                         // No way this could have committed in some previous
                         // attempt of this loop: we never saw an indeterminate
                         // error (thus there was no previous iteration of the
                         // loop).
-                        return Err(Upper(shard_upper));
+                        return Err((seqno, Upper(shard_upper)));
                     }
                     // This is the bad case. We can't distinguish if some
                     // previous attempt that got an Indeterminate error
@@ -1833,7 +1834,7 @@ pub mod datadriven {
             .machine
             .compare_and_append_idempotent(&batch, &writer_id, now, &token, indeterminate)
             .await
-            .map_err(|err| anyhow!("{:?}", err))?
+            .map_err(|(_seqno, upper)| anyhow!("{:?}", upper))?
             .expect("invalid usage");
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
@@ -1891,6 +1892,7 @@ pub mod datadriven {
 pub mod tests {
     use std::sync::Arc;
 
+    use crate::cache::StateCache;
     use mz_ore::cast::CastFrom;
     use mz_ore::task::spawn;
     use mz_persist::intercept::{InterceptBlob, InterceptHandle};
@@ -2001,5 +2003,40 @@ pub mod tests {
             new_seqno_since,
         };
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
+    }
+
+    // A regression test for #20776, where a bug meant that compare_and_append
+    // would not fetch the latest state after an upper mismatch. This meant that
+    // a write that could succeed if retried on the latest state would instead
+    // return an UpperMismatch.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
+    async fn regression_update_state_after_upper_mismatch() {
+        let client = new_test_client().await;
+        let mut client2 = client.clone();
+
+        // The bug can only happen if the two WriteHandles have separate copies
+        // of state, so make sure that each is given its own StateCache.
+        let new_state_cache = Arc::new(StateCache::new_no_metrics());
+        client2.shared_states = new_state_cache;
+
+        let shard_id = ShardId::new();
+        let (mut write1, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        let (mut write2, _) = client2.expect_open::<String, (), u64, i64>(shard_id).await;
+
+        let data = vec![
+            (("1".to_owned(), ()), 1, 1),
+            (("2".to_owned(), ()), 2, 1),
+            (("3".to_owned(), ()), 3, 1),
+            (("4".to_owned(), ()), 4, 1),
+            (("5".to_owned(), ()), 5, 1),
+        ];
+
+        write1.expect_compare_and_append(&data[..1], 0, 2).await;
+        // quick check: each handle should have its own copy of state
+        assert!(write1.machine.seqno() > write2.machine.seqno());
+        // this handle's upper now lags behind. if compare_and_append fails to update
+        // state after an upper mismatch then this call would (incorrectly) fail
+        write2.expect_compare_and_append(&data[1..2], 2, 3).await;
     }
 }
