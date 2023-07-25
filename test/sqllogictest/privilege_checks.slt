@@ -365,6 +365,11 @@ CREATE SECRET webhook_key AS 'shared_key';
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 REVOKE USAGE ON SECRET webhook_key FROM joe;
 ----
 COMPLETE 0
@@ -426,6 +431,11 @@ CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
     WITH ( SECRET webhook_key BYTES )
     body = webhook_key
   )
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
