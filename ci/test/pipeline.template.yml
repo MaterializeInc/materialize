@@ -40,6 +40,16 @@ steps:
       queue: builder-linux-aarch64
     coverage: skip
 
+  - id: build-wasm
+    label: Build WASM
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
+    inputs:
+      - "*"
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+    coverage: skip
+
   - id: check-merge-with-target
     label: Merge skew cargo check
     command: ci/test/check-merge-with-target.sh

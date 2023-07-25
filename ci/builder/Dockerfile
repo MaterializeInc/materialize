@@ -97,6 +97,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     lld \
     llvm \
     make \
+    npm \
     openssh-client \
     pkg-config \
     postgresql-client-14 \
