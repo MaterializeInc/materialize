@@ -938,6 +938,9 @@ class ServiceConfig(TypedDict, total=False):
     restart: str
     """Restart policy."""
 
+    blkio_config: Dict[str, Any]
+    """Overide the default I/O priority for the container"""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.

@@ -561,6 +561,11 @@ class Cockroach(Service):
                 "init": True,
                 "healthcheck": healthcheck,
                 "restart": restart,
+                # Give CRDB the highest possible priority
+                # in order to avoid FATAL: disk stall detected: unable to sync log files within 20s
+                "blkio_config": {
+                    "weight": 10000,
+                },
             },
         )
 
