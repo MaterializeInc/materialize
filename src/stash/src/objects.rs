@@ -211,18 +211,24 @@ macro_rules! wire_compatible {
                 #[cfg_attr(miri, ignore)] // slow
                 fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
                     use ::prost::Message;
-                    let bytes = a.encode_to_vec();
-                    let decoded = $b $(::$b_sub)*::decode(&bytes[..]);
+                    let a_bytes = a.encode_to_vec();
+                    let decoded = $b $(::$b_sub)*::decode(&a_bytes[..]);
                     ::proptest::prelude::prop_assert!(decoded.is_ok());
+
+                    let b_bytes = decoded.expect("asserted Ok").encode_to_vec();
+                    ::proptest::prelude::prop_assert_eq!(a_bytes, b_bytes, "a and b serialize differently");
                 }
 
                 #[mz_ore::test]
                 #[cfg_attr(miri, ignore)] // slow
                 fn [<proptest_wire_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
                     use ::prost::Message;
-                    let bytes = b.encode_to_vec();
-                    let decoded = $a $(::$a_sub)*::decode(&bytes[..]);
+                    let b_bytes = b.encode_to_vec();
+                    let decoded = $a $(::$a_sub)*::decode(&b_bytes[..]);
                     ::proptest::prelude::prop_assert!(decoded.is_ok());
+
+                    let a_bytes = decoded.expect("asserted Ok").encode_to_vec();
+                    ::proptest::prelude::prop_assert_eq!(a_bytes, b_bytes, "a and b serialize differently");
                 }
             }
         }
