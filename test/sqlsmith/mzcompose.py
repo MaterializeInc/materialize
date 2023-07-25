@@ -151,6 +151,7 @@ known_errors = [
     '" does not exist',  # role does not exist
     "csv_extract number of columns too large",
     "coalesce types text and oid cannot be matched",  # with ACL-related functions
+    "coalesce types oid and text cannot be matched",  # with ACL-related functions
 ]
 
 
