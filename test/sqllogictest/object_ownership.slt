@@ -2559,7 +2559,7 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
 ----
-db error: ERROR: cannot drop cluster "c" without CASCADE while it contains active objects
+db error: ERROR: cannot drop cluster "c" without CASCADE: still depended upon by non-owned catalog items "materialize.public.mv"
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize CASCADE;
