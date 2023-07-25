@@ -73,7 +73,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -145,6 +145,28 @@ impl AwsSecretsController {
     fn id_from_secret_name(&self, name: &str) -> Option<GlobalId> {
         name.strip_prefix(&self.secret_name_prefix)
             .and_then(|id| id.parse().ok())
+    }
+
+    // TODO [Alex Hunt] Remove after all customers have been migrated.
+    pub async fn migrate_from<C>(&self, other_secrets_controller: &C) -> Result<(), anyhow::Error>
+    where
+        C: SecretsController,
+    {
+        let other_secrets: BTreeSet<GlobalId> =
+            other_secrets_controller.list().await?.into_iter().collect();
+
+        let aws_secrets: BTreeSet<GlobalId> = self.list().await?.into_iter().collect();
+
+        let other_secrets_reader = other_secrets_controller.reader();
+        let secrets_to_migrate = other_secrets.difference(&aws_secrets);
+        for secret in secrets_to_migrate {
+            let data = other_secrets_reader.read(secret.to_owned()).await?;
+            self.ensure(secret.to_owned(), &data).await?;
+        }
+        for secret in other_secrets {
+            other_secrets_controller.delete(secret).await?;
+        }
+        Ok(())
     }
 }
 
