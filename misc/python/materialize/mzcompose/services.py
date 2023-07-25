@@ -59,6 +59,12 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
 }
 
+DEFAULT_CRDB_ENVIRONMENT = [
+    "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=60s",
+    "COCKROACH_LOG_MAX_SYNC_DURATION=60s",
+]
+
+
 # TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
 DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
 
@@ -115,6 +121,7 @@ class Materialized(Service):
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
             *environment_extra,
+            *DEFAULT_CRDB_ENVIRONMENT,
         ]
 
         if system_parameter_defaults is None:
@@ -561,6 +568,7 @@ class Cockroach(Service):
                 "init": True,
                 "healthcheck": healthcheck,
                 "restart": restart,
+                "environment": DEFAULT_CRDB_ENVIRONMENT,
             },
         )
 
