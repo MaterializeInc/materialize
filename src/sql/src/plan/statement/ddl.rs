@@ -4024,14 +4024,19 @@ pub fn plan_drop_owned(
 
     // Replicas
     for replica in scx.catalog.get_cluster_replicas() {
-        if role_ids.contains(&replica.owner_id()) {
+        let cluster = scx.catalog.get_cluster(replica.cluster_id());
+        // We skip over linked cluster replicas because they will be added later when collecting
+        // the dependencies of the linked object.
+        if cluster.linked_object_id().is_none() && role_ids.contains(&replica.owner_id()) {
             drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
         }
     }
 
     // Clusters
     for cluster in scx.catalog.get_clusters() {
-        if role_ids.contains(&cluster.owner_id()) {
+        // We skip over linked clusters because they will be added later when collecting
+        // the dependencies of the linked object.
+        if cluster.linked_object_id().is_none() && role_ids.contains(&cluster.owner_id()) {
             // Note: CASCADE is not required for replicas.
             if !cascade {
                 let non_owned_bound_objects: Vec<_> = cluster
