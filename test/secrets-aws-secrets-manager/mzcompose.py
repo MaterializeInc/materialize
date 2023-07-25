@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any
+from typing import Any, Dict, cast
 
 import boto3
 
@@ -157,7 +157,7 @@ def workflow_default(c: Composition) -> None:
         ],
     )
 
-    def list_secrets() -> dict[str, dict[str, Any]]:
+    def list_secrets() -> Dict[str, Dict[str, Any]]:
         return {
             secret["Name"]: secret for secret in sm_client.list_secrets()["SecretList"]
         }
@@ -166,7 +166,10 @@ def workflow_default(c: Composition) -> None:
         return f"/user-managed/{DEFAULT_MZ_ENVIRONMENT_ID}/{_id}"
 
     def get_secret_value(_id: str) -> bytes:
-        return sm_client.get_secret_value(SecretId=secret_name(_id))["SecretBinary"]
+        return cast(
+            bytes,
+            sm_client.get_secret_value(SecretId=secret_name(_id))["SecretBinary"],
+        )
 
     c.up("materialized")
     # Old secrets should not exist on disk.
@@ -212,7 +215,7 @@ def workflow_default(c: Composition) -> None:
     c.sql("DROP SECRET renamed_secret")
     # Check that the file has been deleted from Secrets Manager
     secrets = list_secrets()
-    assert secret_name not in secrets
+    assert secret_name("u3") not in secrets
 
     # Ensure that migration code does not prevent a second restart
     c.stop("materialized")
