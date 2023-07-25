@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -101,6 +103,14 @@ pub fn tracing_config(config: &SystemVars) -> TracingParameters {
     TracingParameters {
         log_filter: Some(config.logging_filter()),
         opentelemetry_filter: Some(config.opentelemetry_filter()),
+    }
+}
+
+pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
+    let ttl_secs = config.webhooks_secrets_caching_ttl_secs();
+    mz_secrets::CachingPolicy {
+        enabled: ttl_secs > 0,
+        ttl: Duration::from_secs(u64::cast_from(ttl_secs)),
     }
 }
 

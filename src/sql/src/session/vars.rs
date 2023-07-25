@@ -760,6 +760,17 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
     internal: true,
 });
 
+static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
+    usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
+});
+
+static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
+    value: &DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS,
+    description: "Sets the time-to-live for values in the Webhooks secrets cache.",
+    internal: true,
+});
+
 static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
 static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
@@ -1882,7 +1893,8 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
-            .with_var(&OPENTELEMETRY_FILTER);
+            .with_var(&OPENTELEMETRY_FILTER)
+            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS);
         vars.refresh_internal_state();
         vars
     }
@@ -2417,6 +2429,10 @@ impl SystemVars {
 
     pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
         self.expect_value(&*OPENTELEMETRY_FILTER).clone()
+    }
+
+    pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
+        *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 }
 
@@ -3785,6 +3801,11 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
+}
+
+/// Returns whether the named variable is a caching configuration parameter.
+pub fn is_secrets_caching_var(name: &str) -> bool {
+    name == WEBHOOKS_SECRETS_CACHING_TTL_SECS.name()
 }
 
 fn is_upsert_rocksdb_config_var(name: &str) -> bool {
