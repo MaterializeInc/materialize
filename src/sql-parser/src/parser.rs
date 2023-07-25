@@ -4256,7 +4256,11 @@ impl<'a> Parser<'a> {
                         .parse_comma_separated(Parser::parse_item_name)
                         .map_parser_err(StatementKind::AlterSource)?;
 
-                    let cascade = self.parse_keyword(CASCADE);
+                    let cascade = matches!(
+                        self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "ALTER SOURCE...DROP")
+                            .map_parser_err(StatementKind::AlterSource)?,
+                        Some(CASCADE),
+                    );
 
                     Statement::AlterSource(AlterSourceStatement {
                         source_name,
