@@ -253,12 +253,8 @@ impl PostgresConsensus {
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
         client
             .batch_execute(&format!(
-                "{} {} {}",
-                SCHEMA,
-                "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
-                // This is in SCHEMA, which sets it for new tables, but we also
-                // need to set it for existing envs.
-                "ALTER TABLE consensus SET (sql_stats_automatic_collection_enabled = false);"
+                "{} {}",
+                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
             ))
             .await?;
 
