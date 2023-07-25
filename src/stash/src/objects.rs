@@ -242,7 +242,7 @@ mod test {
     use std::fs;
     use std::io::{BufRead, BufReader};
 
-    use crate::STASH_VERSION;
+    use crate::{MIN_STASH_VERSION, STASH_VERSION};
 
     // Note: Feel free to update this path if the protos move.
     const PROTO_DIRECTORY: &str = "protos";
@@ -261,10 +261,7 @@ mod test {
         assert!(filenames.remove("objects.proto"));
 
         // Assert snapshots exist for all of the versions we support.
-        //
-        // TODO(parkmycar): Change `15` to be MIN_STASH_VERSION, once we delete all of the JSON
-        // migration code.
-        for version in 15..=STASH_VERSION {
+        for version in MIN_STASH_VERSION..=STASH_VERSION {
             let filename = format!("objects_v{version}.proto");
             assert!(
                 filenames.remove(&filename),
