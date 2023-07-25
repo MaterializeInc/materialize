@@ -4034,7 +4034,7 @@ pub fn plan_drop_owned(
 
     // Clusters
     for cluster in scx.catalog.get_clusters() {
-        // We skip over linked cluster because they will be added later when collecting
+        // We skip over linked clusters because they will be added later when collecting
         // the dependencies of the linked object.
         if cluster.linked_object_id().is_none() && role_ids.contains(&cluster.owner_id()) {
             if !cascade && !cluster.bound_objects().is_empty() {
