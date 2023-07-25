@@ -110,7 +110,7 @@ impl HttpServer {
             tls,
             frontegg,
             adapter_client,
-            allowed_origin,
+            allowed_origin: _,
             active_connection_count,
             metrics,
         }: HttpConfig,
@@ -143,7 +143,8 @@ impl HttpServer {
                     HeaderName::from_static("x-materialize-version"),
                 ])
                 .allow_methods(Any)
-                .allow_origin(allowed_origin)
+                // .allow_origin(allowed_origin)
+                .allow_origin(tower_http::cors::AllowOrigin::any())
                 .expose_headers(Any)
                 .max_age(Duration::from_secs(60) * 60),
         );
