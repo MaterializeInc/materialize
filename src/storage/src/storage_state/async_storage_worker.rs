@@ -241,7 +241,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 .await
                                 .expect("error creating persist client");
 
-                            let write_handle = client
+                            let mut write_handle = client
                                 .open_writer::<SourceData, (), T, Diff>(
                                     *data_shard,
                                     Arc::new(relation_desc.clone()),
@@ -253,7 +253,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 )
                                 .await
                                 .unwrap();
-                            resume_uppers.insert(*id, write_handle.upper().clone());
+                            let upper = write_handle.fetch_recent_upper().await;
+                            resume_uppers.insert(*id, upper.clone());
                             write_handle.expire().await;
 
                             // TODO(petrosagg): The as_of of the ingestion should normally be based
