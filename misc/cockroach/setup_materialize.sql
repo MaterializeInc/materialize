@@ -13,6 +13,9 @@
 -- See: https://github.com/MaterializeInc/materialize/issues/16726
 SET CLUSTER SETTING sql.stats.forecasts.enabled = false;
 
+SET CLUSTER SETTING timeseries.storage.resolution_10s.ttl='72h';
+SET CLUSTER SETTING timeseries.storage.resolution_30m.ttl='720h';
+
 CREATE SCHEMA IF NOT EXISTS consensus;
 CREATE SCHEMA IF NOT EXISTS adapter;
 CREATE SCHEMA IF NOT EXISTS storage;
