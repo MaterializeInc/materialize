@@ -207,7 +207,8 @@ macro_rules! wire_compatible {
 
         ::paste::paste! {
             ::proptest::proptest! {
-                #[test]
+                #[mz_ore::test]
+                #[cfg_attr(miri, ignore)] // slow
                 fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
                     use ::prost::Message;
                     let bytes = a.encode_to_vec();
@@ -215,7 +216,8 @@ macro_rules! wire_compatible {
                     ::proptest::prelude::prop_assert!(decoded.is_ok());
                 }
 
-                #[test]
+                #[mz_ore::test]
+                #[cfg_attr(miri, ignore)] // slow
                 fn [<proptest_wire_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
                     use ::prost::Message;
                     let bytes = b.encode_to_vec();
