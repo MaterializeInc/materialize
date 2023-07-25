@@ -113,13 +113,15 @@ statement ok
 CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     CHECK (
-        decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || '.' || convert_from(body, 'utf-8'), 'key', 'sha256')
+        WITH (HEADERS, BODY)
+        decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || '.' || body, 'key', 'sha256')
     )
 
 statement ok
 CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
+    WITH (HEADERS, BODY BYTES)
     decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
       split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || convert_from(body, 'utf-8'),
       'test_key',
@@ -131,6 +133,7 @@ statement error column "field_that_does_not_exist" does not exist
 CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT TEXT
     CHECK (
+        WITH (HEADERS)
         decode(headers->'signature', 'base64') = hmac(field_that_does_not_exist, 'key', 'sha256')
     )
 
@@ -147,22 +150,34 @@ CREATE SOURCE webhook_json_with_validation IN CLUSTER webhook_cluster FROM WEBHO
 statement error CHECK does not allow subqueries
 CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  CHECK ( headers->'signature' IN (select * from mz_tables) )
+  CHECK (
+    WITH (HEADERS)
+    headers->'signature' IN (select * from mz_tables)
+  )
 
 statement error expression provided in CHECK is not deterministic
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  CHECK ( headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS') )
+  CHECK (
+    WITH (HEADERS)
+    headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS')
+  )
 
 statement error expression provided in CHECK is not deterministic
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  CHECK ( headers->'signature' = mz_now()::text )
+  CHECK (
+    WITH (HEADERS)
+    headers->'signature' = mz_now()::text
+  )
 
 statement error expression provided in CHECK is not deterministic
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  CHECK ( headers->'signature' = current_timestamp()::text )
+  CHECK (
+    WITH (HEADERS)
+    headers->'signature' = current_timestamp()::text
+  )
 
 statement error unknown cluster 'i_do_not_exist'
 CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBHOOK
@@ -181,7 +196,7 @@ statement ok
 CREATE SOURCE webhook_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
-    WITH ( SECRET webhook_shared_secret )
+    WITH ( HEADERS, SECRET webhook_shared_secret )
     headers->'signature' = webhook_shared_secret
   )
 
@@ -189,9 +204,9 @@ statement ok
 CREATE SOURCE webhook_buildkite2 IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
-    WITH ( SECRET webhook_shared_secret )
+    WITH ( HEADERS, BODY, SECRET webhook_shared_secret )
     decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
-      split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || convert_from(body, 'utf-8'),
+      split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || body,
       webhook_shared_secret,
       'sha256'
     )
@@ -205,6 +220,7 @@ CREATE SOURCE webhook_with_two_secrets IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (
+      HEADERS, BODY BYTES,
       SECRET webhook_shared_secret AS key,
       SECRET other_secret BYTES
     )
@@ -216,8 +232,9 @@ CREATE SOURCE webhook_with_unknown_second_secret IN CLUSTER webhook_cluster FROM
   BODY FORMAT BYTES
   CHECK (
     WITH (
+      HEADERS, BODY,
       SECRET webhook_shared_secret AS key,
-      SECRET non_existent_secret BYTES
+      SECRET non_existent_secret
     )
     headers->'signature' = key AND body = non_existent_secret
   )
@@ -227,10 +244,48 @@ CREATE SOURCE webhook_with_duplicate_secret_names IN CLUSTER webhook_cluster FRO
   BODY FORMAT BYTES
   CHECK (
     WITH (
+      HEADERS, BODY,
       SECRET webhook_shared_secret AS other_secret,
-      SECRET other_secret BYTES
+      SECRET other_secret
     )
     headers->'signature' = other_secret AND body = other_secret
+  )
+
+statement ok
+CREATE SOURCE webhook_with_headers_and_body_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (
+      HEADERS AS h1 BYTES,
+      HEADERS,
+      BODY AS b1,
+      BODY BYTES
+    )
+    headers->'signature' = convert_from(h1->'signature', 'utf-8') AND b1 = convert_from(body, 'utf-8')
+  )
+
+statement error column reference "headers" is ambiguous
+CREATE SOURCE webhook_with_headers_duplicates IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (HEADERS, HEADERS)
+    HEADERS->'signature' = '42'
+  )
+
+statement error column reference "body" is ambiguous
+CREATE SOURCE webhook_with_body_duplicates IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (BODY, BODY)
+    length(body) > 0
+  )
+
+statement error column reference "x" is ambiguous
+CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (HEADERS as x, BODY as x)
+    length(x) > 0
   )
 
 # Try creating a webhook source in a compute cluster.
