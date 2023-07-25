@@ -2265,6 +2265,130 @@ DROP TABLE t
 ----
 COMPLETE 0
 
+# Test that linked clusters, linked replicas, and subsources are consistent with their linked
+# object and primary source
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1')
+
+query TT
+SELECT mz_sources.name, mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_sources.name
+----
+accounts       materialize
+auctions       materialize
+bids           materialize
+organizations  materialize
+s              materialize
+s_progress     materialize
+users          materialize
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'materialize_public_s'
+----
+materialize_public_s  materialize
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
+----
+linked  materialize
+
+statement error cannot modify linked cluster "materialize_public_s"
+ALTER CLUSTER materialize_public_s OWNER TO joe
+
+statement error cannot modify linked cluster "materialize_public_s"
+ALTER CLUSTER REPLICA materialize_public_s.linked OWNER TO joe
+
+statement error cannot ALTER this type of source
+ALTER SOURCE accounts OWNER TO joe
+
+statement error cannot ALTER this type of source
+ALTER SOURCE s_progress OWNER TO joe
+
+query TT
+SELECT mz_sources.name, mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_sources.name
+----
+accounts       materialize
+auctions       materialize
+bids           materialize
+organizations  materialize
+s              materialize
+s_progress     materialize
+users          materialize
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'materialize_public_s'
+----
+materialize_public_s  materialize
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
+----
+linked  materialize
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE s OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT mz_sources.name, mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_sources.name
+----
+accounts       joe
+auctions       joe
+bids           joe
+organizations  joe
+s              joe
+s_progress     joe
+users          joe
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'materialize_public_s'
+----
+materialize_public_s  joe
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
+----
+linked  joe
+
+simple conn=mz_system,user=mz_system
+DROP SOURCE s
+----
+COMPLETE 0
+
 # Test DROP OWNED
 
 simple conn=mz_system,user=mz_system

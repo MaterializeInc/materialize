@@ -5029,7 +5029,7 @@ pub(crate) fn resolve_item<'a>(
 }
 
 /// Returns an error if the given cluster is a linked cluster
-fn ensure_cluster_is_not_linked(
+pub(crate) fn ensure_cluster_is_not_linked(
     scx: &StatementContext,
     cluster_id: ClusterId,
 ) -> Result<(), PlanError> {

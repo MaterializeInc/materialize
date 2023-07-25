@@ -8731,6 +8731,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
+    fn is_subsource(&self) -> bool {
+        self.is_subsource()
+    }
+
     fn subsources(&self) -> BTreeSet<GlobalId> {
         self.subsources()
     }

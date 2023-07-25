@@ -590,7 +590,10 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
-    /// If this catalog item is a source, it return the IDs of its subsources
+    /// Reports whether this catalog item is a subsource.
+    fn is_subsource(&self) -> bool;
+
+    /// If this catalog item is a source, it return the IDs of its subsources.
     fn subsources(&self) -> BTreeSet<GlobalId>;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
