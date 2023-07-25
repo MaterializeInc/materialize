@@ -64,6 +64,7 @@ The privileges required to execute this statement are:
 - `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
 - `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
 - `USAGE` privileges on all connections and secrets used in the sink definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
 
 ## Related pages
 

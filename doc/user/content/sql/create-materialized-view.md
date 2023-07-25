@@ -94,6 +94,7 @@ The privileges required to execute this statement are:
 - `CREATE` privileges on the containing schema.
 - `CREATE` privileges on the containing cluster.
 - `USAGE` privileges on all types used in the materialized view definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 
