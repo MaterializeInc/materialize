@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from typing import Any
+
 import boto3
 
 from materialize.mzcompose import Composition
@@ -155,15 +157,15 @@ def workflow_default(c: Composition) -> None:
         ],
     )
 
-    def list_secrets():
+    def list_secrets() -> dict[str, dict[str, Any]]:
         return {
             secret["Name"]: secret for secret in sm_client.list_secrets()["SecretList"]
         }
 
-    def secret_name(_id: str):
+    def secret_name(_id: str) -> str:
         return f"/user-managed/{DEFAULT_MZ_ENVIRONMENT_ID}/{_id}"
 
-    def get_secret_value(_id: str):
+    def get_secret_value(_id: str) -> bytes:
         return sm_client.get_secret_value(SecretId=secret_name(_id))["SecretBinary"]
 
     c.up("materialized")
@@ -212,4 +214,6 @@ def workflow_default(c: Composition) -> None:
     secrets = list_secrets()
     assert secret_name not in secrets
 
+    # Ensure that migration code does not prevent a second restart
     c.stop("materialized")
+    c.up("materialized")
