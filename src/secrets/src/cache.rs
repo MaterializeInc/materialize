@@ -44,10 +44,7 @@ impl CachingParameters {
     }
 
     fn set_ttl(&self, ttl: Duration) -> Duration {
-        // Maintain a minimum TTL of 1 second just incase someone provides a Duration that is
-        // sub-second.
-        let secs = std::cmp::max(ttl.as_secs(), 1);
-        let prev = self.ttl_secs.swap(secs, Ordering::Relaxed);
+        let prev = self.ttl_secs.swap(ttl.as_secs(), Ordering::Relaxed);
         Duration::from_secs(prev)
     }
 }

@@ -108,7 +108,7 @@ impl Coordinator {
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
-        let mut update_caching_config = false;
+        let mut update_secrets_caching_config = false;
 
         for op in &ops {
             match op {
@@ -193,7 +193,7 @@ impl Coordinator {
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
-                    update_caching_config |= vars::is_caching_var(name);
+                    update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -203,7 +203,7 @@ impl Coordinator {
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
-                    update_caching_config = true;
+                    update_secrets_caching_config = true;
                 }
                 _ => (),
             }
@@ -457,8 +457,8 @@ impl Coordinator {
             if update_tracing_config {
                 self.update_tracing_config();
             }
-            if update_caching_config {
-                self.update_caching_config();
+            if update_secrets_caching_config {
+                self.update_secrets_caching_config();
             }
         }
         .await;
@@ -675,7 +675,7 @@ impl Coordinator {
             .expect("unable to drop temporary items for conn_id");
     }
 
-    fn update_caching_config(&mut self) {
+    fn update_secrets_caching_config(&mut self) {
         let config = flags::caching_config(self.catalog.system_config());
         self.caching_secrets_reader.set_policy(config);
     }

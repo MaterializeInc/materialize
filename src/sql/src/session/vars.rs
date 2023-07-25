@@ -760,22 +760,14 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
     internal: true,
 });
 
-static ENABLE_COORDINATOR_SECRETS_CACHING: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_coordinator_secrets_caching"),
-    value: &true,
-    description: "Enables in-memory caching of secrets for some operations in the Coordinator.",
-    internal: true,
-};
-
-static DEFAULT_COORDINATOR_SECRETS_CACHING_TTL: Lazy<Duration> = Lazy::new(|| {
-    Duration::from_secs(
-        mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
-    )
+static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
+    usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
-static COORDINATOR_SECRETS_CACHING_TTL: Lazy<ServerVar<Duration>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("coordinator_secrets_caching_ttl"),
-    value: &DEFAULT_COORDINATOR_SECRETS_CACHING_TTL,
-    description: "Sets the time-to-live value for values in the Coordinator's secrets cache.",
+
+static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
+    value: &DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS,
+    description: "Sets the time-to-live for values in the Webhooks secrets cache.",
     internal: true,
 });
 
@@ -1902,8 +1894,7 @@ impl SystemVars {
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
-            .with_var(&ENABLE_COORDINATOR_SECRETS_CACHING)
-            .with_var(&COORDINATOR_SECRETS_CACHING_TTL);
+            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS);
         vars.refresh_internal_state();
         vars
     }
@@ -2440,12 +2431,8 @@ impl SystemVars {
         self.expect_value(&*OPENTELEMETRY_FILTER).clone()
     }
 
-    pub fn enable_coordinator_secrets_caching(&self) -> bool {
-        *self.expect_value(&ENABLE_COORDINATOR_SECRETS_CACHING)
-    }
-
-    pub fn coordinator_secrets_caching_ttl(&self) -> Duration {
-        *self.expect_value(&*COORDINATOR_SECRETS_CACHING_TTL)
+    pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
+        *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 }
 
@@ -3817,9 +3804,8 @@ pub fn is_storage_config_var(name: &str) -> bool {
 }
 
 /// Returns whether the named variable is a caching configuration parameter.
-pub fn is_caching_var(name: &str) -> bool {
-    name == ENABLE_COORDINATOR_SECRETS_CACHING.name()
-        || name == COORDINATOR_SECRETS_CACHING_TTL.name()
+pub fn is_secrets_caching_var(name: &str) -> bool {
+    name == WEBHOOKS_SECRETS_CACHING_TTL_SECS.name()
 }
 
 fn is_upsert_rocksdb_config_var(name: &str) -> bool {
