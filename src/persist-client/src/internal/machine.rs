@@ -1892,6 +1892,7 @@ pub mod datadriven {
 pub mod tests {
     use std::sync::Arc;
 
+    use crate::cache::StateCache;
     use mz_ore::cast::CastFrom;
     use mz_ore::task::spawn;
     use mz_persist::intercept::{InterceptBlob, InterceptHandle};
@@ -2002,5 +2003,40 @@ pub mod tests {
             new_seqno_since,
         };
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
+    }
+
+    // A regression test for #20776, where a bug meant that compare_and_append
+    // would not fetch the latest state after an upper mismatch. This meant that
+    // a write that could succeed if retried on the latest state would instead
+    // return an UpperMismatch.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
+    async fn regression_update_state_after_upper_mismatch() {
+        let client = new_test_client().await;
+        let mut client2 = client.clone();
+
+        // The bug can only happen if the two WriteHandles have separate copies
+        // of state, so make sure that each is given its own StateCache.
+        let new_state_cache = Arc::new(StateCache::new_no_metrics());
+        client2.shared_states = new_state_cache;
+
+        let shard_id = ShardId::new();
+        let (mut write1, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        let (mut write2, _) = client2.expect_open::<String, (), u64, i64>(shard_id).await;
+
+        let data = vec![
+            (("1".to_owned(), ()), 1, 1),
+            (("2".to_owned(), ()), 2, 1),
+            (("3".to_owned(), ()), 3, 1),
+            (("4".to_owned(), ()), 4, 1),
+            (("5".to_owned(), ()), 5, 1),
+        ];
+
+        write1.expect_compare_and_append(&data[..1], 0, 2).await;
+        // quick check: each handle should have its own copy of state
+        assert!(write1.machine.seqno() > write2.machine.seqno());
+        // this handle's upper now lags behind. if compare_and_append fails to update state
+        // after an upper mismatch we would expect this call to fail
+        write2.expect_compare_and_append(&data[1..2], 2, 3).await;
     }
 }
