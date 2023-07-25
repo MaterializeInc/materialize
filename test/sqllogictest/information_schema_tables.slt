@@ -417,6 +417,10 @@ mz_frontiers
 SOURCE
 materialize
 mz_internal
+mz_global_frontiers
+VIEW
+materialize
+mz_internal
 mz_kafka_sources
 BASE TABLE
 materialize

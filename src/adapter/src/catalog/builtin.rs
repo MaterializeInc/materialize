@@ -1951,6 +1951,39 @@ pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     is_retained_metrics_object: false,
 });
 
+pub const MZ_GLOBAL_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_global_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_global_frontiers AS
+WITH
+  -- If a collection has reached the empty frontier on one of its replicas,
+  -- the entry for that replica is removed from `mz_frontiers`. In this case,
+  -- it should also be removed from `mz_global_frontiers`, to signal that the
+  -- global frontier is empty as well. The achieve that, we join the replica
+  -- lists from `mz_frontiers` with those in `mz_cluster_replicas`. If a
+  -- replica is missing from `mz_frontiers`, it won't have a match in this
+  -- join and will be omitted from the final output.
+  replica_lists AS (
+    SELECT list_agg(id) AS replicas
+    FROM mz_cluster_replicas
+    GROUP BY cluster_id
+    -- Add a `{NULL}` list to accomodate collections that are not installed
+    -- on a replica.
+    UNION VALUES (LIST[NULL])
+  ),
+  frontiers_with_replicas AS (
+    SELECT
+      object_id,
+      list_agg(replica_id) AS replicas,
+      max(time) AS time
+    FROM mz_internal.mz_frontiers
+    GROUP BY object_id
+  )
+SELECT object_id, time
+FROM frontiers_with_replicas
+JOIN replica_lists USING (replicas)",
+};
+
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_subscriptions",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4663,6 +4696,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SINK_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
+        Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
