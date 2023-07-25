@@ -1080,6 +1080,12 @@ pub struct Ingestion {
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
+    /// The column index to provide the request body and whether to provide it as bytes.
+    pub bodies: Vec<(usize, bool)>,
+    /// The column index to provide the request headers and whether to provide the values as bytes.
+    ///
+    /// TODO(parkmycar): Support filtering down to specific headers.
+    pub headers: Vec<(usize, bool)>,
     /// Any secrets that are used in that validation.
     pub secrets: Vec<WebhookValidationSecret>,
 }

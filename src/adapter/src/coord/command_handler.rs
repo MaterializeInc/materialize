@@ -857,8 +857,7 @@ impl Coordinator {
                     let validator = validation.as_ref().map(|v| {
                         let validation = v.clone();
                         AppendWebhookValidator::new(
-                            validation.expression,
-                            validation.secrets,
+                            validation,
                             coord.caching_secrets_reader.clone(),
                         )
                     });

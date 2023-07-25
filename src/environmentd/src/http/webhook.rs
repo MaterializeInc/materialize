@@ -193,6 +193,10 @@ impl From<AppendWebhookError> for WebhookError {
         match err {
             AppendWebhookError::MissingSecret => WebhookError::SecretMissing,
             AppendWebhookError::ValidationError => WebhookError::ValidationError,
+            AppendWebhookError::NonUtf8Body => WebhookError::InvalidBody {
+                ty: ScalarType::String,
+                msg: "invalid".to_string(),
+            },
             AppendWebhookError::InternalError => {
                 WebhookError::Internal(anyhow::anyhow!("failed to run validation"))
             }
