@@ -10,7 +10,7 @@ publish = false
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0.47"
+proc-macro2 = "1.0.60"
 quote = "1.0.23"
 syn = { version = "1.0.107", features = ["extra-traits", "printing"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
