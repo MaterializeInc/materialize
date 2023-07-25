@@ -2619,6 +2619,90 @@ GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
 ----
 COMPLETE 0
 
+## Testing dropping a cluster with bound objects
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_materialized_views WHERE name = 'mv'
+----
+mv
+
+statement ok
+DROP OWNED BY materialize
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_materialized_views WHERE name = 'mv'
+----
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+
+statement ok
+GRANT CREATE ON CLUSTER c TO joe
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA public TO joe
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_materialized_views WHERE name = 'mv'
+----
+mv
+
+statement error cannot drop cluster "c" without CASCADE: still depended upon by non-owned catalog items "materialize.public.mv"
+DROP OWNED BY materialize
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_materialized_views WHERE name = 'mv'
+----
+mv
+
+statement ok
+DROP OWNED BY materialize CASCADE
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_materialized_views WHERE name = 'mv'
+----
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA public FROM joe
+----
+COMPLETE 0
+
 # Test REASSIGN OWNED
 
 statement ok

@@ -4032,11 +4032,26 @@ pub fn plan_drop_owned(
     // Clusters
     for cluster in scx.catalog.get_clusters() {
         if role_ids.contains(&cluster.owner_id()) {
-            if !cascade && !cluster.bound_objects().is_empty() {
-                sql_bail!(
-                    "cannot drop cluster {} without CASCADE while it contains active objects",
-                    cluster.name().quoted()
-                );
+            // Note: CASCADE is not required for replicas.
+            if !cascade {
+                let non_owned_bound_objects: Vec<_> = cluster
+                    .bound_objects()
+                    .into_iter()
+                    .map(|global_id| scx.catalog.get_item(global_id))
+                    .filter(|item| !role_ids.contains(&item.owner_id()))
+                    .collect();
+                if !non_owned_bound_objects.is_empty() {
+                    let names: Vec<_> = non_owned_bound_objects
+                        .into_iter()
+                        .map(|item| scx.catalog.resolve_full_name(item.name()))
+                        .map(|name| name.to_string().quoted().to_string())
+                        .collect();
+                    sql_bail!(
+                        "cannot drop cluster {} without CASCADE: still depended upon by non-owned catalog items {}",
+                        cluster.name().quoted(),
+                        names.join(", ")
+                    );
+                }
             }
             drop_ids.push(cluster.id().into());
         }
