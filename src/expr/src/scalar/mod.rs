@@ -645,6 +645,23 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
+    pub fn contains_error_if_null(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if matches!(
+                expr,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ErrorIfNull,
+                    ..
+                }
+            ) {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
     /// If self is a column, return the column index, otherwise `None`.
     pub fn as_column(&self) -> Option<usize> {
         if let MirScalarExpr::Column(c) = self {
@@ -1956,6 +1973,76 @@ impl VisitChildren<Self> for MirScalarExpr {
             }
         }
         Ok(())
+    }
+}
+
+impl MirScalarExpr {
+    /// Iterates through references to child expressions.
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut third = None;
+        let mut variadic = None;
+
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
+                first = Some(&**expr);
+            }
+            CallBinary { expr1, expr2, .. } => {
+                first = Some(&**expr1);
+                second = Some(&**expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                variadic = Some(exprs);
+            }
+            If { cond, then, els } => {
+                first = Some(&**cond);
+                second = Some(&**then);
+                third = Some(&**els);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(third)
+            .chain(variadic.into_iter().flatten())
+    }
+
+    /// Iterates through mutable references to child expressions.
+    pub fn children_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut third = None;
+        let mut variadic = None;
+
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
+                first = Some(&mut **expr);
+            }
+            CallBinary { expr1, expr2, .. } => {
+                first = Some(&mut **expr1);
+                second = Some(&mut **expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                variadic = Some(exprs);
+            }
+            If { cond, then, els } => {
+                first = Some(&mut **cond);
+                second = Some(&mut **then);
+                third = Some(&mut **els);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(third)
+            .chain(variadic.into_iter().flatten())
     }
 }
 
