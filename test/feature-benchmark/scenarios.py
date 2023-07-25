@@ -23,6 +23,7 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
 
 
@@ -891,7 +892,13 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRestart(Scenario):
+class KafkaRestart(ScenarioDisabled):
+    """This scenario dates from the pre-persistence era where the entire topic was re-ingested from scratch.
+    With presistence however, no reingestion takes place and the scenario ehibits extreme variability.
+    Instead of re-ingestion, we are measuring mostly  the speed of COUNT(*), further obscured by
+    the one second timestamp granularity
+    """
+
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
