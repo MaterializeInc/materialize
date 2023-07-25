@@ -2845,11 +2845,23 @@ impl<'a> Parser<'a> {
         };
         let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
 
-        let validate_using = if self.parse_keywords(&[VALIDATE, USING]) {
+        let validate_using = if self.parse_keyword(CHECK) {
             self.expect_token(&Token::LParen)?;
-            let validate_using = self.parse_expr()?;
+
+            let options = if self.parse_keyword(WITH) {
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_create_webhook_check_options()?;
+                self.expect_token(&Token::RParen)?;
+
+                Some(options)
+            } else {
+                None
+            };
+
+            let using = self.parse_expr()?;
             self.expect_token(&Token::RParen)?;
-            Some(validate_using)
+
+            Some(CreateWebhookSourceCheck { options, using })
         } else {
             None
         };
@@ -2864,6 +2876,34 @@ impl<'a> Parser<'a> {
                 in_cluster,
             },
         ))
+    }
+
+    fn parse_create_webhook_check_options(
+        &mut self,
+    ) -> Result<CreateWebhookSourceCheckOptions<Raw>, ParserError> {
+        let mut secrets = vec![];
+
+        self.parse_comma_separated(|f| match f.expect_one_of_keywords(&[SECRET])? {
+            SECRET => {
+                let secret = f.parse_raw_name()?;
+                let alias = f
+                    .parse_keyword(AS)
+                    .then(|| f.parse_identifier())
+                    .transpose()?;
+                let use_bytes = f.parse_keyword(Keyword::Bytes);
+
+                secrets.push(CreateWebhookSourceSecret {
+                    secret,
+                    alias,
+                    use_bytes,
+                });
+
+                Ok(())
+            }
+            k => unreachable!("Unexpected keyword! {k}"),
+        })?;
+
+        Ok(CreateWebhookSourceCheckOptions { secrets })
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {

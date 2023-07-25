@@ -115,7 +115,7 @@ use crate::plan::{
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
     Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
     ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View,
+    View, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -402,16 +402,16 @@ pub fn plan_create_webhook_source(
     } = stmt;
 
     let validate_using = validate_using
-        .map(|expr| query::plan_webhook_validate_using(scx, expr))
+        .map(|stmt| query::plan_webhook_validate_using(scx, stmt))
         .transpose()?;
-    if let Some(expr) = &validate_using {
+    if let Some(WebhookValidation { expression, .. }) = &validate_using {
         // If the validation expression doesn't reference any part of the request, then we should
         // return an error because it's almost definitely wrong.
-        if !expr.contains_column() {
+        if !expression.contains_column() {
             return Err(PlanError::WebhookValidationDoesNotUseColumns);
         }
         // Validation expressions cannot contain unmaterializable functions, e.g. now().
-        if expr.contains_unmaterializable() {
+        if expression.contains_unmaterializable() {
             return Err(PlanError::WebhookValidationNonDeterministic);
         }
     }
@@ -474,7 +474,7 @@ pub fn plan_create_webhook_source(
         name,
         source: Source {
             create_sql,
-            data_source: DataSourceDesc::Webhook { validate_using },
+            data_source: DataSourceDesc::Webhook(validate_using),
             desc,
         },
         if_not_exists,

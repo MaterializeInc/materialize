@@ -359,6 +359,76 @@ CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT 
 ----
 COMPLETE 0
 
+simple conn=joe,user=joe
+CREATE SECRET webhook_key AS 'shared_key';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SECRET webhook_key FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+db error: ERROR: permission denied for SECRET "materialize.public.webhook_key"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_with_secret1 IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+db error: ERROR: permission denied for SECRET "materialize.public.webhook_key"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET webhook_key TO child;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+db error: ERROR: permission denied for SECRET "materialize.public.webhook_key"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_with_secret1 IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET webhook_key TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----

@@ -81,7 +81,7 @@ impl fmt::Debug for CacheItem {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CachingSecretsReader {
     /// The underlying secrets, source of truth.
     inner: Arc<dyn SecretsReader>,

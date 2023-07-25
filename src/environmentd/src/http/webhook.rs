@@ -12,9 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mz_adapter::{AdapterError, AppendWebhookResponse, AppendWebhookValidation};
-use mz_expr::EvalError;
-use mz_ore::result::ResultExt;
+use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
@@ -59,14 +57,19 @@ pub async fn handle_webhook(
         tx,
         body_ty,
         header_ty,
-        validate_expr,
+        validator,
     } = client
         .append_webhook(database, schema, name, conn_id)
         .await?;
 
     // If this source requires validation, then validate!
-    if let Some(validate_expr) = validate_expr {
-        validate_request(validate_expr, Bytes::clone(&body), &headers).await?;
+    if let Some(validator) = validator {
+        let valid = validator
+            .eval(Bytes::clone(&body), Arc::clone(&headers))
+            .await?;
+        if !valid {
+            return Err(WebhookError::ValidationFailed);
+        }
     }
 
     // Pack our body and headers into a Row.
@@ -76,51 +79,6 @@ pub async fn handle_webhook(
     tx.append(vec![(row, 1)]).await?;
 
     Ok::<_, WebhookError>(())
-}
-
-async fn validate_request(
-    validate_expr: AppendWebhookValidation,
-    body: Bytes,
-    headers: &Arc<BTreeMap<String, String>>,
-) -> Result<(), WebhookError> {
-    let headers = Arc::clone(headers);
-
-    // Run our validation on a separate thread, waiting for it's completion.
-    let valid = mz_ore::task::spawn_blocking(
-        || "webhook-validate".to_string(),
-        move || {
-            // Use a RowPacker to form a Datum::Map.
-            let mut row = Row::with_capacity(1);
-            let mut packer = row.packer();
-            packer.push_dict(
-                headers
-                    .iter()
-                    .map(|(name, val)| (name.as_str(), Datum::String(val))),
-            );
-            let headers = row.unpack_first();
-            let body = Datum::Bytes(&body[..]);
-
-            // Since the validation expression is technically a user defined function, we want to
-            // be extra careful and guard against issues taking down the entire process.
-            match mz_ore::panic::catch_unwind(move || validate_expr(body, headers)) {
-                Ok(result) => result.err_into(),
-                Err(_) => {
-                    tracing::error!("panic while validating webhook request!");
-                    Err(WebhookError::ValidationPanicked)
-                }
-            }
-        },
-    )
-    .await
-    .context("validation")??;
-
-    if valid {
-        Ok(())
-    } else {
-        Err(WebhookError::ValidationFailed(
-            "invalid request".to_string(),
-        ))
-    }
 }
 
 /// Given the body and headers of a request, pack them into a [`Row`].
@@ -186,16 +144,18 @@ fn pack_row(
 pub enum WebhookError {
     #[error("no object was found at the path {}", .0.quoted())]
     NotFound(String),
+    #[error("the required auth could not be found")]
+    SecretMissing,
     #[error("this feature is currently unsupported: {0}")]
     Unsupported(&'static str),
     #[error("headers of request were invalid: {0}")]
     InvalidHeaders(String),
     #[error("failed to deserialize body as {ty:?}: {msg}")]
     InvalidBody { ty: ScalarType, msg: String },
-    #[error("failed to validate the request: {0}")]
-    ValidationFailed(String),
-    #[error("attempt to validate request panicked")]
-    ValidationPanicked,
+    #[error("failed to validate the request")]
+    ValidationFailed,
+    #[error("error occurred while running validation")]
+    ValidationError,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
@@ -228,19 +188,28 @@ impl From<AdapterError> for WebhookError {
     }
 }
 
-impl From<EvalError> for WebhookError {
-    fn from(value: EvalError) -> Self {
-        WebhookError::ValidationFailed(value.to_string())
+impl From<AppendWebhookError> for WebhookError {
+    fn from(err: AppendWebhookError) -> Self {
+        match err {
+            AppendWebhookError::MissingSecret => WebhookError::SecretMissing,
+            AppendWebhookError::ValidationError => WebhookError::ValidationError,
+            AppendWebhookError::InternalError => {
+                WebhookError::Internal(anyhow::anyhow!("failed to run validation"))
+            }
+        }
     }
 }
 
 impl IntoResponse for WebhookError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            e @ WebhookError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+            e @ WebhookError::NotFound(_) | e @ WebhookError::SecretMissing => {
+                (StatusCode::NOT_FOUND, e.to_string()).into_response()
+            }
             e @ WebhookError::Unsupported(_)
             | e @ WebhookError::InvalidBody { .. }
-            | e @ WebhookError::ValidationFailed(_) => {
+            | e @ WebhookError::ValidationFailed
+            | e @ WebhookError::ValidationError => {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
             }
             e @ WebhookError::InvalidHeaders(_) => {
@@ -249,14 +218,15 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
             }
-            e @ WebhookError::ValidationPanicked => {
-                (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
-            }
             e @ WebhookError::InternalStorageError(_)
-            | e @ WebhookError::InternalAdapterError(_)
-            | e @ WebhookError::Internal(_) => {
+            | e @ WebhookError::InternalAdapterError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
+            WebhookError::Internal(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.root_cause().to_string(),
+            )
+                .into_response(),
         }
     }
 }

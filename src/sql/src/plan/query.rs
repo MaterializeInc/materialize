@@ -55,12 +55,13 @@ use mz_repr::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CteBlock, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
-    HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select,
-    SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator, ShowStatement,
-    SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
-    UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    AsOf, Assignment, AstInfo, CreateWebhookSourceCheck, CreateWebhookSourceSecret, CteBlock,
+    DeleteStatement, Distinct, Expr, Function, FunctionArgs, HomogenizingFunction, Ident,
+    InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, MutRecBlock,
+    MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption,
+    SelectOptionName, SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use uuid::Uuid;
 
@@ -81,7 +82,10 @@ use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
-use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
+use crate::plan::{
+    transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
+    WebhookValidationSecret,
+};
 use crate::session::vars::{self, FeatureFlag};
 
 #[derive(Debug)]
@@ -905,16 +909,21 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
-/// Plans an expression in the VALIDATE USING position of a `CREATE SOURCE ... FROM WEBHOOK`.
+/// Plans an expression in the CHECK position of a `CREATE SOURCE ... FROM WEBHOOK`.
 pub fn plan_webhook_validate_using(
     scx: &StatementContext,
-    mut expr: Expr<Aug>,
-) -> Result<MirScalarExpr, PlanError> {
+    validate_using: CreateWebhookSourceCheck<Aug>,
+) -> Result<WebhookValidation, PlanError> {
     let qcx = QueryContext::root(scx, QueryLifetime::Static);
+
+    let CreateWebhookSourceCheck {
+        options,
+        using: mut expr,
+    } = validate_using;
 
     // We _always_ provide the body of the request as bytes and include the headers when validating
     // a request, regardless of what has otherwise been specified for the source.
-    let column_typs = vec![
+    let mut column_typs = vec![
         ColumnType {
             scalar_type: ScalarType::Bytes,
             nullable: false,
@@ -927,17 +936,67 @@ pub fn plan_webhook_validate_using(
             nullable: false,
         },
     ];
-    let column_names = ["body", "headers"];
+    let mut column_names = vec!["body".to_string(), "headers".to_string()];
+
+    // Append all secrets so they can be used in the expression.
+    let secrets = options.map(|o| o.secrets).unwrap_or_default();
+    let mut validation_secrets = vec![];
+
+    for CreateWebhookSourceSecret {
+        secret,
+        alias,
+        use_bytes,
+    } in secrets
+    {
+        // Either provide the secret to the validation expression as Bytes or a String.
+        let scalar_type = if use_bytes {
+            ScalarType::Bytes
+        } else {
+            ScalarType::String
+        };
+
+        column_typs.push(ColumnType {
+            scalar_type,
+            nullable: false,
+        });
+        let ResolvedItemName::Item { id, full_name: FullItemName { item, .. }, .. } = secret else {
+            return Err(PlanError::InvalidSecret(Box::new(secret)));
+        };
+
+        // Plan the expression using the secret's alias, if one is provided.
+        let name = if let Some(alias) = alias {
+            alias.into_string()
+        } else {
+            item
+        };
+        column_names.push(name);
+
+        // Get the column index that corresponds for this secret, so we can make sure to provide the
+        // secrets in the correct order during evaluation.
+        let column_idx = column_typs.len() - 1;
+        // Double check that our column names and types match.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "column names and types don't match"
+        );
+
+        validation_secrets.push(WebhookValidationSecret {
+            id,
+            column_idx,
+            use_bytes,
+        });
+    }
 
     let relation_typ = RelationType::new(column_typs);
-    let desc = RelationDesc::new(relation_typ, column_names);
+    let desc = RelationDesc::new(relation_typ, column_names.clone());
     let scope = Scope::from_source(None, column_names);
 
     transform_ast::transform(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
-        name: "VALIDATE USING",
+        name: "CHECK",
         scope: &scope,
         relation_type: desc.typ(),
         allow_aggregates: false,
@@ -948,7 +1007,11 @@ pub fn plan_webhook_validate_using(
     let expr = plan_expr(ecx, &expr)?
         .type_as(ecx, &ScalarType::Bool)?
         .lower_uncorrelated()?;
-    Ok(expr)
+    let validation = WebhookValidation {
+        expression: expr,
+        secrets: validation_secrets,
+    };
+    Ok(validation)
 }
 
 pub fn plan_default_expr(
