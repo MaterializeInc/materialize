@@ -2035,8 +2035,8 @@ pub mod tests {
         write1.expect_compare_and_append(&data[..1], 0, 2).await;
         // quick check: each handle should have its own copy of state
         assert!(write1.machine.seqno() > write2.machine.seqno());
-        // this handle's upper now lags behind. if compare_and_append fails to update state
-        // after an upper mismatch we would expect this call to fail
+        // this handle's upper now lags behind. if compare_and_append fails to update
+        // state after an upper mismatch then this call would (incorrectly) fail
         write2.expect_compare_and_append(&data[1..2], 2, 3).await;
     }
 }
