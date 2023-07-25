@@ -2619,6 +2619,23 @@ GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
 ----
 COMPLETE 0
 
+## Test linked clusters
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
+
+query TT
+SELECT name, type FROM mz_objects WHERE name = 's'
+----
+s  source
+
+statement ok
+DROP OWNED BY materialize CASCADE
+
+query TT
+SELECT name, type FROM mz_objects WHERE name = 's'
+----
+
 # Test REASSIGN OWNED
 
 statement ok
