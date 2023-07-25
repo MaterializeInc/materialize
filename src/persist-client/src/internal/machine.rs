@@ -249,14 +249,14 @@ where
                 .await;
             match res {
                 Ok(x) => return Ok(x),
-                Err(_current_upper) => {
+                Err((seqno, _current_upper)) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
                     // method has found out that it advanced via some some
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    self.applier.fetch_and_update_state(None).await;
+                    self.applier.fetch_and_update_state(Some(seqno)).await;
                     let current_upper = self.applier.clone_upper();
 
                     // We tried to to a compare_and_append with the wrong
@@ -282,7 +282,7 @@ where
         // making it a parameter allows us to simulate hitting an indeterminate
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
         let metrics = Arc::clone(&self.applier.metrics);
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
         // tricky (more discussion of this in #12797):
@@ -460,14 +460,14 @@ where
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.
-                        return Err(Upper(shard_upper));
+                        return Err((seqno, Upper(shard_upper)));
                     }
                     if indeterminate.is_none() {
                         // No way this could have committed in some previous
                         // attempt of this loop: we never saw an indeterminate
                         // error (thus there was no previous iteration of the
                         // loop).
-                        return Err(Upper(shard_upper));
+                        return Err((seqno, Upper(shard_upper)));
                     }
                     // This is the bad case. We can't distinguish if some
                     // previous attempt that got an Indeterminate error
