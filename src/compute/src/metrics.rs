@@ -9,15 +9,24 @@
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::raw::{IntCounterVec, UIntGaugeVec};
-use mz_ore::metrics::{IntCounter, MetricsRegistry, UIntGauge};
+use mz_ore::metrics::{
+    raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
+};
+use mz_repr::GlobalId;
+use prometheus::core::AtomicF64;
 
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
-    pub history_command_count: UIntGaugeVec,
+    // command history
+    pub history_command_count: raw::UIntGaugeVec,
     pub history_dataflow_count: UIntGauge,
+
+    // reconciliation
     pub reconciliation_reused_dataflows: IntCounter,
-    pub reconciliation_replaced_dataflows: IntCounterVec,
+    pub reconciliation_replaced_dataflows: raw::IntCounterVec,
+
+    // dataflow state
+    pub dataflow_initial_output_duration_seconds: GaugeVec,
 }
 
 impl ComputeMetrics {
@@ -41,6 +50,11 @@ impl ComputeMetrics {
                 help: "The number of dataflows that were replaced during compute reconciliation.",
                 var_labels: ["reason"],
             )),
+            dataflow_initial_output_duration_seconds: registry.register(metric!(
+                name: "mz_dataflow_initial_output_duration_seconds",
+                help: "The time from dataflow installation up to when the first output was produced.",
+                var_labels: ["worker_id", "collection_id"],
+            )),
         }
     }
 
@@ -56,6 +70,29 @@ impl ComputeMetrics {
             command_counts,
             dataflow_count,
         }
+    }
+
+    pub fn for_collection(
+        &self,
+        collection_id: GlobalId,
+        worker_id: usize,
+    ) -> Option<CollectionMetrics> {
+        // In an effort to reduce the cardinality of timeseries created, we collect metrics only
+        // for non-transient dataflows. This is roughly equivalent to "long-lived" dataflows,
+        // with the exception of subscribes which may or may not be long-lived. We might want to
+        // change this policy in the future to track subscribes as well.
+        if collection_id.is_transient() {
+            return None;
+        }
+
+        let labels = vec![worker_id.to_string(), collection_id.to_string()];
+        let initial_output_duration_seconds = self
+            .dataflow_initial_output_duration_seconds
+            .get_delete_on_drop_gauge(labels);
+
+        Some(CollectionMetrics {
+            initial_output_duration_seconds,
+        })
     }
 
     /// Record the reconciliation result for a single dataflow.
@@ -84,4 +121,9 @@ impl ComputeMetrics {
             self.reconciliation_reused_dataflows.inc();
         }
     }
+}
+
+/// Metrics maintained per compute collection.
+pub struct CollectionMetrics {
+    pub initial_output_duration_seconds: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
 }

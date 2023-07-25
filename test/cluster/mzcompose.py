@@ -11,7 +11,7 @@ import json
 import time
 from textwrap import dedent
 from threading import Thread
-from typing import Tuple
+from typing import Dict, List, Tuple
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -81,6 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-mv-source-sink",
         "test-query-without-default-cluster",
         "test-clusterd-death-detection",
+        "test-replica-dataflow-metrics",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -1900,4 +1901,101 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
     assert (
         "error reading a body from connection: stream closed because of a broken pipe"
         in envd.stdout
+    )
+
+
+class Metrics:
+    metrics: Dict[str, str]
+
+    def __init__(self, raw: str) -> None:
+        self.metrics = {}
+        for line in raw.splitlines():
+            key, value = line.split(maxsplit=1)
+            self.metrics[key] = value
+
+    def for_collection(self, metric_name: str, collection_id: str) -> List[float]:
+        values = []
+        for key, value in self.metrics.items():
+            if (
+                key.startswith(metric_name)
+                and f'collection_id="{collection_id}"' in key
+            ):
+                values.append(float(value))
+        return values
+
+
+def workflow_test_replica_dataflow_metrics(c: Composition) -> None:
+    """Test dataflow metrics exposed by replicas."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Set up a cluster with a couple dataflows.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+
+        CREATE INDEX idx ON t (a);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+        SELECT * FROM t;
+        SELECT * FROM mv;
+        """
+    )
+
+    index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
+    mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
+
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+    (index_iod,) = metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", index_id
+    )
+    assert index_iod > 0
+    (mv_iod,) = metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", mv_id
+    )
+    assert mv_iod > 0
+
+    # Drop the dataflows.
+    c.sql(
+        """
+        DROP INDEX idx;
+        DROP MATERIALIZED VIEW mv;
+        """
+    )
+
+    # Wait for the drop commands to reach the replica.
+    time.sleep(1)
+
+    # Check that the dataflow metrics have been cleaned up.
+    metrics = fetch_metrics()
+    assert not metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", index_id
+    )
+    assert not metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", mv_id
     )
