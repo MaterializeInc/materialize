@@ -1834,7 +1834,7 @@ pub mod datadriven {
             .machine
             .compare_and_append_idempotent(&batch, &writer_id, now, &token, indeterminate)
             .await
-            .map_err(|err| anyhow!("{:?}", err))?
+            .map_err(|(_seqno, upper)| anyhow!("{:?}", upper))?
             .expect("invalid usage");
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
