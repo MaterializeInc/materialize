@@ -120,6 +120,7 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
+    Frontiers,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -1502,6 +1503,10 @@ where
                     match i {
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
+                        }
+                        IntrospectionType::Frontiers => {
+                            // Set the collection to empty.
+                            self.reconcile_managed_collection(id, vec![]).await;
                         }
                         IntrospectionType::StorageSourceStatistics => {
                             // Set the collection to empty.

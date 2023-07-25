@@ -1940,13 +1940,14 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     is_retained_metrics_object: true,
 });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replica_frontiers",
+pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::Frontiers),
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("export_id", ScalarType::String.nullable(false))
-        .with_column("time", ScalarType::MzTimestamp.nullable(false)),
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("time", ScalarType::MzTimestamp.nullable(true)),
     is_retained_metrics_object: false,
 });
 
@@ -4530,7 +4531,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
@@ -4662,6 +4662,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::Source(&MZ_SINK_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
+        Builtin::Source(&MZ_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),

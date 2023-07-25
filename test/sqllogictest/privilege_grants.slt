@@ -4715,7 +4715,7 @@ t
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
-SELECT COUNT(*) >= 307 FROM information_schema.table_privileges WHERE grantee = 'mz_system'
+SELECT COUNT(*) >= 304 FROM information_schema.table_privileges WHERE grantee = 'mz_system'
 ----
 t
 COMPLETE 1
@@ -4757,7 +4757,7 @@ t
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
-SELECT COUNT(*) >= 307 FROM information_schema.role_table_grants WHERE grantee = 'mz_system'
+SELECT COUNT(*) >= 304 FROM information_schema.role_table_grants WHERE grantee = 'mz_system'
 ----
 t
 COMPLETE 1
