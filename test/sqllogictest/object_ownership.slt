@@ -2624,7 +2624,7 @@ COMPLETE 0
 statement ok
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
 
-query T
+query TT
 SELECT name, type FROM mz_objects WHERE name = 's'
 ----
 s  source
@@ -2632,7 +2632,7 @@ s  source
 statement ok
 DROP OWNED BY materialize CASCADE
 
-query T
+query TT
 SELECT name, type FROM mz_objects WHERE name = 's'
 ----
 
