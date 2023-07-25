@@ -256,6 +256,7 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
+                    self.applier.fetch_and_update_state(None).await;
                     let current_upper = self.applier.clone_upper();
 
                     // We tried to to a compare_and_append with the wrong
