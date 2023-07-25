@@ -55,7 +55,6 @@ impl Endpoint {
 
     /// Returns the URL for the OAuth token exchange.
     pub fn web_login_url(&self, profile_name: &str, port: u16) -> Url {
-        println!("Self: {:?}", self);
         let mut url = self.with_path(&["account", "login"]);
         let mut query_pairs = url.query_pairs_mut();
         query_pairs.append_pair(
