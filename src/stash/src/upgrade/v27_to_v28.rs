@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::objects::wire_compatible;
 use crate::upgrade::MigrationAction;
 use crate::{StashError, Transaction, TypedCollection};
 
@@ -17,6 +18,15 @@ pub mod objects_v27 {
 pub mod objects_v28 {
     include!(concat!(env!("OUT_DIR"), "/objects_v28.rs"));
 }
+
+wire_compatible!(objects_v28::DefaultPrivilegesKey with objects_v27::DefaultPrivilegesKey);
+wire_compatible!(objects_v28::DefaultPrivilegesValue with objects_v27::DefaultPrivilegesValue);
+
+wire_compatible!(objects_v28::DatabaseKey with objects_v27::DatabaseKey);
+wire_compatible!(objects_v28::DatabaseValue with objects_v27::DatabaseValue);
+
+wire_compatible!(objects_v28::SchemaKey with objects_v27::SchemaKey);
+wire_compatible!(objects_v28::SchemaValue with objects_v27::SchemaValue);
 
 const MZ_INTROSPECTION_ROLE_ID: objects_v28::RoleId = objects_v28::RoleId {
     value: Some(objects_v28::role_id::Value::System(2)),
@@ -43,51 +53,54 @@ pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
         TypedCollection::new("schema");
 
     DEFAULT_PRIVILEGES_COLLECTION
-        .migrate_to(tx, |entries| {
-            let mut updates = vec![
-                MigrationAction::Insert(
-                    objects_v28::DefaultPrivilegesKey {
-                        role_id: Some(PUBLIC_ROLE_ID),
-                        database_id: None,
-                        schema_id: None,
-                        object_type: objects_v27::ObjectType::Database.into(),
-                        grantee: Some(MZ_INTROSPECTION_ROLE_ID),
-                    },
-                    objects_v28::DefaultPrivilegesValue {
-                        privileges: Some(ACL_MODE_USAGE),
-                    },
-                ),
-                MigrationAction::Insert(
-                    objects_v28::DefaultPrivilegesKey {
-                        role_id: Some(PUBLIC_ROLE_ID),
-                        database_id: None,
-                        schema_id: None,
-                        object_type: objects_v27::ObjectType::Schema.into(),
-                        grantee: Some(MZ_INTROSPECTION_ROLE_ID),
-                    },
-                    objects_v28::DefaultPrivilegesValue {
-                        privileges: Some(ACL_MODE_USAGE),
-                    },
-                ),
-            ];
+        .migrate_compat::<objects_v28::DefaultPrivilegesKey, objects_v28::DefaultPrivilegesValue>(
+            tx,
+            |entries| {
+                let mut updates = vec![
+                    MigrationAction::Insert(
+                        objects_v28::DefaultPrivilegesKey {
+                            role_id: Some(PUBLIC_ROLE_ID),
+                            database_id: None,
+                            schema_id: None,
+                            object_type: objects_v28::ObjectType::Database.into(),
+                            grantee: Some(MZ_INTROSPECTION_ROLE_ID),
+                        },
+                        objects_v28::DefaultPrivilegesValue {
+                            privileges: Some(ACL_MODE_USAGE),
+                        },
+                    ),
+                    MigrationAction::Insert(
+                        objects_v28::DefaultPrivilegesKey {
+                            role_id: Some(PUBLIC_ROLE_ID),
+                            database_id: None,
+                            schema_id: None,
+                            object_type: objects_v27::ObjectType::Schema.into(),
+                            grantee: Some(MZ_INTROSPECTION_ROLE_ID),
+                        },
+                        objects_v28::DefaultPrivilegesValue {
+                            privileges: Some(ACL_MODE_USAGE),
+                        },
+                    ),
+                ];
 
-            for (key, value) in entries {
-                let new_key = key.clone().into();
-                let new_value = value.clone().into();
-                updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
-            }
+                for (key, value) in entries {
+                    let new_key = key.clone();
+                    let new_value = value.clone();
+                    updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
+                }
 
-            updates
-        })
+                updates
+            },
+        )
         .await?;
 
     DATABASES_COLLECTION
-        .migrate_to(tx, |entries| {
+        .migrate_compat::<objects_v28::DatabaseKey, objects_v28::DatabaseValue>(tx, |entries| {
             let mut updates = Vec::with_capacity(entries.len());
 
             for (key, value) in entries {
-                let new_key: objects_v28::DatabaseKey = key.clone().into();
-                let mut new_value: objects_v28::DatabaseValue = value.clone().into();
+                let new_key = key.clone();
+                let mut new_value = value.clone();
                 new_value.privileges.push(objects_v28::MzAclItem {
                     grantee: Some(MZ_INTROSPECTION_ROLE_ID),
                     grantor: value.owner_id.clone().map(Into::into),
@@ -101,15 +114,15 @@ pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
         .await?;
 
     SCHEMAS_COLLECTION
-        .migrate_to(tx, |entries| {
+        .migrate_compat::<objects_v28::SchemaKey, objects_v28::SchemaValue>(tx, |entries| {
             let mut updates = Vec::with_capacity(entries.len());
 
             for (key, value) in entries {
-                let new_key: objects_v28::SchemaKey = key.clone().into();
-                let mut new_value: objects_v28::SchemaValue = value.clone().into();
+                let new_key = key.clone();
+                let mut new_value = value.clone();
                 new_value.privileges.push(objects_v28::MzAclItem {
                     grantee: Some(MZ_INTROSPECTION_ROLE_ID),
-                    grantor: value.owner_id.clone().map(Into::into),
+                    grantor: value.owner_id.clone(),
                     acl_mode: Some(ACL_MODE_USAGE),
                 });
                 updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
@@ -120,152 +133,6 @@ pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
         .await?;
 
     Ok(())
-}
-
-impl From<objects_v27::DatabaseId> for objects_v28::DatabaseId {
-    fn from(id: objects_v27::DatabaseId) -> Self {
-        let value = match id.value {
-            None => None,
-            Some(objects_v27::database_id::Value::User(id)) => {
-                Some(objects_v28::database_id::Value::User(id))
-            }
-            Some(objects_v27::database_id::Value::System(id)) => {
-                Some(objects_v28::database_id::Value::System(id))
-            }
-        };
-        objects_v28::DatabaseId { value }
-    }
-}
-
-impl From<objects_v27::DatabaseKey> for objects_v28::DatabaseKey {
-    fn from(key: objects_v27::DatabaseKey) -> Self {
-        Self {
-            id: key.id.map(Into::into),
-        }
-    }
-}
-
-impl From<objects_v27::RoleId> for objects_v28::RoleId {
-    fn from(id: objects_v27::RoleId) -> Self {
-        let value = match id.value {
-            None => None,
-            Some(objects_v27::role_id::Value::User(id)) => {
-                Some(objects_v28::role_id::Value::User(id))
-            }
-            Some(objects_v27::role_id::Value::System(id)) => {
-                Some(objects_v28::role_id::Value::System(id))
-            }
-            Some(objects_v27::role_id::Value::Public(_)) => {
-                Some(objects_v28::role_id::Value::Public(Default::default()))
-            }
-        };
-        objects_v28::RoleId { value }
-    }
-}
-
-impl From<objects_v27::AclMode> for objects_v28::AclMode {
-    fn from(acl_mode: objects_v27::AclMode) -> Self {
-        objects_v28::AclMode {
-            bitflags: acl_mode.bitflags,
-        }
-    }
-}
-
-impl From<objects_v27::MzAclItem> for objects_v28::MzAclItem {
-    fn from(item: objects_v27::MzAclItem) -> Self {
-        Self {
-            grantee: item.grantee.map(Into::into),
-            grantor: item.grantor.map(Into::into),
-            acl_mode: item.acl_mode.map(Into::into),
-        }
-    }
-}
-
-impl From<objects_v27::DatabaseValue> for objects_v28::DatabaseValue {
-    fn from(value: objects_v27::DatabaseValue) -> Self {
-        Self {
-            name: value.name,
-            owner_id: value.owner_id.map(Into::into),
-            privileges: value.privileges.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<objects_v27::SchemaId> for objects_v28::SchemaId {
-    fn from(id: objects_v27::SchemaId) -> Self {
-        let value = match id.value {
-            None => None,
-            Some(objects_v27::schema_id::Value::User(id)) => {
-                Some(objects_v28::schema_id::Value::User(id))
-            }
-            Some(objects_v27::schema_id::Value::System(id)) => {
-                Some(objects_v28::schema_id::Value::System(id))
-            }
-        };
-        objects_v28::SchemaId { value }
-    }
-}
-
-impl From<objects_v27::SchemaKey> for objects_v28::SchemaKey {
-    fn from(key: objects_v27::SchemaKey) -> Self {
-        Self {
-            id: key.id.map(Into::into),
-        }
-    }
-}
-
-impl From<objects_v27::SchemaValue> for objects_v28::SchemaValue {
-    fn from(value: objects_v27::SchemaValue) -> Self {
-        Self {
-            database_id: value.database_id.map(Into::into),
-            name: value.name,
-            owner_id: value.owner_id.map(Into::into),
-            privileges: value.privileges.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<objects_v27::ObjectType> for objects_v28::ObjectType {
-    fn from(object_type: objects_v27::ObjectType) -> Self {
-        match object_type {
-            objects_v27::ObjectType::Unknown => objects_v28::ObjectType::Unknown,
-            objects_v27::ObjectType::Table => objects_v28::ObjectType::Table,
-            objects_v27::ObjectType::View => objects_v28::ObjectType::View,
-            objects_v27::ObjectType::MaterializedView => objects_v28::ObjectType::MaterializedView,
-            objects_v27::ObjectType::Source => objects_v28::ObjectType::Source,
-            objects_v27::ObjectType::Sink => objects_v28::ObjectType::Sink,
-            objects_v27::ObjectType::Index => objects_v28::ObjectType::Index,
-            objects_v27::ObjectType::Type => objects_v28::ObjectType::Type,
-            objects_v27::ObjectType::Role => objects_v28::ObjectType::Role,
-            objects_v27::ObjectType::Cluster => objects_v28::ObjectType::Cluster,
-            objects_v27::ObjectType::ClusterReplica => objects_v28::ObjectType::ClusterReplica,
-            objects_v27::ObjectType::Secret => objects_v28::ObjectType::Secret,
-            objects_v27::ObjectType::Connection => objects_v28::ObjectType::Connection,
-            objects_v27::ObjectType::Database => objects_v28::ObjectType::Database,
-            objects_v27::ObjectType::Schema => objects_v28::ObjectType::Schema,
-            objects_v27::ObjectType::Func => objects_v28::ObjectType::Func,
-        }
-    }
-}
-
-impl From<objects_v27::DefaultPrivilegesKey> for objects_v28::DefaultPrivilegesKey {
-    fn from(key: objects_v27::DefaultPrivilegesKey) -> Self {
-        objects_v28::DefaultPrivilegesKey {
-            role_id: key.role_id.map(Into::into),
-            database_id: key.database_id.map(Into::into),
-            schema_id: key.schema_id.map(Into::into),
-            object_type: key.object_type,
-            grantee: key.grantee.map(Into::into),
-        }
-    }
-}
-
-impl From<objects_v27::DefaultPrivilegesValue> for objects_v28::DefaultPrivilegesValue {
-    fn from(value: objects_v27::DefaultPrivilegesValue) -> Self {
-        objects_v28::DefaultPrivilegesValue {
-            privileges: value.privileges.map(Into::into),
-        }
-    }
 }
 
 #[cfg(test)]

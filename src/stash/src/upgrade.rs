@@ -40,6 +40,7 @@
 use std::collections::BTreeMap;
 
 use crate::objects::proto::{ConfigKey, ConfigValue};
+use crate::objects::WireCompatible;
 use crate::{
     AppendBatch, Data, InternalStashError, StashError, Transaction, TypedCollection,
     COLLECTION_CONFIG, USER_VERSION_KEY,
@@ -132,6 +133,62 @@ where
                     let old_value = current.get(&old_key).expect("key to exist");
                     append_to_batch(&mut batch, &old_key, old_value, -1);
                     append_to_batch(&mut batch, &new_key, &new_value, 1);
+                }
+            }
+        }
+
+        tx.append(vec![batch]).await?;
+
+        Ok(())
+    }
+
+    /// Provided a closure, will migrate a [`TypedCollection`] of types `K` and `V` to
+    /// [`WireCompatible`] types `K2` and `V2`.
+    pub(crate) async fn migrate_compat<K2, V2>(
+        &self,
+        tx: &mut Transaction<'_>,
+        f: impl for<'a> FnOnce(&'a BTreeMap<K2, V2>) -> Vec<MigrationAction<K2, K2, V2>>,
+    ) -> Result<(), StashError>
+    where
+        K2: Data + WireCompatible<K>,
+        V2: Data + WireCompatible<V>,
+    {
+        // Create a batch that we'll write to.
+        //
+        // Note: this opens the collection with the NEW types that we're migrating to. This is okay
+        // though because the new types are defined as being wire compatible with the old types.
+        let collection = tx.collection::<K2, V2>(self.name).await?;
+        let lower = tx.upper(collection.id).await?;
+        let mut batch = collection.make_batch_lower(lower)?;
+        let current = match tx.peek_one(collection).await {
+            Ok(set) => set,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    tx.append(vec![batch]).await?;
+                    let lower = tx.upper(collection.id).await?;
+                    batch = collection.make_batch_lower(lower)?;
+                    tx.peek_one(collection).await?
+                }
+                _ => return Err(err),
+            },
+        };
+
+        // Call the provided closure, generating a list of update actions.
+        for op in f(&current) {
+            match op {
+                MigrationAction::Delete(old_key) => {
+                    let old_value = current.get(&old_key).expect("key to exist");
+                    collection.append_to_batch(&mut batch, &old_key, old_value, -1);
+                }
+                MigrationAction::Insert(key, value) => {
+                    collection.append_to_batch(&mut batch, &key, &value, 1);
+                }
+                MigrationAction::Update(old_key, (new_key, new_value)) => {
+                    let old_value = current.get(&old_key).expect("key to exist");
+                    collection.append_to_batch(&mut batch, &old_key, old_value, -1);
+                    collection.append_to_batch(&mut batch, &new_key, &new_value, 1);
                 }
             }
         }
