@@ -116,7 +116,7 @@ class Privileges(Check):
             f"DROP DATABASE privilege_db{i}",
         ]
         return (
-            f"$ postgres-execute connection=postgres://materialize@materialized:6875/materialize\n"
+            "$ postgres-execute connection=postgres://materialize@materialized:6875/materialize\n"
             + "\n".join(cmds)
             + "\n"
         )
