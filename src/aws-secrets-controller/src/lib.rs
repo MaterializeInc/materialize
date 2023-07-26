@@ -121,11 +121,14 @@ impl AwsSecretsController {
         AwsSecretsController {
             client: load_secrets_manager_client(environment_id.cloud_provider_region().to_owned())
                 .await,
+            // TODO [Alex Hunt] move this to a shared function that can be imported by the
+            // region-controller.
             secret_name_prefix: format!("/user-managed/{}/", environment_id),
             environment_id,
             default_tags,
         }
     }
+
     fn tags(&self) -> Vec<Tag> {
         self.default_tags
             .iter()
@@ -135,6 +138,8 @@ impl AwsSecretsController {
 
     fn kms_key_alias(&self) -> String {
         // Do not change this, as it must match the code in the region-controller.
+        // TODO [Alex Hunt] move this to a shared function that can be imported by the
+        // region-controller.
         format!("alias/customer_key_{}", &self.environment_id)
     }
 
@@ -154,18 +159,23 @@ impl AwsSecretsController {
     {
         let other_secrets: BTreeSet<GlobalId> =
             other_secrets_controller.list().await?.into_iter().collect();
+        tracing::debug!("Found {} legacy secrets", other_secrets.len());
 
         let aws_secrets: BTreeSet<GlobalId> = self.list().await?.into_iter().collect();
+        tracing::debug!("Found {} AWS secrets", aws_secrets.len());
 
         let other_secrets_reader = other_secrets_controller.reader();
         let secrets_to_migrate = other_secrets.difference(&aws_secrets);
         for secret in secrets_to_migrate {
+            tracing::debug!("Migrating secret {}", secret);
             let data = other_secrets_reader.read(secret.to_owned()).await?;
             self.ensure(secret.to_owned(), &data).await?;
         }
         for secret in other_secrets {
+            tracing::debug!("Deleting legacy secret {}", secret);
             other_secrets_controller.delete(secret).await?;
         }
+        tracing::info!("Secret migration completed.");
         Ok(())
     }
 }
