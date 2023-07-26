@@ -70,15 +70,17 @@ class Scenario:
         # Configure implicitly for cloud scenarios
         if not isinstance(actions[0], StartMz):
             actions.insert(0, ConfigureMz(self))
-        for action in actions:
-            action.execute(self.executor)
-            action.join(self.executor)
+
+        for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
             if isinstance(action, StartMz) or isinstance(
                 action, ReplaceEnvironmentdStatefulSet
             ):
-                ConfigureMz(self).execute(self.executor)
-                ConfigureMz(self).join(self.executor)
+                actions.insert(index + 1, ConfigureMz(self))
+
+        for action in actions:
+            action.execute(self.executor)
+            action.join(self.executor)
 
 
 class NoRestartNoUpgrade(Scenario):
