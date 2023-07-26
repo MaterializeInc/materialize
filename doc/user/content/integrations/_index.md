@@ -174,15 +174,15 @@ Client libraries and ORM frameworks tend to run complex introspection queries th
 
 ### Client libraries {#libraries-and-drivers}
 
-| Language | Support level                   | Tested drivers                                             | Notes                                                 |
-| -------- | ------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------- |
-| Go       | {{< supportLevel production >}} | [`pgx`](https://github.com/jackc/pgx)                      | See the [Go cheatsheet](/integrations/golang/).       |
-| Java     | {{< supportLevel production >}} | [PostgreSQL JDBC driver](https://jdbc.postgresql.org/)     | See the [Java cheatsheet](/integrations/java-jdbc/).  |
-| Node.js  | {{< supportLevel production >}} | [`node-postgres`](https://node-postgres.com/)              | See the [Node.js cheatsheet](/integrations/node-js/). |
-| PHP      | {{< supportLevel production >}} | [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php) | See the [PHP cheatsheet](/integrations/php/).         |
-| Python   | {{< supportLevel production >}} | [`psycopg2`](https://pypi.org/project/psycopg2/)           | See the [Python cheatsheet](/integrations/python/).   |
-| Ruby     | {{< supportLevel production >}} | [`pg` gem](https://rubygems.org/gems/pg/)                  | See the [Ruby cheatsheet](/integrations/ruby/).       |
-| Rust     | {{< supportLevel production >}} | [`postgres`](https://crates.io/crates/postgres)            | See the [Rust cheatsheet](/integrations/rust/).       |
+| Language | Support level                   | Tested drivers                                                  | Notes                                                 |
+| -------- | ------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
+| Go       | {{< supportLevel production >}} | [`pgx`](https://github.com/jackc/pgx)                           | See the [Go cheatsheet](/integrations/golang/).       |
+| Java     | {{< supportLevel production >}} | [PostgreSQL JDBC driver](https://jdbc.postgresql.org/)          | See the [Java cheatsheet](/integrations/java-jdbc/).  |
+| Node.js  | {{< supportLevel production >}} | [`node-postgres`](https://node-postgres.com/)                   | See the [Node.js cheatsheet](/integrations/node-js/). |
+| PHP      | {{< supportLevel production >}} | [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php)      | See the [PHP cheatsheet](/integrations/php/).         |
+| Python   | {{< supportLevel production >}} | [`psycopg2`](https://pypi.org/project/psycopg2/)                | See the [Python cheatsheet](/integrations/python/).   |
+| Ruby     | {{< supportLevel production >}} | [`pg` gem](https://rubygems.org/gems/pg/)                       | See the [Ruby cheatsheet](/integrations/ruby/).       |
+| Rust     | {{< supportLevel production >}} | [`postgres-openssl`](https://crates.io/crates/postgres-openssl) | See the [Rust cheatsheet](/integrations/rust/).       |
 
 ### ORM frameworks
 
