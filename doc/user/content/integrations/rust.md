@@ -30,47 +30,27 @@ pub(crate) fn create_client() -> Result<Client, Error> {
 }
 ```
 
-## Stream
+## Create tables
 
-Materialize is designed to stream changes to views. To subscribe to a stream of updates in Rust, you can use PostgreSQL's LISTEN/NOTIFY feature. Here's how to subscribe to a stream:
+To create a table named `countries` in Materialize:
 
 ```rust
-use std::{thread::sleep, time::Duration};
+use postgres::Error;
 
 use crate::connection::create_client;
 
-pub(crate) fn subscribe() {
-    let mut client = create_client().expect("Error creating client.");
-    let mut transaction = client.transaction().expect("Error creating transaction.");
-    transaction.execute("DECLARE c CURSOR FOR SUBSCRIBE (SELECT symbol, bid_price::text FROM market_orders) WITH (SNAPSHOT = false);", &[]).expect("Error creating cursor.");
-
-    loop {
-        let results = transaction.query("FETCH ALL c;", &[]).expect("Error running fetch.");
-        for row in results {
-            println!("{:} - {:}", row.get::<usize, String>(2), row.get::<usize, String>(3));
-        }
-        sleep(Duration::from_millis(200));
-    }
-}
-```
-
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `results` contains all of the columns of `market_orders`, prepended with several additional columns that describe the nature of the update.
-
-## Query
-
-Querying Materialize is identical to querying a PostgreSQL database. Here's how to do a SELECT statement:
-
-```rust
-use crate::connection::create_client;
-
-pub(crate) fn run_query () {
+pub(crate) fn create_table() -> Result<u64, Error> {
     let mut client = create_client().expect("Error creating client.");
 
-    let results = client.query("SELECT code, name FROM countries;", &[]).expect("Error running query.");
-
-    for row in results {
-        println!("{:} - {:}", row.get::<usize, String>(0), row.get::<usize, String>(1));
-    };
+    client.execute(
+        "
+        CREATE TABLE IF NOT EXISTS countries (
+            code CHAR(2),
+            name TEXT
+        );
+    ",
+        &[],
+    )
 }
 ```
 
@@ -93,6 +73,24 @@ pub(crate) fn insert() -> Result<u64, Error> {
         "INSERT INTO countries(code, name) VALUES($1, $2)",
         &[&code, &name],
     )
+}
+```
+
+## Query
+
+Querying Materialize is identical to querying a PostgreSQL database. Here's how to do a SELECT statement:
+
+```rust
+use crate::connection::create_client;
+
+pub(crate) fn run_query () {
+    let mut client = create_client().expect("Error creating client.");
+
+    let results = client.query("SELECT code, name FROM countries;", &[]).expect("Error running query.");
+
+    for row in results {
+        println!("{:} - {:}", row.get::<usize, String>(0), row.get::<usize, String>(1));
+    };
 }
 ```
 
@@ -136,12 +134,38 @@ pub(crate) fn create_materialized_view() -> Result<u64, Error> {
         "
         CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
         SELECT sum(counter)
-        FROM counter;`
+        FROM counter;
     ",
         &[],
     )
 }
 ```
+
+## Stream
+
+Materialize is designed to stream changes to views. To subscribe to a stream of updates in Rust, you can use PostgreSQL's LISTEN/NOTIFY feature. Here's how to subscribe to a stream:
+
+```rust
+use std::{thread::sleep, time::Duration};
+
+use crate::connection::create_client;
+
+pub(crate) fn subscribe() {
+    let mut client = create_client().expect("Error creating client.");
+    let mut transaction = client.transaction().expect("Error creating transaction.");
+    transaction.execute("DECLARE c CURSOR FOR SUBSCRIBE (SELECT sum::text FROM counter_sum) WITH (SNAPSHOT = false);", &[]).expect("Error creating cursor.");
+
+    loop {
+        let results = transaction.query("FETCH ALL c;", &[]).expect("Error running fetch.");
+        for row in results {
+            println!("{:}", row.get::<usize, String>(2));
+        }
+        sleep(Duration::from_millis(200));
+    }
+}
+```
+
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `results` contains all of the columns of `market_orders`, prepended with several additional columns that describe the nature of the update.
 
 ## ORM
 
