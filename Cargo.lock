@@ -1969,7 +1969,7 @@ checksum = "2eac3c0b9fa6eb75255ebb42c0ba3e2210d102a66d2795afef6fed668f373311"
 [[package]]
 name = "eventsource-client"
 version = "0.11.0"
-source = "git+https://github.com/MaterializeInc/rust-eventsource-client#7189b690cbfa7ff5be2e943fbce83b8a8b67b928"
+source = "git+https://github.com/MaterializeInc/rust-eventsource-client#fb749fde693a9757289238ee71d4e9b3590fb24b"
 dependencies = [
  "futures",
  "hyper",
@@ -2908,7 +2908,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#5c36592edc75b620482a92e6991147aee7baf2d8"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#59b5740089a1d91b778a6995c941421d05617e36"
 dependencies = [
  "built",
  "chrono",
