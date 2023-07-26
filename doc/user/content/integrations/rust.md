@@ -32,6 +32,8 @@ pub(crate) fn create_client() -> Result<Client, Error> {
 
 ## Create tables
 
+Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
+
 To create a table named `countries` in Materialize:
 
 ```rust
@@ -56,7 +58,7 @@ pub(crate) fn create_table() -> Result<u64, Error> {
 
 ## Insert data into tables
 
-To insert a row of data into a table named `countries` in Materialize:
+To [insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
 
 ```rust
 use postgres::Error;
