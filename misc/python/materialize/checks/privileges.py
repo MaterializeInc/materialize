@@ -89,7 +89,7 @@ class Privileges(Check):
                     REVOKE ALL PRIVILEGES ON CLUSTER privilege_cluster{i} FROM {role}
                     """
             )
-    
+
         return s
 
     def _drop_objects(

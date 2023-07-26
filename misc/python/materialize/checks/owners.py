@@ -197,7 +197,9 @@ class Owners(Check):
                 # Requires enable_ld_rbac_checks
                 (
                     self._drop_objects("materialize", 1, success=False, expensive=True)
-                    + self._drop_objects("materialize", 2, success=False, expensive=True)
+                    + self._drop_objects(
+                        "materialize", 2, success=False, expensive=True
+                    )
                     + self._drop_objects("materialize", 3, success=False)
                     + self._drop_objects("materialize", 4, success=False)
                     + self._drop_objects("materialize", 5, success=False)
