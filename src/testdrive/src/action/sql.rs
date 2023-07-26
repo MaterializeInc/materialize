@@ -121,14 +121,20 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
 
     match stmt {
-        Statement::CreateDatabase { .. }
+        Statement::AlterDefaultPrivileges { .. }
+        | Statement::AlterOwner { .. }
+        | Statement::CreateDatabase { .. }
         | Statement::CreateIndex { .. }
         | Statement::CreateSchema { .. }
         | Statement::CreateSource { .. }
         | Statement::CreateTable { .. }
         | Statement::CreateView { .. }
         | Statement::CreateMaterializedView { .. }
-        | Statement::DropObjects { .. } => {
+        | Statement::DropObjects { .. }
+        | Statement::GrantPrivileges { .. }
+        | Statement::GrantRole { .. }
+        | Statement::RevokePrivileges { .. }
+        | Statement::RevokeRole { .. } => {
             let disk_state = state
                 .with_catalog_copy(|catalog| catalog.state().dump())
                 .await
