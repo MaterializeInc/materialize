@@ -66,7 +66,7 @@
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
@@ -507,13 +507,10 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
-// 1 GiB
-const MAX_QUERY_RESULT_SIZE_DEFAULT: u32 = 1_073_741_824;
-
-// The maximum number of bytes from Rows to
 pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_query_result_size"),
-    value: &MAX_QUERY_RESULT_SIZE_DEFAULT,
+    // 1 GiB
+    value: &1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -1355,10 +1352,7 @@ impl SessionVars {
                 &ENABLE_SESSION_CARDINALITY_ESTIMATES,
                 &ENABLE_CARDINALITY_ESTIMATES,
             )
-            .with_value_constrained_var(
-                &MAX_QUERY_RESULT_SIZE,
-                ValueConstraint::Domain(&MaxConstraint(MAX_QUERY_RESULT_SIZE_DEFAULT)),
-            )
+            .with_var(&MAX_QUERY_RESULT_SIZE)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -3108,27 +3102,6 @@ impl Value for i32 {
 
     fn format(&self) -> String {
         self.to_string()
-    }
-}
-
-/// A DomainConstraint that limits the maximum of a var.
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct MaxConstraint<T>(T);
-
-impl<T> DomainConstraint<T> for MaxConstraint<T>
-where
-    T: PartialEq + Debug + Value + Display + PartialOrd + ToOwned<Owned = T> + 'static,
-{
-    fn check(&self, var: &(dyn Var + Send + Sync), n: &T) -> Result<(), VarError> {
-        if n > &self.0 {
-            Err(VarError::InvalidParameterValue {
-                parameter: var.into(),
-                values: vec![n.to_string()],
-                reason: format!("cannot be greater than {}", self.0),
-            })
-        } else {
-            Ok(())
-        }
     }
 }
 
