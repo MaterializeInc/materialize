@@ -36,9 +36,10 @@ However, these and many other statements do have a known `ExecuteResponse` that 
 We will add a new transaction operation mode called `SingleStatement`.
 Currently those modes are `Peeks`, `Writes`, and `Subscribe`.
 `SingleStatement` will record the statement, then generate and return to the user an `ExecuteResponse` that assummes success.
-This mode can only be entered in explicit transactions (must start with `BEGIN`).
-If the next statement is `COMMIT`, the coordinator sets the session's transaction status to `InTransactionImplicit`, which is a status that can execute any statement, then executes the statement.
-If any other statement beside `COMMIT` or `ROLLBACK` is executed after the first, the transaction fails.
+The `SingleStatement` operation can only be entered in explicit transactions (must start with `BEGIN`).
+On `COMMIT`, the coordinator clears the current transaction, fetching and processing its inner operation (this already occurs before this document).
+If the inner operation is `SingleStatement`, the transaction status is set to `Started` (a status that can execute any statement), the recorded statement is executed, and an implicit `COMMIT` is executed.
+The implicit `COMMIT` puts the transaction into the same final state (`Default`) as the explicit `COMMIT`.
 
 ### Session Transaction State Machine
 
@@ -67,6 +68,9 @@ All status except `Default` have an inner `Transaction` object that tracks what 
 These operations are: `Peeks`, `Subscribe`, `Writes`, `None`.
 `None` is the default and can transition to any other operation.
 The other operations can be merged with like operations, except `Subscribe` which supports only a single `SUBSCRIBE`.
+When a transaction is being `COMMIT`ed, the transaction is cleared (set to `Default`) and its inner operation is able to do arbitrary post processing.
+`Peeks` can enqueue the session back into the Coordinator in order to wait for a strict serializable verification.
+`Writes` enqueues the writes along with their session in order to wait for writing to the storage controller.
 
 The `ReadyForQuery` message is sent by the server when it is ready to receive new queries, and it includes the current transaction status code: `Idle`, `InTransaction`, or `Failed`.
 `InTransaction` and `Failed` correspond to the similarly named variants above and can only appear in explicit transactions.
@@ -77,16 +81,16 @@ The pgwire, http, and ws handlers enforce these requirements and state changes.
 #### Changes from this design
 
 This design adds a new operation to the inner transaction: `SingleStatement`.
-This operation records a single statement that is later retrieved and executed during `COMMIT`.
-
-This design also adds what is essentially a new handler: the coordinator itself.
-When a transaction is being committed and its inner operation is `SingleStatement`, the inner statement is queued in the coordinator for execution by a new method that is serving as a handler: `sequence_execute_single_statement_transaction`.
+This operation records a single statement.
+The post processing for this operation enqueues to the Coordinator a message containing the statement and session, which is processed by a new `sequence_execute_single_statement_transaction` method.
 This method:
-1. Ensures the session's transaction is in `Default`, which should be a side effect of running it through `sequence_end_transaction` from the `COMMIT`.
+1. Asserts the session's transaction is in `Default`, which should be a side effect of running it through `sequence_end_transaction` from the `COMMIT`.
 2. Puts the session's transaction into `Started` (single-statement, implicit transaction).
 3. Executes the inner statement, without sending the result to the user.
 4. Commits the transaction.
 5. The transaction should again be in `Default`.
+
+The `sequence_execute_single_statement_transaction` function is acting as a handler and must ensure the correct state transitions and invariants as the other handlers.
 
 ## Alternatives
 

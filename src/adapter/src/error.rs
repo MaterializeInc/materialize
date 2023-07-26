@@ -401,7 +401,7 @@ impl AdapterError {
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::SingleStatementTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {

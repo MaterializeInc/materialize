@@ -580,7 +580,7 @@ impl Coordinator {
                             .flatten()
                             .map(|r| r.try_into())
                             .collect::<Vec<Result<ExecuteResponse, _>>>();
-                        // If we're in an implicit transaction and we could generate exactly one
+                        // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
                         if !txn.is_implicit() && resp_kind.len() == 1 {
                             if let Ok(resp) = resp_kind.swap_remove(0) {

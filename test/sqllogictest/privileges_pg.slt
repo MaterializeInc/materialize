@@ -129,7 +129,7 @@ COMPLETE 0
 simple conn=regress_priv_user3,user=regress_priv_user3
 REVOKE regress_priv_user2 FROM regress_priv_user4;
 ----
-db error: ERROR: REVOKE regress_priv_user2 FROM regress_priv_user4 cannot be run inside a transaction block
+COMPLETE 0
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 ROLLBACK;
@@ -144,7 +144,7 @@ COMPLETE 0
 simple conn=regress_priv_user3,user=regress_priv_user3
 GRANT regress_priv_user2 TO regress_priv_user4;
 ----
-db error: ERROR: GRANT regress_priv_user2 TO regress_priv_user4 cannot be run inside a transaction block
+COMPLETE 0
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 ROLLBACK;
