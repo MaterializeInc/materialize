@@ -17,7 +17,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
-use crate::catalog::storage::{self, Transaction};
+use crate::catalog::storage::Transaction;
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 
 async fn rewrite_items<F>(
@@ -34,23 +34,20 @@ where
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
-    for storage::Item {
-        id,
-        name,
-        definition: SerializedCatalogItem::V1 { create_sql },
-        owner_id: _,
-        privileges: _,
-    } in items
-    {
-        let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
+    for mut item in items {
+        let create_sql = match &item.definition {
+            SerializedCatalogItem::V1 { create_sql } => create_sql,
+        };
+        let mut stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
 
         f(tx, &cat, &mut stmt).await?;
 
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
         };
+        item.definition = serialized_item;
 
-        updated_items.insert(id, (name.item, serialized_item));
+        updated_items.insert(item.id, item);
     }
     tx.update_items(updated_items)?;
     Ok(())

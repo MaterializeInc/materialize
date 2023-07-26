@@ -5437,7 +5437,7 @@ impl Catalog {
                         )));
                     }
 
-                    let old_sink = match entry.item() {
+                    let mut new_sink = match entry.item() {
                         CatalogItem::Sink(sink) => sink.clone(),
                         other => {
                             coord_bail!("ALTER SINK entry was not a sink: {}", other.typ())
@@ -5447,7 +5447,7 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&old_sink.create_sql)
+                    let mut stmt = mz_sql::parse::parse(&new_sink.create_sql)
                         .expect("invalid create sql persisted to catalog")
                         .into_element()
                         .ast;
@@ -5482,13 +5482,13 @@ impl Catalog {
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
-                    let sink = CatalogItem::Sink(Sink {
-                        create_sql,
-                        ..old_sink
-                    });
+                    new_sink.create_sql = create_sql;
+                    let sink = CatalogEntry {
+                        item: CatalogItem::Sink(new_sink),
+                        ..(entry.clone())
+                    };
 
-                    let ser = Self::serialize_item(&sink);
-                    tx.update_item(id, &name.item, &ser)?;
+                    tx.update_item(id, &sink)?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5510,7 +5510,14 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(state, builtin_table_updates, id, to_name, sink, &drop_ids)?;
+                    update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        to_name,
+                        sink.item,
+                        &drop_ids,
+                    )?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -5528,7 +5535,7 @@ impl Catalog {
                         )));
                     }
 
-                    let old_source = match entry.item() {
+                    let mut new_source = match entry.item() {
                         CatalogItem::Source(source) => source.clone(),
                         other => {
                             coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ())
@@ -5538,7 +5545,7 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+                    let mut stmt = mz_sql::parse::parse(&new_source.create_sql)
                         .expect("invalid create sql persisted to catalog")
                         .into_element()
                         .ast;
@@ -5575,13 +5582,13 @@ impl Catalog {
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
-                    let source = CatalogItem::Source(Source {
-                        create_sql,
-                        ..old_source
-                    });
+                    new_source.create_sql = create_sql;
+                    let source = CatalogEntry {
+                        item: CatalogItem::Source(new_source.clone()),
+                        ..(entry.clone())
+                    };
 
-                    let ser = Self::serialize_item(&source);
-                    tx.update_item(id, &name.item, &ser)?;
+                    tx.update_item(id, &source)?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5603,7 +5610,14 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(state, builtin_table_updates, id, to_name, source, &drop_ids)?;
+                    update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        to_name,
+                        source.item,
+                        &drop_ids,
+                    )?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -6516,11 +6530,7 @@ impl Catalog {
                                 let entry = state.get_entry_mut(id);
                                 update_privilege_fn(&mut entry.privileges);
                                 if !entry.item().is_temporary() {
-                                    tx.update_item(
-                                        *id,
-                                        &entry.name().item,
-                                        &Self::serialize_item(entry.item()),
-                                    )?;
+                                    tx.update_item(*id, entry)?;
                                 }
                                 builtin_table_updates.extend(state.pack_item_update(*id, 1));
                             }
@@ -6742,7 +6752,7 @@ impl Catalog {
                     to_full_name.item = to_name.clone();
 
                     let mut to_qualified_name = entry.name().clone();
-                    to_qualified_name.item = to_name;
+                    to_qualified_name.item = to_name.clone();
 
                     let details = EventDetails::RenameItemV1(mz_audit_log::RenameItemV1 {
                         id: id.to_string(),
@@ -6763,7 +6773,9 @@ impl Catalog {
                     }
 
                     // Rename item itself.
-                    let item = entry
+                    let mut new_entry = entry.clone();
+                    new_entry.name.item = to_name.clone();
+                    new_entry.item = entry
                         .item
                         .rename_item_refs(
                             current_full_name.clone(),
@@ -6781,11 +6793,11 @@ impl Catalog {
                                 message: e,
                             }))
                         })?;
-                    let serialized_item = Self::serialize_item(&item);
 
                     for id in entry.used_by() {
                         let dependent_item = state.get_entry(id);
-                        let to_item = dependent_item
+                        let mut to_entry = dependent_item.clone();
+                        to_entry.item = dependent_item
                             .item
                             .rename_item_refs(
                                 current_full_name.clone(),
@@ -6807,19 +6819,18 @@ impl Catalog {
                                 }))
                             })?;
 
-                        if !item.is_temporary() {
-                            let serialized_item = Self::serialize_item(&to_item);
-                            tx.update_item(*id, &dependent_item.name().item, &serialized_item)?;
+                        if !new_entry.item().is_temporary() {
+                            tx.update_item(*id, &to_entry)?;
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
 
-                        updates.push((id.clone(), dependent_item.name().clone(), to_item));
+                        updates.push((id.clone(), dependent_item.name().clone(), to_entry.item));
                     }
-                    if !item.is_temporary() {
-                        tx.update_item(id, &to_full_name.item, &serialized_item)?;
+                    if !new_entry.item().is_temporary() {
+                        tx.update_item(id, &new_entry)?;
                     }
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    updates.push((id, to_qualified_name, item));
+                    updates.push((id, to_qualified_name, new_entry.item));
                     for (id, to_name, to_item) in updates {
                         update_item(
                             state,
@@ -6953,11 +6964,7 @@ impl Catalog {
                             );
                             entry.owner_id = new_owner;
                             if !entry.item().is_temporary() {
-                                tx.update_item(
-                                    *id,
-                                    &entry.name().item,
-                                    &Self::serialize_item(entry.item()),
-                                )?;
+                                tx.update_item(*id, entry)?;
                             }
                             builtin_table_updates.extend(state.pack_item_update(*id, 1));
                         }
@@ -7011,10 +7018,10 @@ impl Catalog {
                     ));
                 }
                 Op::UpdateItem { id, name, to_item } => {
-                    let ser = Self::serialize_item(&to_item);
-                    tx.update_item(id, &name.item, &ser)?;
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
+                    let entry = state.get_entry(&id);
+                    tx.update_item(id, entry)?;
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
@@ -7247,7 +7254,7 @@ impl Catalog {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    fn serialize_item(item: &CatalogItem) -> SerializedCatalogItem {
+    pub(crate) fn serialize_item(item: &CatalogItem) -> SerializedCatalogItem {
         match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),

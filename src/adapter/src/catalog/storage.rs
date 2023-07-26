@@ -42,7 +42,7 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
-    self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
+    self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
     SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
 };
@@ -1386,17 +1386,17 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_item(
         &mut self,
         id: GlobalId,
-        item_name: &str,
-        item: &SerializedCatalogItem,
+        entry: &catalog::CatalogEntry,
     ) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
+                let definition = Catalog::serialize_item(entry.item());
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: item_name.to_string(),
-                    definition: item.clone(),
-                    owner_id: v.owner_id,
-                    privileges: v.clone().privileges,
+                    name: entry.name().item.clone(),
+                    definition,
+                    owner_id: *entry.owner_id(),
+                    privileges: entry.privileges().all_values_owned().collect(),
                 })
             } else {
                 None
@@ -1417,18 +1417,15 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the called to either abort the transaction or commit.
-    pub(crate) fn update_items(
-        &mut self,
-        items: BTreeMap<GlobalId, (String, SerializedCatalogItem)>,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
-            if let Some((item_name, item)) = items.get(&k.gid) {
+            if let Some(item) = items.get(&k.gid) {
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: item_name.clone(),
-                    definition: item.clone(),
-                    owner_id: v.owner_id,
-                    privileges: v.privileges.clone(),
+                    name: item.name.item.clone(),
+                    definition: item.definition.clone(),
+                    owner_id: item.owner_id.clone(),
+                    privileges: item.privileges.clone(),
                 })
             } else {
                 None
