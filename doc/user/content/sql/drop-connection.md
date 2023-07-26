@@ -57,6 +57,13 @@ ERROR:  cannot drop materialize.public.kafka_connection: still depended upon by 
 DROP CONNECTION kafka_connection CASCADE;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped connection.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`SHOW CONNECTIONS`](../show-connections)

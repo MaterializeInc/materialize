@@ -29,14 +29,14 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_sql_lexer::keywords::*;
+use mz_sql_lexer::lexer::{self, LexerError, Token};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use IsLateral::*;
 use IsOptional::*;
 
 use crate::ast::*;
-use crate::keywords::*;
-use crate::lexer::{self, Token};
 
 // NOTE(benesch): this recursion limit was chosen based on the maximum amount of
 // nesting I've ever seen in a production SQL query (i.e., about a dozen) times
@@ -54,6 +54,20 @@ macro_rules! parser_err {
     ($parser:expr, $pos:expr, $($arg:tt)*) => {
         Err($parser.error($pos, format!($($arg)*)))
     };
+}
+
+/// The result of successfully parsing a statement:
+/// both the AST and the SQL text that it corresponds to
+#[derive(Debug, Clone)]
+pub struct StatementParseResult<'a> {
+    pub ast: Statement<Raw>,
+    pub sql: &'a str,
+}
+
+impl<'a> StatementParseResult<'a> {
+    pub fn new(ast: Statement<Raw>, sql: &'a str) -> Self {
+        Self { ast, sql }
+    }
 }
 
 trait ParserStatementErrorMapper<T> {
@@ -91,7 +105,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements_with_limit(
     sql: &str,
-) -> Result<Result<Vec<Statement<Raw>>, ParserStatementError>, String> {
+) -> Result<Result<Vec<StatementParseResult>, ParserStatementError>, String> {
     if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
@@ -103,8 +117,11 @@ pub fn parse_statements_with_limit(
 
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
-    let tokens = lexer::lex(sql).map_no_statement_parser_err()?;
+pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
+    let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
+        error: error.into(),
+        statement: None,
+    })?;
     Parser::new(sql, tokens).parse_statements()
 }
 
@@ -236,6 +253,21 @@ impl fmt::Display for ParserStatementError {
     }
 }
 
+impl From<LexerError> for ParserError {
+    fn from(value: LexerError) -> Self {
+        ParserError {
+            message: value.message,
+            pos: value.pos,
+        }
+    }
+}
+
+impl From<Keyword> for Ident {
+    fn from(value: Keyword) -> Ident {
+        Ident::new(value.as_str().to_lowercase())
+    }
+}
+
 /// SQL Parser
 struct Parser<'a> {
     sql: &'a str,
@@ -287,7 +319,7 @@ impl<'a> Parser<'a> {
         ParserError { pos, message }
     }
 
-    fn parse_statements(&mut self) -> Result<Vec<Statement<Raw>>, ParserStatementError> {
+    fn parse_statements(&mut self) -> Result<Vec<StatementParseResult<'a>>, ParserStatementError> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         loop {
@@ -304,16 +336,28 @@ impl<'a> Parser<'a> {
                     .map_no_statement_parser_err();
             }
 
-            let statement = self.parse_statement()?;
-            stmts.push(statement);
+            let s = self.parse_statement()?;
+            stmts.push(s);
             expecting_statement_delimiter = true;
         }
         Ok(stmts)
     }
+    /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
+    /// stopping before the statement separator, if any. Returns the parsed statement and the SQL
+    /// fragment corresponding to it.
+    fn parse_statement(&mut self) -> Result<StatementParseResult<'a>, ParserStatementError> {
+        let before = self.peek_pos();
+        let statement = self.parse_statement_inner()?;
+        let after = self.peek_pos();
+        Ok(StatementParseResult::new(
+            statement,
+            self.sql[before..after].trim(),
+        ))
+    }
 
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any.
-    fn parse_statement(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+    fn parse_statement_inner(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.next_token() {
             Some(t) => match t {
                 Token::Keyword(SELECT) | Token::Keyword(WITH) | Token::Keyword(VALUES) => {
@@ -531,7 +575,7 @@ impl<'a> Parser<'a> {
                     "expected expression, but found reserved keyword".into(),
                 ));
             }
-            Token::Keyword(id) => self.parse_qualified_identifier(id.into_ident()),
+            Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
             Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
             Token::Op(op) if op == "-" => {
                 if let Some(Token::Number(n)) = self.peek_token() {
@@ -890,7 +934,7 @@ impl<'a> Parser<'a> {
     fn parse_extract_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {
-            Some(Token::Keyword(kw)) => kw.into_ident().into_string(),
+            Some(Token::Keyword(kw)) => Ident::from(kw).into_string(),
             Some(Token::Ident(id)) => Ident::new(id).into_string(),
             Some(Token::String(s)) => s,
             t => self.expected(self.peek_prev_pos(), "extract field token", t)?,
@@ -1240,7 +1284,7 @@ impl<'a> Parser<'a> {
                 // access operator.
                 Some(Token::Keyword(kw)) => Ok(Expr::FieldAccess {
                     expr: Box::new(expr),
-                    field: kw.into_ident(),
+                    field: kw.into(),
                 }),
                 Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
                 unexpected => self.expected(
@@ -1351,19 +1395,20 @@ impl<'a> Parser<'a> {
     ///   * `OPERATOR("foo"."bar"."baz".@>)`
     fn parse_operator(&mut self) -> Result<Op, ParserError> {
         let mut namespace = vec![];
-        loop {
+        let op = loop {
             match self.next_token() {
-                Some(Token::Keyword(kw)) => namespace.push(kw.into_ident()),
+                Some(Token::Keyword(kw)) => namespace.push(kw.into()),
                 Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
-                Some(Token::Op(op)) => return Ok(Op { namespace, op }),
-                Some(Token::Star) => {
-                    let op = String::from("*");
-                    return Ok(Op { namespace, op });
-                }
+                Some(Token::Op(op)) => break op,
+                Some(Token::Star) => break "*".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
             }
             self.expect_token(&Token::Dot)?;
-        }
+        };
+        Ok(Op {
+            namespace: Some(namespace),
+            op,
+        })
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -2214,57 +2259,58 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_connection_option(&mut self) -> Result<KafkaConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL])? {
-            BROKER => {
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::Broker,
-                    value: Some(self.parse_kafka_broker()?),
-                });
-            }
-            BROKERS => {
-                let _ = self.consume_token(&Token::Eq);
-                let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
-                let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
-                self.expect_token(&match delimiter {
-                    Token::LParen => Token::RParen,
-                    Token::LBracket => Token::RBracket,
-                    _ => unreachable!(),
-                })?;
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::Brokers,
-                    value: Some(WithOptionValue::Sequence(brokers)),
-                });
-            }
-            PROGRESS => {
-                self.expect_keyword(TOPIC)?;
-                KafkaConnectionOptionName::ProgressTopic
-            }
-            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
-                MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
-                PASSWORD => KafkaConnectionOptionName::SaslPassword,
-                USERNAME => KafkaConnectionOptionName::SaslUsername,
-                _ => unreachable!(),
-            },
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
-                return Ok(KafkaConnectionOption {
-                    name: KafkaConnectionOptionName::SshTunnel,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => KafkaConnectionOptionName::SslKey,
-                CERTIFICATE => {
-                    if self.parse_keyword(AUTHORITY) {
-                        KafkaConnectionOptionName::SslCertificateAuthority
-                    } else {
-                        KafkaConnectionOptionName::SslCertificate
-                    }
+        let name =
+            match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL, SSH])? {
+                BROKER => {
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::Broker,
+                        value: Some(self.parse_kafka_broker()?),
+                    });
                 }
+                BROKERS => {
+                    let _ = self.consume_token(&Token::Eq);
+                    let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
+                    let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
+                    self.expect_token(&match delimiter {
+                        Token::LParen => Token::RParen,
+                        Token::LBracket => Token::RBracket,
+                        _ => unreachable!(),
+                    })?;
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::Brokers,
+                        value: Some(WithOptionValue::Sequence(brokers)),
+                    });
+                }
+                PROGRESS => {
+                    self.expect_keyword(TOPIC)?;
+                    KafkaConnectionOptionName::ProgressTopic
+                }
+                SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                    MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
+                    PASSWORD => KafkaConnectionOptionName::SaslPassword,
+                    USERNAME => KafkaConnectionOptionName::SaslUsername,
+                    _ => unreachable!(),
+                },
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    return Ok(KafkaConnectionOption {
+                        name: KafkaConnectionOptionName::SshTunnel,
+                        value: Some(self.parse_object_option_value()?),
+                    });
+                }
+                SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                    KEY => KafkaConnectionOptionName::SslKey,
+                    CERTIFICATE => {
+                        if self.parse_keyword(AUTHORITY) {
+                            KafkaConnectionOptionName::SslCertificateAuthority
+                        } else {
+                            KafkaConnectionOptionName::SslCertificate
+                        }
+                    }
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
+            };
         Ok(KafkaConnectionOption {
             name,
             value: self.parse_optional_option_value()?,
@@ -2366,7 +2412,7 @@ impl<'a> Parser<'a> {
                 KafkaConfigOptionName::EnableIdempotence
             }
             FETCH => {
-                self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
+                self.expect_keywords(&[MESSAGE, MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes
             }
             GROUP => {
@@ -2608,9 +2654,23 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_item_name()?;
+
         let (col_names, key_constraint) = self.parse_source_columns()?;
+
+        // For webhook sources we require `IN CLUSTER`, so track the position for an error message.
+        let cluster_err = self.expected(self.peek_pos(), "IN CLUSTER", self.peek_token());
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
+
+        // Webhook Source, which works differently than all other sources.
+        if self.peek_keyword(WEBHOOK) {
+            return self.parse_create_webhook_source(
+                name,
+                if_not_exists,
+                (in_cluster, cluster_err),
+            );
+        }
+
         let connection = self.parse_create_source_connection()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
@@ -2737,7 +2797,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP, DISK])? {
+        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
             IGNORE => {
                 self.expect_keyword(KEYS)?;
                 CreateSourceOptionName::IgnoreKeys
@@ -2748,7 +2808,6 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(INTERVAL)?;
                 CreateSourceOptionName::TimestampInterval
             }
-            DISK => CreateSourceOptionName::Disk,
             _ => unreachable!(),
         };
         Ok(name)
@@ -2761,6 +2820,90 @@ impl<'a> Parser<'a> {
             name,
             value: self.parse_optional_option_value()?,
         })
+    }
+
+    fn parse_create_webhook_source(
+        &mut self,
+        name: UnresolvedItemName,
+        if_not_exists: bool,
+        in_cluster: (Option<RawClusterName>, Result<(), ParserError>),
+    ) -> Result<Statement<Raw>, ParserError> {
+        let in_cluster = in_cluster.0.ok_or_else(|| in_cluster.1.unwrap_err())?;
+
+        // Consume this keyword because we only peeked it earlier.
+        self.expect_keyword(WEBHOOK)?;
+
+        self.expect_keywords(&[BODY, FORMAT])?;
+
+        // Note: we don't use `parse_format()` here because we support fewer formats than other
+        // sources, and the user gets better errors if we reject the formats here.
+        let body_format = match self.expect_one_of_keywords(&[JSON, TEXT, BYTES])? {
+            JSON => Format::Json,
+            TEXT => Format::Text,
+            BYTES => Format::Bytes,
+            _ => unreachable!(),
+        };
+        let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
+
+        let validate_using = if self.parse_keyword(CHECK) {
+            self.expect_token(&Token::LParen)?;
+
+            let options = if self.parse_keyword(WITH) {
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_create_webhook_check_options()?;
+                self.expect_token(&Token::RParen)?;
+
+                Some(options)
+            } else {
+                None
+            };
+
+            let using = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+
+            Some(CreateWebhookSourceCheck { options, using })
+        } else {
+            None
+        };
+
+        Ok(Statement::CreateWebhookSource(
+            CreateWebhookSourceStatement {
+                name,
+                if_not_exists,
+                body_format,
+                include_headers,
+                validate_using,
+                in_cluster,
+            },
+        ))
+    }
+
+    fn parse_create_webhook_check_options(
+        &mut self,
+    ) -> Result<CreateWebhookSourceCheckOptions<Raw>, ParserError> {
+        let mut secrets = vec![];
+
+        self.parse_comma_separated(|f| match f.expect_one_of_keywords(&[SECRET])? {
+            SECRET => {
+                let secret = f.parse_raw_name()?;
+                let alias = f
+                    .parse_keyword(AS)
+                    .then(|| f.parse_identifier())
+                    .transpose()?;
+                let use_bytes = f.parse_keyword(Keyword::Bytes);
+
+                secrets.push(CreateWebhookSourceSecret {
+                    secret,
+                    alias,
+                    use_bytes,
+                });
+
+                Ok(())
+            }
+            k => unreachable!("Unexpected keyword! {k}"),
+        })?;
+
+        Ok(CreateWebhookSourceCheckOptions { secrets })
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3275,6 +3418,7 @@ impl<'a> Parser<'a> {
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
             AVAILABILITY,
+            DISK,
             IDLE,
             INTROSPECTION,
             MANAGED,
@@ -3287,6 +3431,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
             }
+            DISK => ClusterOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ClusterOptionName::IdleArrangementMergeEffort
@@ -3345,6 +3490,7 @@ impl<'a> Parser<'a> {
             AVAILABILITY,
             COMPUTE,
             COMPUTECTL,
+            DISK,
             IDLE,
             INTROSPECTION,
             SIZE,
@@ -3364,6 +3510,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ADDRESSES)?;
                 ReplicaOptionName::ComputectlAddresses
             }
+            DISK => ReplicaOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
@@ -4102,9 +4249,41 @@ impl<'a> Parser<'a> {
 
         Ok(
             match self
-                .expect_one_of_keywords(&[DROP, RESET, SET, RENAME, OWNER])
+                .expect_one_of_keywords(&[ADD, DROP, RESET, SET, RENAME, OWNER])
                 .map_no_statement_parser_err()?
             {
+                ADD => {
+                    self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
+                        .map_parser_err(StatementKind::AlterSource)?;
+
+                    // TODO: Add IF NOT EXISTS?
+                    let subsources = self
+                        .parse_comma_separated(Parser::parse_subsource_references)
+                        .map_parser_err(StatementKind::AlterSource)?;
+
+                    let options = if self.parse_keyword(WITH) {
+                        self.expect_token(&Token::LParen)
+                            .map_parser_err(StatementKind::AlterSource)?;
+                        let options = self
+                            .parse_comma_separated(Parser::parse_alter_source_add_subsource_option)
+                            .map_parser_err(StatementKind::AlterSource)?;
+                        self.expect_token(&Token::RParen)
+                            .map_parser_err(StatementKind::AlterSource)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name,
+                        if_exists,
+                        action: AlterSourceAction::AddSubsources {
+                            subsources,
+                            details: None,
+                            options,
+                        },
+                    })
+                }
                 DROP => {
                     self.expect_one_of_keywords(&[SUBSOURCE, TABLE])
                         .map_parser_err(StatementKind::AlterSource)?;
@@ -4189,6 +4368,35 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
         )
+    }
+
+    fn parse_alter_source_add_subsource_option(
+        &mut self,
+    ) -> Result<AlterSourceAddSubsourceOption<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[TEXT])? {
+            TEXT => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(AlterSourceAddSubsourceOption {
+                    name: AlterSourceAddSubsourceOptionName::TextColumns,
+                    value,
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
@@ -4551,7 +4759,7 @@ impl<'a> Parser<'a> {
     /// Parse a copy statement
     fn parse_copy(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let relation = if self.consume_token(&Token::LParen) {
-            let query = self.parse_statement()?;
+            let query = self.parse_statement()?.ast;
             self.expect_token(&Token::RParen)
                 .map_parser_err(StatementKind::Copy)?;
             match query {
@@ -4921,7 +5129,7 @@ impl<'a> Parser<'a> {
             // which may start a construct allowed in this position, to be parsed as aliases.
             // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
             // not an alias.)
-            Some(Token::Keyword(kw)) if after_as || !is_reserved(kw) => Ok(Some(kw.into_ident())),
+            Some(Token::Keyword(kw)) if after_as || !is_reserved(kw) => Ok(Some(kw.into())),
             Some(Token::Ident(id)) => Ok(Some(Ident::new(id))),
             not_an_ident => {
                 if after_as {
@@ -5063,7 +5271,7 @@ impl<'a> Parser<'a> {
         match self.peek_token() {
             Some(Token::Keyword(kw)) => {
                 self.next_token();
-                Some(kw.into_ident())
+                Some(kw.into())
             }
             Some(Token::Ident(id)) => {
                 self.next_token();
@@ -5080,7 +5288,7 @@ impl<'a> Parser<'a> {
                 let mut ends_with_wildcard = false;
                 while self.consume_token(&Token::Dot) {
                     match self.next_token() {
-                        Some(Token::Keyword(kw)) => id_parts.push(kw.into_ident()),
+                        Some(Token::Keyword(kw)) => id_parts.push(kw.into()),
                         Some(Token::Ident(id)) => id_parts.push(Ident::new(id)),
                         Some(Token::Star) => {
                             ends_with_wildcard = true;
@@ -5704,11 +5912,21 @@ impl<'a> Parser<'a> {
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => ShowObjectType::Source,
                 ObjectType::Subsource => {
-                    self.expect_keyword(ON)?;
+                    let on_source = if self.parse_one_of_keywords(&[ON]).is_some() {
+                        Some(self.parse_raw_name()?)
+                    } else {
+                        None
+                    };
 
-                    ShowObjectType::Subsource {
-                        on_source: self.parse_raw_name()?,
+                    if from.is_some() && on_source.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "Cannot specify both FROM and ON"
+                        );
                     }
+
+                    ShowObjectType::Subsource { on_source }
                 }
                 ObjectType::Sink => ShowObjectType::Sink,
                 ObjectType::Type => ShowObjectType::Type,
@@ -6478,14 +6696,26 @@ impl<'a> Parser<'a> {
             .map_parser_err(StatementKind::Declare)?;
         self.expect_keyword(CURSOR)
             .map_parser_err(StatementKind::Declare)?;
+        if self.parse_keyword(WITH) {
+            let err = parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("WITH HOLD is unsupported for cursors")
+            )
+            .map_parser_err(StatementKind::Declare);
+            self.expect_keyword(HOLD)
+                .map_parser_err(StatementKind::Declare)?;
+            return err;
+        }
         // WITHOUT HOLD is optional and the default behavior so we can ignore it.
         let _ = self.parse_keywords(&[WITHOUT, HOLD]);
         self.expect_keyword(FOR)
             .map_parser_err(StatementKind::Declare)?;
-        let stmt = self.parse_statement()?;
+        let StatementParseResult { ast, sql } = self.parse_statement()?;
         Ok(Statement::Declare(DeclareStatement {
             name,
-            stmt: Box::new(stmt),
+            stmt: Box::new(ast),
+            sql: sql.to_string(),
         }))
     }
 
@@ -6506,19 +6736,20 @@ impl<'a> Parser<'a> {
             .map_parser_err(StatementKind::Prepare)?;
         let pos = self.peek_pos();
         //
-        let stmt = match self.parse_statement()? {
-            stmt @ Statement::Select(_)
-            | stmt @ Statement::Insert(_)
-            | stmt @ Statement::Delete(_)
-            | stmt @ Statement::Update(_) => stmt,
-            _ => {
-                return parser_err!(self, pos, "unpreparable statement")
-                    .map_no_statement_parser_err()
-            }
-        };
+        let StatementParseResult { ast, sql } = self.parse_statement()?;
+        if !matches!(
+            ast,
+            Statement::Select(_)
+                | Statement::Insert(_)
+                | Statement::Delete(_)
+                | Statement::Update(_),
+        ) {
+            return parser_err!(self, pos, "unpreparable statement").map_no_statement_parser_err();
+        }
         Ok(Statement::Prepare(PrepareStatement {
             name,
-            stmt: Box::new(stmt),
+            stmt: Box::new(ast),
+            sql: sql.to_string(),
         }))
     }
 

@@ -25,7 +25,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::bail;
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
@@ -35,6 +34,7 @@ use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::{global, KeyValue};
+use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
@@ -48,6 +48,8 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{reload, EnvFilter, Registry};
 
+use crate::metric;
+use crate::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
 
@@ -76,6 +78,8 @@ pub struct TracingConfig<F> {
     pub build_sha: &'static str,
     /// The time of this build of the service.
     pub build_time: &'static str,
+    /// Registry for prometheus metrics.
+    pub registry: MetricsRegistry,
 }
 
 /// Configures Sentry reporting.
@@ -133,8 +137,6 @@ pub struct OpenTelemetryConfig {
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
-    /// Whether to startup with the dynamic OpenTelemetry layer enabled
-    pub start_enabled: bool,
 }
 
 /// Configuration of the [Tokio console] integration.
@@ -327,16 +329,14 @@ where
             Directive::from_str("hyper=off").expect("valid directive"),
         ];
 
-        let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
+        let (filter, filter_handle) = reload::Layer::new({
             let mut filter = otel_config.filter;
             for directive in &default_directives {
                 filter = filter.add_directive(directive.clone());
             }
             filter
-        } else {
-            // The default `EnvFilter` has everything disabled.
-            EnvFilter::default()
         });
+        let metrics_layer = MetricsLayer::new(&config.registry);
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
             // eating memory until OOM. So we set a max number of events that are allowed to be
@@ -345,6 +345,7 @@ where
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
             .max_events_per_span(2048)
             .with_tracer(tracer)
+            .and_then(metrics_layer)
             // WARNING, ENTERING SPOOKY ZONE 2.0
             //
             // Notice we use `with_filter` here. `and_then` will apply the filter globally.
@@ -358,7 +359,7 @@ where
         });
         (Some(layer), reloader)
     } else {
-        let reloader = Arc::new(move |_| bail!("OpenTelemetry is disabled"));
+        let reloader = Arc::new(|_| Ok(()));
         (None, reloader)
     };
 
@@ -596,6 +597,27 @@ impl From<OpenTelemetryContext> for BTreeMap<String, String> {
 impl From<BTreeMap<String, String>> for OpenTelemetryContext {
     fn from(map: BTreeMap<String, String>) -> Self {
         Self { inner: map }
+    }
+}
+
+struct MetricsLayer {
+    on_close: IntCounter,
+}
+
+impl MetricsLayer {
+    fn new(registry: &MetricsRegistry) -> Self {
+        MetricsLayer {
+            on_close: registry.register(metric!(
+                name: "mz_otel_on_close",
+                help: "count of on_close events sent to otel",
+            )),
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
+    fn on_close(&self, _id: tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        self.on_close.inc()
     }
 }
 

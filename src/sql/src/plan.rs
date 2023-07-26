@@ -44,8 +44,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-
-use mz_sql_parser::ast::{QualifiedReplica, TransactionIsolationLevel, TransactionMode};
+use mz_sql_parser::ast::{
+    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
+    TransactionIsolationLevel, TransactionMode, WithOptionValue,
+};
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -59,7 +61,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId,
+    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -81,10 +84,14 @@ pub(crate) mod with_options;
 use crate::plan::with_options::OptionalInterval;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use expr::{
+    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    WindowExprType,
+};
 pub use notice::PlanNotice;
 pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
+pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::PlannedRoleAttributes;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
@@ -135,6 +142,12 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
+    PurifiedAlterSource {
+        // The `ALTER SOURCE` plan
+        alter_source: AlterSourcePlan,
+        // The plan to create any subsources added in the `ALTER SOURCE` statement.
+        subsources: Vec<CreateSourcePlans>,
+    },
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
@@ -211,7 +224,9 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
-            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+            StatementKind::CreateSource
+            | StatementKind::CreateSubsource
+            | StatementKind::CreateWebhookSource => {
                 vec![PlanKind::CreateSource]
             }
             StatementKind::CreateTable => vec![PlanKind::CreateTable],
@@ -331,7 +346,7 @@ impl Plan {
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
-            Plan::AlterSource(_) => "alter source",
+            Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
@@ -454,6 +469,7 @@ pub struct CreateClusterManagedPlan {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
+    pub disk: bool,
 }
 
 #[derive(Debug)]
@@ -492,6 +508,7 @@ pub enum ReplicaConfig {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
+        disk: bool,
     },
 }
 
@@ -508,17 +525,7 @@ pub struct CreateSourcePlan {
 pub struct CreateSourcePlans {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
-    pub depends_on: Vec<GlobalId>,
-}
-
-impl From<(GlobalId, CreateSourcePlan, Vec<GlobalId>)> for CreateSourcePlans {
-    fn from(plan: (GlobalId, CreateSourcePlan, Vec<GlobalId>)) -> Self {
-        CreateSourcePlans {
-            source_id: plan.0,
-            plan: plan.1,
-            depends_on: plan.2,
-        }
-    }
+    pub resolved_ids: ResolvedIds,
 }
 
 /// Specifies the cluster for a source or a sink.
@@ -841,7 +848,14 @@ pub struct AlterSinkPlan {
 #[derive(Debug)]
 pub enum AlterSourceAction {
     Resize(AlterOptionParameter),
-    DropSubsourceExports { to_drop: BTreeSet<GlobalId> },
+    DropSubsourceExports {
+        to_drop: BTreeSet<GlobalId>,
+    },
+    AddSubsourceExports {
+        subsources: Vec<CreateSourceSubsource<Aug>>,
+        details: Option<WithOptionValue<Aug>>,
+        options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+    },
 }
 
 #[derive(Debug)]
@@ -923,6 +937,7 @@ pub struct RotateKeysPlan {
 pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
+    pub sql: String,
 }
 
 #[derive(Debug)]
@@ -941,6 +956,7 @@ pub struct ClosePlan {
 pub struct PreparePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
+    pub sql: String,
     pub desc: StatementDesc,
 }
 
@@ -1042,12 +1058,14 @@ pub struct Source {
 
 #[derive(Debug, Clone)]
 pub enum DataSourceDesc {
-    /// Receives data from an external system
+    /// Receives data from an external system.
     Ingestion(Ingestion),
-    /// Receives data from some other source
+    /// Receives data from some other source.
     Source,
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
+    /// Receives data from HTTP post requests.
+    Webhook(Option<WebhookValidation>),
 }
 
 #[derive(Clone, Debug)]
@@ -1056,6 +1074,24 @@ pub struct Ingestion {
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WebhookValidation {
+    /// The expression used to validate a request.
+    pub expression: MirScalarExpr,
+    /// Any secrets that are used in that validation.
+    pub secrets: Vec<WebhookValidationSecret>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WebhookValidationSecret {
+    /// Identifies the secret by [`GlobalId`].
+    pub id: GlobalId,
+    /// Column index for the expression context that this secret was originally evaluated in.
+    pub column_idx: usize,
+    /// Whether or not this secret should be provided to the expression as Bytes or a String.
+    pub use_bytes: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1221,6 +1257,7 @@ pub struct PlanClusterOption {
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
+    pub disk: AlterOptionParameter<bool>,
 }
 
 impl Default for PlanClusterOption {
@@ -1234,6 +1271,7 @@ impl Default for PlanClusterOption {
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
+            disk: AlterOptionParameter::Unchanged,
         }
     }
 }

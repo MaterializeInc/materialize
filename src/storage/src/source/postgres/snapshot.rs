@@ -240,6 +240,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             // Nothing needs to be snapshot.
             if exports_to_snapshot.is_empty() {
+                trace!(%id, "no exports to snapshot");
                 return Ok(());
             }
 
@@ -248,9 +249,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .config(&*context.secrets_reader)
                 .await?
                 .replication_timeouts(config.params.pg_replication_timeouts.clone());
+            let task_name = format!("timely-{worker_id} PG snapshotter");
 
-            let client = connection_config.connect_replication().await?;
-            if is_snapshot_leader {
+            let client = if is_snapshot_leader {
+                let client = connection_config.connect_replication().await?;
                 // The main slot must be created *before* we start snapshotting so that we can be
                 // certain that the temporarly slot created for the snapshot start at an LSN that
                 // is greater than or equal to that of the main slot.
@@ -260,7 +262,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 trace!(%id, "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
                 let cap = snapshot_cap.as_ref().unwrap();
                 snapshot_handle.give(cap, snapshot_info).await;
-            }
+
+                client
+            } else {
+                // Only the snapshot leader needs a replication connection.
+                connection_config.connect(&task_name).await?
+            };
 
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next_mut().await {
@@ -382,6 +389,14 @@ async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), Transien
         .unwrap();
     let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
 
+    // When creating a replication slot postgres returns the LSN of its consistent point, which is
+    // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
+    // phase to the replication phase. `START_REPLICATION` includes all transactions that commit at
+    // LSNs *greater than or equal* to the passed LSN. Therefore the snapshot phase must happen at
+    // the greatest LSN that is not beyond the consistent point. That LSN is `consistent_point - 1`
+    let consistent_point = u64::from(consistent_point)
+        .checked_sub(1)
+        .expect("consistent point is always non-zero");
     Ok((snapshot, MzOffset::from(consistent_point)))
 }
 

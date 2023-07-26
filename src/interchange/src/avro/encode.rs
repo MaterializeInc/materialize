@@ -268,6 +268,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
             }
         } else {
             let mut val = match &typ.scalar_type {
+                ScalarType::AclItem => Value::String(datum.unwrap_acl_item().to_string()),
                 ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
                 ScalarType::PgLegacyChar => {
                     Value::Fixed(1, datum.unwrap_uint8().to_le_bytes().into())
@@ -335,7 +336,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     buf
                 }),
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                ScalarType::String | ScalarType::VarChar { .. } => {
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
                     Value::String(datum.unwrap_str().to_owned())
                 }
                 ScalarType::Char { length } => {

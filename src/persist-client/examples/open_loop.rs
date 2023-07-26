@@ -479,7 +479,7 @@ mod raw_persist_benchmark {
     use mz_ore::cast::CastFrom;
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
-    use mz_persist_client::{PersistClient, ShardId};
+    use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::VecU8Schema;
     use mz_persist_types::Codec64;
     use timely::progress::Antichain;
@@ -513,9 +513,9 @@ mod raw_persist_benchmark {
             let (_writer, reader) = persist
                 .open::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
-                    "open loop",
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
+                    Diagnostics::from_purpose("open loop"),
                 )
                 .await?;
 
@@ -548,9 +548,9 @@ mod raw_persist_benchmark {
             let mut write = persist
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
-                    "open loop",
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
+                    Diagnostics::from_purpose("open loop"),
                 )
                 .await?;
 
@@ -597,9 +597,9 @@ mod raw_persist_benchmark {
             let mut write = persist
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
-                    "open loop",
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
+                    Diagnostics::from_purpose("open loop"),
                 )
                 .await?;
 

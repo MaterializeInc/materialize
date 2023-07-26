@@ -1893,6 +1893,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
             assert!(actual.is_ok());

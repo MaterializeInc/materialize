@@ -16,28 +16,35 @@
 parse-statement
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 ----
-CREATE TYPE custom AS MAP ( KEY TYPE = text, VALUE TYPE = bool )
+CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: KeyType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }, CreateTypeMapOption { name: ValueType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] })) }] } })
 
 parse-statement
+CREATE TYPE custom AS (a int, b text)
+----
+CREATE TYPE custom AS (a int4, b text)
+=>
+CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }] } })
+
+parse-statement
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 ----
-CREATE TYPE custom AS MAP ( KEY TYPE = text, VALUE TYPE = custom_type )
+CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: KeyType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }, CreateTypeMapOption { name: ValueType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("custom_type")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (KEY TYPE = text)
 ----
-CREATE TYPE custom AS MAP ( KEY TYPE = text )
+CREATE TYPE custom AS MAP (KEY TYPE = text)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: KeyType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 ----
-CREATE TYPE custom AS MAP ( VALUE TYPE = bool )
+CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: Map { options: [CreateTypeMapOption { name: ValueType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] })) }] } })
 
@@ -58,63 +65,63 @@ CREATE TYPE custom AS MAP (KEY TYPE = text, random_type=int)
 parse-statement
 CREATE TYPE custom AS LIST (ELEMENT TYPE=text)
 ----
-CREATE TYPE custom AS LIST ( ELEMENT TYPE = text )
+CREATE TYPE custom AS LIST (ELEMENT TYPE = text)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (ELEMENT TYPE=x)
 ----
-CREATE TYPE custom AS LIST ( ELEMENT TYPE = x )
+CREATE TYPE custom AS LIST (ELEMENT TYPE = x)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE custom AS LIST (ELEMENT TYPE=_text)
 ----
-CREATE TYPE custom AS LIST ( ELEMENT TYPE = _text )
+CREATE TYPE custom AS LIST (ELEMENT TYPE = _text)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("custom")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("_text")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE schema.t2 AS LIST (ELEMENT TYPE=schema.t1)
 ----
-CREATE TYPE schema.t2 AS LIST ( ELEMENT TYPE = schema.t1 )
+CREATE TYPE schema.t2 AS LIST (ELEMENT TYPE = schema.t1)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("schema"), Ident("t2")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("schema"), Ident("t1")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE db2.schema2.t2 AS LIST (ELEMENT TYPE=db1.schema1.t1)
 ----
-CREATE TYPE db2.schema2.t2 AS LIST ( ELEMENT TYPE = db1.schema1.t1 )
+CREATE TYPE db2.schema2.t2 AS LIST (ELEMENT TYPE = db1.schema1.t1)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("db2"), Ident("schema2"), Ident("t2")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("db1"), Ident("schema1"), Ident("t1")])), typ_mod: [] })) }] } })
 
 parse-statement
 CREATE TYPE numeric_list AS LIST (ELEMENT TYPE=numeric(100,100,100))
 ----
-CREATE TYPE numeric_list AS LIST ( ELEMENT TYPE = numeric(100, 100, 100) )
+CREATE TYPE numeric_list AS LIST (ELEMENT TYPE = numeric(100, 100, 100))
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("numeric_list")]), as_type: List { options: [CreateTypeListOption { name: ElementType, value: Some(DataType(Other { name: Name(UnresolvedItemName([Ident("numeric")])), typ_mod: [100, 100, 100] })) }] } })
 
 parse-statement
 CREATE TYPE named_composite AS (a int, b text, c float8);
 ----
-CREATE TYPE named_composite AS ( a int4, b text, c float8 )
+CREATE TYPE named_composite AS (a int4, b text, c float8)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }] } })
 
 parse-statement
 CREATE TYPE named_composite AS (a InT,     b text, c flOAt8   );
 ----
-CREATE TYPE named_composite AS ( a int4, b text, c float8 )
+CREATE TYPE named_composite AS (a int4, b text, c float8)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }] } })
 
 parse-statement
 CREATE TYPE named_composite AS (a int, b other_type, c yet_another_type);
 ----
-CREATE TYPE named_composite AS ( a int4, b other_type, c yet_another_type )
+CREATE TYPE named_composite AS (a int4, b other_type, c yet_another_type)
 =>
 CreateType(CreateTypeStatement { name: UnresolvedItemName([Ident("named_composite")]), as_type: Record { column_defs: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("other_type")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("yet_another_type")])), typ_mod: [] }, collation: None, options: [] }] } })
 
@@ -238,6 +245,13 @@ CREATE TABLE schema_name.table_name (col_name int4)
 CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
+CREATE TABLE schema_name.table_name (col_name text COLLATE en)
+----
+CREATE TABLE schema_name.table_name (col_name text COLLATE en)
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: Some(UnresolvedItemName([Ident("en")])), options: [] }], constraints: [], if_not_exists: false, temporary: false })
+
+parse-statement
 CREATE TABLE "" (col_name int)
 ----
 error: zero-length delimited identifier
@@ -261,3 +275,247 @@ CREATE TABLE " " (x int)
 error: null character in quoted identifier
 CREATE TABLE " " (x int)
              ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: true, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE IF NOT EXISTS webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT
+----
+CREATE SOURCE IF NOT EXISTS webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_text")]), if_not_exists: true, body_format: Text, include_headers: false, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json_no_headers IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON
+----
+CREATE SOURCE webhook_json_no_headers IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json_no_headers")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
+----
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_bytes")]), if_not_exists: false, body_format: Bytes, include_headers: false, validate_using: None, in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_proto IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT PROTOBUF INCLUDE HEADERS
+----
+error: Expected one of JSON or TEXT or BYTES, found PROTOBUF
+CREATE SOURCE webhook_proto IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT PROTOBUF INCLUDE HEADERS
+                                                                                ^
+
+parse-statement
+CREATE SOURCE webhook_avro IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT AVRO
+----
+error: Expected one of JSON or TEXT or BYTES, found AVRO
+CREATE SOURCE webhook_avro IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT AVRO
+                                                                               ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = 'test' )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: None, using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK ( headers['signature'] = hmac(sha256, 'body=' || body) )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (headers['signature'] = hmac(sha256, 'body=' || body))
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: None, using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("hmac")])), args: Args { args: [Identifier([Ident("sha256")]), Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("body=")), expr2: Some(Identifier([Ident("body")])) }], order_by: [] }, filter: None, over: None, distinct: false })) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET test_key )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key,
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key, SECRET other_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: None, use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key as foo,
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key AS foo, SECRET other_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: Some(Ident("foo")), use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key as foo
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+error: Expected right parenthesis, found SECRET
+            SECRET other_key
+            ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key AS bar,
+            SECRET other_key
+        )
+        headers['signature'] = 'test'
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET test_key AS bar, SECRET other_key) headers['signature'] = 'test')
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("test_key")])), alias: Some(Ident("bar")), use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: None, use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Value(String("test"))) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET bytes_key BYTES )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET bytes_key BYTES) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("bytes_key")])), alias: None, use_bytes: true }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET bytes_key AS bytes )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET bytes_key AS bytes) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("bytes_key")])), alias: Some(Ident("bytes")), use_bytes: false }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET bytes_key AS bytes bytes )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET bytes_key AS bytes BYTES) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("bytes_key")])), alias: Some(Ident("bytes")), use_bytes: true }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH ( SECRET secret_key, SECRET other_key AS foo BYTES )
+        headers['signature'] = bytes_key
+    )
+----
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON CHECK (WITH (SECRET secret_key, SECRET other_key AS foo BYTES) headers['signature'] = bytes_key)
+=>
+CreateWebhookSource(CreateWebhookSourceStatement { name: UnresolvedItemName([Ident("webhook_json")]), if_not_exists: false, body_format: Json, include_headers: false, validate_using: Some(CreateWebhookSourceCheck { options: Some(CreateWebhookSourceCheckOptions { secrets: [CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("secret_key")])), alias: None, use_bytes: false }, CreateWebhookSourceSecret { secret: Name(UnresolvedItemName([Ident("other_key")])), alias: Some(Ident("foo")), use_bytes: true }] }), using: Op { op: Op { namespace: None, op: "=" }, expr1: Subscript { expr: Identifier([Ident("headers")]), positions: [SubscriptPosition { start: Some(Value(String("signature"))), end: None, explicit_slice: false }] }, expr2: Some(Identifier([Ident("bytes_key")])) } }), in_cluster: Unresolved(Ident("webhook_cluster")) })
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+        WITH (
+            SECRET test_key AS bar
+            SECRET other_key,
+        )
+        headers['signature'] = 'test'
+    )
+----
+error: Expected right parenthesis, found SECRET
+            SECRET other_key,
+            ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK ( WITH ( SECRET test_key ) )
+----
+error: Expected an expression, found right parenthesis
+    CHECK ( WITH ( SECRET test_key ) )
+                                     ^
+
+parse-statement
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK ( WITH ( SECRET test_key, ) )
+----
+error: Expected one of SECRET, found right parenthesis
+    CHECK ( WITH ( SECRET test_key, ) )
+                                    ^
+
+parse-statement
+CREATE SOURCE webhook_no_cluster FROM WEBHOOK BODY FORMAT TEXT
+----
+error: Expected IN CLUSTER, found FROM
+CREATE SOURCE webhook_no_cluster FROM WEBHOOK BODY FORMAT TEXT
+                                 ^
+
+parse-statement
+CREATE SOURCE webhook_include_headers_no_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS
+----
+error: Expected IN CLUSTER, found FROM
+CREATE SOURCE webhook_include_headers_no_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS
+                                                 ^
+
+parse-statement
+CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT CHECK ( headers['signature'] = 'test' )
+----
+error: Expected IN CLUSTER, found FROM
+CREATE SOURCE webhook_validation_no_cluster FROM WEBHOOK BODY FORMAT TEXT CHECK ( headers['signature'] = 'test' )
+                                            ^
+
+parse-statement
+CREATE DATABASE IF NOT EXISTS db
+----
+CREATE DATABASE IF NOT EXISTS db
+=>
+CreateDatabase(CreateDatabaseStatement { name: UnresolvedDatabaseName(Ident("db")), if_not_exists: true })
+
+parse-statement
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) WITH (PROGRESS, REFERENCES)
+----
+CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) WITH (PROGRESS, REFERENCES)
+=>
+CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }, CreateSubsourceOption { name: References, value: None }] })

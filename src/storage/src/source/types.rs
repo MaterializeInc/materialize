@@ -23,6 +23,7 @@ use differential_dataflow::Collection;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_client::metrics::BackpressureMetrics;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
@@ -487,12 +488,21 @@ pub struct UpsertMetrics {
     pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
     pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb: Arc<mz_rocksdb::RocksDBMetrics>,
+    // `UpsertMetrics` keeps a reference (through `Arc`'s) to backpressure metrics, so that
+    // they are not dropped when the `persist_source` operator is dropped.
+    _backpressure_metrics: Option<BackpressureMetrics>,
 }
 
 impl UpsertMetrics {
-    pub fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId, worker_id: usize) -> Self {
+    pub fn new(
+        base_metrics: &SourceBaseMetrics,
+        source_id: GlobalId,
+        worker_id: usize,
+        backpressure_metrics: Option<BackpressureMetrics>,
+    ) -> Self {
         let base = &base_metrics.upsert_specific;
         let source_id_s = source_id.to_string();
         let worker_id = worker_id.to_string();
@@ -505,9 +515,14 @@ impl UpsertMetrics {
                 .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
             rehydration_updates: base
                 .rehydration_updates
-                .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            rocksdb_autospill_in_use: Arc::new(
+                base.rocksdb_autospill_in_use
+                    .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
+            ),
             shared: base.shared(&source_id),
             rocksdb: base.rocksdb(&source_id),
+            _backpressure_metrics: backpressure_metrics,
         }
     }
 }

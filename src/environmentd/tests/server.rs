@@ -75,10 +75,11 @@
 
 //! Integration tests for Materialize server.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
@@ -92,23 +93,25 @@ use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
 use mz_environmentd::WebSocketResponse;
+use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
+use mz_ore::cast::TryCastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
+use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
-use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::{Listeners, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -190,6 +193,78 @@ fn test_persistence() {
     );
 }
 
+#[mz_ore::test]
+fn test_statement_logging_unsampled_metrics() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // TODO[btv]
+    //
+    // The point of these metrics is to show how much SQL text we
+    // would have logged had statement logging been turned on.
+    // Since there is no way (yet) to turn statement logging off or on,
+    // this test is valid as-is currently. However, once we turn statement logging on,
+    // we should make sure to turn it _off_ in this test.
+    let batch_queries = [
+        "SELECT 'Hello, world!';SELECT 1;;",
+        "SELECT 'Hello, world again!'",
+    ];
+    let batch_total: usize = batch_queries
+        .iter()
+        .map(|s| s.as_bytes().iter().filter(|&&ch| ch != b';').count())
+        .sum();
+    let single_queries = ["SELECT 'foo'", "SELECT 'bar';;;"];
+    let single_total: usize = single_queries
+        .iter()
+        .map(|s| s.as_bytes().iter().filter(|&&ch| ch != b';').count())
+        .sum();
+    let prepared_queries = ["SELECT 'baz';;;", "SELECT 'quux';"];
+    let prepared_total: usize = prepared_queries
+        .iter()
+        .map(|s| s.as_bytes().iter().filter(|&&ch| ch != b';').count())
+        .sum();
+
+    let named_prepared_inner = "SELECT 42";
+    let named_prepared_outer = format!("PREPARE p AS {named_prepared_inner};EXECUTE p;");
+    let named_prepared_total = named_prepared_inner.len()
+        + named_prepared_outer
+            .as_bytes()
+            .iter()
+            .filter(|&&ch| ch != b';')
+            .count();
+
+    for q in batch_queries {
+        client.batch_execute(q).unwrap();
+    }
+
+    for q in single_queries {
+        client.execute(q, &[]).unwrap();
+    }
+
+    for q in prepared_queries {
+        let s = client.prepare(q).unwrap();
+        client.execute(&s, &[]).unwrap();
+    }
+
+    client.batch_execute(&named_prepared_outer).unwrap();
+
+    // This should NOT be logged, since we never actually execute it.
+    client.prepare("SELECT 'Hello, not counted!'").unwrap();
+
+    let expected_total = batch_total + single_total + prepared_total + named_prepared_total;
+    let metric_value = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|m| m.get_name() == "mz_statement_logging_unsampled_bytes")
+        .unwrap()
+        .take_metric()[0]
+        .get_counter()
+        .get_value();
+    let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
+    assert_eq!(expected_total, metric_value);
+}
+
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
 // unsafe mode.
 #[mz_ore::test]
@@ -243,7 +318,6 @@ fn test_source_sink_size_required() {
 
 // Test the POST and WS server endpoints.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
     // text or binary websocket messages that are the input. Output is
@@ -343,7 +417,6 @@ fn test_http_sql() {
 
 // Test that the server properly handles cancellation requests.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -455,19 +528,16 @@ fn test_cancellation_cancels_dataflows(query: &str) {
 
 // Test that dataflow uninstalls cancelled peeks.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_dataflow_removal() {
     test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_select() {
     test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_insert_select() {
     test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
 }
@@ -562,13 +632,11 @@ fn test_closing_connection_cancels_dataflows(query: String) {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_long_select() {
     test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_insert_select() {
     test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
@@ -916,7 +984,6 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
@@ -948,7 +1015,6 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -1076,7 +1142,6 @@ fn test_max_statement_batch_size() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_mz_system_user_admin() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
@@ -1120,17 +1185,18 @@ fn test_ws_passes_options() {
         serde_json::from_str(&msg).unwrap()
     };
     let starting = read_msg();
-    let col_name = read_msg();
+    let columns = read_msg();
     let row_val = read_msg();
 
     if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
         panic!("wrong message!, {starting:?}");
     };
 
-    if let WebSocketResponse::Rows(rows) = col_name {
-        assert_eq!(rows, ["application_name"]);
+    if let WebSocketResponse::Rows(rows) = columns {
+        let names: Vec<&str> = rows.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["application_name"]);
     } else {
-        panic!("wrong message!, {col_name:?}");
+        panic!("wrong message!, {columns:?}");
     };
 
     if let WebSocketResponse::Row(row) = row_val {
@@ -1176,8 +1242,18 @@ struct HttpResponse<R> {
 #[derive(Debug, Deserialize)]
 struct HttpRows {
     rows: Vec<Vec<serde_json::Value>>,
-    col_names: Vec<String>,
+    desc: HttpResponseDesc,
     notices: Vec<Notice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponseDesc {
+    columns: Vec<HttpResponseColumn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponseColumn {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1227,7 +1303,7 @@ fn test_http_options_param() {
     assert!(rows.notices.is_empty());
 
     let row = rows.rows.pop().unwrap().pop().unwrap();
-    let col = rows.col_names.pop().unwrap();
+    let col = rows.desc.columns.pop().unwrap().name;
 
     assert_eq!(col, "application_name");
     assert_eq!(row, "yet_another_client");
@@ -1340,7 +1416,7 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read_message().unwrap(),
-                Message::Text("{\"type\":\"Rows\",\"payload\":[\"?column?\"]}".to_string())
+                Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
             );
             assert_eq!(
                 ws.read_message().unwrap(),
@@ -1481,15 +1557,13 @@ fn test_leader_promotion() {
     }
     let config = config.with_deploy_generation(Some(2));
     {
-        // start with different deploy generation, we need acknowledgement before starting sql port
-        let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
-        let config = config
-            .with_deploy_generation(Some(3))
-            .with_waiting_on_leader_promotion(Some(internal_http_addr_tx));
+        // start with different deploy generation
+        let config = config.with_deploy_generation(Some(3));
         thread::scope(|s| {
-            let server_handle = s.spawn(|| util::start_server(config).unwrap());
+            let listeners = Listeners::new().unwrap();
+            let internal_http_addr = listeners.inner.internal_http_local_addr();
+            let server_handle = s.spawn(|| listeners.serve(config).unwrap());
 
-            let internal_http_addr = internal_http_addr_rx.blocking_recv().unwrap();
             let status_http_url =
                 Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
 
@@ -1548,7 +1622,6 @@ fn test_leader_promotion() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
-    let (internal_http_addr_tx, mut internal_http_addr_rx) = mpsc::channel(1);
     let config = util::Config::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
@@ -1561,16 +1634,11 @@ fn test_leader_promotion_always_using_deploy_generation() {
     }
     {
         // keep it the same, no need to promote the leader
-        let server = util::start_server(
-            config.with_waiting_on_leader_promotion(Some(internal_http_addr_tx)),
-        )
-        .unwrap();
+        let listeners = Listeners::new().unwrap();
+        let internal_http_addr = listeners.inner.internal_http_local_addr();
+        let server = listeners.serve(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
-
-        let internal_http_addr = internal_http_addr_rx
-            .blocking_recv()
-            .expect("should be populated");
 
         // check that we're the leader and promotion doesn't do anything
         let status_http_url =
@@ -1637,4 +1705,488 @@ fn test_cancel_ws() {
         }
     }
     handle.join().unwrap();
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn smoketest_webhook_source() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    struct WebhookEvent {
+        ts: u128,
+        name: String,
+        attrs: Vec<String>,
+    }
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos()
+    };
+
+    // Generate some events.
+    const NUM_EVENTS: i64 = 100;
+    let events: Vec<_> = (0..NUM_EVENTS)
+        .map(|i| WebhookEvent {
+            ts: now(),
+            name: format!("event_{i}"),
+            attrs: (0..i).map(|j| format!("attr_{j}")).collect(),
+        })
+        .collect();
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_json",
+        server.inner.http_local_addr()
+    );
+    // Send all of our events to our webhook source.
+    for event in &events {
+        let resp = http_client
+            .post(&webhook_url)
+            .json(event)
+            .send()
+            .expect("failed to POST event");
+        assert!(resp.status().is_success());
+    }
+    let total_requests_metric = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|metric| metric.get_name() == "mz_http_requests_total")
+        .unwrap();
+    let total_requests_metric = &total_requests_metric.get_metric()[0];
+    assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
+
+    let path_label = &total_requests_metric.get_label()[0];
+    assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
+
+    let status_label = &total_requests_metric.get_label()[1];
+    assert_eq!(status_label.get_value(), "200");
+
+    // Wait for the events to be persisted.
+    mz_ore::retry::Retry::default()
+        .max_tries(10)
+        .retry(|_| {
+            let cnt: i64 = client
+                .query_one("SELECT COUNT(*) FROM webhook_json", &[])
+                .expect("failed to get count")
+                .get(0);
+
+            if cnt != 100 {
+                Err(anyhow::anyhow!("not all rows present"))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("failed to read events!");
+
+    // Read all of our events back.
+    let events_roundtrip: Vec<WebhookEvent> = client
+        .query("SELECT * FROM webhook_json", &[])
+        .expect("failed to query source")
+        .into_iter()
+        .map(|row| serde_json::from_value(row.get("body")).expect("failed to deserialize"))
+        .collect();
+
+    similar_asserts::assert_eq!(events, events_roundtrip);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_invalid_webhook_body() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let http_client = Client::new();
+
+    // Create a cluster we can install webhook sources on.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+
+    // Create a webhook source with a body format of text.
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr()
+    );
+
+    // Send non-UTF8 text which will fail to get deserialized.
+    let non_utf8 = vec![255, 255, 255, 255];
+    assert!(std::str::from_utf8(&non_utf8).is_err());
+
+    let resp = http_client
+        .post(webhook_url)
+        .body(non_utf8)
+        .send()
+        .expect("failed to POST event");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Create a webhook source with a body format of JSON.
+    client
+        .execute(
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_json",
+        server.inner.http_local_addr()
+    );
+
+    // Send invalid JSON which will fail to get deserialized.
+    let resp = http_client
+        .post(webhook_url)
+        .body("a")
+        .send()
+        .expect("failed to POST event");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Create a webhook source with a body format of bytes.
+    client
+        .execute(
+            "CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_bytes",
+        server.inner.http_local_addr()
+    );
+
+    // No matter what is in the body, we should always succeed.
+    let mut data = [0u8; 128];
+    rand::thread_rng().fill_bytes(&mut data);
+    println!("Random bytes: {data:?}");
+    let resp = http_client
+        .post(webhook_url)
+        .body(data.to_vec())
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_duplicate_headers() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let http_client = Client::new();
+
+    // Create a webhook source that includes headers.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS",
+            &[],
+        )
+        .expect("failed to create source");
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr()
+    );
+
+    // Send a request with duplicate headers.
+    let resp = http_client
+        .post(webhook_url)
+        .body("test")
+        .header("dupe", "first")
+        .header("DUPE", "second")
+        .header("dUpE", "third")
+        .header("dUpE", "final")
+        .send()
+        .expect("failed to POST event");
+    assert_eq!(resp.status().as_u16(), 401);
+}
+
+// Test that websockets observe cancellation and leave the transaction in an idle state.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_github_20262() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (i INT);").unwrap();
+
+    let mut cancel = || {
+        // Wait for the subscription to start.
+        let conn_id = Retry::default()
+            .retry(|_| {
+                let conn_id: String = client
+                    .query_one(
+                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        &[],
+                    )?
+                    .get(0);
+                Ok::<_, postgres::Error>(conn_id)
+            })
+            .unwrap();
+        client
+            .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
+            .unwrap();
+    };
+
+    let subscribe: serde_json::Value =
+        serde_json::from_str(r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#).unwrap();
+    let subscribe = subscribe.to_string();
+    let commit: serde_json::Value =
+        serde_json::from_str(r#"{"queries":[{"query":"COMMIT"}]}"#).unwrap();
+    let commit = commit.to_string();
+    let select: serde_json::Value =
+        serde_json::from_str(r#"{"queries":[{"query":"SELECT 1"}]}"#).unwrap();
+    let select = select.to_string();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    ws.write_message(Message::Text(subscribe)).unwrap();
+    cancel();
+    ws.write_message(Message::Text(commit)).unwrap();
+    ws.write_message(Message::Text(select)).unwrap();
+
+    let mut expect = VecDeque::from([
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
+        r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
+        r#"{"type":"Error","payload":{"message":"query canceled","code":"XX000"}}"#,
+        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
+        r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
+        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","severity":"warning"}}"#,
+        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
+        r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
+        r#"{"type":"Row","payload":[1]}"#,
+        r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
+        r#"{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}"#,
+        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+    ]);
+    while !expect.is_empty() {
+        if let Message::Text(text) = ws.read_message().unwrap() {
+            let next = expect.pop_front().unwrap();
+            assert_eq!(text, next);
+        }
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_http_metrics() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr(),
+    ))
+    .unwrap();
+
+    let json = r#"{ "query": "SHOW application_name;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = Client::new()
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .unwrap();
+    assert!(response.status().is_success());
+
+    let json = r#"{ "query": "invalid sql 123;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = Client::new().post(http_url).json(&json).send().unwrap();
+    assert!(response.status().is_client_error());
+
+    let metrics = server.metrics_registry.gather();
+    let http_metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|metric| metric.get_name().starts_with("mz_http"))
+        .collect();
+
+    // Make sure the duration metric exists.
+    let duration_count = http_metrics
+        .iter()
+        .filter(|metric| metric.get_name() == "mz_http_request_duration_seconds")
+        .count();
+    assert_eq!(duration_count, 1);
+    // Make sure the active count metric exists.
+    let active_count = http_metrics
+        .iter()
+        .filter(|metric| metric.get_name() == "mz_http_requests_active")
+        .count();
+    assert_eq!(active_count, 1);
+
+    // Make sure our metrics capture the one successful query and the one failure.
+    let mut request_metrics: Vec<_> = http_metrics
+        .into_iter()
+        .filter(|metric| metric.get_name() == "mz_http_requests_total")
+        .collect();
+    assert_eq!(request_metrics.len(), 1);
+
+    let request_metric = request_metrics.pop().unwrap();
+    let success_metric = &request_metric.get_metric()[0];
+    assert_eq!(success_metric.get_counter().get_value(), 1.0);
+    assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
+    assert_eq!(success_metric.get_label()[1].get_value(), "200");
+
+    let failure_metric = &request_metric.get_metric()[1];
+    assert_eq!(failure_metric.get_counter().get_value(), 1.0);
+    assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
+    assert_eq!(failure_metric.get_label()[1].get_value(), "400");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_concurrent_actions() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    struct WebhookEvent {
+        ts: u128,
+        name: String,
+        thread: usize,
+    }
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos()
+    };
+
+    // Flag that lets us shutdown our threads.
+    let keep_sending = Arc::new(AtomicBool::new(true));
+    let success_count = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    // Spin up a few threads that push a bunch of data to the webhook.
+    let posters: Vec<_> = (0..4)
+        .map(|thread_idx| {
+            let keep_sending_ = Arc::clone(&keep_sending);
+            let success_count_ = Arc::clone(&success_count);
+            let addr = server.inner.http_local_addr().clone();
+            let tx_ = tx.clone();
+
+            std::thread::spawn(move || {
+                let mut i = 0;
+
+                // Keep sending events until we're told to stop.
+                while keep_sending_.load(std::sync::atomic::Ordering::Relaxed) {
+                    let http_client = Client::new();
+                    let webhook_url = format!(
+                        "http://{}/api/webhook/materialize/public/webhook_json",
+                        addr,
+                    );
+
+                    // Create an event.
+                    let event = WebhookEvent {
+                        ts: now(),
+                        name: format!("event_{i}"),
+                        thread: thread_idx,
+                    };
+
+                    // Send all of our events to our webhook source.
+                    let resp = http_client
+                        .post(&webhook_url)
+                        .json(&event)
+                        .send()
+                        .expect("failed to POST event");
+                    tx_.send(resp.status()).expect("channel closed?");
+
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+
+                    // Incrament the count of how many successes we should see.
+                    success_count_.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    i += 1;
+                }
+            })
+        })
+        .collect();
+
+    // Let the posting threads run for a bit.
+    std::thread::sleep(std::time::Duration::from_secs(4));
+
+    // We should see at least this many successes.
+    let expected_success = success_count.load(std::sync::atomic::Ordering::Relaxed);
+    // Drop the source
+    client
+        .execute("DROP SOURCE webhook_json;", &[])
+        .expect("failed to drop source");
+
+    // Keep sending for a bit.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Stop the threads.
+    keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
+    for handle in posters {
+        handle.join().expect("thread panicked!");
+    }
+    // Drop our sender, otherwise the channel will never complete?
+    drop(tx);
+
+    // Inspect the results.
+    let mut results = rx.into_iter();
+
+    // We should see at least "expected_success" number of successes, because this was the total
+    // count before we dropped the source.
+    for _ in 0..expected_success {
+        let status = results.next().expect("status to exist");
+        assert!(status.is_success())
+    }
+    // We should have seen at least 100 successes.
+    assert!(expected_success > 100);
+
+    let mut saw_atleast_one_success_after_close = false;
+    while let Some(status) = results.next() {
+        if status.is_success() {
+            saw_atleast_one_success_after_close = true;
+        }
+        // TODO(parkmycar): Ideally we only get 200s or 404s here, but occassionally we see 500s.
+    }
+    assert!(saw_atleast_one_success_after_close);
 }

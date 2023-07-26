@@ -84,7 +84,7 @@ impl Coordinator {
         session: &Session,
         id_bundle: &CollectionIdBundle,
     ) -> Vec<String> {
-        id_bundle
+        let mut names: Vec<_> = id_bundle
             .iter()
             // This could filter out an entry that has been replaced in another transaction.
             .filter_map(|id| self.catalog().try_get_entry(&id))
@@ -93,6 +93,8 @@ impl Coordinator {
                     .resolve_full_name(item.name(), Some(session.conn_id()))
                     .to_string()
             })
-            .collect()
+            .collect();
+        names.sort();
+        names
     }
 }

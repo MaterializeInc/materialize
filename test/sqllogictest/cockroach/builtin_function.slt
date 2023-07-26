@@ -107,16 +107,17 @@ SELECT quote_literal(b'abc'), quote_nullable(b'abc')
 ----
 e'\\x616263'  e'\\x616263'
 
-statement ok
-SET bytea_output = 'escape'
-
-query TT
-SELECT quote_literal(b'abc'), quote_nullable(b'abc')
-----
-'abc'  'abc'
-
-statement ok
-RESET bytea_output
+# TODO: Support bytea
+#statement ok
+#SET bytea_output = 'escape'
+#
+#query TT
+#SELECT quote_literal(b'abc'), quote_nullable(b'abc')
+#----
+#'abc'  'abc'
+#
+#statement ok
+#RESET bytea_output
 
 query T colnames
 SELECT upper('roacH7')
@@ -1452,7 +1453,7 @@ SELECT OVERLAY(foo.* PLACING 'string' FROM 'string') FROM (VALUES (1)) AS foo(x)
 query error cannot use "nonexistent.\*" without a FROM clause
 SELECT nonexistent.* IS NOT TRUE
 
-query error unsupported comparison operator: <tuple{int AS x}> IS DISTINCT FROM <bool>
+query error unsupported comparison operator: <tuple\{int AS x\}> IS DISTINCT FROM <bool>
 SELECT foo.* IS NOT TRUE FROM (VALUES (1)) AS foo(x)
 
 query T

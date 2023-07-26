@@ -46,6 +46,8 @@ ERROR_RE = re.compile(
     | unsupported\ SQL\ type\ in\ testdrive:
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
+    | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
+    | unrecognized\ configuration\ parameter
     )
     # Emitted by tests employing explicit mz_panic()
     (?!.*forced\ panic)
@@ -53,6 +55,8 @@ ERROR_RE = re.compile(
     (?!.*timely\ communication\ error:)
     # Expected once compute cluster has panicked, only happens in CI
     (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
+    # Emitted by webhook source tests that explicitly panic the validation.
+    (?!.*webhook\ panic\ test')
     """,
     re.VERBOSE,
 )

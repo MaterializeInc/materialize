@@ -171,7 +171,6 @@ fn test_bind_params() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_partial_read() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -198,7 +197,6 @@ fn test_partial_read() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_read_many_rows() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -213,7 +211,6 @@ fn test_read_many_rows() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_conn_startup() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -362,7 +359,6 @@ fn test_conn_startup() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_conn_user() {
     let server = util::start_server(util::Config::default()).unwrap();
 
@@ -397,7 +393,6 @@ fn test_conn_user() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_simple_query_no_hang() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -407,7 +402,6 @@ fn test_simple_query_no_hang() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_copy() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -457,7 +451,6 @@ fn test_copy() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_arrays() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -505,7 +498,6 @@ fn test_arrays() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_record_types() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -573,15 +565,12 @@ fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_pgtest() {
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
     pg_test_inner(dir, &[]);
 }
 
 #[mz_ore::test]
-// unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-#[cfg_attr(miri, ignore)]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() {
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();

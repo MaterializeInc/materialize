@@ -11,7 +11,7 @@ anyhow = "1.0.66"
 async-stream = "0.3.3"
 async-trait = "0.1.68"
 bytesize = "1.1.0"
-columnation = "0.1.0"
+columnation = { git = "https://github.com/frankmcsherry/columnation" }
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 differential-dataflow = "0.12.0"
 futures = "0.3.25"
@@ -30,6 +30,7 @@ mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-service = { path = "../service" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
+mz-tracing = { path = "../tracing" }
 once_cell = "1.16.0"
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}

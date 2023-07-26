@@ -833,7 +833,7 @@ impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
 pub enum UnplannedSourceEnvelope {
     None(KeyEnvelope),
     Debezium(DebeziumEnvelope),
-    Upsert { style: UpsertStyle, disk: bool },
+    Upsert { style: UpsertStyle },
     CdcV2,
 }
 
@@ -870,9 +870,6 @@ pub struct UpsertEnvelope {
     /// The indices of the keys in the full value row, used
     /// to deduplicate data in `upsert_core`
     pub key_indices: Vec<usize>,
-    /// Whether or not to store the upsert state on disk, as opposed
-    /// to in-memory.
-    pub disk: bool,
 }
 
 impl Arbitrary for UpsertEnvelope {
@@ -884,13 +881,11 @@ impl Arbitrary for UpsertEnvelope {
             any::<usize>(),
             any::<UpsertStyle>(),
             proptest::collection::vec(any::<usize>(), 1..4),
-            any::<bool>(),
         )
-            .prop_map(|(source_arity, style, key_indices, disk)| Self {
+            .prop_map(|(source_arity, style, key_indices)| Self {
                 source_arity,
                 style,
                 key_indices,
-                disk,
             })
             .boxed()
     }
@@ -902,7 +897,6 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
             source_arity: self.source_arity.into_proto(),
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
-            disk: self.disk.into_proto(),
         }
     }
 
@@ -913,7 +907,6 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
                 .style
                 .into_rust_if_some("ProtoUpsertEnvelope::style")?,
             key_indices: proto.key_indices.into_rust()?,
-            disk: proto.disk.into_rust()?,
         })
     }
 }
@@ -1193,7 +1186,6 @@ impl UnplannedSourceEnvelope {
         match self {
             UnplannedSourceEnvelope::Upsert {
                 style: upsert_style,
-                disk,
             } => SourceEnvelope::Upsert(UpsertEnvelope {
                 style: upsert_style,
                 key_indices: key.expect(
@@ -1204,7 +1196,6 @@ impl UnplannedSourceEnvelope {
                     "into_source_envelope to be passed \
                     correct parameters for UnplannedSourceEnvelope::Upsert",
                 ),
-                disk,
             }),
             UnplannedSourceEnvelope::Debezium(inner) => SourceEnvelope::Debezium(inner),
             UnplannedSourceEnvelope::None(key_envelope) => SourceEnvelope::None(NoneEnvelope {

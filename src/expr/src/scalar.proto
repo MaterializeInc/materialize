@@ -95,6 +95,9 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty current_setting = 15;
         google.protobuf.Empty is_rbac_enabled = 16;
         google.protobuf.Empty session_user = 17;
+        google.protobuf.Empty current_schema = 18;
+        google.protobuf.Empty mz_role_oid_memberships = 19;
+        google.protobuf.Empty mz_is_superuser = 20;
     }
 }
 
@@ -421,6 +424,13 @@ message ProtoUnaryFunc {
         ProtoCastToVariableType cast_array_to_array = 295;
         google.protobuf.Empty mz_validate_privileges = 296;
         google.protobuf.Empty quote_ident = 297;
+        google.protobuf.Empty cast_string_to_pg_legacy_name = 298;
+        google.protobuf.Empty try_parse_monotonic_iso8601_timestamp = 299;
+        google.protobuf.Empty mz_validate_role_privilege = 300;
+        google.protobuf.Empty mz_format_privileges = 301;
+        google.protobuf.Empty acl_item_grantor = 302;
+        google.protobuf.Empty acl_item_grantee = 303;
+        google.protobuf.Empty acl_item_privileges = 304;
     }
 }
 
@@ -430,6 +440,8 @@ message ProtoBinaryFunc {
         bool rev = 2;
     }
 
+    reserved 93; // timezone_time
+    reserved "timezone_time";
     oneof kind {
         google.protobuf.Empty add_int16 = 46;
         google.protobuf.Empty add_int32 = 11;
@@ -521,7 +533,6 @@ message ProtoBinaryFunc {
         google.protobuf.Empty date_trunc_interval = 90;
         google.protobuf.Empty timezone_timestamp = 91;
         google.protobuf.Empty timezone_timestamp_tz = 92;
-        mz_repr.chrono.ProtoNaiveDateTime timezone_time = 93;
         google.protobuf.Empty timezone_interval_timestamp = 94;
         google.protobuf.Empty timezone_interval_timestamp_tz = 95;
         google.protobuf.Empty timezone_interval_time = 96;
@@ -659,6 +670,8 @@ message ProtoVariadicFunc {
         google.protobuf.Empty date_diff_timestamp_tz = 34;
         google.protobuf.Empty date_diff_date = 35;
         google.protobuf.Empty date_diff_time = 36;
+        google.protobuf.Empty timezone_time = 37;
+        google.protobuf.Empty make_acl_item = 38;
     }
 }
 
@@ -797,5 +810,6 @@ message ProtoEvalError {
         string invalid_date_part = 71;
         ProtoDateDiffOverflow date_diff_overflow = 72;
         string if_null_error = 73;
+        google.protobuf.Empty length_too_large = 74;
     }
 }

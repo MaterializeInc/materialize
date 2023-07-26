@@ -268,7 +268,7 @@ Explained Query:
     With
       cte l4 =
         Project (#0, #2, #10, #11, #13..=#15, #19, #22) // { arity: 9 }
-          Filter (#5 = 15) AND (#26 = "EUROPE") AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#23) IS NOT NULL AND "%BRASS" ~~(varchar_to_text(#4)) // { arity: 28 }
+          Filter (#5 = 15) AND (#26 = "EUROPE") AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#23) IS NOT NULL AND like["%BRASS"](varchar_to_text(#4)) // { arity: 28 }
             Join on=(#0 = #16 AND #9 = #17 AND #12 = #21 AND #23 = #25) type=delta // { arity: 28 }
               implementation
                 %0:part » %2:l1[#0]KA » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
@@ -728,7 +728,7 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
     Reduce group_by=[#5, extract_year_d(#4)] aggregates=[sum(((#1 * (1 - #2)) - (#3 * #0)))] // { arity: 3 }
       Project (#20..=#22, #35, #41, #47) // { arity: 6 }
-        Filter (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#16) IS NOT NULL AND "%green%" ~~(varchar_to_text(#1)) // { arity: 50 }
+        Filter (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#16) IS NOT NULL AND like["%green%"](varchar_to_text(#1)) // { arity: 50 }
           Join on=(eq(#0, #17, #32) AND eq(#9, #18, #33) AND #12 = #46 AND #16 = #37) type=delta // { arity: 50 }
             implementation
               %0:part » %2:lineitem[#1]KA » %3:partsupp[#0, #1]KKA » %1:supplier[#0]KA » %4:orders[#0]KA » %5:nation[#0]KA
@@ -1003,7 +1003,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0..=#8) // { arity: 9 }
-          Filter (#0) IS NOT NULL AND NOT("%special%requests%" ~~(varchar_to_text(#16))) // { arity: 17 }
+          Filter (#0) IS NOT NULL AND NOT(like["%special%requests%"](varchar_to_text(#16))) // { arity: 17 }
             Join on=(#0 = #9) type=differential // { arity: 17 }
               implementation
                 %1:orders[#1]KAf » %0:customer[#0]KAf
@@ -1050,7 +1050,7 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[sum(case when "PROMO%" ~~(varchar_to_text(#2)) then (#0 * (1 - #1)) else 0 end), sum((#0 * (1 - #1)))] // { arity: 2 }
+      Reduce aggregates=[sum(case when like["PROMO%"](varchar_to_text(#2)) then (#0 * (1 - #1)) else 0 end), sum((#0 * (1 - #1)))] // { arity: 2 }
         Project (#5, #6, #20) // { arity: 3 }
           Filter (#10 >= 1995-09-01) AND (#1) IS NOT NULL AND (date_to_timestamp(#10) < 1995-10-01 00:00:00) // { arity: 25 }
             Join on=(#1 = #16) type=differential // { arity: 25 }
@@ -1192,7 +1192,7 @@ Explained Query:
                             Get l1 // { arity: 1 }
                           ArrangeBy keys=[[]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
-                              Filter "%Customer%Complaints%" ~~(varchar_to_text(#6)) // { arity: 7 }
+                              Filter like["%Customer%Complaints%"](varchar_to_text(#6)) // { arity: 7 }
                                 Get materialize.public.supplier // { arity: 7 }
                 Get l1 // { arity: 1 }
     With
@@ -1202,7 +1202,7 @@ Explained Query:
             Get l0 // { arity: 4 }
       cte l0 =
         Project (#1, #8..=#10) // { arity: 4 }
-          Filter (#8 != "Brand#45") AND (#0) IS NOT NULL AND NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#9))) AND ((#10 = 3) OR (#10 = 9) OR (#10 = 14) OR (#10 = 19) OR (#10 = 23) OR (#10 = 36) OR (#10 = 45) OR (#10 = 49)) // { arity: 14 }
+          Filter (#8 != "Brand#45") AND (#0) IS NOT NULL AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(#9))) AND ((#10 = 3) OR (#10 = 9) OR (#10 = 14) OR (#10 = 19) OR (#10 = 23) OR (#10 = 36) OR (#10 = 45) OR (#10 = 49)) // { arity: 14 }
             Join on=(#0 = #5) type=differential // { arity: 14 }
               implementation
                 %1:part[#0]KAef » %0:partsupp[#0]KAef
@@ -1537,7 +1537,7 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
-                  Filter (#0) IS NOT NULL AND "forest%" ~~(varchar_to_text(#1)) // { arity: 9 }
+                  Filter (#0) IS NOT NULL AND like["forest%"](varchar_to_text(#1)) // { arity: 9 }
                     Get materialize.public.part // { arity: 9 }
       cte l0 =
         Project (#0..=#2) // { arity: 3 }

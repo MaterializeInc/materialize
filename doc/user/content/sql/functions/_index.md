@@ -102,10 +102,14 @@ Operator | Computes
 Operator | Computes
 ---------|---------
 <code>&vert;&vert;</code> | Concatenation
+`~~` | Matches LIKE pattern case sensitively, see [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`~~*` | Matches LIKE pattern case insensitively (ILIKE), see [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`!~~` | Matches NOT LIKE pattern (case sensitive), see [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
+`!~~*` | Matches NOT ILIKE pattern (case insensitive), see [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 `~` | Matches regular expression, case sensitive
 `~*` | Matches regular expression, case insensitive
-`!~` | Does not match regular expression, case sensitive
-`!~*` | Does not match regular expression, case insensitive
+`!~` | Matches regular expression case sensitively, and inverts the match
+`!~*` | Match regular expression case insensitively, and inverts the match
 
 The regular expression syntax supported by Materialize is documented by the
 [Rust `regex` crate](https://docs.rs/regex/*/#syntax).

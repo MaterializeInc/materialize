@@ -339,7 +339,7 @@ mod tests {
     use serde_json::json;
 
     use crate::tests::new_test_client;
-    use crate::{PersistClient, ShardId};
+    use crate::{Diagnostics, PersistClient, ShardId};
 
     use super::*;
 
@@ -377,14 +377,17 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn rate_limit() {
         let client = crate::tests::new_test_client().await;
 
         let shard_id = crate::ShardId::new();
 
         let mut since = client
-            .open_critical_since::<(), (), u64, i64, i64>(shard_id, CriticalReaderId::new(), "")
+            .open_critical_since::<(), (), u64, i64, i64>(
+                shard_id,
+                CriticalReaderId::new(),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("codec mismatch");
 
@@ -405,7 +408,6 @@ mod tests {
 
     // Verifies that the handle updates its view of the opaque token correctly
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn handle_opaque_token() {
         let client = new_test_client().await;
         let shard_id = ShardId::new();
@@ -414,7 +416,7 @@ mod tests {
             .open_critical_since::<(), (), u64, i64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                "",
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
@@ -434,7 +436,7 @@ mod tests {
             .open_critical_since::<(), (), u64, i64, i64>(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                "",
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");

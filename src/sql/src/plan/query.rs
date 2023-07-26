@@ -55,12 +55,13 @@ use mz_repr::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CteBlock, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
-    HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select,
-    SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator, ShowStatement,
-    SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
-    UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    AsOf, Assignment, AstInfo, CreateWebhookSourceCheck, CreateWebhookSourceSecret, CteBlock,
+    DeleteStatement, Distinct, Expr, Function, FunctionArgs, HomogenizingFunction, Ident,
+    InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, MutRecBlock,
+    MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption,
+    SelectOptionName, SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use uuid::Uuid;
 
@@ -81,7 +82,10 @@ use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
-use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
+use crate::plan::{
+    transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
+    WebhookValidationSecret,
+};
 use crate::session::vars::{self, FeatureFlag};
 
 #[derive(Debug)]
@@ -176,7 +180,7 @@ pub fn plan_insert_query(
     source: InsertSource<Aug>,
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<(GlobalId, HirRelationExpr, PlannedQuery<Vec<HirScalarExpr>>), PlanError> {
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
@@ -531,7 +535,7 @@ pub fn plan_delete_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut delete_stmt)?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     plan_mutation_query_inner(
         qcx,
         delete_stmt.table_name,
@@ -548,7 +552,7 @@ pub fn plan_update_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut update_stmt)?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
     plan_mutation_query_inner(
         qcx,
@@ -826,7 +830,7 @@ pub fn plan_up_to(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -854,7 +858,7 @@ pub fn plan_as_of(
             AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
-                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
                 transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
                     qcx: &qcx,
@@ -885,7 +889,7 @@ pub fn plan_secret_as(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
 
     transform_ast::transform(scx, &mut expr)?;
 
@@ -905,12 +909,117 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
+/// Plans an expression in the CHECK position of a `CREATE SOURCE ... FROM WEBHOOK`.
+pub fn plan_webhook_validate_using(
+    scx: &StatementContext,
+    validate_using: CreateWebhookSourceCheck<Aug>,
+) -> Result<WebhookValidation, PlanError> {
+    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+
+    let CreateWebhookSourceCheck {
+        options,
+        using: mut expr,
+    } = validate_using;
+
+    // We _always_ provide the body of the request as bytes and include the headers when validating
+    // a request, regardless of what has otherwise been specified for the source.
+    let mut column_typs = vec![
+        ColumnType {
+            scalar_type: ScalarType::Bytes,
+            nullable: false,
+        },
+        ColumnType {
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            },
+            nullable: false,
+        },
+    ];
+    let mut column_names = vec!["body".to_string(), "headers".to_string()];
+
+    // Append all secrets so they can be used in the expression.
+    let secrets = options.map(|o| o.secrets).unwrap_or_default();
+    let mut validation_secrets = vec![];
+
+    for CreateWebhookSourceSecret {
+        secret,
+        alias,
+        use_bytes,
+    } in secrets
+    {
+        // Either provide the secret to the validation expression as Bytes or a String.
+        let scalar_type = if use_bytes {
+            ScalarType::Bytes
+        } else {
+            ScalarType::String
+        };
+
+        column_typs.push(ColumnType {
+            scalar_type,
+            nullable: false,
+        });
+        let ResolvedItemName::Item { id, full_name: FullItemName { item, .. }, .. } = secret else {
+            return Err(PlanError::InvalidSecret(Box::new(secret)));
+        };
+
+        // Plan the expression using the secret's alias, if one is provided.
+        let name = if let Some(alias) = alias {
+            alias.into_string()
+        } else {
+            item
+        };
+        column_names.push(name);
+
+        // Get the column index that corresponds for this secret, so we can make sure to provide the
+        // secrets in the correct order during evaluation.
+        let column_idx = column_typs.len() - 1;
+        // Double check that our column names and types match.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "column names and types don't match"
+        );
+
+        validation_secrets.push(WebhookValidationSecret {
+            id,
+            column_idx,
+            use_bytes,
+        });
+    }
+
+    let relation_typ = RelationType::new(column_typs);
+    let desc = RelationDesc::new(relation_typ, column_names.clone());
+    let scope = Scope::from_source(None, column_names);
+
+    transform_ast::transform(scx, &mut expr)?;
+
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "CHECK",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let expr = plan_expr(ecx, &expr)?
+        .type_as(ecx, &ScalarType::Bool)?
+        .lower_uncorrelated()?;
+    let validation = WebhookValidation {
+        expression: expr,
+        secrets: validation_secrets,
+    };
+    Ok(validation)
+}
+
 pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Aug>,
     target_ty: &ScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
@@ -938,7 +1047,7 @@ pub fn plan_params<'a>(
         );
     }
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let scope = Scope::empty();
     let rel_type = RelationType::empty();
 
@@ -1536,7 +1645,7 @@ fn plan_set_expr(
                 ShowStatement::ShowObjects(stmt) => {
                     show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
                 }
-                ShowStatement::ShowVariable(_) => sql_bail!("unsupported SHOW statement"),
+                ShowStatement::ShowVariable(_) => bail_unsupported!("SHOW variable in subqueries"),
                 ShowStatement::InspectShard(_) => sql_bail!("unsupported INSPECT statement"),
             }
         }
@@ -5150,6 +5259,7 @@ fn scalar_type_from_catalog(
                         custom_id: Some(id),
                     })
                 }
+                CatalogType::AclItem => Ok(ScalarType::AclItem),
                 CatalogType::Bool => Ok(ScalarType::Bool),
                 CatalogType::Bytes => Ok(ScalarType::Bytes),
                 CatalogType::Date => Ok(ScalarType::Date),
@@ -5166,6 +5276,7 @@ fn scalar_type_from_catalog(
                 CatalogType::Jsonb => Ok(ScalarType::Jsonb),
                 CatalogType::Oid => Ok(ScalarType::Oid),
                 CatalogType::PgLegacyChar => Ok(ScalarType::PgLegacyChar),
+                CatalogType::PgLegacyName => Ok(ScalarType::PgLegacyName),
                 CatalogType::Pseudo => {
                     sql_bail!(
                         "cannot reference pseudo type {}",
@@ -5356,9 +5467,9 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
 /// allowed to reason about the time at which it is running, e.g., by calling
 /// the `now()` function.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum QueryLifetime<'a> {
+pub enum QueryLifetime {
     /// The query's result will be computed at one point in time.
-    OneShot(&'a PlanContext),
+    OneShot,
     /// The query's result will be maintained indefinitely.
     Static,
 }
@@ -5376,7 +5487,7 @@ pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
     pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
-    pub lifetime: QueryLifetime<'a>,
+    pub lifetime: QueryLifetime,
     /// The scopes of the outer relation expression.
     pub outer_scopes: Vec<Scope>,
     /// The type of the outer relation expressions.
@@ -5393,7 +5504,7 @@ impl CheckedRecursion for QueryContext<'_> {
 }
 
 impl<'a> QueryContext<'a> {
-    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime<'a>) -> QueryContext<'a> {
+    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime) -> QueryContext<'a> {
         QueryContext {
             scx,
             lifetime,

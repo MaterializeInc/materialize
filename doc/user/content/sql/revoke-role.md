@@ -10,7 +10,7 @@ menu:
 of other roles, as well as inherit all the privileges of those
 roles. This membership can also be revoked.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -34,6 +34,12 @@ REVOKE data_scientist FROM joe;
 ```sql
 REVOKE data_scientist FROM joe, mike;
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the systems.
 
 ## Related pages
 

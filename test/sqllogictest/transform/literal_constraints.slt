@@ -543,7 +543,7 @@ WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l
 ----
 Explained Query (fast path):
   Project (#1)
-    Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)) AND ("l%" ~~(#0) OR (#1 > 5))
+    Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)) AND (like["l%"](#0) OR (#1 > 5))
       ReadExistingIndex materialize.public.idx_t1_b lookup_values=[("l1"); ("l2"); ("l3"); ("l9")]
 
 Used Indexes:
@@ -564,7 +564,7 @@ WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b 
 ----
 Explained Query (fast path):
   Project (#0, #1)
-    Filter ("nonono" ~~(#1) OR ("l%" ~~(#1) AND (#0 < 10)))
+    Filter (like["nonono"](#1) OR (like["l%"](#1) AND (#0 < 10)))
       ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2")]
 
 Used Indexes:
@@ -621,7 +621,7 @@ WHERE (
 ----
 Explained Query (fast path):
   Project (#0)
-    Filter ("aaa" ~~(#1) OR "l%" ~~(#1)) AND ((#0 = 2) OR ("nope" ~~(#1) AND (#0 = 1)))
+    Filter (like["aaa"](#1) OR like["l%"](#1)) AND ((#0 = 2) OR (like["nope"](#1) AND (#0 = 1)))
       ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2)]
 
 Used Indexes:

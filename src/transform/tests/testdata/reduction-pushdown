@@ -178,6 +178,7 @@ Project (#0, #3)
         Get z
         Get w
 
+# TODO(mgree): is this changed join order okay?
 opt
 (reduce (join [(get x) (get y) (get z) (get w)] [[#0 #2] [#3 #5] [#4 #6]]) [#3 #5] [])
 ----

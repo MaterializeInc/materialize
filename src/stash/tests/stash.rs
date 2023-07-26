@@ -82,8 +82,8 @@ use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::spawn;
 use mz_stash::{
-    Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
-    INSERT_BATCH_SPLIT_SIZE,
+    AppendBatch, Data, Stash, StashCollection, StashError, StashFactory, TableTransaction,
+    Timestamp, TypedCollection, INSERT_BATCH_SPLIT_SIZE,
 };
 use postgres_openssl::MakeTlsConnector;
 use timely::progress::Antichain;
@@ -141,24 +141,24 @@ async fn test_stash_postgres() {
         let mut conn1 = connect(&factory, &connstr, tls.clone(), true).await;
         // Don't clear the stash tables.
         let mut conn2 = connect(&factory, &connstr, tls.clone(), false).await;
-        assert!(match conn1.collection::<String, String>("c").await {
+        assert!(match collection::<String, String>(&mut conn1, "c").await {
             Err(e) => e.is_unrecoverable(),
             _ => panic!("expected error"),
         });
-        let _: StashCollection<String, String> = conn2.collection("c").await.unwrap();
+        let _: StashCollection<String, String> = collection(&mut conn2, "c").await.unwrap();
     }
     // Test failures after commit.
     {
         let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
-        let col = stash.collection::<i64, i64>("c1").await.unwrap();
-        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
+        let mut batch = make_batch(&col, &mut stash).await.unwrap();
         col.append_to_batch(&mut batch, &1, &2, 1);
-        stash.append(vec![batch]).await.unwrap();
+        append(&mut stash, vec![batch]).await.unwrap();
         assert_eq!(
             C1.peek_one(&mut stash).await.unwrap(),
             BTreeMap::from([(1, 2)])
         );
-        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        let mut batch = make_batch(&col, &mut stash).await.unwrap();
         col.append_to_batch(&mut batch, &1, &2, -1);
 
         fail::cfg("stash_commit_pre", "return(commit failpoint)").unwrap();
@@ -180,7 +180,7 @@ async fn test_stash_postgres() {
             fail::cfg("stash_commit_pre", "off").unwrap();
             rx.await.unwrap();
         });
-        stash.append(vec![batch.clone()]).await.unwrap();
+        append(&mut stash, vec![batch.clone()]).await.unwrap();
         assert_eq!(C1.peek_one(&mut stash).await.unwrap(), BTreeMap::new());
         tx.send(()).unwrap();
         handle.await.unwrap();
@@ -209,12 +209,12 @@ async fn test_stash_postgres() {
     // Test batches with a large number of individual updates.
     {
         let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
-        let col = stash.collection::<i64, i64>("c1").await.unwrap();
-        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
+        let mut batch = make_batch(&col, &mut stash).await.unwrap();
         for i in 0..500_000 {
             col.append_to_batch(&mut batch, &i, &(i + 1), 1);
         }
-        stash.append(vec![batch]).await.unwrap();
+        append(&mut stash, vec![batch]).await.unwrap();
     }
     // Test readonly.
     {
@@ -223,10 +223,10 @@ async fn test_stash_postgres() {
             .open(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
-        let col_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
-        let mut batch = col_rw.make_batch(&mut stash_rw).await.unwrap();
+        let col_rw = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
+        let mut batch = make_batch(&col_rw, &mut stash_rw).await.unwrap();
         col_rw.append_to_batch(&mut batch, &1, &2, 1);
-        stash_rw.append(vec![batch]).await.unwrap();
+        append(&mut stash_rw, vec![batch]).await.unwrap();
 
         // Now make a readonly stash. We should fail to create new collections,
         // but be able to read existing collections.
@@ -234,7 +234,7 @@ async fn test_stash_postgres() {
             .open_readonly(connstr.to_string(), None, tls.clone())
             .await
             .unwrap();
-        let res = stash_ro.collection::<i64, i64>("c2").await;
+        let res = collection::<i64, i64>(&mut stash_ro, "c2").await;
         assert_contains!(
             res.unwrap_err().to_string(),
             "cannot execute INSERT in a read-only transaction"
@@ -262,10 +262,10 @@ async fn test_stash_postgres() {
             .open_savepoint(connstr.to_string(), tls)
             .await
             .unwrap();
-        let c1_sp = stash_rw.collection::<i64, i64>("c1").await.unwrap();
-        let mut batch = c1_sp.make_batch(&mut stash_sp).await.unwrap();
+        let c1_sp = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
+        let mut batch = make_batch(&c1_sp, &mut stash_sp).await.unwrap();
         c1_sp.append_to_batch(&mut batch, &5, &6, 1);
-        stash_sp.append(vec![batch]).await.unwrap();
+        append(&mut stash_sp, vec![batch]).await.unwrap();
         assert_eq!(
             C1.peek_one(&mut stash_sp).await.unwrap(),
             BTreeMap::from([(1, 2), (5, 6)]),
@@ -277,13 +277,12 @@ async fn test_stash_postgres() {
         );
 
         // SP stash can create a new collection, append to it, peek it.
-        let c_savepoint = stash_sp
-            .collection::<i64, i64>("c_savepoint")
+        let c_savepoint = collection::<i64, i64>(&mut stash_sp, "c_savepoint")
             .await
             .unwrap();
-        let mut batch = c_savepoint.make_batch(&mut stash_sp).await.unwrap();
+        let mut batch = make_batch(&c_savepoint, &mut stash_sp).await.unwrap();
         c_savepoint.append_to_batch(&mut batch, &3, &4, 1);
-        stash_sp.append(vec![batch]).await.unwrap();
+        append(&mut stash_sp, vec![batch]).await.unwrap();
         assert_eq!(
             C_SAVEPOINT.peek_one(&mut stash_sp).await.unwrap(),
             BTreeMap::from([(3, 4)])
@@ -378,8 +377,12 @@ where
     );
 
     // Test append across collections.
-    let orders = stash.collection::<String, String>("orders").await.unwrap();
-    let other = stash.collection::<String, String>("other").await.unwrap();
+    let orders = collection::<String, String>(&mut stash, "orders")
+        .await
+        .unwrap();
+    let other = collection::<String, String>(&mut stash, "other")
+        .await
+        .unwrap();
 
     stash
         .with_transaction(move |tx| {
@@ -757,23 +760,86 @@ where
     stash
 }
 
+async fn make_batch<K, V>(
+    collection: &StashCollection<K, V>,
+    stash: &mut Stash,
+) -> Result<AppendBatch, StashError> {
+    let id = collection.id;
+    let lower = stash
+        .with_transaction(move |tx| Box::pin(async move { tx.upper(id).await }))
+        .await?;
+    collection.make_batch_lower(lower)
+}
+
+async fn collection<K, V>(
+    stash: &mut Stash,
+    name: &str,
+) -> Result<StashCollection<K, V>, StashError>
+where
+    K: Data,
+    V: Data,
+{
+    let name = name.to_string();
+    stash
+        .with_transaction(move |tx| Box::pin(async move { tx.collection(&name).await }))
+        .await
+}
+
+/// Atomically adds entries, seals, compacts, and consolidates multiple
+/// collections.
+///
+/// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
+/// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
+/// The `compact` of each `AppendBatch` will be the new `since` of the collection.
+///
+/// If this method returns `Ok`, the entries have been made durable and uppers
+/// advanced, otherwise no changes were committed.
+async fn append(stash: &mut Stash, batches: Vec<AppendBatch>) -> Result<(), StashError> {
+    if batches.is_empty() {
+        return Ok(());
+    }
+    stash
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                let batches = batches.clone();
+                tx.append(batches).await?;
+                for id in tx.collections().await?.keys() {
+                    tx.consolidate(*id).await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+}
+
+async fn get<K, V>(
+    typed_collection: &TypedCollection<K, V>,
+    stash: &mut Stash,
+) -> Result<StashCollection<K, V>, StashError>
+where
+    K: Data,
+    V: Data,
+{
+    collection(stash, typed_collection.name()).await
+}
+
 async fn test_stash_table(stash: &mut Stash) {
     const TABLE: TypedCollection<Vec<u8>, String> = TypedCollection::new("table");
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
     }
-    let collection = TABLE.get(stash).await.unwrap();
+    let collection = get(&TABLE, stash).await.unwrap();
 
     async fn commit(
         stash: &mut Stash,
         collection: StashCollection<Vec<u8>, String>,
         pending: Vec<(Vec<u8>, String, i64)>,
     ) -> Result<(), StashError> {
-        let mut batch = collection.make_batch(stash).await.unwrap();
+        let mut batch = make_batch(&collection, stash).await.unwrap();
         for (k, v, diff) in pending {
             collection.append_to_batch(&mut batch, &k, &v, diff);
         }
-        stash.append(vec![batch]).await.unwrap();
+        append(stash, vec![batch]).await.unwrap();
         Ok(())
     }
 
@@ -928,10 +994,10 @@ async fn test_stash_table(stash: &mut Stash) {
         .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
     commit(stash, collection, table.pending()).await.unwrap();
-    let items = TABLE.peek(stash).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
     assert_eq!(
-        items,
-        vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]
+        items.into_iter().collect::<Vec<_>>(),
+        vec![(1i64.to_le_bytes().to_vec(), "v5".to_string())]
     );
 
     // Test `set`.

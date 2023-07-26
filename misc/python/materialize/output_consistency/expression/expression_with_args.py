@@ -147,21 +147,23 @@ class ExpressionWithArgs(Expression):
 
 
 def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
-    storage_layout: Optional[ValueStorageLayout] = None
+    mutual_storage_layout: Optional[ValueStorageLayout] = None
 
     for arg in args:
-        if arg.storage_layout == ValueStorageLayout.ANY:
+        if (
+            mutual_storage_layout is None
+            or mutual_storage_layout == ValueStorageLayout.ANY
+        ):
+            mutual_storage_layout = arg.storage_layout
+        elif arg.storage_layout == ValueStorageLayout.ANY:
             continue
-
-        if storage_layout is None:
-            storage_layout = arg.storage_layout
-        elif storage_layout != arg.storage_layout:
+        elif mutual_storage_layout != arg.storage_layout:
             raise RuntimeError(
-                f"It is not allowed to mix storage layouts in an expression (current={storage_layout}, got={arg.storage_layout})"
+                f"It is not allowed to mix storage layouts in an expression (current={mutual_storage_layout}, got={arg.storage_layout})"
             )
 
-    if storage_layout is None:
+    if mutual_storage_layout is None:
         # use this as default (but it should not matter as expressions are expected to always have at least one arg)
         return ValueStorageLayout.HORIZONTAL
 
-    return storage_layout
+    return mutual_storage_layout

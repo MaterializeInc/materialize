@@ -272,21 +272,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 negated,
             } => {
                 f.write_node(&expr);
-                f.write_str(match (*case_insensitive, *negated) {
-                    (false, false) => " ~~ ",
-                    (false, true) => " !~~ ",
-                    (true, false) => " ~~* ",
-                    (true, true) => " !~~* ",
-                });
-                match escape {
-                    Some(escape) => {
-                        f.write_str("like_escape(");
-                        f.write_node(&pattern);
-                        f.write_str(", ");
-                        f.write_node(escape);
-                        f.write_str(")");
-                    }
-                    None => f.write_node(&pattern),
+                f.write_str(" ");
+                if *negated {
+                    f.write_str("NOT ");
+                }
+                if *case_insensitive {
+                    f.write_str("I");
+                }
+                f.write_str("LIKE ");
+                f.write_node(&pattern);
+                if let Some(escape) = escape {
+                    f.write_str(" ESCAPE ");
+                    f.write_node(escape);
                 }
             }
             Expr::Between {
@@ -419,7 +416,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
-                f.write_str("ANY (");
+                f.write_str(" ANY (");
                 f.write_node(&right);
                 f.write_str(")");
             }
@@ -427,7 +424,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
-                f.write_str("ANY (");
+                f.write_str(" ANY (");
                 f.write_node(&right);
                 f.write_str(")");
             }
@@ -611,23 +608,23 @@ impl<T: AstInfo> Expr<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Op {
     /// Any namespaces that preceded the operator.
-    pub namespace: Vec<Ident>,
+    pub namespace: Option<Vec<Ident>>,
     /// The operator itself.
     pub op: String,
 }
 
 impl AstDisplay for Op {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        if self.namespace.is_empty() {
-            f.write_str(&self.op)
-        } else {
+        if let Some(namespace) = &self.namespace {
             f.write_str("OPERATOR(");
-            for name in &self.namespace {
+            for name in namespace {
                 f.write_node(name);
                 f.write_str(".");
             }
             f.write_str(&self.op);
             f.write_str(")");
+        } else {
+            f.write_str(&self.op)
         }
     }
 }
@@ -640,7 +637,7 @@ impl Op {
         S: Into<String>,
     {
         Op {
-            namespace: vec![],
+            namespace: None,
             op: op.into(),
         }
     }

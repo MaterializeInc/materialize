@@ -287,9 +287,9 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
-        (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
-        (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
-        (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
+        (Oid, RegClass) => Implicit: CastOidToRegClass(func::CastOidToRegClass),
+        (Oid, RegProc) => Implicit: CastOidToRegProc(func::CastOidToRegProc),
+        (Oid, RegType) => Implicit: CastOidToRegType(func::CastOidToRegType),
 
         // REGCLASS
         (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
@@ -525,11 +525,27 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         }),
         (VarChar, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
 
-        //PG LEGACY CHAR
+        // PG LEGACY CHAR
         (PgLegacyChar, String) => Implicit: CastPgLegacyCharToString(func::CastPgLegacyCharToString),
         (PgLegacyChar, Char) => Assignment: CastPgLegacyCharToChar(func::CastPgLegacyCharToChar),
         (PgLegacyChar, VarChar) => Assignment: CastPgLegacyCharToVarChar(func::CastPgLegacyCharToVarChar),
         (PgLegacyChar, Int32) => Explicit: CastPgLegacyCharToInt32(func::CastPgLegacyCharToInt32),
+
+        // PG LEGACY NAME
+        // Under the hood VarChars and Name's are just Strings, so we can re-use existing methods
+        // on Strings and VarChars instead of defining new ones.
+        (PgLegacyName, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
+        (PgLegacyName, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            let length = to_type.unwrap_char_length();
+            Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
+        }),
+        (PgLegacyName, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            let length = to_type.unwrap_varchar_max_length();
+            Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
+        }),
+        (String, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+        (Char, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+        (VarChar, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
 
         // RECORD
         (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -664,6 +680,46 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                     (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id)
                 LEFT JOIN mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
                 LEFT JOIN mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
+            )"),
+        (MzAclItem, AclItem) => Explicit: sql_impl_cast("(
+                SELECT makeaclitem(
+                    (CASE mz_internal.mz_aclitem_grantee($1)
+                        WHEN 'p' THEN 0
+                        ELSE (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantee($1))
+                    END),
+                    (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantor($1)),
+                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges($1)), ',')),
+                    -- GRANT OPTION isn't implemented so we hardcode false.
+                    false
+                )
+            )"),
+
+        // AclItem
+        (AclItem, String) => Explicit: sql_impl_cast("(
+                SELECT
+                    (CASE grantee_oid
+                        WHEN 0 THEN ''
+                        ELSE COALESCE(grantee_role.name, grantee_oid::text)
+                    END)
+                    || '='
+                    || mz_internal.aclitem_privileges($1)
+                    || '/'
+                    || COALESCE(grantor_role.name, grantor_oid::text)
+                FROM
+                    (SELECT mz_internal.aclitem_grantee($1) AS grantee_oid),
+                    (SELECT mz_internal.aclitem_grantor($1) AS grantor_oid)
+                LEFT JOIN mz_roles AS grantee_role ON grantee_oid = grantee_role.oid
+                LEFT JOIN mz_roles AS grantor_role ON grantor_oid = grantor_role.oid
+            )"),
+        (AclItem, MzAclItem) => Explicit: sql_impl_cast("(
+                SELECT mz_internal.make_mz_aclitem(
+                    (CASE mz_internal.aclitem_grantee($1)
+                        WHEN 0 THEN 'p'
+                        ELSE (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantee($1))
+                    END),
+                    (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantor($1)),
+                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.aclitem_privileges($1)), ','))
+                )
             )")
     }
 });

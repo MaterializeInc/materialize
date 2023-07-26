@@ -92,6 +92,42 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
+# Matches LIKE pattern case sensitively, using SQL LIKE matching
+TEXT_OPERATION_TYPES.append(
+    DbOperation(
+        "$ ~~ $",
+        [TextOperationParam(), REGEX_PARAM],
+        BooleanReturnTypeSpec(),
+    )
+)
+
+# Matches LIKE pattern case insensitively (ILIKE), using SQL LIKE matching
+TEXT_OPERATION_TYPES.append(
+    DbOperation(
+        "$ ~~* $",
+        [TextOperationParam(), REGEX_PARAM],
+        BooleanReturnTypeSpec(),
+    )
+)
+
+# Does not match LIKE pattern case sensitively, using SQL LIKE matching
+TEXT_OPERATION_TYPES.append(
+    DbOperation(
+        "$ !~~ $",
+        [TextOperationParam(), REGEX_PARAM],
+        BooleanReturnTypeSpec(),
+    )
+)
+
+#  Does not match LIKE pattern case insensitively (ILIKE), using SQL LIKE matching
+TEXT_OPERATION_TYPES.append(
+    DbOperation(
+        "$ !~~* $",
+        [TextOperationParam(), REGEX_PARAM],
+        BooleanReturnTypeSpec(),
+    )
+)
+
 TEXT_OPERATION_TYPES.append(
     DbFunction(
         "ascii",

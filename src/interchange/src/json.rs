@@ -112,6 +112,7 @@ impl ToJson for TypedDatum<'_> {
             serde_json::Value::Null
         } else {
             match &typ.scalar_type {
+                ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
                 ScalarType::Bool => json!(datum.unwrap_bool()),
                 ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
                 ScalarType::Int16 => json!(datum.unwrap_int16()),
@@ -146,7 +147,9 @@ impl ToJson for TypedDatum<'_> {
                     serde_json::Value::String(format!("{}", datum.unwrap_interval()))
                 }
                 ScalarType::Bytes => json!(datum.unwrap_bytes()),
-                ScalarType::String | ScalarType::VarChar { .. } => json!(datum.unwrap_str()),
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+                    json!(datum.unwrap_str())
+                }
                 ScalarType::Char { length } => {
                     let s = char::format_str_pad(datum.unwrap_str(), *length);
                     serde_json::Value::String(s)
@@ -227,6 +230,7 @@ fn build_row_schema_field(
     typ: &ColumnType,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
+        ScalarType::AclItem => json!("string"),
         ScalarType::Bool => json!("boolean"),
         ScalarType::PgLegacyChar => json!({
             "type": "fixed",
@@ -259,7 +263,10 @@ fn build_row_schema_field(
         }),
         ScalarType::Interval => type_namer.interval_type(),
         ScalarType::Bytes => json!("bytes"),
-        ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
+        ScalarType::String
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::PgLegacyName => {
             json!("string")
         }
         ScalarType::Jsonb => json!({

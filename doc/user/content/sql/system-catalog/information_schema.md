@@ -11,8 +11,16 @@ Materialize has compatibility shims for the following relations from the
 SQL standard [`information_schema`](https://www.postgresql.org/docs/current/infoschema-schema.html)
 schema, which is automatically available in all databases:
 
+  * [`applicable_roles`](https://www.postgresql.org/docs/current/infoschema-applicable-roles.html)
   * [`columns`](https://www.postgresql.org/docs/current/infoschema-columns.html)
+  * [`enabled_roles`](https://www.postgresql.org/docs/current/infoschema-enabled-roles.html)
+  * [`role_table_grants`](https://www.postgresql.org/docs/current/infoschema-role-table-grants.html)
+  * [`routines`](https://www.postgresql.org/docs/current/infoschema-routines.html)
+  * [`schemata`](https://www.postgresql.org/docs/current/infoschema-schemata.html)
   * [`tables`](https://www.postgresql.org/docs/current/infoschema-tables.html)
+  * [`table_privileges`](https://www.postgresql.org/docs/current/infoschema-table-privileges.html)
+  * [`triggers`](https://www.postgresql.org/docs/current/infoschema-triggers.html)
+  * [`views`](https://www.postgresql.org/docs/current/infoschema-views.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in the SQL standard, or if they do include the column the

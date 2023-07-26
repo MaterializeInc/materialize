@@ -10,7 +10,7 @@ menu:
 be used to indicate that the privileges should be revoked from all roles
 (including roles that might not exist yet).
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -88,6 +88,15 @@ REVOKE ALL ON CLUSTER dev FROM joe;
 ```sql
 REVOKE CREATEDB ON SYSTEM FROM joe;
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- superuser status if the privilege is a system privilege.
 
 ## Related pages
 

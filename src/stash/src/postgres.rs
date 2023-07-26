@@ -32,8 +32,8 @@ use tracing::{error, event, info, warn, Level};
 
 use crate::upgrade;
 use crate::{
-    AppendBatch, Data, Diff, Id, InternalStashError, StashCollection, StashError, Timestamp,
-    COLLECTION_CONFIG, MIN_STASH_VERSION, STASH_VERSION, USER_VERSION_KEY,
+    Diff, Id, InternalStashError, StashError, Timestamp, COLLECTION_CONFIG, MIN_STASH_VERSION,
+    STASH_VERSION, USER_VERSION_KEY,
 };
 
 // TODO: Change the indexes on data to be more applicable to the current
@@ -173,7 +173,7 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    pub fn inc<S: Into<String>>(&self, name: S) {
+    fn inc<S: Into<String>>(&self, name: S) {
         if let Some(counts) = &self.counts {
             let mut map = counts.lock().unwrap();
             *map.entry(name.into()).or_default() += 1;
@@ -181,42 +181,46 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    pub fn fetch_epoch(&self) -> &Statement {
+    fn fetch_epoch(&self) -> &Statement {
         self.inc("fetch_epoch");
         &self.stmts.fetch_epoch
     }
-    pub fn iter_key(&self) -> &Statement {
+    pub(crate) fn iter_key(&self) -> &Statement {
         self.inc("iter_key");
         &self.stmts.iter_key
     }
-    pub fn since(&self) -> &Statement {
+    pub(crate) fn since(&self) -> &Statement {
         self.inc("since");
         &self.stmts.since
     }
-    pub fn upper(&self) -> &Statement {
+    pub(crate) fn upper(&self) -> &Statement {
         self.inc("upper");
         &self.stmts.upper
     }
-    pub fn collection(&self) -> &Statement {
+    pub(crate) fn collection(&self) -> &Statement {
         self.inc("collection");
         &self.stmts.collection
     }
-    pub fn iter(&self) -> &Statement {
+    pub(crate) fn iter(&self) -> &Statement {
         self.inc("iter");
         &self.stmts.iter
     }
-    pub fn seal(&self) -> &Statement {
+    pub(crate) fn seal(&self) -> &Statement {
         self.inc("seal");
         &self.stmts.seal
     }
-    pub fn compact(&self) -> &Statement {
+    pub(crate) fn compact(&self) -> &Statement {
         self.inc("compact");
         &self.stmts.compact
     }
     /// Returns a ToStatement to INSERT a specified number of rows. First
     /// statement parameter is collection_id. Then key, value, time, diff as
     /// sets of 4 for each row.
-    pub async fn update(&self, client: &Client, rows: usize) -> Result<Statement, StashError> {
+    pub(crate) async fn update(
+        &self,
+        client: &Client,
+        rows: usize,
+    ) -> Result<Statement, StashError> {
         self.inc(format!("update[{rows}]"));
 
         match self.stmts.update_many.lock().await.entry(rows) {
@@ -381,7 +385,7 @@ struct Metrics {
 }
 
 impl Metrics {
-    pub fn register_into(registry: &MetricsRegistry) -> Metrics {
+    fn register_into(registry: &MetricsRegistry) -> Metrics {
         let metrics = Metrics {
             transactions: registry.register(metric!(
                 name: "mz_stash_transactions",
@@ -558,21 +562,6 @@ impl Stash {
                 tx.batch_execute(SCHEMA).await?;
             }
 
-            // Migration added in 0.45.0. This block can be removed anytime after that
-            // release.
-            {
-                // We can't add the column for other txn modes, and they don't
-                // even require it since they use the read-only fetch_epoch
-                // query.
-                if matches!(self.txn_mode, TransactionMode::Writeable) {
-                    tx
-                    .batch_execute(
-                        "ALTER TABLE fence ADD COLUMN IF NOT EXISTS version bigint DEFAULT 1 NOT NULL;",
-                    )
-                    .await?;
-                }
-            }
-
             let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
                 // The `data`, `sinces`, and `uppers` tables can create and delete
                 // rows at a high frequency, generating many tombstoned rows. If
@@ -609,31 +598,6 @@ impl Stash {
             };
 
             tx.commit().await?;
-
-            // Migration added in 0.54.0. This block can be removed anytime after that
-            // release.
-            {
-                // Check if we still use JSON.
-                let rows = client
-                    .query("SELECT pg_typeof(key) kind FROM data LIMIT 1", &[])
-                    .await?;
-                let is_json = rows
-                    .get(0)
-                    .map(|row| {
-                        row.try_get("kind")
-                            .map(|ty: String| ty == "jsonb")
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
-
-                if is_json {
-                    upgrade::migrate_json_to_proto(&mut client, epoch)
-                        .await
-                        .map_err(|e| StashError {
-                            inner: InternalStashError::Other(e.to_string()),
-                        })?;
-                }
-            }
 
             self.epoch = Some(epoch);
         }
@@ -925,7 +889,7 @@ impl Stash {
         // Run migrations until we're up-to-date.
         while run_upgrade(self).await? < STASH_VERSION {}
 
-        pub async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
+        async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
             stash
                 .with_transaction(move |mut tx| {
                     async move {
@@ -942,8 +906,6 @@ impl Stash {
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                            13 => upgrade::v13_to_v14::upgrade(),
-                            14 => upgrade::v14_to_v15::upgrade(),
                             15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
                             16 => upgrade::v16_to_v17::upgrade(),
                             17 => upgrade::v17_to_v18::upgrade(&mut tx).await?,
@@ -954,6 +916,10 @@ impl Stash {
                             22 => upgrade::v22_to_v23::upgrade(&mut tx).await?,
                             23 => upgrade::v23_to_v24::upgrade(&mut tx).await?,
                             24 => upgrade::v24_to_v25::upgrade(&mut tx).await?,
+                            25 => upgrade::v25_to_v26::upgrade(),
+                            26 => upgrade::v26_to_v27::upgrade(),
+                            27 => upgrade::v27_to_v28::upgrade(&mut tx).await?,
+                            28 => upgrade::v28_to_v29::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -974,7 +940,7 @@ impl Stash {
     }
 }
 
-pub(crate) enum TransactionError<T> {
+enum TransactionError<T> {
     /// A failure occurred pre-transaction.
     Connect(StashError),
     /// The epoch check failed.
@@ -1046,7 +1012,7 @@ impl<T> TransactionError<T> {
     }
 
     /// Reports whether this error can safely be retried.
-    pub fn retryable(&self) -> bool {
+    fn retryable(&self) -> bool {
         // Only attempt to retry postgres-related errors. Others come from stash
         // code and can't be retried.
         if self.pgerr().is_none() {
@@ -1089,65 +1055,9 @@ impl<T> TransactionError<T> {
 }
 
 impl Stash {
-    pub async fn collection<K, V>(
-        &mut self,
-        name: &str,
-    ) -> Result<StashCollection<K, V>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let name = name.to_string();
-        self.with_transaction(move |tx| Box::pin(async move { tx.collection(&name).await }))
-            .await
-    }
-
     pub async fn collections(&mut self) -> Result<BTreeMap<Id, String>, StashError> {
         self.with_transaction(move |tx| Box::pin(async move { tx.collections().await }))
             .await
-    }
-
-    /// Performs a synchronous consolidation (the rows are guaranteed to be removed from disk after this
-    /// future resolves).
-    pub async fn consolidate_now(&mut self, id: Id) -> Result<(), StashError> {
-        let since = self
-            .with_transaction(move |tx| Box::pin(async move { tx.since(id).await }))
-            .await?;
-        let (tx, rx) = oneshot::channel();
-        self.sinces_tx
-            .send(ConsolidateRequest {
-                id,
-                since,
-                done: Some(tx),
-            })
-            .expect("consolidator unexpectedly gone");
-        rx.await.expect("consolidator unexpectedly gone");
-        Ok(())
-    }
-
-    pub async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
-        self.consolidate_batch(&[collection]).await
-    }
-
-    pub async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
-        let collections = collections.to_vec();
-        let sinces = self
-            .with_transaction(move |tx| {
-                Box::pin(async move { tx.sinces_batch(&collections).await })
-            })
-            .await?;
-        // On successful transact, send consolidation sinces to the
-        // Consolidator.
-        for (id, since) in sinces {
-            self.sinces_tx
-                .send(ConsolidateRequest {
-                    id,
-                    since,
-                    done: None,
-                })
-                .expect("consolidator unexpectedly gone");
-        }
-        Ok(())
     }
 
     pub async fn confirm_leadership(&mut self) -> Result<(), StashError> {
@@ -1171,42 +1081,6 @@ impl From<tokio_postgres::Error> for StashError {
     }
 }
 
-impl Stash {
-    #[tracing::instrument(level = "debug", skip_all)]
-    /// Like `append` but doesn't consolidate.
-    pub async fn append_batch(&mut self, batches: Vec<AppendBatch>) -> Result<(), StashError> {
-        if batches.is_empty() {
-            return Ok(());
-        }
-        self.with_transaction(move |tx| {
-            Box::pin(async move {
-                let batches = batches.clone();
-                tx.append(batches).await
-            })
-        })
-        .await
-    }
-
-    /// Atomically adds entries, seals, compacts, and consolidates multiple
-    /// collections.
-    ///
-    /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
-    /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
-    /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
-    ///
-    /// If this method returns `Ok`, the entries have been made durable and uppers
-    /// advanced, otherwise no changes were committed.
-    pub async fn append(&mut self, batches: Vec<AppendBatch>) -> Result<(), StashError> {
-        if batches.is_empty() {
-            return Ok(());
-        }
-        let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
-        self.append_batch(batches).await?;
-        self.consolidate_batch(&ids).await?;
-        Ok(())
-    }
-}
-
 /// The Consolidator receives since advancements on a channel and
 /// transactionally consolidates them. These can safely be done at a later time
 /// in a separate connection that doesn't do leader or epoch checking because 1)
@@ -1227,7 +1101,7 @@ struct Consolidator {
 }
 
 impl Consolidator {
-    pub fn start(
+    fn start(
         config: Arc<tokio::sync::Mutex<Config>>,
         tls: MakeTlsConnector,
         sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,

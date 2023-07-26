@@ -618,7 +618,7 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
@@ -696,6 +696,7 @@ mod tests {
             0,
             1,
             PROGRESS_DESC.clone(),
+            GlobalId::Explain,
         )
         .await
         .unwrap();
@@ -730,7 +731,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_basic_usage() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -783,7 +784,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_frontier() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -800,9 +801,9 @@ mod tests {
         let mut remap_read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 remap_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -953,7 +954,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1042,7 +1043,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_gh16318() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1071,7 +1072,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_compaction() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -1088,9 +1089,9 @@ mod tests {
         let mut remap_read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 remap_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1181,7 +1182,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_sharing() {
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -1212,7 +1213,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_concurrency() {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
@@ -1268,7 +1269,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_inversion() {
         let persist_location = PersistLocation {
             blob_uri: "mem://".to_owned(),
@@ -1285,9 +1286,9 @@ mod tests {
         let mut remap_read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 remap_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");
@@ -1429,7 +1430,7 @@ mod tests {
     // Regression test for
     // https://github.com/MaterializeInc/materialize/issues/14740.
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 
@@ -1477,9 +1478,9 @@ mod tests {
         let read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 binding_shard,
-                "test_since_hold",
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::from_purpose("test_since_hold"),
             )
             .await
             .expect("error opening persist shard");

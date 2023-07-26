@@ -91,45 +91,45 @@ Work estimates for each transform are given in relative t-shirt sizes.
 The `?` suffix denotes uncertainty of absolute size 1 (`M?` can be `L` or `S`).
 The proposed implementation plan is summarized after the table.
 
-transformation              | estimate | tracked in
-----------------------------|----------|-------------------------------------------------
-`canonicalize_mfp`          | &check;  | MaterializeInc/materialize#18123
-`column_knowledge`          | &check;  | MaterializeInc/materialize#18161
-`demand`                    | &check;  | MaterializeInc/materialize#18162
-`filter_fusion`             | &check;  | MaterializeInc/materialize#18123 (depends on type inference)
-`fixpoint`                  | &check;  | MaterializeInc/materialize#16561
-`flatmap_to_map`            | &check;  | MaterializeInc/materialize#18123
-`fold_constants`            | &check;  | MaterializeInc/materialize#18163
-`fuse_and_collapse`         | &check;  | MaterializeInc/materialize#18164
-`fusion`                    | &check;  | MaterializeInc/materialize#18123
-`join_fusion`               | &check;  | MaterializeInc/materialize#18123
-`join_implementation`       | &check;  | MaterializeInc/materialize#16561
-`literal_constraints`       | &check;  | MaterializeInc/materialize#18123
-`literal_lifting`           | &check;  | MaterializeInc/materialize#18165
-`map_fusion`                | &check;  | MaterializeInc/materialize#18123
-`monotonic_flag`            | &check;  | MaterializeInc/materialize#18472
-`negate_fusion`             | &check;  | MaterializeInc/materialize#18123
-`non_null_requirements`     | &check;  | MaterializeInc/materialize#18166
-`non_nullable`              | &check;  | MaterializeInc/materialize#18123 (somewhat restricted)
-`normalize_ops`             | &check;  | MaterializeInc/materialize#18123
-`normalize_lets`            | &check;  | MaterializeInc/materialize#16665
-`predicate_pushdown`        | &check;  | MaterializeInc/materialize#18167
-`project_fusion`            | &check;  | MaterializeInc/materialize#18123
-`projection_extraction`     | &check;  | MaterializeInc/materialize#18123
-`projection_lifting`        | &check;  | MaterializeInc/materialize#18168
-`projection_pushdown`       | &check;  | MaterializeInc/materialize#18169
-`reduce_elision`            | &check;  | MaterializeInc/materialize#18170
-`reduce_fusion`             | &check;  | MaterializeInc/materialize#18123
-`reduction_pushdown`        | &check;  | MaterializeInc/materialize#18171
-`redundant_join`            | &check;  | MaterializeInc/materialize#18172
-`relation_cse`              | &check;  | MaterializeInc/materialize#18173
-`semijoin_idempotence`      | &check;  | MaterializeInc/materialize#18174 (depends on type inference)
-`threshold_elision`         | &check;  | MaterializeInc/materialize#18175
-`topk_elision`              | &check;  | MaterializeInc/materialize#18123
-`topk_fusion`               | &check;  | MaterializeInc/materialize#18123
-`union`                     | &check;  | MaterializeInc/materialize#18123
-`union_branch_cancellation` | &check;  | MaterializeInc/materialize#18176
-`union_negate`              | &check;  | MaterializeInc/materialize#18123
+transformation              | estimate | solution | tracked in
+----------------------------|----------|----------|-------------------------------------------------
+`canonicalize_mfp`          | &check;  | trivial  | MaterializeInc/materialize#18123
+`column_knowledge`          | &check;  | advanced | MaterializeInc/materialize#18161
+`demand`                    | &check;  | basic    | MaterializeInc/materialize#18162
+`filter_fusion`             | &check;  | trivial  | MaterializeInc/materialize#18123 (depends on type inference)
+`fixpoint`                  | &check;  | trivial  | MaterializeInc/materialize#16561
+`flatmap_to_map`            | &check;  | trivial  | MaterializeInc/materialize#18123
+`fold_constants`            | &check;  | basic    | MaterializeInc/materialize#18163
+`fuse_and_collapse`         | &check;  | trivial  | MaterializeInc/materialize#18164
+`fusion`                    | &check;  | trivial  | MaterializeInc/materialize#18123
+`join_fusion`               | &check;  | trivial  | MaterializeInc/materialize#18123
+`join_implementation`       | &check;  | advanced | MaterializeInc/materialize#16561
+`literal_constraints`       | &check;  | trivial  | MaterializeInc/materialize#18123
+`literal_lifting`           | &check;  | basic    | MaterializeInc/materialize#18165
+`map_fusion`                | &check;  | trivial  | MaterializeInc/materialize#18123
+`monotonic_flag`            | &check;  | advanced | MaterializeInc/materialize#18472
+`negate_fusion`             | &check;  | trivial  | MaterializeInc/materialize#18123
+`non_null_requirements`     | &check;  | basic    | MaterializeInc/materialize#18166
+`non_nullable`              | &check;  | trivial  | MaterializeInc/materialize#18123 (somewhat restricted)
+`normalize_ops`             | &check;  | trivial  | MaterializeInc/materialize#18123
+`normalize_lets`            | &check;  | advanced | MaterializeInc/materialize#16665
+`predicate_pushdown`        | &check;  | basic    | MaterializeInc/materialize#18167
+`project_fusion`            | &check;  | trivial  | MaterializeInc/materialize#18123
+`projection_extraction`     | &check;  | trivial  | MaterializeInc/materialize#18123
+`projection_lifting`        | &check;  | basic    | MaterializeInc/materialize#18168
+`projection_pushdown`       | &check;  | basic    | MaterializeInc/materialize#18169 (depends on MaterializeInc/materialize#18553)
+`reduce_elision`            | &check;  | basic    | MaterializeInc/materialize#18170 (depends on MaterializeInc/materialize#18553)
+`reduce_fusion`             | &check;  | trivial  | MaterializeInc/materialize#18123
+`reduction_pushdown`        | &check;  | basic    | MaterializeInc/materialize#18171 (depends on MaterializeInc/materialize#18553)
+`redundant_join`            | &check;  | basic    | MaterializeInc/materialize#18172
+`relation_cse`              | &check;  | basic    | MaterializeInc/materialize#18173
+`semijoin_idempotence`      | &check;  | basic    | MaterializeInc/materialize#18174 (depends on MaterializeInc/materialize#18553)
+`threshold_elision`         | &check;  | basic    | MaterializeInc/materialize#18175
+`topk_elision`              | &check;  | trivial  | MaterializeInc/materialize#18123
+`topk_fusion`               | &check;  | trivial  | MaterializeInc/materialize#18123
+`union`                     | &check;  | trivial  | MaterializeInc/materialize#18123
+`union_branch_cancellation` | &check;  | trivial  | MaterializeInc/materialize#18176
+`union_negate`              | &check;  | trivial  | MaterializeInc/materialize#18123
 
 We have 36 `Transform` implementations, of which 3 are currently marked as `recursion_safe`.
 All but 16 can be trivially marked as recursion safe (done in MaterializeInc/materialize#18123) because they represent local transformations that don't depend on transformation context that depends on the `Let` bindings that are currently in scope.
@@ -138,8 +138,15 @@ From the remaining 16, based on an initial analysis it seems that:
 - 4 are relatively straight-forward to fix (size estimate `M?`),
 - 12 maintain `Let`-based context and need case-by-case reasoning (marked with `L?`).
 
-I will do a second pass of those transforms as part of MaterializeInc/materialize#17914, work on some, and update my estimates once I have more experience.
-This work is going to be parallelized with [@ggevay](https://github.com/ggevay).
+For most non-trivial transforms, we have multiple solutions at our disposal:
+
+1. A _basic_ solution which only applies the transform to bindings that are not actually recursive and treats recursive bindings as an optimization barrier.
+   Transforms using this we have are marked with _solution = basic_ in the table above.
+2. An _advanced_ solution which uses abstract interpretation based on lattice theory to propagate information through `LetRec` nodes.
+   Transforms using this solution are marked with _solution = advanced_ in the table above.
+   For the _basic_ transforms the _advanced_ solution is sketched in the linked issue in case we want to improve them as future work.
+3. An _advanced_ solution that we will get without changes to the actual `Transform` code if we implement MaterializeInc/materialize#18174.
+   Those are marked with _solution = basic_ and the corresponding issue as depending on MaterializeInc/materialize#18553.
 
 ## Generalization of LIR rendering
 
@@ -155,7 +162,7 @@ How do we validate that the feature performs as expected? What monitoring and ob
 -->
 The WMR feature is currently only enabled in `--unsafe-mode`.
 As part of the enclosing epic, we will introduce a dedicated `with_mutually_recursive` feature flag.
-The feature will be first made available on all `staging` environments (alpha testers) and then gradually rolled out to selected `production` environments (beta testers).
+The feature will be first made available on all `staging` environments (alpha testers) and then rolled out to `production` environments for "public preview".
 The following aspects need special attention:
 1. Queries producing wrong results (discussed in [Testing and observability](testing-and-observability)).
 2. Queries that do not terminate.
@@ -201,10 +208,12 @@ We can invest time proportional to the complexity of the transform to ensure tha
 1. **Integration tests.**
 We will add test scenarios inspired by the use cases of our prospects as end-to-end `*.slt` tests.
 We will also add at least one long-running `mzcompose` test runs [as part of our nightly tests](https://buildkite.com/materialize/nightlies) and is used when qualifying future releases.
-
 As those tests will include expected results, it will be great if we have a reference external iteration driver for the semantics proposed in the original design doc[^wmr].
 That way we can cross-check the results of the reference and the internal implementation of WMR support and ensure that both produce equal results.
 We can implement such driver in Python and integrate it in our `mzcompose` tests.
+
+1. **End-to-end experiments.**
+We will perform a bunch of end-to-end experiments (available in [the `letrec-bench` GitHub repository](https://github.com/MaterializeInc/letrec-bench)) to get a sense of the resource consumption and stability of the feature under a sustained load of concurrently occurring updates.
 
 ### By test scenario
 [By test scenario]: #by-test-scenario
@@ -243,14 +252,13 @@ It should be OK to turn the feature flag off for customers as long as they don't
 
 The feature will go through an `alpha`/`beta`/`stable` lifecycle.
 Once we have reworked WMR to be behind a dedicated feature flag, we will enable this flag for all `staging` environments, thereby entering the alpha stage.
-The feature will be promoted to `beta` when the following conditions are met:
+The feature will be promoted to `beta` (public preview) when the following conditions are met:
 
 1. We have enabled sufficient MIR transformations to not feel horrible about the optimization opportunities that are lost in a WMR context.
 2. We have sufficient test coverage to feel good about potential regressions to existing workloads.
 
-For the `beta` testing phase, we will work with selected customers / prospects, who have previously explicitly voiced their interest in the feature and have a clear use case to demonstrate its value.
+In the `beta` testing phase, we will work with selected customers / prospects, who have previously explicitly voiced their interest in the feature and have a clear use case to demonstrate its value.
 We will remain in close contact with those customers and treat their use cases as proof-of-concept in order to iron out potential operational and stability issues.
-We will create dedicated metrics so we can track (a) number of environments that have used the feature vs the number of environments where the feature has been enabled.
 
 Once we have established the above and have build up confidence about the optimizer and runtime stability of recursive dataflows running in production, we will open the feature to everybody.
 This needs to be coordinated with the GTM team, as most probably we will want to advertise this accordingly.
@@ -291,7 +299,6 @@ I think that we can re-evaluate these points as part of an "end of epic" retrosp
 - What questions does this design raise that we should address separately?
 -->
 
-- How do we mitigate the risk of customers having bad experience with WMR by deploying WMR queries that don't terminate? See discussion in [Rollout].
 - Do we want to focus / target use cases where `WITH MUTUALLY RECURSIVE` is known to play well with incremental computations?
   See discussion of use-case driven tests in [By test scenario].
 - Can we measure / observe the amount of work / data diff that a specific change to the input introduces?
@@ -308,42 +315,39 @@ This section can also serve as a place to dump ideas that are related but not pa
 If you can't think of any, please note this down.
 -->
 
-Due to time constraints proper benchmarking of WMR queries has to be punted until we the basic infrastructure to load and ingest LDBC benchmark data in an incremental way.
-The tracking epic for this is MaterializeInc/materialize#17591.
-Consequently, the the pool of available E2E test scenarios in MaterializeInc/materialize#17912 and MaterializeInc/materialize#17916 was narrowed only to those that can be implemented and tested within a reasonable time frame.
+We are still lacking operational observability (tracked in MaterializeInc/materialize#18022).
 
----
+At the very least, we can export a Prometheus metric that tracks the number of indexed or materialized views that have recursive CTEs.
 
-Improve query planning by implementing the TODO from the `plan_ctes` function:
-
-https://github.com/MaterializeInc/materialize/blob/dcd02a44a4355d9b6841d609e0097cd50b5bbdd3/src/sql/src/plan/query.rs#L1207-L1223
-
-This should be done only after investigating the impacts of having an extra `Map` and `Project` on our optimization potential.
+Once we have anonymized query logging, we can get some deper insights which would be useful for product analytics.
 
 ---
 
 Within the scope of MaterializeInc/materialize#17012 we only provided the _basic case_ for most non-trivial transforms.
-The following issues describe an _advanced case_ (and optionally an _intermediate case_) represent opportunities for improvement.
-
-- MaterializeInc/materialize#18162
-- MaterializeInc/materialize#18163
-- MaterializeInc/materialize#18165
-- MaterializeInc/materialize#18166
-- MaterializeInc/materialize#18167
-- MaterializeInc/materialize#18170 (can be improved by MaterializeInc/materialize#18553)
-- MaterializeInc/materialize#18172
-- MaterializeInc/materialize#18173
-- MaterializeInc/materialize#18174 (can be improved by MaterializeInc/materialize#18553)
-- MaterializeInc/materialize#18175
+Issues marked in [the above table](#mir-transformations) with _solution = basic_ represent opportunities for improvement.
 
 ---
 
-The following issues remain
+UI/UX improvements:
 
-- MaterializeInc/materialize#18022
-- MaterializeInc/materialize#18553
-- MaterializeInc/materialize#19012
-- MaterializeInc/materialize#19334
+- In "linear chains" mode the `EXPLAIN` output of plans that have recursive queries does not work.
+  We will need to revisit this if we ever decide to make this the default or we have people that use it on a daily basis.
+  Tracked in MaterializeInc/materialize#19012.
+- Similarly, the graph visualizer for dataflows that have iterative scopes might need to be fixed.
+- As we gain insights how people use the feature, we might want to follow-up with more focused "guidance docs" that go in depth of some common considerations and pitfalls.
+  Currently, this is partially covered by [the final two sections of the reference docs](https://materialize.com/docs/sql/recursive-ctes/#examples), but this might not be sufficient to cover everything in the long run.
+  Tracked in MaterializeInc/materialize#19334.
+
+---
+
+Due to time constraints benchmarking of WMR based on LDBC has been punted in favor of a more limited benchmark available in [the `letrec-bench` GitHub repository](https://github.com/MaterializeInc/letrec-bench).
+The tracking epic for this is MaterializeInc/materialize#17591.
+
+---
+
+Improve query planning by [implementing the TODO from the `plan_ctes` function](https://github.com/MaterializeInc/materialize/blob/dcd02a44a4355d9b6841d609e0097cd50b5bbdd3/src/sql/src/plan/query.rs#L1207-L1223).
+
+This should be done only after investigating the impacts of having an extra `Map` and `Project` on our optimization potential.
 
 # Appendix: Internal Use Cases
 
@@ -356,8 +360,6 @@ with mutually recursive
   ),
   reach(src text, tgt text) as (
     select * from base
-    union all -- TODO: cover the more probable `union` case here
-    select * from reach
     union
     select r1.src, r2.tgt from reach r1 join reach r2 on r1.tgt = r2.src
   )
@@ -371,7 +373,7 @@ Session windows can be defined in an easier way (see MaterializeInc/materialize#
 
 ---
 
-One of our cluster `mzcompose` tests uses `WITH MUTUALLY RECURSIVE` (see MaterializeInc/materialize#18295).
+One of our cluster `mzcompose` tests already uses `WITH MUTUALLY RECURSIVE` (see MaterializeInc/materialize#18295).
 
 ---
 

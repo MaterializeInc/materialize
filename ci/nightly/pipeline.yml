@@ -17,6 +17,7 @@ steps:
       - select: Tests
         key: tests
         options:
+          - { value: miri-test }
           - { value: kafka-matrix }
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
@@ -28,7 +29,7 @@ steps:
           - { value: testdrive-size-1 }
           - { value: testdrive-size-8 }
           - { value: testdrive-in-cloudtest }
-          - { value: upsert-compaction-disabled }
+          - { value: upsert-compaction-enabled }
           - { value: feature-benchmark }
           - { value: zippy-kafka-sources }
           - { value: zippy-kafka-parallel-insert }
@@ -71,6 +72,12 @@ steps:
           - { value: sqlancer-query-partitioning }
           - { value: crdb-restarts }
           - { value: pubsub-disruption }
+          - { value: data-ingest }
+          - { value: parallel-workload-dml }
+          - { value: parallel-workload }
+          - { value: parallel-workload-100-threads }
+          #- { value: parallel-workload-cancel }
+          #- { value: parallel-workload-kill }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -79,6 +86,8 @@ steps:
     label: Build x86_64
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
     timeout_in_minutes: 60
+    # For releases we trigger nightly from the test job directly, no need to build again
+    branches: "!v*.*"
     agents:
       queue: builder-linux-x86_64
 
@@ -90,6 +99,18 @@ steps:
       queue: linux
 
   - wait: ~
+
+  - id: miri-test
+    label: Miri test (full)
+    timeout_in_minutes: 600
+    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+          args: [--miri-full]
+    agents:
+      queue: builder-linux-x86_64
 
   - id: feature-benchmark
     label: "Feature benchmark against 'latest'"
@@ -242,14 +263,13 @@ steps:
           args: [--aws-region=us-east-1, --persistent-user-tables]
     skip: Persistence tests disabled
 
-  - id: upsert-compaction-disabled
-    label: Upsert (compaction disabled)
+  - id: upsert-compaction-enabled
+    label: Upsert (compaction enabled)
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upsert
-          args: [--compaction-disabled]
     agents:
       queue: linux-x86_64
 
@@ -349,7 +369,8 @@ steps:
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      # A larger instance is needed due to frequent OOMs
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -360,7 +381,8 @@ steps:
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      # A larger instance is needed due to frequent OOMs
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -370,7 +392,7 @@ steps:
     label: "Checks parallel + DROP/CREATE replica"
     timeout_in_minutes: 300
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -381,7 +403,7 @@ steps:
     label: "Checks parallel + restart compute clusterd"
     timeout_in_minutes: 300
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -392,7 +414,7 @@ steps:
     label: "Checks parallel + restart of the entire Mz"
     timeout_in_minutes: 300
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -403,7 +425,7 @@ steps:
     label: "Checks parallel + restart of environmentd & storage clusterd"
     timeout_in_minutes: 300
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -414,7 +436,7 @@ steps:
     label: "Checks parallel + kill storage clusterd"
     timeout_in_minutes: 300
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -425,7 +447,7 @@ steps:
     label: "Checks parallel + restart Redpanda & Debezium"
     timeout_in_minutes: 300
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -712,6 +734,73 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
+
+  - id: data-ingest
+    label: "Data Ingest"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: data-ingest
+
+  - id: parallel-workload-dml
+    label: "Parallel Workload (DML)"
+    artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000, --complexity=dml, --threads=16]
+
+  - id: parallel-workload
+    label: "Parallel Workload"
+    artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000]
+
+  - id: parallel-workload-100-threads
+    label: "Parallel Workload (100 threads)"
+    artifact_paths: [junit_*.xml, pw-*.log]
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000, --threads=100]
+
+  # TODO(def-) Enable after https://github.com/MaterializeInc/materialize/issues/20404 is fixed
+  #- id: parallel-workload-cancel
+  #  label: "Parallel Workload (cancel)"
+  #  artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+  #  timeout_in_minutes: 60
+  #  agents:
+  #    queue: builder-linux-x86_64
+  #  plugins:
+  #    - ./ci/plugins/mzcompose:
+  #        composition: parallel-workload
+  #        args: [--runtime=3000, --scenario=cancel]
+
+  # TODO(def-) Enable after figuring out restoring catalog
+  #- id: parallel-workload-kill
+  #  label: "Parallel Workload (kill)"
+  #  artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+  #  timeout_in_minutes: 60
+  #  agents:
+  #    queue: builder-linux-x86_64
+  #  plugins:
+  #    - ./ci/plugins/mzcompose:
+  #        composition: parallel-workload
+  #        args: [--runtime=3000, --scenario=kill]
 
   - wait: ~
     continue_on_failure: true

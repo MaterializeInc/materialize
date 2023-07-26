@@ -201,14 +201,14 @@ All metrics in this list have an `instance_id` label identifying the compute ins
     * **Labels**: `instance_id`, `replica_id`
     * **Description**: The total time spent waiting for replica (re-)connection, by replica.
 * Peeks
-  * [ ] `mz_compute_peeks_total`
+  * [x] `mz_compute_peeks_total`
     * **Type**: counter
     * **Labels**: `instance_id`, `result`
-    * **Description**: The total number of peeks served, by result type (success, error, canceled).
-  * [ ] `mz_compute_peek_duration_seconds`
+    * **Description**: The total number of peeks served, by result type (rows, error, canceled).
+  * [x] `mz_compute_peek_duration_seconds`
     * **Type**: histogram
     * **Labels**: `instance_id`, `result`
-    * **Description**: A histogram of peek durations since restart, by result type (success, error, canceled).
+    * **Description**: A histogram of peek durations since restart, by result type (rows, error, canceled).
 
 ### Replica Metrics
 
@@ -261,8 +261,8 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Description**: The import frontiers of dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_compute_import_frontiers` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
-  * [ ] `mz_dataflow_initial_output_duration_seconds`
-    * **Type**: counter
+  * [x] `mz_dataflow_initial_output_duration_seconds`
+    * **Type**: gauge
     * **Labels**: `worker_id`, `collection_id`
     * **Description**: The time from dataflow installation up to when the first output was produced.
     * **Export Type**: direct

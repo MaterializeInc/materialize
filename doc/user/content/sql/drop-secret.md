@@ -55,6 +55,13 @@ ERROR:  cannot drop materialize.public.upstash_sasl_password: still depended upo
 DROP SECRET upstash_sasl_password CASCADE;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped secret.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`SHOW SECRETS`](../show-secrets)

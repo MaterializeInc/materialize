@@ -27,6 +27,7 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use rdkafka::client::BrokerAddr;
@@ -135,12 +136,15 @@ impl ConnectionContext {
     /// (e.g., via a configuration option in a SQL statement). See
     /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
-        filter: &tracing_subscriber::filter::EnvFilter,
+        startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
     ) -> ConnectionContext {
         ConnectionContext {
-            librdkafka_log_level: mz_ore::tracing::crate_level(filter, "librdkafka"),
+            librdkafka_log_level: mz_ore::tracing::crate_level(
+                &startup_log_level.clone().into(),
+                "librdkafka",
+            ),
             aws_external_id_prefix,
             secrets_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -184,15 +188,16 @@ impl Connection {
     /// Validates this connection by attempting to connect to the upstream system.
     pub async fn validate(
         &self,
+        id: GlobalId,
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         match self {
-            Connection::Kafka(conn) => conn.validate(connection_context).await,
-            Connection::Csr(conn) => conn.validate(connection_context).await,
-            Connection::Postgres(conn) => conn.validate(connection_context).await,
-            Connection::Ssh(conn) => conn.validate(connection_context).await,
-            Connection::Aws(conn) => conn.validate(connection_context).await,
-            Connection::AwsPrivatelink(conn) => conn.validate(connection_context).await,
+            Connection::Kafka(conn) => conn.validate(id, connection_context).await,
+            Connection::Csr(conn) => conn.validate(id, connection_context).await,
+            Connection::Postgres(conn) => conn.validate(id, connection_context).await,
+            Connection::Ssh(conn) => conn.validate(id, connection_context).await,
+            Connection::Aws(conn) => conn.validate(id, connection_context).await,
+            Connection::AwsPrivatelink(conn) => conn.validate(id, connection_context).await,
         }
     }
 }
@@ -405,7 +410,11 @@ impl KafkaConnection {
         Ok(config.create_with_context(context)?)
     }
 
-    async fn validate(&self, connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+    async fn validate(
+        &self,
+        _id: GlobalId,
+        connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
         let consumer: BaseConsumer<_> = self
             .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
             .await?;
@@ -677,7 +686,11 @@ impl CsrConnection {
         client_config.build()
     }
 
-    async fn validate(&self, connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+    async fn validate(
+        &self,
+        _id: GlobalId,
+        connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
         self.connect(connection_context).await?;
         Ok(())
     }
@@ -866,7 +879,11 @@ impl PostgresConnection {
         Ok(mz_postgres_util::Config::new(config, tunnel)?)
     }
 
-    async fn validate(&self, connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+    async fn validate(
+        &self,
+        _id: GlobalId,
+        connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
         let config = self.config(&*connection_context.secrets_reader).await?;
         config.connect("connection validation").await?;
         Ok(())
@@ -1119,8 +1136,21 @@ impl SshTunnel {
 }
 impl SshConnection {
     #[allow(clippy::unused_async)]
-    async fn validate(&self, _connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
-        Err(anyhow!("Validating SSH connections is not supported yet"))
+    async fn validate(
+        &self,
+        id: GlobalId,
+        connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
+        let secret = connection_context.secrets_reader.read(id).await?;
+        let key_set = SshKeyPairSet::from_bytes(&secret)?;
+        let key_pair = key_set.primary().clone();
+        let config = SshTunnelConfig {
+            host: self.host.clone(),
+            port: self.port,
+            user: self.user.clone(),
+            key_pair,
+        };
+        config.validate().await
     }
 
     fn validate_by_default(&self) -> bool {
@@ -1130,7 +1160,11 @@ impl SshConnection {
 
 impl AwsPrivatelinkConnection {
     #[allow(clippy::unused_async)]
-    async fn validate(&self, _connection_context: &ConnectionContext) -> Result<(), anyhow::Error> {
+    async fn validate(
+        &self,
+        _id: GlobalId,
+        _connection_context: &ConnectionContext,
+    ) -> Result<(), anyhow::Error> {
         Err(anyhow!(
             "Validating AWS Privatelink connections is not supported yet"
         ))

@@ -63,6 +63,7 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! PredicatePushdown::default().transform(&mut expr, TransformArgs {
 //!   indexes: &mz_transform::EmptyIndexOracle,
+//!   stats: &mz_transform::EmptyStatisticsOracle,
 //!   global_id: None,
 //! });
 //!
@@ -849,9 +850,18 @@ impl PredicatePushdown {
             // equivalences allow the predicate to be rewritten
             // in terms of only columns from that input.
             for (index, push_down) in push_downs.iter_mut().enumerate() {
-                if predicate.is_literal_err() {
+                if predicate.is_literal_err() || predicate.contains_error_if_null() {
                     // Do nothing. We don't push down literal errors,
                     // as we can't know the join will be non-empty.
+                    //
+                    // We also don't want to push anything that involves `error_if_null`. This is
+                    // for the same reason why in theory we shouldn't really push anything that can
+                    // error, assuming that we want to preserve error semantics. (Because we would
+                    // create a spurious error if some other Join input ends up empty.) We can't fix
+                    // this problem in general (as we can't just not push anything that might
+                    // error), but we decided to fix the specific problem instance involving
+                    // `error_if_null`, because it was very painful:
+                    // <https://github.com/MaterializeInc/materialize/issues/20769>
                 } else {
                     let mut localized = predicate.clone();
                     if input_mapper.try_localize_to_input_with_bound_expr(

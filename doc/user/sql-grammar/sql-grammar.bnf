@@ -1,4 +1,8 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+alter_cluster_set ::=
+  'ALTER' 'CLUSTER' name 'SET' '(' (cluster_option '=' value)* ')'
+alter_cluster_reset ::=
+  'ALTER' 'CLUSTER' name 'RESET' '(' (cluster_option_name)* ')'
 alter_connection ::=
   'ALTER' 'CONNECTION' 'IF EXISTS'? name 'ROTATE' 'KEYS'
 alter_default_privileges ::=
@@ -44,6 +48,8 @@ create_cluster ::=
   'CREATE' 'CLUSTER' name (
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
+create_managed_cluster ::=
+  'CREATE' 'CLUSTER' name 'SIZE' '=' value (',' cluster_option '=' value)*
 cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
@@ -96,7 +102,7 @@ create_sink_kafka ::=
     ('IN CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' kafka_sink_connection
-    ('KEY' '(' key_column ( ',' key_column )* ')')?
+    ('KEY' '(' key_column ( ',' key_column )* ')' 'NOT ENFORCED'?)?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
@@ -202,7 +208,7 @@ execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain ::=
   'EXPLAIN'
-  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )?
+  ( ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )? | 'TIMESTAMP' ? )
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
@@ -304,12 +310,12 @@ revoke_role ::=
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
-  'WITH' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )?
-  'AS' '(' select_stmt ')' ( ',' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')' )*
-  'SELECT' ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
-  target_elem ( ',' target_elem )*
-  ( 'FROM' table_expr ( ',' table_expr )* )?
-  join_expr?
+  ( select_with_ctes | select_with_recursive_ctes | simple_select_stmt )
+simple_select_stmt ::=
+  'SELECT'
+    ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
+    target_elem ( ',' target_elem )*
+  'FROM' table_expr ( ',' table_expr )* join_expr?
   ( 'WHERE' expr )?
   ( 'GROUP' 'BY' col_ref ( ',' col_ref )* )?
   ( 'OPTIONS' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
@@ -352,7 +358,7 @@ show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
 show_indexes ::=
     'SHOW' 'INDEXES'
-    ((('ON') on_name) | ('FROM' schema_name))?
+    ('FROM' schema_name | 'ON' on_name)?
     ('IN CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
@@ -367,6 +373,8 @@ show_sinks ::=
    'SHOW' 'SINKS' ('FROM' schema_name)?
 show_sources ::=
   'SHOW' 'SOURCES' ('FROM' schema_name)?
+show_subsources ::=
+  'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
 show_tables ::=
   'SHOW' 'TABLES' ('FROM' schema_name)?
 show_types ::=
@@ -439,7 +447,21 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
-with_options ::= ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+with_ctes ::=
+  'WITH'
+    cte_binding ( ',' cte_binding )*
+    select_stmt
+with_recursive_ctes ::=
+  'WITH MUTUALLY RECURSIVE'
+    ( '(' ('RETURN AT' | 'ERROR AT')? 'RECURSION LIMIT' limit ')' )?
+    recursive_cte_binding ( ',' recursive_cte_binding )*
+    select_stmt
+cte_binding ::=
+  cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')'
+recursive_cte_binding ::=
+  cte_ident '(' col_ident col_type ( ',' col_ident col_type )* ')' 'AS' '(' select_stmt ')'
+with_options ::=
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 with_options_aws ::= 'WITH' '('
     (
       static_credentials

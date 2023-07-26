@@ -205,6 +205,10 @@ pub(super) struct UpsertMetrics {
     pub(super) rehydration_total: UIntGaugeVec,
     pub(super) rehydration_updates: UIntGaugeVec,
 
+    // Metric will contain either 0 to denote in-memory state usage,
+    // and 1 to denote auto spill to rocksdb
+    pub(super) rocksdb_autospill_in_use: UIntGaugeVec,
+
     // These are used by `shared`.
     pub(super) merge_snapshot_latency: HistogramVec,
     pub(super) merge_snapshot_updates: HistogramVec,
@@ -252,6 +256,12 @@ impl UpsertMetrics {
                 help: "The number of updates (both negative and positive), \
                     per-worker, rehydrated into the upsert state for \
                     this source",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            rocksdb_autospill_in_use: registry.register(metric!(
+                name: "mz_storage_upsert_state_rocksdb_autospill_in_use",
+                help: "Flag to denote whether upsert state has spilled to rocksdb \
+                    or using in-memory state",
                 var_labels: ["source_id", "worker_id"],
             )),
             // Choose a relatively low number of representative buckets.
@@ -434,6 +444,42 @@ impl UpsertSharedMetrics {
     }
 }
 
+/// Metrics related to backpressure in `UPSERT` dataflows.
+#[derive(Clone, Debug)]
+pub(crate) struct UpsertBackpressureMetrics {
+    pub(crate) emitted_bytes: IntCounterVec,
+    pub(crate) last_backpressured_bytes: UIntGaugeVec,
+    pub(crate) retired_bytes: IntCounterVec,
+}
+
+impl UpsertBackpressureMetrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        // We add a `worker_id` label here, even though only 1 worker is ever
+        // active, as this is the simplest way to avoid the non-active
+        // workers from un-registering metrics. This is consistent with how
+        // `persist_sink` metrics work.
+        Self {
+            emitted_bytes: registry.register(metric!(
+                name: "mz_storage_upsert_backpressure_emitted_bytes",
+                help: "A counter with the number of emitted bytes.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            last_backpressured_bytes: registry.register(metric!(
+                name: "mz_storage_upsert_backpressure_last_backpressured_bytes",
+                help: "The last count of bytes we are waiting to be retired in \
+                    the operator. This cannot be directly compared to \
+                    `retired_bytes`, but CAN indicate that backpressure is happening.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            retired_bytes: registry.register(metric!(
+                name: "mz_storage_upsert_backpressure_retired_bytes",
+                help:"A counter with the number of bytes retired by downstream processing.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+        }
+    }
+}
+
 /// A set of base metrics that hang off a central metrics registry, labeled by the source they
 /// belong to.
 #[derive(Debug, Clone)]
@@ -443,6 +489,7 @@ pub struct SourceBaseMetrics {
     pub(super) postgres_source_specific: PostgresSourceSpecificMetrics,
 
     pub(super) upsert_specific: UpsertMetrics,
+    pub(crate) upsert_backpressure_specific: UpsertBackpressureMetrics,
 
     pub(crate) bytes_read: IntCounter,
 
@@ -459,6 +506,7 @@ impl SourceBaseMetrics {
             postgres_source_specific: PostgresSourceSpecificMetrics::register_with(registry),
 
             upsert_specific: UpsertMetrics::register_with(registry),
+            upsert_backpressure_specific: UpsertBackpressureMetrics::register_with(registry),
 
             bytes_read: registry.register(metric!(
                 name: "mz_bytes_read_total",

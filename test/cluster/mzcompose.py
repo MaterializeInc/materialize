@@ -11,7 +11,7 @@ import json
 import time
 from textwrap import dedent
 from threading import Thread
-from typing import Tuple
+from typing import Dict, List, Tuple
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -27,6 +27,7 @@ from materialize.mzcompose.services import (
     Redpanda,
     SchemaRegistry,
     Testdrive,
+    Toxiproxy,
     Zookeeper,
 )
 
@@ -43,6 +44,7 @@ SERVICES = [
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False, external_cockroach=True),
     Redpanda(),
+    Toxiproxy(),
     Testdrive(
         volume_workdir="../testdrive:/workdir/testdrive",
         volumes_extra=[".:/workdir/smoke"],
@@ -77,6 +79,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
         "test-mv-source-sink",
+        "test-query-without-default-cluster",
+        "test-clusterd-death-detection",
+        "test-replica-dataflow-metrics",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -1781,3 +1786,216 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     assert (
         mv_since >= t_since
     ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
+
+
+def workflow_test_query_without_default_cluster(c: Composition) -> None:
+    """Test queries without a default cluster in Materialize."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Postgres(),
+        Materialized(),
+    ):
+        c.up("materialized", "postgres")
+
+        c.run(
+            "testdrive",
+            "query-without-default-cluster/query-without-default-cluster.td",
+        )
+
+
+def workflow_test_clusterd_death_detection(c: Composition) -> None:
+    """
+    Test that environmentd notices when a clusterd becomes disconnected.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/20299
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1", "toxiproxy")
+    c.up("testdrive", persistent=True)
+
+    c.testdrive(
+        input=dedent(
+            """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd1",
+              "listen": "0.0.0.0:2100",
+              "upstream": "clusterd1:2100",
+              "enabled": true
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd2",
+              "listen": "0.0.0.0:2101",
+              "upstream": "clusterd1:2101",
+              "enabled": true
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd3",
+              "listen": "0.0.0.0:2102",
+              "upstream": "clusterd1:2102",
+              "enabled": true
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {
+              "name": "clusterd4",
+              "listen": "0.0.0.0:2103",
+              "upstream": "clusterd1:2103",
+              "enabled": true
+            }
+
+            > CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                STORAGE ADDRESSES ['toxiproxy:2103'],
+                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                COMPUTE ADDRESSES ['toxiproxy:2102'],
+                WORKERS 2));
+
+            > SELECT mz_internal.mz_sleep(1);
+            <null>
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
+            {
+              "name": "clusterd1",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
+            {
+              "name": "clusterd2",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
+            {
+              "name": "clusterd3",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
+            {
+              "name": "clusterd4",
+              "type": "timeout",
+              "attributes": {"timeout": 0}
+            }
+        """
+        )
+    )
+    # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
+    time.sleep(10)
+    envd = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "error reading a body from connection: stream closed because of a broken pipe"
+        in envd.stdout
+    )
+
+
+class Metrics:
+    metrics: Dict[str, str]
+
+    def __init__(self, raw: str) -> None:
+        self.metrics = {}
+        for line in raw.splitlines():
+            key, value = line.split(maxsplit=1)
+            self.metrics[key] = value
+
+    def for_collection(self, metric_name: str, collection_id: str) -> List[float]:
+        values = []
+        for key, value in self.metrics.items():
+            if (
+                key.startswith(metric_name)
+                and f'collection_id="{collection_id}"' in key
+            ):
+                values.append(float(value))
+        return values
+
+
+def workflow_test_replica_dataflow_metrics(c: Composition) -> None:
+    """Test dataflow metrics exposed by replicas."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Set up a cluster with a couple dataflows.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+
+        CREATE INDEX idx ON t (a);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+        SELECT * FROM t;
+        SELECT * FROM mv;
+        """
+    )
+
+    index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
+    mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
+
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+    (index_iod,) = metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", index_id
+    )
+    assert index_iod > 0
+    (mv_iod,) = metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", mv_id
+    )
+    assert mv_iod > 0
+
+    # Drop the dataflows.
+    c.sql(
+        """
+        DROP INDEX idx;
+        DROP MATERIALIZED VIEW mv;
+        """
+    )
+
+    # Wait for the drop commands to reach the replica.
+    time.sleep(1)
+
+    # Check that the dataflow metrics have been cleaned up.
+    metrics = fetch_metrics()
+    assert not metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", index_id
+    )
+    assert not metrics.for_collection(
+        "mz_dataflow_initial_output_duration_seconds", mv_id
+    )

@@ -31,7 +31,8 @@ use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationT
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
-    AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
@@ -57,7 +58,6 @@ use mz_storage_client::types::sources::{
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use prost::Message;
-use regex::Regex;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -71,10 +71,11 @@ use crate::ast::{
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
     CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
-    CsrSeedProtobuf, CsvColumns, DbzMode, DropObjectsStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
+    CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
+    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
     KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
@@ -114,7 +115,7 @@ use crate::plan::{
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
     Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
     ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View,
+    View, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -345,6 +346,13 @@ pub fn plan_create_table(
     }))
 }
 
+pub fn describe_create_webhook_source(
+    _: &StatementContext,
+    _: CreateWebhookSourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn describe_create_source(
     _: &StatementContext,
     _: CreateSourceStatement<Aug>,
@@ -364,8 +372,7 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Interval),
-    (Disk, bool)
+    (TimestampInterval, Interval)
 );
 
 generate_extracted_config!(
@@ -374,6 +381,107 @@ generate_extracted_config!(
     (Publication, String),
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
+
+pub fn plan_create_webhook_source(
+    scx: &StatementContext,
+    stmt: CreateWebhookSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    // Make sure the LaunchDarkly flag is enabled.
+    scx.require_feature_flag(&vars::ENABLE_WEBHOOK_SOURCES)?;
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
+
+    let CreateWebhookSourceStatement {
+        name,
+        if_not_exists,
+        body_format,
+        include_headers,
+        validate_using,
+        in_cluster,
+    } = stmt;
+
+    let validate_using = validate_using
+        .map(|stmt| query::plan_webhook_validate_using(scx, stmt))
+        .transpose()?;
+    if let Some(WebhookValidation { expression, .. }) = &validate_using {
+        // If the validation expression doesn't reference any part of the request, then we should
+        // return an error because it's almost definitely wrong.
+        if !expression.contains_column() {
+            return Err(PlanError::WebhookValidationDoesNotUseColumns);
+        }
+        // Validation expressions cannot contain unmaterializable functions, e.g. now().
+        if expression.contains_unmaterializable() {
+            return Err(PlanError::WebhookValidationNonDeterministic);
+        }
+    }
+
+    let body_scalar_type = match body_format {
+        Format::Bytes => ScalarType::Bytes,
+        Format::Json => ScalarType::Jsonb,
+        Format::Text => ScalarType::String,
+        // TODO(parkmycar): Make an issue to support more types, or change this to NeverSupported.
+        ty => {
+            return Err(PlanError::Unsupported {
+                feature: format!("{ty} is not a valid BODY FORMAT for a WEBHOOK source"),
+                issue_no: None,
+            })
+        }
+    };
+
+    let mut column_ty = vec![
+        // Always include the body of the request as the first column.
+        ColumnType {
+            scalar_type: body_scalar_type,
+            nullable: false,
+        },
+    ];
+    let mut column_names = vec!["body"];
+
+    if include_headers {
+        // Optionally include the headers of the request as a second column.
+        column_ty.push(ColumnType {
+            scalar_type: ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            },
+            nullable: false,
+        });
+        column_names.push("headers");
+    }
+
+    let typ = RelationType::new(column_ty);
+    let desc = RelationDesc::new(typ, column_names);
+
+    let cluster_config = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
+
+    // Check for an object in the catalog with this same name
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    // Note(parkmycar): We don't currently support specifying a timeline for Webhook sources. As
+    // such, we always use a default of EpochMilliseconds.
+    let timeline = Timeline::EpochMilliseconds;
+
+    Ok(Plan::CreateSource(CreateSourcePlan {
+        name,
+        source: Source {
+            create_sql,
+            data_source: DataSourceDesc::Webhook(validate_using),
+            desc,
+        },
+        if_not_exists,
+        timeline,
+        cluster_config,
+    }))
+}
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -396,15 +504,7 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    let mut allowed_with_options = vec![CreateSourceOptionName::Size];
-
-    if scx
-        .require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)
-        .is_ok()
-    {
-        allowed_with_options.push(CreateSourceOptionName::Disk);
-    }
-
+    let allowed_with_options = vec![CreateSourceOptionName::Size];
     if let Some(op) = with_options
         .iter()
         .find(|op| !allowed_with_options.contains(&op.name))
@@ -917,15 +1017,12 @@ pub fn plan_create_source(
         timeline,
         timestamp_interval,
         ignore_keys,
-        disk,
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let (key_desc, value_desc) = encoding.desc()?;
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
-
-    let disk_default = scx.catalog.system_vars().upsert_source_disk_default();
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -945,7 +1042,6 @@ pub fn plan_create_source(
             match mode {
                 DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
                     style: UpsertStyle::Debezium { after_idx },
-                    disk: disk.unwrap_or(disk_default),
                 },
             }
         }
@@ -963,7 +1059,6 @@ pub fn plan_create_source(
             }
             UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),
-                disk: disk.unwrap_or(disk_default),
             }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
@@ -976,17 +1071,6 @@ pub fn plan_create_source(
             UnplannedSourceEnvelope::CdcV2
         }
     };
-
-    if disk.is_some() {
-        match &envelope {
-            UnplannedSourceEnvelope::Upsert { .. } => {
-                scx.require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)?
-            }
-            _ => {
-                bail_unsupported!("ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE");
-            }
-        }
-    }
 
     let metadata_columns = external_connection.metadata_columns();
     let metadata_column_types = external_connection.metadata_column_types();
@@ -1632,12 +1716,10 @@ fn get_encoding_inner(
                 })
             }
         },
-        Format::Regex(regex) => {
-            let regex = Regex::new(regex).map_err(|e| sql_err!("parsing regex: {e}"))?;
-            DataEncodingInner::Regex(RegexEncoding {
-                regex: mz_repr::adt::regex::Regex(regex),
-            })
-        }
+        Format::Regex(regex) => DataEncodingInner::Regex(RegexEncoding {
+            regex: mz_repr::adt::regex::Regex::new(regex.clone(), false)
+                .map_err(|e| sql_err!("parsing regex: {e}"))?,
+        }),
         Format::Csv { columns, delimiter } => {
             let columns = match columns {
                 CsvColumns::Header { names } => {
@@ -1656,10 +1738,7 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => {
-            scx.require_feature_flag(&crate::session::vars::ENABLE_FORMAT_JSON)?;
-            DataEncodingInner::Json
-        }
+        Format::Json => DataEncodingInner::Json,
         Format::Text => DataEncodingInner::Text,
     }))
 }
@@ -2039,6 +2118,7 @@ pub fn plan_create_sink(
         });
     }
 
+    let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
@@ -2076,12 +2156,26 @@ pub fn plan_create_sink(
 
                 if !is_valid_key && envelope == SinkEnvelope::Upsert {
                     if key.not_enforced {
-                        scx.catalog.add_notice(PlanNotice::KeyNotEnforced {
-                            key: key_columns.clone(),
-                            name: name.item.clone(),
-                        })
+                        scx.catalog
+                            .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
+                                key: key_columns.clone(),
+                                name: name.item.clone(),
+                            })
                     } else {
-                        return Err(invalid_upsert_key_err(&desc, &key_columns));
+                        return Err(PlanError::UpsertSinkWithInvalidKey {
+                            name: from_name.full_name_str(),
+                            desired_key: key_columns.iter().map(|c| c.to_string()).collect(),
+                            valid_keys: desc
+                                .typ()
+                                .keys
+                                .iter()
+                                .map(|key| {
+                                    key.iter()
+                                        .map(|col| desc.get_name(*col).as_str().into())
+                                        .collect()
+                                })
+                                .collect(),
+                        });
                     }
                 }
                 Some(indices)
@@ -2144,32 +2238,6 @@ pub fn plan_create_sink(
         if_not_exists,
         cluster_config,
     }))
-}
-
-fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]) -> PlanError {
-    let requested_user_key = requested_user_key
-        .iter()
-        .map(|column| column.as_str())
-        .join(", ");
-    let requested_user_key = format!("({})", requested_user_key);
-    let valid_keys = if desc.typ().keys.is_empty() {
-        "there are no valid keys".to_owned()
-    } else {
-        let valid_keys = desc
-            .typ()
-            .keys
-            .iter()
-            .map(|key_columns| {
-                let columns_string = key_columns
-                    .iter()
-                    .map(|col| desc.get_name(*col).as_str())
-                    .join(", ");
-                format!("({})", columns_string)
-            })
-            .join(", ");
-        format!("valid keys are: {}", valid_keys)
-    };
-    sql_err!("Invalid upsert key: {}, {}", requested_user_key, valid_keys,)
 }
 
 fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanError {
@@ -2733,6 +2801,7 @@ pub fn describe_create_cluster(
 generate_extracted_config!(
     ClusterOption,
     (AvailabilityZones, Vec<String>),
+    (Disk, bool),
     (IdleArrangementMergeEffort, u32),
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalInterval),
@@ -2756,6 +2825,7 @@ pub fn plan_create_cluster(
         replication_factor,
         seen: _,
         size,
+        disk,
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
@@ -2778,6 +2848,13 @@ pub fn plan_create_cluster(
 
         let replication_factor = replication_factor.unwrap_or(1);
         let availability_zones = availability_zones.unwrap_or_default();
+
+        let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
+        let disk = disk.unwrap_or(disk_default);
+        if disk {
+            scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
+        }
+
         Ok(Plan::CreateCluster(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
@@ -2785,6 +2862,7 @@ pub fn plan_create_cluster(
                 size,
                 availability_zones,
                 compute,
+                disk,
             }),
         }))
     } else {
@@ -2808,6 +2886,9 @@ pub fn plan_create_cluster(
         }
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
+        }
+        if disk.is_some() {
+            sql_bail!("DISK not supported for unmanaged clusters");
         }
         let mut replicas = vec![];
         for ReplicaDefinition { name, options } in replica_defs {
@@ -2838,7 +2919,8 @@ generate_extracted_config!(
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
     (IntrospectionDebugging, bool, Default(false)),
-    (IdleArrangementMergeEffort, u32)
+    (IdleArrangementMergeEffort, u32),
+    (Disk, bool)
 );
 
 fn plan_replica_config(
@@ -2856,6 +2938,7 @@ fn plan_replica_config(
         introspection_interval,
         introspection_debugging,
         idle_arrangement_merge_effort,
+        disk,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -2864,6 +2947,10 @@ fn plan_replica_config(
         introspection_debugging,
         idle_arrangement_merge_effort,
     )?;
+
+    if disk.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
+    }
 
     match (
         size,
@@ -2881,10 +2968,14 @@ fn plan_replica_config(
             sql_bail!("SIZE option must be specified");
         }
         (Some(size), availability_zone, None, None, None, None, None) => {
+            let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
+            let disk = disk.unwrap_or(disk_default);
+
             Ok(ReplicaConfig::Managed {
                 size,
                 availability_zone,
                 compute,
+                disk,
             })
         }
 
@@ -2930,6 +3021,10 @@ fn plan_replica_config(
 
             if workers == 0 {
                 sql_bail!("WORKERS must be greater than 0");
+            }
+
+            if disk.is_some() {
+                sql_bail!("DISK can't be specified for unmanaged clusters");
             }
 
             Ok(ReplicaConfig::Unmanaged {
@@ -3929,14 +4024,19 @@ pub fn plan_drop_owned(
 
     // Replicas
     for replica in scx.catalog.get_cluster_replicas() {
-        if role_ids.contains(&replica.owner_id()) {
+        let cluster = scx.catalog.get_cluster(replica.cluster_id());
+        // We skip over linked cluster replicas because they will be added later when collecting
+        // the dependencies of the linked object.
+        if cluster.linked_object_id().is_none() && role_ids.contains(&replica.owner_id()) {
             drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
         }
     }
 
     // Clusters
     for cluster in scx.catalog.get_clusters() {
-        if role_ids.contains(&cluster.owner_id()) {
+        // We skip over linked clusters because they will be added later when collecting
+        // the dependencies of the linked object.
+        if cluster.linked_object_id().is_none() && role_ids.contains(&cluster.owner_id()) {
             if !cascade && !cluster.bound_objects().is_empty() {
                 sql_bail!(
                     "cannot drop cluster {} without CASCADE while it contains active objects",
@@ -4224,6 +4324,7 @@ pub fn plan_alter_cluster(
                 replication_factor,
                 seen: _,
                 size,
+                disk,
             }: ClusterOptionExtracted = set_options.try_into()?;
 
             match managed.unwrap_or_else(|| cluster.is_managed()) {
@@ -4261,6 +4362,9 @@ pub fn plan_alter_cluster(
                     if size.is_some() {
                         sql_bail!("SIZE not supported for unmanaged clusters");
                     }
+                    if disk.is_some() {
+                        sql_bail!("DISK not supported for unmanaged clusters");
+                    }
                 }
             }
 
@@ -4294,6 +4398,9 @@ pub fn plan_alter_cluster(
             if let Some(introspection_interval) = introspection_interval {
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
             }
+            if let Some(disk) = disk {
+                options.disk = AlterOptionParameter::Set(disk);
+            }
             if !replicas.is_empty() {
                 options.replicas = AlterOptionParameter::Set(replicas);
             }
@@ -4304,6 +4411,7 @@ pub fn plan_alter_cluster(
             for option in reset_options {
                 match option {
                     AvailabilityZones => options.availability_zones = Reset,
+                    Disk => options.disk = Reset,
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
                     IdleArrangementMergeEffort => options.idle_arrangement_merge_effort = Reset,
@@ -4603,6 +4711,11 @@ pub fn describe_alter_connection(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(
+    AlterSourceAddSubsourceOption,
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+);
+
 pub fn plan_alter_source(
     scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
@@ -4719,6 +4832,15 @@ pub fn plan_alter_source(
                 crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
             }
         }
+        AlterSourceAction::AddSubsources {
+            subsources,
+            details,
+            options,
+        } => crate::plan::AlterSourceAction::AddSubsourceExports {
+            subsources,
+            details,
+            options,
+        },
     };
 
     Ok(Plan::AlterSource(AlterSourcePlan { id, action }))

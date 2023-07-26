@@ -98,6 +98,13 @@ You can use either of the following commands:
 DROP TABLE IF EXISTS t;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped table.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`CREATE TABLE`](../create-table)

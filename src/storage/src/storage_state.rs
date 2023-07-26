@@ -82,15 +82,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::Context;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::ShardId;
+use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{
@@ -161,6 +161,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
+        cluster_size: Option<String>,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -226,6 +228,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             internal_cmd_tx: command_sequencer,
             async_worker,
             dataflow_parameters: Default::default(),
+            tracing_handle,
+            cluster_size,
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -309,6 +313,11 @@ pub struct StorageState {
 
     /// Dynamically configurable parameters that control how dataflows are rendered.
     pub dataflow_parameters: DataflowParameters,
+
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
+    /// The materialize cluster size the worker belongs to
+    pub cluster_size: Option<String>,
 }
 
 /// Extra context for a storage instance.
@@ -326,17 +335,7 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
-        if let Some(scratch_directory) = &scratch_directory {
-            tokio::fs::create_dir_all(scratch_directory)
-                .await
-                .with_context(|| {
-                    format!(
-                        "creating scratch directory: {}",
-                        scratch_directory.display()
-                    )
-                })?;
-        }
+    pub fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
             rocksdb_env: rocksdb::Env::new()?,
@@ -388,9 +387,12 @@ impl SinkHandle {
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
                 .open_leased_reader(
                     shard_id,
-                    &format!("sink::since {}", sink_id),
                     Arc::new(from_relation_desc),
                     Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: sink_id.to_string(),
+                        handle_purpose: format!("sink::since {}", sink_id),
+                    },
                 )
                 .await
                 .expect("opening reader for shard");
@@ -725,10 +727,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 source_resume_uppers,
             } => {
                 info!(
-                    "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
+                    ?as_of,
+                    ?resume_uppers,
+                    "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                    as_of
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
@@ -848,9 +851,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
             }
-            InternalStorageCommand::UpdateConfiguration(pg, rocksdb) => {
-                self.storage_state.dataflow_parameters.update(pg, rocksdb)
-            }
+            InternalStorageCommand::UpdateConfiguration {
+                pg,
+                rocksdb,
+                storage_dataflow_max_inflight_bytes_config,
+                auto_spill_config,
+            } => self.storage_state.dataflow_parameters.update(
+                pg,
+                rocksdb,
+                auto_spill_config,
+                storage_dataflow_max_inflight_bytes_config,
+            ),
         }
     }
 
@@ -1148,15 +1159,24 @@ impl StorageState {
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
+                params.tracing.apply(self.tracing_handle.as_ref());
+
+                if let Some(log_filter) = &params.tracing.log_filter {
+                    self.connection_context.librdkafka_log_level =
+                        mz_ore::tracing::crate_level(&log_filter.clone().into(), "librdkafka");
+                }
 
                 // This needs to be broadcast by one worker and go through
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
-                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
-                        params.pg_replication_timeouts,
-                        params.upsert_rocksdb_tuning_config,
-                    ))
+                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
+                        pg: params.pg_replication_timeouts,
+                        rocksdb: params.upsert_rocksdb_tuning_config,
+                        storage_dataflow_max_inflight_bytes_config: params
+                            .storage_dataflow_max_inflight_bytes_config,
+                        auto_spill_config: params.upsert_auto_spill_config,
+                    })
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {

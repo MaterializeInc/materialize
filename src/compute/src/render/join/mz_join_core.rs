@@ -452,7 +452,7 @@ where
                         consolidate_updates(temp);
 
                         *fuel = fuel.saturating_sub(temp.len());
-                        session.give_container(temp);
+                        session.give_iterator(temp.drain(..));
 
                         if *fuel == 0 {
                             // The fuel is exhausted, so we should yield. Returning here is only

@@ -275,7 +275,7 @@ true
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -491,6 +491,27 @@ true
 true
 
 #
+# Ensure we can start a source with more workers than the default max_wal_senders param (10)
+#
+
+> CREATE SOURCE large_cluster
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES ("pk_table" AS large_cluster_pk_table)
+  WITH (SIZE = '16');
+
+> SELECT * FROM large_cluster_pk_table;
+13 three
+14 four
+2 two_two
+5 five
+
+# TODO: should only be 'running' w/ resolution of #20666
+> SELECT status = 'starting' OR status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+true
+
+> DROP SOURCE large_cluster;
+
+#
 # Remove all data on the Postgres side
 #
 
@@ -615,13 +636,27 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-> CREATE SOURCE enum_source
+! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
     TEXT COLUMNS [
       enum_table.a,
       public.another_enum_table."колона",
       pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+contains:TEXT COLUMNS can only refer to tables being added to source
+
+> CREATE SOURCE enum_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона"
     ]
   )
   FOR TABLES (
@@ -655,8 +690,10 @@ INSERT INTO pk_table VALUES (99999);
 
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
-! SELECT COUNT(*) = 0 FROM pk_table;
-regex:publication "mz_source" does not exist
+
+> SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
+"publication \"mz_source\" does not exist"
+"publication \"mz_source\" does not exist"
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;

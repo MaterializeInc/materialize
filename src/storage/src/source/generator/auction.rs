@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
 use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
@@ -111,7 +112,8 @@ impl Generator for Auction {
         });
 
         let mut counter = 0;
-        let mut pending: Vec<(usize, Row)> = organizations.chain(users).chain(accounts).collect();
+        let mut pending: VecDeque<(usize, Row)> =
+            organizations.chain(users).chain(accounts).collect();
 
         Box::new(iter::from_fn(move || {
             {
@@ -130,7 +132,7 @@ impl Generator for Auction {
                             .try_into()
                             .expect("timestamp must fit"),
                     )); // end time
-                    pending.push((AUCTIONS_OUTPUT, auction));
+                    pending.push_back((AUCTIONS_OUTPUT, auction));
                     const MAX_BIDS: i64 = 10;
                     for i in 0..rng.gen_range(2..MAX_BIDS) {
                         let bid_id = Datum::Int64(counter * MAX_BIDS + i);
@@ -148,10 +150,11 @@ impl Generator for Auction {
                             )); // bid time
                             bid
                         };
-                        pending.push((BIDS_OUTPUT, bid));
+                        pending.push_back((BIDS_OUTPUT, bid));
                     }
                 }
-                let pend = pending.pop();
+                // Pop from the front so auctions always appear before bids.
+                let pend = pending.pop_front();
                 pend.map(|(output, row)| {
                     // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.
                     let typ = if counter != 0 || pending.is_empty() {

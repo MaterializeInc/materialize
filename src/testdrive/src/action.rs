@@ -58,6 +58,7 @@ mod sleep;
 mod sql;
 mod sql_server;
 mod version_check;
+mod webhook;
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -161,6 +162,7 @@ pub struct State {
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
     materialize_sql_addr: String,
+    materialize_http_addr: String,
     materialize_internal_sql_addr: String,
     materialize_internal_http_addr: String,
     materialize_user: String,
@@ -556,6 +558,7 @@ impl Run for PosCommand {
                     }
                     "set" => set::set_vars(builtin, state),
                     "set-from-sql" => set::run_set_from_sql(builtin, state).await,
+                    "webhook-append" => webhook::run_append(builtin, state).await,
                     // "verify-timestamp-compaction" => Box::new(
                     //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
                     //         builtin,
@@ -670,6 +673,7 @@ pub async fn create_state(
 
     let (
         materialize_sql_addr,
+        materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,
@@ -711,6 +715,11 @@ pub async fn create_state(
             materialize_url.host_str().unwrap(),
             materialize_url.port().unwrap()
         );
+        let materialize_http_addr = format!(
+            "{}:{}",
+            materialize_url.host_str().unwrap(),
+            config.materialize_http_port
+        );
         let materialize_internal_sql_addr = format!(
             "{}:{}",
             materialize_internal_url.host_str().unwrap(),
@@ -723,6 +732,7 @@ pub async fn create_state(
         );
         (
             materialize_sql_addr,
+            materialize_http_addr,
             materialize_internal_sql_addr,
             materialize_internal_http_addr,
             materialize_user,
@@ -813,6 +823,7 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
         materialize_sql_addr,
+        materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,

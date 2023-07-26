@@ -19,7 +19,8 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, UsedIndexes};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
-use tracing::dispatcher::{self, with_default};
+use mz_sql_parser::ast::ExplainStage;
+use tracing::dispatcher::{self};
 use tracing_subscriber::prelude::*;
 
 use crate::catalog::ConnCatalog;
@@ -32,7 +33,10 @@ use crate::explain::Explainable;
 /// Internally, this will create a layered [`tracing::subscriber::Subscriber`]
 /// consisting of one layer for each supported plan type `T`.
 ///
-/// The [`OptimizerTrace::collect_trace`] method on the created instance can be
+/// Use `tracing::dispatcher::set_default` to trace in synchronous context.
+/// Use `tracing::instrument::WithSubscriber::with_subscriber(&optimizer_trace)` to trace the result of a `Future`.
+///
+/// The [`OptimizerTrace::drain_all`] method on the created instance can be
 /// then used to collect the trace, and [`OptimizerTrace::drain_all`] to obtain
 /// the collected trace as a vector of [`TraceEntry`] instances.
 pub(crate) struct OptimizerTrace(dispatcher::Dispatch);
@@ -71,12 +75,6 @@ impl OptimizerTrace {
             .with(PlanTrace::<DataflowDescription<Plan>>::find(path));
 
         OptimizerTrace(dispatcher::Dispatch::new(subscriber))
-    }
-
-    /// Run the given optimization `pipeline` once and collect a trace of all
-    /// plans produced during that run.
-    pub fn collect_trace<T>(&self, pipeline: impl FnOnce() -> T) -> T {
-        with_default(&self.0, pipeline)
     }
 
     /// Collect all traced plans for all plan types `T` that are available in
@@ -169,13 +167,23 @@ impl OptimizerTrace {
                     // update the context with the current time
                     context.duration = entry.full_duration;
                     match fast_path_plan {
-                        Some(fast_path_plan) if !context.config.no_fast_path => Ok(TraceEntry {
-                            instant: entry.instant,
-                            span_duration: entry.span_duration,
-                            full_duration: entry.full_duration,
-                            path: entry.path,
-                            plan: fast_path_plan.clone(),
-                        }),
+                        Some(fast_path_plan)
+                            if !context.config.no_fast_path && {
+                                [
+                                    ExplainStage::OptimizedPlan.path(),
+                                    ExplainStage::PhysicalPlan.path(),
+                                ]
+                                .contains(&entry.path.as_str())
+                            } =>
+                        {
+                            Ok(TraceEntry {
+                                instant: entry.instant,
+                                span_duration: entry.span_duration,
+                                full_duration: entry.full_duration,
+                                path: entry.path,
+                                plan: fast_path_plan.clone(),
+                            })
+                        }
                         _ => Ok(TraceEntry {
                             instant: entry.instant,
                             span_duration: entry.span_duration,
@@ -221,5 +229,13 @@ impl OptimizerTrace {
         } else {
             vec![]
         }
+    }
+}
+
+impl From<&OptimizerTrace> for tracing::Dispatch {
+    fn from(value: &OptimizerTrace) -> Self {
+        // be not afraid: value.0 is a Dispatcher, which is Arc<dyn Subscriber + ...>
+        // https://docs.rs/tracing-core/0.1.30/src/tracing_core/dispatcher.rs.html#451-453
+        value.0.clone()
     }
 }

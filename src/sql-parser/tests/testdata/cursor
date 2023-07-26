@@ -18,14 +18,21 @@ DECLARE "c" CURSOR WITHOUT HOLD FOR SELECT * FROM t
 ----
 DECLARE c CURSOR FOR SELECT * FROM t
 =>
-Declare(DeclareStatement { name: Ident("c"), stmt: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }) })
+Declare(DeclareStatement { name: Ident("c"), stmt: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), sql: "SELECT * FROM t" })
 
 parse-statement
 DECLARE c CURSOR FOR SUBSCRIBE t
 ----
 DECLARE c CURSOR FOR SUBSCRIBE t
 =>
-Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }) })
+Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }), sql: "SUBSCRIBE t" })
+
+parse-statement
+DECLARE c CURSOR WITH HOLD FOR SELECT * FROM t;
+----
+error: WITH HOLD is unsupported for cursors
+DECLARE c CURSOR WITH HOLD FOR SELECT * FROM t;
+                 ^
 
 parse-statement
 CLOSE c

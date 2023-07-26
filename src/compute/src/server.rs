@@ -25,6 +25,7 @@ use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
@@ -144,6 +145,8 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// A process-global handle to tracing configuration.
+    tracing_handle: Arc<TracingHandle>,
 }
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
@@ -157,6 +160,8 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             ActivatorSender,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
+        _cluster_size: Option<String>,
     ) {
         Worker {
             timely_worker,
@@ -165,6 +170,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             compute_metrics: config.compute_metrics,
             persist_clients,
             compute_state: None,
+            tracing_handle,
         }
         .run()
     }
@@ -386,29 +392,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
-                let command_history =
-                    ComputeCommandHistory::new(self.compute_metrics.for_history());
-
-                self.compute_state = Some(ComputeState {
-                    traces: TraceManager::new(
-                        self.trace_metrics.clone(),
-                        self.timely_worker.index(),
-                    ),
-                    sink_tokens: BTreeMap::new(),
-                    subscribe_response_buffer: Rc::new(RefCell::new(Vec::new())),
-                    sink_write_frontiers: BTreeMap::new(),
-                    flow_control_probes: BTreeMap::new(),
-                    pending_peeks: BTreeMap::new(),
-                    reported_frontiers: BTreeMap::new(),
-                    dropped_collections: Vec::new(),
-                    compute_logger: None,
-                    persist_clients: Arc::clone(&self.persist_clients),
-                    command_history,
-                    max_result_size: u32::MAX,
-                    dataflow_max_inflight_bytes: usize::MAX,
-                    linear_join_impl: Default::default(),
-                    metrics: self.compute_metrics.clone(),
-                });
+                let traces =
+                    TraceManager::new(self.trace_metrics.clone(), self.timely_worker.index());
+                self.compute_state = Some(ComputeState::new(
+                    traces,
+                    Arc::clone(&self.persist_clients),
+                    self.compute_metrics.clone(),
+                    Arc::clone(&self.tracing_handle),
+                ));
             }
             _ => (),
         }
@@ -638,12 +629,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // about them anymore.
             compute_state.dropped_collections = Default::default();
 
-            // Adjust reported frontiers:
-            //  * For dataflows we continue to use, reset to ensure we report something not before
-            //    the new `as_of` next.
-            //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
-            //    anything for them. This is only needed until we implement #16275.
-            for (&id, reported_frontier) in compute_state.reported_frontiers.iter_mut() {
+            for (&id, collection) in compute_state.collections.iter_mut() {
+                // Adjust reported frontiers:
+                //  * For dataflows we continue to use, reset to ensure we report something not
+                //    before the new `as_of` next.
+                //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
+                //    anything for them. This is only needed until we implement #16275.
                 let retained = retain_ids.contains(&id);
                 let compaction = old_compaction.remove(&id);
                 let new_reported_frontier = match (retained, compaction) {
@@ -664,7 +655,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                 // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = reported_frontier.logging_time() {
+                    if let Some(time) = collection.reported_frontier().logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                     if let Some(time) = new_reported_frontier.logging_time() {
@@ -672,18 +663,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
-                *reported_frontier = new_reported_frontier;
-            }
+                collection.set_reported_frontier(new_reported_frontier);
 
-            // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
-            //
-            // Dropping the tokens of active subscribes makes them place `DroppedAt` responses into
-            // the subscribe response buffer. We drop that buffer in the next step, which ensures
-            // that we don't send out `DroppedAt` responses for subscribes dropped during
-            // reconciliation.
-            compute_state
-                .sink_tokens
-                .retain(|id, _| retain_ids.contains(id));
+                // Sink tokens should be retained for retained dataflows, and dropped for dropped
+                // dataflows.
+                //
+                // Dropping the tokens of active subscribes makes them place `DroppedAt` responses
+                // into the subscribe response buffer. We drop that buffer in the next step, which
+                // ensures that we don't send out `DroppedAt` responses for subscribes dropped
+                // during reconciliation.
+                if !retained {
+                    collection.sink_token = None;
+                }
+            }
 
             // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.

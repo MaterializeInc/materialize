@@ -166,6 +166,7 @@ struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 
 }
 
 /// An event of an input stream
+#[derive(Debug)]
 pub enum Event<T: Timestamp, D> {
     /// A data event
     Data(InputCapability<T>, D),
@@ -738,7 +739,6 @@ mod test {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     fn gh_18837() {
         let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
         timely::execute::execute_from(builders, other, WorkerConfig::default(), |worker| {

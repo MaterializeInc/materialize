@@ -89,6 +89,9 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         override_db_object_name: Optional[str] = None,
     ) -> str:
+        if storage_layout == ValueStorageLayout.ANY:
+            raise RuntimeError(f"{storage_layout} has not been resolved to a real one")
+
         if override_db_object_name is not None:
             return override_db_object_name
 

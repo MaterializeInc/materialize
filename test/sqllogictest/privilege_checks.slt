@@ -23,6 +23,13 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
+# Enable webhook sources.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources TO true;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 ----
@@ -317,6 +324,16 @@ CREATE SOURCE s2 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
 db error: ERROR: permission denied for CLUSTER "source_cluster"
 
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for CLUSTER "source_cluster"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for CLUSTER "source_cluster"
+
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON CLUSTER source_cluster TO joe;
 ----
@@ -332,10 +349,110 @@ CREATE SOURCE s4 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_a IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_b IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SECRET webhook_key AS 'shared_key';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SECRET webhook_key FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+db error: ERROR: permission denied for SECRET "materialize.public.webhook_key"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_with_secret1 IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+db error: ERROR: permission denied for SECRET "materialize.public.webhook_key"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET webhook_key TO child;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+db error: ERROR: permission denied for SECRET "materialize.public.webhook_key"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text_with_secret1 IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET webhook_key TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( SECRET webhook_key BYTES )
+    body = webhook_key
+  )
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE webhook_text IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE SOURCE webhook_text IN CLUSTER source_cluster FROM WEBHOOK BODY FORMAT TEXT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATECLUSTER ON SYSTEM FROM joe;
@@ -434,7 +551,7 @@ CREATE TABLE t (a ty);
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
+GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -461,6 +578,21 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE TABLE t (a ty);
 ----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE TABLE t (a ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE TABLE t (a ty);
+----
 COMPLETE 0
 
 simple conn=child,user=child
@@ -469,7 +601,7 @@ CREATE TABLE t1 (a ty);
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -496,7 +628,7 @@ CREATE VIEW v AS SELECT ROW(1)::ty;
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
+GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -523,6 +655,21 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE VIEW v AS SELECT ROW(1)::ty;
 ----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE VIEW v AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE VIEW v AS SELECT ROW(1)::ty;
+----
 COMPLETE 0
 
 simple conn=child,user=child
@@ -531,7 +678,7 @@ CREATE VIEW v1 AS SELECT ROW(1)::ty;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -544,6 +691,41 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=child,user=child
+CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+----
+db error: ERROR: permission denied for TYPE "materialize.public.ty"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 
@@ -580,26 +762,6 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO PUBLIC;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
-----
 COMPLETE 0
 
 simple conn=child,user=child
@@ -608,7 +770,7 @@ CREATE MATERIALIZED VIEW mv1 AS SELECT ROW(1)::ty;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -640,22 +802,7 @@ CREATE INDEX i ON t (a::ty);
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE INDEX i ON t (a::ty);
-----
-db error: ERROR: permission denied for CLUSTER "default"
-
-simple conn=child,user=child
-CREATE INDEX i ON t (a::ty);
-----
-db error: ERROR: permission denied for CLUSTER "default"
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO joe;
+GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
@@ -682,6 +829,36 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE INDEX i ON t (a::ty);
 ----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for CLUSTER "default"
+
+simple conn=child,user=child
+CREATE INDEX i ON t (a::ty);
+----
+db error: ERROR: permission denied for CLUSTER "default"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER default TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE INDEX i ON t (a::ty);
+----
 COMPLETE 0
 
 simple conn=child,user=child
@@ -690,7 +867,7 @@ CREATE INDEX i1 ON t (a::ty);
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -2491,21 +2668,6 @@ COMPLETE 0
 simple conn=joe,user=joe
 ALTER SOURCE s SET (SIZE = '4');
 ----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=child,user=child
-ALTER SOURCE s1 SET (SIZE = '4');
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-ALTER SOURCE s SET (SIZE = '4');
-----
 COMPLETE 0
 
 simple conn=child,user=child
@@ -2524,7 +2686,7 @@ DROP SOURCE s1;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
@@ -2890,6 +3052,24 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+## System
+
+statement error You must be a superuser to GRANT/REVOKE SYSTEM PRIVILEGES
+GRANT CREATEDB ON SYSTEM TO joe
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+statement error You must be a superuser to GRANT/REVOKE SYSTEM PRIVILEGES
+REVOKE CREATEDB ON SYSTEM FROM joe
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM joe
+----
+COMPLETE 0
+
 # GRANT/REVOKE role
 
 simple conn=mz_system,user=mz_system
@@ -2991,5 +3171,12 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+# Disable webhook sources.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources TO false;
 ----
 COMPLETE 0

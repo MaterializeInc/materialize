@@ -67,6 +67,13 @@ You can remove an index with any of the following commands:
 DROP INDEX IF EXISTS q01_geo_idx;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped index.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`SHOW VIEWS`](../show-views)

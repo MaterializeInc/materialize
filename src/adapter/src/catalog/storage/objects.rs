@@ -277,6 +277,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 logging,
                 idle_arrangement_merge_effort,
                 replication_factor,
+                disk,
             }) => proto::cluster_config::Variant::Managed(proto::cluster_config::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -284,6 +285,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 idle_arrangement_merge_effort: idle_arrangement_merge_effort
                     .map(|effort| proto::ReplicaMergeEffort { effort }),
                 replication_factor: *replication_factor,
+                disk: *disk,
             }),
             ClusterVariant::Unmanaged => proto::cluster_config::Variant::Unmanaged(proto::Empty {}),
         }
@@ -303,6 +305,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                         .idle_arrangement_merge_effort
                         .map(|e| e.effort),
                     replication_factor: managed.replication_factor,
+                    disk: managed.disk,
                 }))
             }
         }
@@ -369,10 +372,12 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
                 size,
                 availability_zone,
                 az_user_specified,
+                disk,
             } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
                 size: size.to_string(),
                 availability_zone: availability_zone.to_string(),
                 az_user_specified: *az_user_specified,
+                disk: *disk,
             }),
         }
     }
@@ -393,6 +398,7 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
                     size: location.size,
                     availability_zone: location.availability_zone,
                     az_user_specified: location.az_user_specified,
+                    disk: location.disk,
                 })
             }
         }
@@ -578,8 +584,8 @@ impl RustType<proto::RoleValue> for RoleValue {
     fn into_proto(&self) -> proto::RoleValue {
         proto::RoleValue {
             name: self.role.name.to_string(),
-            attributes: self.role.attributes.into_proto(),
-            membership: self.role.membership.into_proto(),
+            attributes: Some(self.role.attributes.into_proto()),
+            membership: Some(self.role.membership.into_proto()),
         }
     }
 
@@ -587,8 +593,12 @@ impl RustType<proto::RoleValue> for RoleValue {
         Ok(RoleValue {
             role: SerializedRole {
                 name: proto.name,
-                attributes: proto.attributes.into_rust()?,
-                membership: proto.membership.into_rust()?,
+                attributes: proto
+                    .attributes
+                    .into_rust_if_some("RoleValue::attributes")?,
+                membership: proto
+                    .membership
+                    .into_rust_if_some("RoleValue::membership")?,
             },
         })
     }

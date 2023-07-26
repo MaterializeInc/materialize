@@ -134,6 +134,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
@@ -229,13 +230,21 @@ pub fn describe(
 /// Produces a [`Plan`] from the purified statement `stmt`.
 ///
 /// Planning is a pure, synchronous function and so requires that the provided
-/// `stmt` does does not depend on any external state. Only `CREATE SOURCE`
-/// statements can depend on external state; remove that state prior to calling
-/// this function via [`crate::pure::purify_create_source`].
+/// `stmt` does does not depend on any external state. Statements that rely on
+/// external state must remove that state prior to calling this function via
+/// [`crate::pure::purify_statement`].
+///
+/// TODO: sinks do not currently obey this rule, which is a bug
+/// <https://github.com/MaterializeInc/materialize/issues/20019>
 ///
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
+///
+/// Note that if you want to do something else asynchronously (e.g. validating
+/// connections), these might want to take different code paths than
+/// `purify_statement`. Feel free to rationalize this by thinking of those
+/// statements as not necessarily depending on external state.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn plan(
     pcx: Option<&PlanContext>,
@@ -281,6 +290,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),

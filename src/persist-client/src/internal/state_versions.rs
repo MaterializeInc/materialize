@@ -9,7 +9,6 @@
 
 //! A durable, truncatable log of versions of [State].
 
-use std::borrow::Borrow;
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -21,13 +20,11 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
 use mz_persist::location::{
     Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
-use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
@@ -94,7 +91,7 @@ use crate::{Metrics, PersistConfig, ShardId};
 ///     for other live states to reference rollups that no longer exist.
 #[derive(Debug)]
 pub struct StateVersions {
-    cfg: PersistConfig,
+    pub(crate) cfg: PersistConfig,
     pub(crate) consensus: Arc<dyn Consensus + Send + Sync>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
@@ -313,6 +310,9 @@ impl StateVersions {
                 shard_metrics
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
+                shard_metrics
+                    .live_writers
+                    .set(u64::cast_from(new_state.collections.writers.len()));
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
@@ -448,7 +448,7 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                        warn!("logic error: fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
                     }
                     continue;
                 }
@@ -968,6 +968,11 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
+        use std::borrow::Borrow;
+
+        use mz_ore::collections::HashSet;
+        use timely::PartialOrder;
+
         x.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
                 self.full_batches.insert(x.clone());
@@ -1019,7 +1024,6 @@ mod tests {
     /// Regression test for (part of) #17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn fetch_all_live_states_regression_uninitialized() {
         let client = new_test_client().await;
         let state_versions = StateVersions::new(

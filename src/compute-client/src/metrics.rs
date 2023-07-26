@@ -11,22 +11,25 @@
 
 use std::borrow::Borrow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec,
-    MetricsRegistry, UIntGaugeVec,
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVecExt,
+    HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry, UIntGaugeVec,
 };
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_service::codec::StatsCollector;
 use prometheus::core::AtomicU64;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
-use crate::protocol::response::ProtoComputeResponse;
+use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
+type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
 
 /// Compute controller metrics
 #[derive(Debug, Clone)]
@@ -48,6 +51,10 @@ pub struct ComputeControllerMetrics {
     // command history
     history_command_count: UIntGaugeVec,
     history_dataflow_count: UIntGaugeVec,
+
+    // peeks
+    peeks_total: IntCounterVec,
+    peek_duration_seconds: HistogramVec,
 }
 
 impl ComputeControllerMetrics {
@@ -113,6 +120,17 @@ impl ComputeControllerMetrics {
                 help: "The number of dataflows in the controller's command history.",
                 var_labels: ["instance_id"],
             )),
+            peeks_total: metrics_registry.register(metric!(
+                name: "mz_compute_peeks_total",
+                help: "The total number of peeks served.",
+                var_labels: ["instance_id", "result"],
+            )),
+            peek_duration_seconds: metrics_registry.register(metric!(
+                name: "mz_compute_peek_duration_seconds",
+                help: "A histogram of peek durations since restart.",
+                var_labels: ["instance_id", "result"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.),
+            )),
         }
     }
 
@@ -130,7 +148,18 @@ impl ComputeControllerMetrics {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
             self.history_command_count.get_delete_on_drop_gauge(labels)
         });
-        let history_dataflow_count = self.history_dataflow_count.get_delete_on_drop_gauge(labels);
+        let history_dataflow_count = self
+            .history_dataflow_count
+            .get_delete_on_drop_gauge(labels.clone());
+        let peeks_total = PeekMetrics::build(|typ| {
+            let labels = labels.iter().cloned().chain([typ.into()]).collect();
+            self.peeks_total.get_delete_on_drop_counter(labels)
+        });
+        let peek_duration_seconds = PeekMetrics::build(|typ| {
+            let labels = labels.iter().cloned().chain([typ.into()]).collect();
+            self.peek_duration_seconds
+                .get_delete_on_drop_histogram(labels)
+        });
 
         InstanceMetrics {
             instance_id,
@@ -141,6 +170,8 @@ impl ComputeControllerMetrics {
             subscribe_count,
             history_command_count,
             history_dataflow_count,
+            peeks_total,
+            peek_duration_seconds,
         }
     }
 }
@@ -157,6 +188,8 @@ pub struct InstanceMetrics {
     pub subscribe_count: UIntGauge,
     pub history_command_count: CommandMetrics<UIntGauge>,
     pub history_dataflow_count: UIntGauge,
+    pub peeks_total: PeekMetrics<IntCounter>,
+    pub peek_duration_seconds: PeekMetrics<Histogram>,
 }
 
 impl InstanceMetrics {
@@ -233,6 +266,14 @@ impl InstanceMetrics {
             command_counts,
             dataflow_count,
         }
+    }
+
+    /// Reflect the given peek response in the metrics.
+    pub fn observe_peek_response(&self, response: &PeekResponse, duration: Duration) {
+        self.peeks_total.for_peek_response(response).inc();
+        self.peek_duration_seconds
+            .for_peek_response(response)
+            .observe(duration.as_secs_f64());
     }
 }
 
@@ -395,5 +436,36 @@ where
     pub fn reset(&self) {
         self.command_counts.for_all(|m| m.borrow().set(0));
         self.dataflow_count.borrow().set(0);
+    }
+}
+
+/// Metrics for finished peeks, keyed by peek result.
+#[derive(Debug)]
+pub struct PeekMetrics<M> {
+    rows: M,
+    error: M,
+    canceled: M,
+}
+
+impl<M> PeekMetrics<M> {
+    fn build<F>(build_metric: F) -> Self
+    where
+        F: Fn(&str) -> M,
+    {
+        Self {
+            rows: build_metric("rows"),
+            error: build_metric("error"),
+            canceled: build_metric("canceled"),
+        }
+    }
+
+    fn for_peek_response(&self, response: &PeekResponse) -> &M {
+        use PeekResponse::*;
+
+        match response {
+            Rows(_) => &self.rows,
+            Error(_) => &self.error,
+            Canceled => &self.canceled,
+        }
     }
 }

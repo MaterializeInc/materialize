@@ -99,6 +99,13 @@ You can use either of the following commands:
 DROP TYPE IF EXISTS int4_list;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped type.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 * [`CREATE TYPE`](../create-type)

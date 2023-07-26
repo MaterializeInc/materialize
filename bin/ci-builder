@@ -103,7 +103,7 @@ files=$(cat \
         <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | LC_ALL=C sort -z \
-    | xargs -0 sha1sum)
+    | xargs -0 "$shasum")
 files+="
 rust-version:$rust_version
 rust-date:$rust_date
@@ -176,10 +176,18 @@ case "$cmd" in
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env NO_COLOR
+            --env POLAR_SIGNALS_API_TOKEN
             --env PYPI_TOKEN
+            # For Miri with nightly Rust
+            --env ZOOKEEPER_ADDR
+            --env KAFKA_ADDRS
+            --env SCHEMA_REGISTRY_URL
+            --env POSTGRES_URL
+            --env COCKROACH_URL
+            --env MZ_SOFT_ASSERTIONS
         )
 
         if [[ $detach_container == "true" ]]; then

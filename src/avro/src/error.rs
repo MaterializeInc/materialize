@@ -89,7 +89,14 @@ pub enum DecodeError {
     I32OutOfRange(i64),
     IntConversionError,
     IntDecodeOverflow,
-    BadJson(serde_json::error::Category),
+    BadJson {
+        category: serde_json::error::Category,
+        /// A string representation of what we attempted to decode.
+        /// Ideally the original bytes,
+        /// but might be a re-serialization of a deserialized value,
+        /// if we no longer have access to the original.
+        bytes: Vec<u8>,
+    },
     BadUuid(uuid::Error),
     MismatchedBlockHeader {
         expected: [u8; 16],
@@ -168,7 +175,10 @@ impl DecodeError {
             DecodeError::StringUtf8Error => write!(f, "String was not valid UTF-8"),
             DecodeError::UuidUtf8Error => write!(f, "UUID was not valid UTF-8"),
             DecodeError::IntConversionError => write!(f, "Integer conversion failed"),
-            DecodeError::BadJson(inner_kind) => write!(f, "Json decoding failed: {:?}", inner_kind),
+            DecodeError::BadJson { category, bytes } => {
+                write!(f, "Json decoding failed: {:?}", category)?;
+                write!(f, " (got {})", String::from_utf8_lossy(bytes))
+            }
             DecodeError::BadUuid(inner) => write!(f, "UUID decoding failed: {}", inner),
             DecodeError::MismatchedBlockHeader { expected, actual } => write!(
                 f,

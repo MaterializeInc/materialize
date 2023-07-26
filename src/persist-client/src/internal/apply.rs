@@ -36,7 +36,7 @@ use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::PubSubSender;
-use crate::{PersistConfig, ShardId};
+use crate::{Diagnostics, PersistConfig, ShardId};
 
 /// An applier of persist commands.
 ///
@@ -93,14 +93,19 @@ where
         state_versions: Arc<StateVersions>,
         shared_states: Arc<StateCache>,
         pubsub_sender: Arc<dyn PubSubSender>,
+        diagnostics: Diagnostics,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let shard_metrics = metrics.shards.shard(&shard_id);
+        let shard_metrics = metrics.shards.shard(&shard_id, &diagnostics.shard_name);
         let state = shared_states
-            .get::<K, V, T, D, _, _>(shard_id, || {
-                metrics.cmds.init_state.run_cmd(&shard_metrics, || {
-                    state_versions.maybe_init_shard(&shard_metrics)
-                })
-            })
+            .get::<K, V, T, D, _, _>(
+                shard_id,
+                || {
+                    metrics.cmds.init_state.run_cmd(&shard_metrics, || {
+                        state_versions.maybe_init_shard(&shard_metrics)
+                    })
+                },
+                &diagnostics,
+            )
             .await?;
         let ret = Applier {
             cfg,
@@ -376,6 +381,11 @@ where
                     .lease
                     .timeout_read
                     .inc_by(u64::cast_from(expiry_metrics.readers_expired));
+
+                metrics
+                    .state
+                    .writer_removed
+                    .inc_by(u64::cast_from(expiry_metrics.writers_expired));
 
                 if let Some(gc) = garbage_collection.as_ref() {
                     debug!("Assigned gc request: {:?}", gc);

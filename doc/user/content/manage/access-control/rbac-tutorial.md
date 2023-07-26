@@ -7,7 +7,7 @@ menu:
     weight: 25
 ---
 
-{{< alpha />}}
+{{< private-preview />}}
 
 This tutorial walks you through creating a new user and managing roles in Materialize. By
 the end of this tutorial you will:

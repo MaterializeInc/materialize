@@ -25,7 +25,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
+    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
 use mz_ore::halt;
@@ -74,6 +74,8 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The disk limit for each process in the replica.
+    pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
     pub scale: u16,
     /// The number of worker threads in the replica.
@@ -91,6 +93,7 @@ fn test_replica_allocation_deserialization() {
         {
             "cpu_limit": 1.0,
             "memory_limit": "10GiB",
+            "disk_limit": "100MiB",
             "scale": 16,
             "workers": 1,
             "credits_per_hour": "16"
@@ -178,6 +181,8 @@ pub struct ManagedReplicaLocation {
     /// `true` if the AZ was specified by the user and must be respected;
     /// `false` if it was picked arbitrarily by Materialize.
     pub az_user_specified: bool,
+    /// Whether the replica needs scratch disk space.
+    pub disk: bool,
 }
 
 /// Configures logging for a cluster replica.
@@ -253,6 +258,7 @@ where
             storage_location: ClusterReplicaLocation,
             compute_location: ClusterReplicaLocation,
             metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
+            size: Option<String>,
         }
 
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
@@ -297,11 +303,13 @@ where
                                 storage_location,
                                 compute_location,
                                 metrics_task_join_handle: None,
+                                size: None,
                             },
                         ))
                     }
                     ReplicaLocation::Managed(m) => {
                         let workers = m.allocation.workers;
+                        let cluster_size = m.size.clone();
                         let (service, metrics_task_join_handle) = this
                             .provision_replica(cluster_id, replica_id, role, m)
                             .await?;
@@ -323,6 +331,7 @@ where
                                 storage_location,
                                 compute_location,
                                 metrics_task_join_handle: Some(metrics_task_join_handle),
+                                size: Some(cluster_size),
                             },
                         ))
                     }
@@ -347,11 +356,14 @@ where
         drop(replica_stream);
 
         for (cluster_id, replicas) in replicas {
+            let storage_replica = &replicas.last();
+            let cluster_size = storage_replica.map(|r| r.size.clone()).flatten();
             // We only connect to the last replica (chosen arbitrarily)
             // for storage, until we support multi-replica storage objects
             self.storage.connect_replica(
                 cluster_id,
                 replicas.last().unwrap().storage_location.clone(),
+                cluster_size,
             );
 
             for ReplicaInfo {
@@ -360,6 +372,7 @@ where
                 storage_location: _,
                 compute_location,
                 metrics_task_join_handle,
+                size: _,
             } in replicas
             {
                 if let Some(jh) = metrics_task_join_handle {
@@ -556,6 +569,8 @@ where
                             },
                         },
                     ]),
+                    disk_limit: location.allocation.disk_limit,
+                    disk: location.disk,
                 },
             )
             .await?;

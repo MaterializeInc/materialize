@@ -151,8 +151,6 @@ pub struct ControllerConfig {
     pub postgres_factory: StashFactory,
     /// The metrics registry.
     pub metrics_registry: MetricsRegistry,
-    /// Whether clusters have scratch directories enabled.
-    pub scratch_directory_enabled: bool,
     /// The URL for Persist PubSub.
     pub persist_pubsub_url: String,
 }
@@ -351,7 +349,6 @@ where
             &config.postgres_factory,
             envd_epoch,
             config.metrics_registry.clone(),
-            config.scratch_directory_enabled,
         )
         .await;
 

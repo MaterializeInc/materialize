@@ -11,7 +11,7 @@ menu:
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -54,6 +54,12 @@ SELECT name FROM mz_roles;
  mz_system
  mz_introspection
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

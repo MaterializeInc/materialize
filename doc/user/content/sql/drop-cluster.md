@@ -54,6 +54,12 @@ ERROR:  cannot drop cluster with active indexes or materialized views
 DROP CLUSTER auction_house CASCADE;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped cluster.
+
 ## Related pages
 
 - [`SHOW CLUSTERS`](../show-clusters)

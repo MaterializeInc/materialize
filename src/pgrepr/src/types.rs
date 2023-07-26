@@ -12,7 +12,7 @@ use std::fmt;
 use std::mem::size_of;
 
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{
     InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
 };
@@ -91,6 +91,9 @@ pub enum Type {
         /// The type of the values in the map.
         value_type: Box<Type>,
     },
+    /// A character type for storing identifiers of no more than 64 bytes
+    /// in length.
+    Name,
     /// An arbitrary precision number.
     Numeric {
         /// Optional constraints on the type.
@@ -151,8 +154,12 @@ pub enum Type {
         /// The domain type.
         element_type: Box<Type>,
     },
-    /// A list of privileges granted to a role.
+    /// A list of privileges granted to a user, that uses [`mz_repr::role_id::RoleId`]s for role
+    /// references.
     MzAclItem,
+    /// A list of privileges granted to a user that uses [`mz_repr::adt::system::Oid`]s for role
+    /// references. This type is used primarily for compatibility with PostgreSQL.
+    AclItem,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -426,7 +433,7 @@ pub static UINT8: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT2_ARRAY`].
 pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "uint2_array".to_owned(),
+        "_uint2".to_owned(),
         oid::TYPE_UINT2_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -436,7 +443,7 @@ pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT4_ARRAY`].
 pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "uint4_array".to_owned(),
+        "_uint4".to_owned(),
         oid::TYPE_UINT4_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -446,7 +453,7 @@ pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT8_ARRAY`].
 pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "uint8_array".to_owned(),
+        "_uint8".to_owned(),
         oid::TYPE_UINT8_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -466,7 +473,7 @@ pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
 pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "mz_timestamp_array".to_owned(),
+        "_mz_timestamp".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -486,7 +493,7 @@ pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
 pub static MZ_ACL_ITEM_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "mz_aclitem_array".to_owned(),
+        "_mz_aclitem".to_owned(),
         oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         MZ_CATALOG_SCHEMA.to_owned(),
@@ -663,7 +670,9 @@ impl Type {
 
     pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
+            Type::AclItem => &postgres_types::Type::ACLITEM,
             Type::Array(t) => match &**t {
+                Type::AclItem => &postgres_types::Type::ACLITEM_ARRAY,
                 Type::Array(_) => unreachable!(),
                 Type::Bool => &postgres_types::Type::BOOL_ARRAY,
                 Type::Bytea => &postgres_types::Type::BYTEA_ARRAY,
@@ -682,6 +691,7 @@ impl Type {
                 Type::Jsonb => &postgres_types::Type::JSONB_ARRAY,
                 Type::List(_) => unreachable!(),
                 Type::Map { .. } => unreachable!(),
+                Type::Name { .. } => &postgres_types::Type::NAME_ARRAY,
                 Type::Numeric { .. } => &postgres_types::Type::NUMERIC_ARRAY,
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
@@ -726,6 +736,7 @@ impl Type {
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::List(_) => &LIST,
             Type::Map { .. } => &MAP,
+            Type::Name => &postgres_types::Type::NAME,
             Type::Numeric { .. } => &postgres_types::Type::NUMERIC,
             Type::Oid => &postgres_types::Type::OID,
             Type::Record(_) => &postgres_types::Type::RECORD,
@@ -766,6 +777,7 @@ impl Type {
         // postgres_types' `name()` uses the pg_catalog name, and not the pretty
         // SQL standard name.
         match self.inner() {
+            &postgres_types::Type::ACLITEM_ARRAY => "aclitem[]",
             &postgres_types::Type::BOOL_ARRAY => "boolean[]",
             &postgres_types::Type::BYTEA_ARRAY => "bytea[]",
             &postgres_types::Type::BPCHAR_ARRAY => "character[]",
@@ -799,7 +811,14 @@ impl Type {
             &postgres_types::Type::REGPROC_ARRAY => "regproc[]",
             &postgres_types::Type::REGTYPE_ARRAY => "regtype[]",
             &postgres_types::Type::INT2_VECTOR => "int2vector",
-            other => other.name(),
+            other => match other.oid() {
+                oid::TYPE_UINT2_ARRAY_OID => "uint2[]",
+                oid::TYPE_UINT4_ARRAY_OID => "uint4[]",
+                oid::TYPE_UINT8_ARRAY_OID => "uint8[]",
+                oid::TYPE_MZ_TIMESTAMP_ARRAY_OID => "mz_timestamp[]",
+                oid::TYPE_MZ_ACL_ITEM_ARRAY_OID => "mz_aclitem[]",
+                _ => other.name(),
+            },
         }
     }
 
@@ -837,7 +856,8 @@ impl Type {
             Type::TimestampTz {
                 precision: Some(precision),
             } => Some(precision),
-            Type::Array(_)
+            Type::AclItem
+            | Type::Array(_)
             | Type::Bool
             | Type::Bytea
             | Type::BpChar { length: None }
@@ -856,6 +876,7 @@ impl Type {
             | Type::Jsonb
             | Type::List(_)
             | Type::Map { .. }
+            | Type::Name
             | Type::Numeric { constraints: None }
             | Type::Int2Vector
             | Type::Oid
@@ -898,6 +919,7 @@ impl Type {
             Type::Jsonb => -1,
             Type::List(_) => -1,
             Type::Map { .. } => -1,
+            Type::Name { .. } => 64,
             Type::Numeric { .. } => -1,
             Type::Oid => 4,
             Type::Record(_) => -1,
@@ -920,6 +942,7 @@ impl Type {
                 .expect("must fit"),
             Type::Range { .. } => -1,
             Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
+            Type::AclItem => AclItem::binary_size().try_into().expect("must fit"),
         }
     }
 
@@ -954,6 +977,7 @@ impl TryFrom<&Type> for ScalarType {
 
     fn try_from(typ: &Type) -> Result<ScalarType, TypeConversionError> {
         match typ {
+            Type::AclItem => Ok(ScalarType::AclItem),
             Type::Array(t) => Ok(ScalarType::Array(Box::new(TryFrom::try_from(&**t)?))),
             Type::Bool => Ok(ScalarType::Bool),
             Type::Bytea => Ok(ScalarType::Bytes),
@@ -978,6 +1002,7 @@ impl TryFrom<&Type> for ScalarType {
                 value_type: Box::new(TryFrom::try_from(&**value_type)?),
                 custom_id: None,
             }),
+            Type::Name => Ok(ScalarType::PgLegacyName),
             Type::Numeric { constraints } => {
                 let max_scale = match constraints {
                     Some(constraints) => {
@@ -1137,6 +1162,7 @@ impl From<InvalidVarCharMaxLengthError> for TypeConversionError {
 impl From<&ScalarType> for Type {
     fn from(typ: &ScalarType) -> Type {
         match typ {
+            ScalarType::AclItem => Type::AclItem,
             ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,
@@ -1158,6 +1184,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Map { value_type, .. } => Type::Map {
                 value_type: Box::new(From::from(&**value_type)),
             },
+            ScalarType::PgLegacyName => Type::Name,
             ScalarType::Oid => Type::Oid,
             ScalarType::Record { fields, .. } => Type::Record(
                 fields

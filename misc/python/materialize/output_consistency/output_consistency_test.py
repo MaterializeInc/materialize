@@ -11,6 +11,7 @@ import argparse
 
 import pg8000
 from pg8000 import Connection
+from pg8000.exceptions import InterfaceError
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -146,6 +147,8 @@ def _run_output_consistency_tests_internal(
         query_generator,
         output_comparator,
         sql_executor,
+        randomized_picker,
+        ignore_filter,
         output_printer,
     )
     test_runner.setup()
@@ -176,8 +179,15 @@ def main() -> int:
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
     args = parse_output_consistency_input_args(parser)
+    db_user = "materialize"
 
-    connection = pg8000.connect(host=args.host, port=args.port, user="materialize")
+    try:
+        connection = pg8000.connect(host=args.host, port=args.port, user=db_user)
+    except InterfaceError:
+        print(
+            f"Connecting to database failed (host={args.host}, port={args.port}, user={db_user})!"
+        )
+        return 1
 
     result = run_output_consistency_tests(connection, args)
     return 0 if result.all_passed() else 1

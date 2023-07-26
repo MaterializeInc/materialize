@@ -22,7 +22,8 @@ class Action:
         assert False
 
     def join(self, e: Executor) -> None:
-        assert False
+        print(f"Action {self} does not implement join()")
+        raise NotImplementedError
 
 
 class Testdrive(Action):
@@ -49,6 +50,9 @@ class Sleep(Action):
     def execute(self, e: Executor) -> None:
         print(f"Sleeping for {self.interval} seconds")
         time.sleep(self.interval)
+
+    def join(self, e: Executor) -> None:
+        pass
 
 
 class Initialize(Action):

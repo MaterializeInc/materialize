@@ -65,6 +65,13 @@ You can use either of the following commands:
 DROP SCHEMA IF EXISTS my_schema;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped schema.
+- `USAGE` privileges on the containing database.
+
 ## Related pages
 
 - [`SHOW SCHEMAS`](../show-schemas)

@@ -182,11 +182,7 @@ impl Server {
                 }
             })()
             .await;
-            let status = match result {
-                Ok(()) => "success",
-                Err(_) => "error",
-            };
-            metrics.connection_status(status).inc();
+            metrics.connection_status(result.is_ok()).inc();
             result
         }
     }

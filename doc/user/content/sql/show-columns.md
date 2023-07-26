@@ -62,6 +62,12 @@ SHOW COLUMNS FROM my_source;
  column2 | f       | text
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing `item_ref`.
+
 ## Related pages
 
 - [`SHOW SOURCES`](../show-sources)

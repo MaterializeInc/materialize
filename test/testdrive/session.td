@@ -36,7 +36,7 @@ statement_timeout                   "10 s"                  "Sets the maximum al
 idle_in_transaction_session_timeout "2 min"                 "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
-emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
+emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 auto_route_introspection_queries    on                      "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize)."
 enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."

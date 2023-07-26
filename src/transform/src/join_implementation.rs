@@ -24,11 +24,14 @@ use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
+use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
+use crate::attribute::cardinality::{FactorizerVariable, SymExp};
+use crate::attribute::{Cardinality, RequiredAttributes};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
-use crate::{TransformArgs, TransformError};
+use crate::{StatisticsOracle, TransformArgs, TransformError};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -64,7 +67,7 @@ impl crate::Transform for JoinImplementation {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes));
+        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes), args.stats);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -79,10 +82,11 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
+        stats: &dyn StatisticsOracle,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
-                self.action_recursive(value, indexes)?;
+                self.action_recursive(value, indexes, stats)?;
                 match &**value {
                     MirRelationExpr::ArrangeBy { keys, .. } => {
                         for key in keys {
@@ -97,14 +101,14 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes)?;
+                self.action_recursive(body, indexes, stats)?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
                 let (mfp, mfp_input) =
                     MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
-                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
-                self.action(mfp_input, mfp, indexes)?;
+                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes, stats))?;
+                self.action(mfp_input, mfp, indexes, stats)?;
                 Ok(())
             }
         })
@@ -116,6 +120,7 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
+        stats: &dyn StatisticsOracle,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -159,6 +164,65 @@ impl JoinImplementation {
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
+            // Cardinality information for each input relation
+            let mut symbolic_cardinalities: Vec<SymExp> = Vec::with_capacity(inputs.len());
+            // Symbolic terms in the cardinality estimate
+            let mut symbolics = std::collections::BTreeSet::new();
+            for input in inputs.iter() {
+                let mut builder = RequiredAttributes::default();
+                builder.require::<Cardinality>();
+                let mut attributes = builder.finish();
+
+                input.visit(&mut attributes)?;
+
+                let cardinality = attributes
+                    .get_results_mut::<Cardinality>()
+                    .pop()
+                    .expect("cardinality");
+
+                cardinality.collect_symbolics(&mut symbolics);
+                symbolic_cardinalities.push(cardinality);
+            }
+
+            let mut cardinality_stats = BTreeMap::new();
+            let mut have_stats_for_all_inputs = true;
+            for s in symbolics {
+                match s {
+                    FactorizerVariable::Id(id) => {
+                        if let Some(cardinality) = stats.cardinality_estimate(id) {
+                            cardinality_stats.insert(id, cardinality);
+                        } else {
+                            have_stats_for_all_inputs = false;
+                            break;
+                        }
+                    }
+                    FactorizerVariable::Index(_) => (),
+                    FactorizerVariable::Unknown => {
+                        have_stats_for_all_inputs = false;
+                        break;
+                    }
+                }
+            }
+
+            let fill_in_estimates = |v: &FactorizerVariable| -> f64 {
+                debug_assert!(have_stats_for_all_inputs);
+
+                match v {
+                    FactorizerVariable::Id(id) => f64::cast_lossy(
+                        *cardinality_stats
+                            .get(id)
+                            .expect("have stats for all inputs"),
+                    ),
+                    // TODO(mgree): should be the # of distinct values in the index of `_col`, but we don't have those statistics (as of 2023-06-13)
+                    FactorizerVariable::Index(_col) => {
+                        crate::attribute::cardinality::WORST_CASE_SELECTIVITY
+                    }
+                    FactorizerVariable::Unknown => {
+                        unreachable!("have stats for all inputs but encounted unknown")
+                    }
+                }
+            };
+
             // The first fundamental question is whether we should employ a delta query or not.
             //
             // Here we conservatively use the rule that if sufficient arrangements exist we will
@@ -184,7 +248,8 @@ impl JoinImplementation {
                 .map(|typ| typ.keys)
                 .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
-            let mut filters = Vec::new();
+            let mut filters = Vec::with_capacity(inputs.len());
+            let mut cardinalities = Vec::with_capacity(inputs.len());
 
             // We figure out what predicates from mfp_above could be pushed to which input.
             // We won't actually push these down now; this just informs FilterCharacteristics.
@@ -245,8 +310,32 @@ impl JoinImplementation {
                         characteristics.add_literal_equality();
                     }
                 }
-                characteristics |=
+                let push_down_characteristics =
                     FilterCharacteristics::filter_characteristics(&push_downs[index])?;
+                let push_down_factor = push_down_characteristics.worst_case_scaling_factor();
+                characteristics |= push_down_characteristics;
+
+                // Compute the actual cardinalities given our statistics. One of two cases applies:
+                //
+                //   1. `have_stats_for_all_inputs`, and we can use `fill_in_estimates` to get cardinalities for every input
+                //   2. Some inputs are missing inputs; we ignore the estimates
+                if have_stats_for_all_inputs {
+                    // evaluate and scale by the filters
+                    let estimate = symbolic_cardinalities[index].evaluate(&fill_in_estimates);
+                    // we've already accounted for the filters _in_ the term; these capture the ones above
+                    let scaled = estimate * push_down_factor;
+
+                    // round and flatten
+                    let rounded = scaled.ceil();
+                    let flattened = usize::cast_from(
+                        u64::try_cast_from(rounded)
+                            .expect("positive and representable cardinality estimate"),
+                    );
+
+                    cardinalities.push(Some(flattened));
+                } else {
+                    cardinalities.push(None);
+                }
                 filters.push(characteristics);
 
                 // Collect available arrangements on this input.
@@ -320,6 +409,7 @@ impl JoinImplementation {
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
+                    &cardinalities,
                     &filters,
                 )
             };
@@ -329,6 +419,7 @@ impl JoinImplementation {
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
+                    &cardinalities,
                     &filters,
                 )
             };
@@ -419,6 +510,7 @@ mod delta_queries {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
+        cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
@@ -453,8 +545,14 @@ mod delta_queries {
             }
 
             // Determine a viable order for each relation, or return `Err` if none found.
-            let orders =
-                super::optimize_orders(equivalences, available, unique_keys, filters, input_mapper);
+            let orders = super::optimize_orders(
+                equivalences,
+                available,
+                unique_keys,
+                cardinalities,
+                filters,
+                input_mapper,
+            );
 
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
@@ -516,6 +614,7 @@ mod differential {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
+        cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
@@ -532,8 +631,14 @@ mod differential {
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
-            let mut orders =
-                super::optimize_orders(equivalences, available, unique_keys, filters, input_mapper);
+            let mut orders = super::optimize_orders(
+                equivalences,
+                available,
+                unique_keys,
+                cardinalities,
+                filters,
+                input_mapper,
+            );
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -792,10 +897,18 @@ fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
     available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input
     unique_keys: &[Vec<Vec<usize>>],     // unique keys per input
+    cardinalities: &[Option<usize>],     // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
 ) -> Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>> {
-    let mut orderer = Orderer::new(equivalences, available, unique_keys, filters, input_mapper);
+    let mut orderer = Orderer::new(
+        equivalences,
+        available,
+        unique_keys,
+        cardinalities,
+        filters,
+        input_mapper,
+    );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
@@ -806,6 +919,7 @@ struct Orderer<'a> {
     equivalences: &'a [Vec<MirScalarExpr>],
     arrangements: &'a [Vec<Vec<MirScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
+    cardinalities: &'a [Option<usize>],
     filters: &'a [FilterCharacteristics],
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
@@ -825,6 +939,7 @@ impl<'a> Orderer<'a> {
         equivalences: &'a [Vec<MirScalarExpr>],
         arrangements: &'a [Vec<Vec<MirScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
+        cardinalities: &'a [Option<usize>],
         filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
     ) -> Self {
@@ -860,6 +975,7 @@ impl<'a> Orderer<'a> {
             equivalences,
             arrangements,
             unique_keys,
+            cardinalities,
             filters,
             input_mapper,
             reverse_equivalences,
@@ -890,6 +1006,8 @@ impl<'a> Orderer<'a> {
 
         // Introduce cross joins as a possibility.
         for input in 0..self.inputs {
+            let cardinality = self.cardinalities[input];
+
             let is_unique = self.unique_keys[input].iter().any(|cols| cols.is_empty());
             if let Some(pos) = self.arrangements[input]
                 .iter()
@@ -901,6 +1019,7 @@ impl<'a> Orderer<'a> {
                         is_unique,
                         0,
                         true,
+                        cardinality,
                         self.filters[input].clone(),
                         input,
                     ),
@@ -913,6 +1032,7 @@ impl<'a> Orderer<'a> {
                         is_unique,
                         0,
                         false,
+                        cardinality,
                         self.filters[input].clone(),
                         input,
                     ),
@@ -943,7 +1063,14 @@ impl<'a> Orderer<'a> {
         // input. We know which input that is, but we need to compute a key and characteristics.
         // We start with some default values:
         let mut start_tuple = (
-            JoinInputCharacteristics::new(false, 0, false, self.filters[start].clone(), start),
+            JoinInputCharacteristics::new(
+                false,
+                0,
+                false,
+                self.cardinalities[start],
+                self.filters[start].clone(),
+                start,
+            ),
             vec![],
             start,
         );
@@ -962,6 +1089,7 @@ impl<'a> Orderer<'a> {
                 })
                 .collect::<Vec<_>>();
             if candidate_start_key.len() == key.len() {
+                let cardinality = self.cardinalities[start];
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
                     cols.iter()
                         .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c)))
@@ -975,6 +1103,7 @@ impl<'a> Orderer<'a> {
                         is_unique,
                         candidate_start_key.len(),
                         arranged,
+                        cardinality,
                         self.filters[start].clone(),
                         start,
                     ),
@@ -1063,6 +1192,7 @@ impl<'a> Orderer<'a> {
                                                     is_unique,
                                                     key.len(),
                                                     true,
+                                                    self.cardinalities[rel],
                                                     self.filters[rel].clone(),
                                                     rel,
                                                 ),
@@ -1072,6 +1202,8 @@ impl<'a> Orderer<'a> {
                                         }
                                     }
                                 }
+
+                                // does the relation we're joining on have a unique key wrt what's already bound?
                                 let is_unique = self.unique_keys[rel].iter().any(|cols| {
                                     cols.iter().all(|c| {
                                         self.bound[rel].contains(&MirScalarExpr::Column(*c))
@@ -1082,6 +1214,7 @@ impl<'a> Orderer<'a> {
                                         is_unique,
                                         self.bound[rel].len(),
                                         false,
+                                        self.cardinalities[rel],
                                         self.filters[rel].clone(),
                                         rel,
                                     ),

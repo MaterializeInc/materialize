@@ -17,6 +17,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 > SHOW TYPES FROM pg_catalog
 name
 ---------------------
+_aclitem
 _bool
 _bpchar
 _bytea
@@ -38,6 +39,7 @@ _interval
 _jsonb
 _mz_aclitem
 _mz_timestamp
+_name
 _numeric
 _numrange
 _oid
@@ -53,6 +55,7 @@ _tsrange
 _tstzrange
 _uuid
 _varchar
+aclitem
 any
 anyarray
 anycompatible
@@ -87,6 +90,7 @@ list
 map
 mz_aclitem
 mz_timestamp
+name
 numeric
 numrange
 oid

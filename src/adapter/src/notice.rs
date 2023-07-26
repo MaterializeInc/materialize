@@ -19,12 +19,15 @@ use mz_sql::ast::NoticeSeverity;
 use mz_sql::catalog::ErrorMessageObjectDescription;
 use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
+use tokio_postgres::error::SqlState;
+
+use crate::TimestampExplanation;
 
 /// Notices that can occur in the adapter layer.
 ///
 /// These are diagnostic warnings or informational messages that are not
 /// severe enough to warrant failing a query entirely.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum AdapterNotice {
     DatabaseAlreadyExists {
         name: String,
@@ -66,7 +69,7 @@ pub enum AdapterNotice {
         name: String,
     },
     QueryTimestamp {
-        timestamp: mz_repr::Timestamp,
+        explanation: TimestampExplanation<mz_repr::Timestamp>,
     },
     EqualSubscribeBounds {
         bound: mz_repr::Timestamp,
@@ -113,6 +116,7 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
             _ => None,
         }
     }
@@ -136,6 +140,45 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             _ => None
+        }
+    }
+
+    /// Reports the error code.
+    pub fn code(&self) -> SqlState {
+        match self {
+            AdapterNotice::DatabaseAlreadyExists { .. } => SqlState::DUPLICATE_DATABASE,
+            AdapterNotice::SchemaAlreadyExists { .. } => SqlState::DUPLICATE_SCHEMA,
+            AdapterNotice::TableAlreadyExists { .. } => SqlState::DUPLICATE_TABLE,
+            AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
+            AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
+            AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
+                SqlState::NO_ACTIVE_SQL_TRANSACTION
+            }
+            AdapterNotice::UserRequested { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
+            AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
+            AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
+            AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
+            AdapterNotice::RbacSystemDisabled => SqlState::WARNING,
+            AdapterNotice::RbacUserDisabled => SqlState::WARNING,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
+            AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
+            AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
+            AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
+            AdapterNotice::PlanNotice(plan) => match plan {
+                PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+                PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
+            },
         }
     }
 }
@@ -201,9 +244,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::DroppedActiveCluster { name } => {
                 write!(f, "active cluster {} has been dropped", name.quoted())
             }
-            AdapterNotice::QueryTimestamp { timestamp } => {
-                write!(f, "query timestamp: {}", timestamp)
-            }
+            AdapterNotice::QueryTimestamp { .. } => write!(f, "EXPLAIN TIMESTAMP for query"),
             AdapterNotice::EqualSubscribeBounds { bound } => {
                 write!(f, "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty")
             }

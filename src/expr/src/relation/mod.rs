@@ -59,10 +59,10 @@ pub const RECURSION_LIMIT: usize = 2048;
 
 /// A trait for types that describe how to build a collection.
 pub trait CollectionPlan {
-    /// Appends global identifiers on which this plan depends to `out`.
+    /// Collects the set of global identifiers from dataflows referenced in Get.
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>);
 
-    /// Returns the global identifiers on which this plan depends.
+    /// Returns the set of global identifiers from dataflows referenced in Get.
     ///
     /// See [`CollectionPlan::depends_on_into`] to reuse an existing `BTreeSet`.
     fn depends_on(&self) -> BTreeSet<GlobalId> {
@@ -1784,6 +1784,33 @@ impl MirRelationExpr {
         dfs(self, &mut size, &mut max_depth, 1);
         (size, max_depth)
     }
+
+    /// The MirRelationExpr is considered potentially expensive if and only if at least one of the
+    ///  following conditions is true:
+    ///  - It contains at least one FlatMap or a Reduce operator.
+    ///  - It contains at least one MirScalarExpr with a function call.
+    pub fn could_run_expensive_function(&self) -> bool {
+        let mut result = false;
+        self.visit_pre(&mut |e: &MirRelationExpr| {
+            use MirRelationExpr::*;
+            use MirScalarExpr::*;
+            if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
+                result |= match scalar {
+                    Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                    // Function calls are considered expensive
+                    CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
+                };
+                Ok(())
+            }) {
+                // Conservatively set `true` if on RecursionLimitError.
+                result = true;
+            }
+            // FlatMap has a table function; Reduce has an aggregate function.
+            // Other constructs use MirScalarExpr to run a function
+            result |= matches!(e, FlatMap { .. } | Reduce { .. });
+        });
+        result
+    }
 }
 
 // `LetRec` helpers
@@ -2739,6 +2766,8 @@ pub struct JoinInputCharacteristics {
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
     /// We want to prefer input earlier in the input list, for stability of ordering.
@@ -2751,6 +2780,7 @@ impl JoinInputCharacteristics {
         unique_key: bool,
         key_length: usize,
         arranged: bool,
+        cardinality: Option<usize>,
         filters: FilterCharacteristics,
         input: usize,
     ) -> Self {
@@ -2758,6 +2788,7 @@ impl JoinInputCharacteristics {
             unique_key,
             key_length,
             arranged,
+            cardinality: cardinality.map(std::cmp::Reverse),
             filters,
             input: std::cmp::Reverse(input),
         }
@@ -2774,6 +2805,9 @@ impl JoinInputCharacteristics {
         }
         if self.arranged {
             e.push_str("A");
+        }
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
         }
         e.push_str(&self.filters.explain());
         e
@@ -3260,6 +3294,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
             assert!(actual.is_ok());

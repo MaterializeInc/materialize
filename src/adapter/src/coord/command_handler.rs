@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +22,7 @@ use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
+use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
@@ -31,20 +33,18 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    Canceled, Command, ExecuteResponse, GetVariablesResponse, Response, StartupMessage,
-    StartupResponse,
+    AppendWebhookResponse, AppendWebhookValidator, Canceled, Command, ExecuteResponse,
+    GetVariablesResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{
-    ConnMeta, Coordinator, CreateConnectionValidationReady, CreateSourceStatementReady, Message,
-    PendingTxn,
-};
+use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{PreparedStatement, Session, TransactionStatus};
+use crate::session::{Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac, ExecuteContext};
 
@@ -74,6 +74,10 @@ impl Coordinator {
             Command::CopyRows { tx, session, .. } => send(tx, session, e),
             Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
             Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::AppendWebhook { tx, .. } => {
+                // We don't care if our listener went away.
+                let _ = tx.send(Err(e));
+            }
             Command::Terminate { tx, session, .. } => {
                 if let Some(tx) = tx {
                     send(tx, session, e)
@@ -122,6 +126,7 @@ impl Coordinator {
             Command::Declare {
                 name,
                 stmt,
+                inner_sql: sql,
                 param_types,
                 session,
                 tx,
@@ -133,18 +138,19 @@ impl Coordinator {
                     session,
                     Default::default(),
                 );
-                self.declare(ctx, name, stmt, param_types);
+                self.declare(ctx, name, stmt, sql, param_types);
             }
 
             Command::Prepare {
                 name,
                 stmt,
+                sql,
                 param_types,
                 session,
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.handle_prepare(tx, session, name, stmt, param_types);
+                self.handle_prepare(tx, session, name, stmt, sql, param_types);
             }
 
             Command::CancelRequest {
@@ -180,9 +186,19 @@ impl Coordinator {
                 self.sequence_plan(
                     ctx,
                     Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
-                    Vec::new(),
+                    ResolvedIds(BTreeSet::new()),
                 )
                 .await;
+            }
+
+            Command::AppendWebhook {
+                database,
+                schema,
+                name,
+                conn_id,
+                tx,
+            } => {
+                self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
             Command::GetSystemVars { session, tx } => {
@@ -256,7 +272,8 @@ impl Coordinator {
                         })
                     }
                 };
-                self.sequence_plan(ctx, plan, Vec::new()).await;
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await;
             }
 
             Command::VerifyPreparedStatement {
@@ -382,6 +399,15 @@ impl Coordinator {
             Some(stmt) => stmt.clone(),
             None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
         };
+
+        let logging = Arc::clone(&portal.logging);
+
+        self.begin_statement_execution(ctx.session_mut(), &logging);
+
+        let portal = ctx
+            .session()
+            .get_portal_unverified(&portal_name)
+            .expect("known to exist");
 
         let session_type = metrics::session_type_label_value(ctx.session().user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
@@ -524,6 +550,7 @@ impl Coordinator {
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
+                    | Statement::CreateWebhookSource(_)
                     | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
@@ -553,39 +580,46 @@ impl Coordinator {
         let catalog = self.catalog();
         let catalog = catalog.for_session(ctx.session());
         let original_stmt = stmt.clone();
-        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = depends_on.into_iter().collect();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
-        //   - In the handler for `Message::CreateSourceStatementReady`, before we handle the purified statement.
+        //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
-            Statement::CreateSource(stmt) => {
+            stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
+                // Checks if the session is authorized to purify a statement. Usually
+                // authorization is checked after planning, however purification happens before
+                // planning, which may require the use of some connections and secrets.
+                if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
+                    return ctx.retire(Err(e));
+                }
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
-                let purify_fut = mz_sql::pure::purify_create_source(
-                    Box::new(catalog.into_owned()),
-                    self.now(),
-                    stmt,
-                    self.connection_context.clone(),
-                );
+
+                let catalog = self.owned_catalog();
+                let now = self.now();
+                let connection_context = self.connection_context.clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let result = purify_fut.await.map_err(|e| e.into());
+                    let catalog = catalog.for_session(ctx.session());
+                    let result =
+                        mz_sql::pure::purify_statement(catalog, now, stmt, connection_context)
+                            .await
+                            .map_err(|e| e.into());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
-                        CreateSourceStatementReady {
+                    let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
+                        PurifiedStatementReady {
                             ctx,
                             result,
                             params,
-                            depends_on,
+                            resolved_ids,
                             original_stmt,
                             otel_ctx,
                         },
@@ -602,55 +636,9 @@ impl Coordinator {
                 "CREATE SUBSOURCE statements",
             ))),
 
-            // `CREATE CONNECTION` statements might need validation which happens off the main
-            // coordinator thread of control.
-            stmt @ Statement::CreateConnection(_) => {
-                let plan = match self.plan_statement(ctx.session_mut(), stmt, &params) {
-                    Ok(Plan::CreateConnection(plan)) => plan,
-                    Ok(_) => unreachable!(),
-                    Err(e) => {
-                        ctx.retire(Err(e));
-                        return;
-                    }
-                };
-
-                if plan.validate {
-                    let internal_cmd_tx = self.internal_cmd_tx.clone();
-                    let conn_id = ctx.session().conn_id().clone();
-                    let connection_context = self.connection_context.clone();
-                    let otel_ctx = OpenTelemetryContext::obtain();
-                    task::spawn(|| format!("validate_connection:{conn_id}"), async move {
-                        let connection = &plan.connection.connection;
-                        let result = match connection.validate(&connection_context).await {
-                            Ok(()) => Ok(plan),
-                            Err(err) => Err(err.into()),
-                        };
-
-                        // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
-                        let result =
-                            internal_cmd_tx.send(Message::CreateConnectionValidationReady(
-                                CreateConnectionValidationReady {
-                                    ctx,
-                                    result,
-                                    params,
-                                    depends_on,
-                                    original_stmt,
-                                    otel_ctx,
-                                },
-                            ));
-                        if let Err(e) = result {
-                            tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                        }
-                    });
-                } else {
-                    self.sequence_plan(ctx, Plan::CreateConnection(plan), depends_on)
-                        .await;
-                }
-            }
-
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {
-                Ok(plan) => self.sequence_plan(ctx, plan, depends_on).await,
+                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },
         }
@@ -662,9 +650,11 @@ impl Coordinator {
         mut session: Session,
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
+        let now = self.now();
         mz_ore::task::spawn(|| "coord::handle_prepare", async move {
             // Note: This failpoint is used to simulate a request outliving the external connection
             // that made it.
@@ -682,7 +672,11 @@ impl Coordinator {
                 Ok(desc) => {
                     session.set_prepared_statement(
                         name,
-                        PreparedStatement::new(stmt, desc, catalog.transient_revision()),
+                        stmt,
+                        sql,
+                        desc,
+                        catalog.transient_revision(),
+                        now,
                     );
                     Ok(())
                 }
@@ -804,5 +798,92 @@ impl Coordinator {
         self.cancel_pending_peeks(session.conn_id());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
+    }
+
+    fn handle_append_webhook(
+        &mut self,
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+    ) {
+        // Make sure the feature is enabled before doing anything else.
+        if !self.catalog().system_config().enable_webhook_sources() {
+            // We don't care if the listener went away.
+            let _ = tx.send(Err(AdapterError::Unsupported("enable_webhook_sources")));
+            return;
+        }
+
+        /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
+        ///
+        /// Returns a struct that can be used to append data to the underlying storate collection, and the
+        /// types we should cast the request to.
+        fn resolve(
+            coord: &Coordinator,
+            database: String,
+            schema: String,
+            name: String,
+            conn_id: ConnectionId,
+        ) -> Result<AppendWebhookResponse, PartialItemName> {
+            // Resolve our collection.
+            let name = PartialItemName {
+                database: Some(database),
+                schema: Some(schema),
+                item: name,
+            };
+            let Ok(entry) = coord.catalog().resolve_entry(None, &vec![], &name, &conn_id) else {
+                return Err(name);
+            };
+
+            let (body_ty, header_ty, validator) = match entry.item() {
+                CatalogItem::Source(Source {
+                    data_source: DataSourceDesc::Webhook { validation, .. },
+                    desc,
+                    ..
+                }) => {
+                    // All Webhook sources should have at most 2 columns.
+                    mz_ore::soft_assert!(desc.arity() <= 2);
+
+                    let body = desc
+                        .get_by_name(&"body".into())
+                        .map(|(_idx, ty)| ty.clone())
+                        .ok_or(name)?;
+                    let header = desc
+                        .get_by_name(&"headers".into())
+                        .map(|(_idx, ty)| ty.clone());
+
+                    // Create a validator that can be called to validate a webhook request.
+                    let validator = validation.as_ref().map(|v| {
+                        let validation = v.clone();
+                        AppendWebhookValidator::new(
+                            validation.expression,
+                            validation.secrets,
+                            coord.caching_secrets_reader.clone(),
+                        )
+                    });
+                    (body, header, validator)
+                }
+                _ => return Err(name),
+            };
+
+            // Get a channel so we can queue updates to be written.
+            let row_tx = coord.controller.storage.monotonic_appender(entry.id());
+            Ok(AppendWebhookResponse {
+                tx: row_tx,
+                body_ty,
+                header_ty,
+                validator,
+            })
+        }
+
+        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
+        let _ = tx.send(response);
     }
 }

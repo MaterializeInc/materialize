@@ -10,15 +10,16 @@
 //! A tokio task (and support machinery) for maintaining storage-managed
 //! collections.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
+use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use crate::client::TimestamplessUpdate;
@@ -26,10 +27,13 @@ use crate::controller::{persist_handles, StorageError};
 
 #[derive(Debug, Clone)]
 pub struct CollectionManager {
-    // TODO(guswynn): this should be a sync mutex, as it protects
-    // normal data.
     collections: Arc<Mutex<BTreeSet<GlobalId>>>,
-    tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
+    tx: mpsc::Sender<(
+        GlobalId,
+        Vec<(Row, Diff)>,
+        oneshot::Sender<Result<(), StorageError>>,
+    )>,
+    notifies: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
 }
 
 /// The `CollectionManager` provides two complementary functions:
@@ -48,21 +52,50 @@ impl CollectionManager {
         write_handle: persist_handles::PersistWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager {
-        let collections = Arc::new(Mutex::new(BTreeSet::new()));
+        let collections: Arc<Mutex<BTreeSet<GlobalId>>> = Arc::new(Mutex::new(BTreeSet::new()));
         let collections_outer = Arc::clone(&collections);
-        let (tx, mut rx) = mpsc::channel::<(GlobalId, Vec<(Row, Diff)>)>(1);
+
+        // Note(parkmycar): The capacity here was chosen randomly.
+        let (tx, mut rx) = mpsc::channel::<(
+            GlobalId,
+            Vec<(Row, Diff)>,
+            oneshot::Sender<Result<(), StorageError>>,
+        )>(256);
+
+        // Allows callers to wait until we finish any in-progress work.
+        //
+        // For example, after unregistering a collection a user might wait on a barrier to be sure
+        // any in-progress work with that collection has completed.
+        //
+        // TODO(parkmycar): Revist the API for persist write handles. Ideally we can return results
+        // per-ID instead of for the entire batch. This should allow us to gracefully handle
+        // collections for which a write handle doesn't exist, or the shard has been sealed.
+        let notifies: Arc<Mutex<Vec<oneshot::Sender<_>>>> = Arc::new(Mutex::new(Vec::new()));
+        let notifies_outer = Arc::clone(&notifies);
 
         mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
             loop {
+                // Notify any waiters.
+                notifies
+                    .lock()
+                    .expect("CollectionManager panicked")
+                    .drain(..)
+                    .for_each(|waiter| {
+                        let _ = waiter.send(());
+                    });
+
                 tokio::select! {
                     _ = interval.tick() => {
-                        let collections = &mut *collections.lock().await;
-
-                        let now = T::from(now());
-                        let updates = collections.iter().map(|id| {
-                            (*id, vec![], now.clone())
-                        }).collect::<Vec<_>>();
+                        // Update each collection.
+                        let updates = {
+                            let collections = collections.lock().expect("collection_mgmt panicked");
+                            let now = T::from(now());
+                            collections
+                                .iter()
+                                .map(|id| (*id, vec![], now.clone()))
+                                .collect()
+                        };
 
                         // Failures don't matter when advancing collections'
                         // uppers. This might fail when a clusterd happens
@@ -78,27 +111,97 @@ impl CollectionManager {
                             }
                         }
                     },
-                    cmd = rx.recv() => {
-                        if let Some((id, updates)) = cmd {
-                            assert!(collections.lock().await.contains(&id));
+                    cmd = rx.recv_many(64) => {
+                        if let Some(batch) = cmd {
+                            // Group all of our updates based on ID.
+                            let mut updates: BTreeMap<GlobalId, UpdateRequest> = BTreeMap::new();
+                            for (id, rows, notif) in batch {
+                                let request = updates.entry(id).or_default();
+                                request.rows.extend(rows);
+                                request.notifs.push(notif);
+                            }
 
-                            let updates = vec![(id, updates.into_iter().map(|(row, diff)| TimestamplessUpdate {
-                                row,
-                                diff,
-                            }).collect::<Vec<_>>(), T::from(now()))];
+                            // Make sure all of the collections exist.
+                            let (mut updates, non_existent): (BTreeMap<_, _>, BTreeMap<_, _>) = {
+                                let collections = collections.lock().expect("collection_mgmt panicked");
+                                updates
+                                    .into_iter()
+                                    .partition(|(key, _val)| collections.contains(key))
+                            };
 
-                            loop {
-                                let append_result = write_handle.monotonic_append(updates.clone()).await.expect("sender hung up");
+                            // Return errors for requests whose collection does not exist.
+                            //
+                            // Note: Here we use IdentifierInvalid as oppossed to
+                            // IdentifierMissing because the ID might exist but wasn't
+                            // registered as a managed collection, which is different than
+                            // the ID missing entirely.
+                            notify_listeners(non_existent, |id| Err(StorageError::IdentifierInvalid(id)));
+
+                            // As updates succeed we'll remove them from the set.
+                            while !updates.is_empty() {
+                                // Gather all of the updates into a request for persist.
+                                let request = updates
+                                    .iter()
+                                    .map(|(id, req)| {
+                                        let rows = req
+                                            .rows
+                                            .clone()
+                                            .into_iter()
+                                            .map(|(row, diff)| TimestamplessUpdate { row, diff })
+                                            .collect::<Vec<_>>();
+                                        (*id, rows, T::from(now()))
+                                    })
+                                    .collect();
+
+                                // Append updates to persist!
+                                let append_result = write_handle.monotonic_append(request).await.expect("sender hung up");
+
                                 match append_result {
-                                    Ok(()) => break,
-                                    Err(StorageError::InvalidUppers(ids)) => {
+                                    // Everything was successful!
+                                    Ok(()) => {
+                                        // Notify all of our listeners.
+                                        notify_listeners(updates, |_id| Ok(()));
+                                        // Break because there are no more updates to send.
+                                        break
+                                    },
+                                    // Failed to write to some collections.
+                                    Err(StorageError::InvalidUppers(failed_ids)) => {
                                         // It's fine to retry invalid-uppers errors here, since monotonic appends
                                         // do not specify a particular upper or timestamp.
-                                        assert_eq!(&ids, &[id], "expect to receive errors for only the relevant collection");
-                                        debug!("Retrying invalid-uppers error while appending to managed collection {id}");
+                                        assert!(
+                                            failed_ids.iter().all(|id| updates.contains_key(id)),
+                                            "expect to receive errors only for collections we tried to update"
+                                        );
+
+                                        let (failed, success): (BTreeMap<_, _>, BTreeMap<_, _>) = updates
+                                            .into_iter()
+                                            .partition(|(id, _val)| failed_ids.contains(id));
+
+                                        // Notify listeners of success.
+                                        notify_listeners(success, |_id| Ok(()));
+
+                                        // Check if any collections disappeared while we were writing.
+                                        let (exists, non_existent) = {
+                                            let collections = collections
+                                                .lock()
+                                                .expect("CollectionManager panicked");
+                                            failed
+                                                .into_iter()
+                                                .partition(|(id, _val)| collections.contains(id))
+                                        };
+
+                                        // Notify listeners that the collection no longer exists.
+                                        notify_listeners(non_existent, |id| Err(StorageError::IdentifierMissing(id)));
+
+                                        // Retain and retry the updates that failed.
+                                        updates = exists;
+
+                                        debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
                                     }
+                                    // Uh-oh, something else went wrong!
                                     Err(other) => {
-                                        panic!("Unhandled error while appending to managed collection {id}: {other:?}")
+                                        let failed_ids = updates.into_keys().collect::<Vec<_>>();
+                                        panic!("Unhandled error while appending to managed collection {failed_ids:?}: {other:?}")
                                     }
                                 }
                             }
@@ -111,6 +214,7 @@ impl CollectionManager {
         CollectionManager {
             tx,
             collections: collections_outer,
+            notifies: notifies_outer,
         }
     }
 
@@ -118,8 +222,37 @@ impl CollectionManager {
     /// - Automatically advance the upper of every second
     /// - Accept appends for. However, note that when appending, the
     ///   `CollectionManager` expects to be the only writer.
-    pub(super) async fn register_collection(&self, id: GlobalId) {
-        self.collections.lock().await.insert(id);
+    pub(super) fn register_collection(&self, id: GlobalId) {
+        self.collections
+            .lock()
+            .expect("collection_mgmt panicked")
+            .insert(id);
+    }
+
+    /// Unregisters the collection as one that `CollectionManager` will maintain.
+    ///
+    /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
+    /// it has stopped referencing the provided `id`.
+    pub(super) async fn unregsiter_collection(&self, id: GlobalId) -> bool {
+        let existed = self
+            .collections
+            .lock()
+            .expect("CollectionManager panicked")
+            .remove(&id);
+
+        // Wait for the CollectionManager to finish all in-progress work, so we can be sure that we
+        // no longer reference the specified collection again.
+        let (tx, rx) = oneshot::channel();
+        self.notifies
+            .lock()
+            .expect("CollectionManager panicked")
+            .push(tx);
+
+        // We don't care if our sender dropped, because that would mean the CollectionManager
+        // has shutdown and at that point it's definitely not referencing `id` anymore.
+        let _ = rx.await;
+
+        existed
     }
 
     /// Appends `updates` to the collection correlated with `id`.
@@ -131,7 +264,75 @@ impl CollectionManager {
     /// - If the collection closed.
     pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if !updates.is_empty() {
-            self.tx.send((id, updates)).await.expect("rx hung up");
+            let (tx, _rx) = oneshot::channel();
+            self.tx.send((id, updates, tx)).await.expect("rx hung up");
+        }
+    }
+
+    /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
+    /// collection correlated with `id`.
+    pub(super) fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
+        MonotonicAppender {
+            id,
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+/// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
+///
+/// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
+#[derive(Debug)]
+pub struct MonotonicAppender {
+    id: GlobalId,
+    tx: mpsc::Sender<(
+        GlobalId,
+        Vec<(Row, Diff)>,
+        oneshot::Sender<Result<(), StorageError>>,
+    )>,
+}
+
+impl MonotonicAppender {
+    pub async fn append(self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
+        let (tx, rx) = oneshot::channel();
+
+        // Make sure there is space available on the channel.
+        let permit = self
+            .tx
+            .try_reserve()
+            .map_err(|_| StorageError::ResourceExhausted("collection manager"))?;
+
+        // Send our update to the CollectionManager.
+        permit.send((self.id, updates, tx));
+
+        // Wait for a response, if we fail to receive then the CollectionManager has gone away.
+        let result = rx
+            .await
+            .map_err(|_| StorageError::ShuttingDown("collection manager"))?;
+
+        result
+    }
+}
+
+// Note(parkmycar): While it technically could be `Clone` we want `MonotonicAppender` to have the
+// same semantics as a oneshot channel, so we specifically don't make it `Clone`.
+static_assertions::assert_not_impl_any!(MonotonicAppender: Clone);
+
+#[derive(Default)]
+struct UpdateRequest {
+    rows: Vec<(Row, Diff)>,
+    notifs: Vec<oneshot::Sender<Result<(), StorageError>>>,
+}
+
+// Helper method for notifying listeners.
+fn notify_listeners(
+    elements: BTreeMap<GlobalId, UpdateRequest>,
+    result: impl Fn(GlobalId) -> Result<(), StorageError>,
+) {
+    for (id, UpdateRequest { notifs, .. }) in elements {
+        for notif in notifs {
+            // We don't care if the listener disappeared.
+            let _ = notif.send(result(id));
         }
     }
 }

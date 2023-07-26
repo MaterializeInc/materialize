@@ -193,7 +193,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::Row;
     use mz_storage_client::types::sources::SourceData;
@@ -204,7 +204,6 @@ mod tests {
 
     // Test suite
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_startup() {
         let persist_cache = persist_cache();
         let healthchecker = simple_healthchecker(ShardId::new(), 1, &persist_cache).await;
@@ -227,7 +226,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_bootstrap_different_sources() {
         let shard_id = ShardId::new();
         let persist_cache = persist_cache();
@@ -248,7 +246,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_repeated_update() {
         let shard_id = ShardId::new();
         let persist_cache = persist_cache();
@@ -288,7 +285,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_forbidden_transition() {
         let shard_id = ShardId::new();
         let persist_cache = persist_cache();
@@ -519,9 +515,9 @@ mod tests {
         let (write_handle, mut read_handle) = persist_client
             .open::<SourceData, (), mz_repr::Timestamp, i64>(
                 shard_id,
-                "tests::dump_storage_collection",
                 Arc::new(MZ_SINK_STATUS_HISTORY_DESC.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics::from_purpose("tests::dump_storage_collection"),
             )
             .await
             .unwrap();

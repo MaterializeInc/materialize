@@ -84,6 +84,11 @@ pub enum PlanError {
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
+    UpsertSinkWithInvalidKey {
+        name: String,
+        desired_key: Vec<String>,
+        valid_keys: Vec<Vec<String>>,
+    },
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
@@ -125,6 +130,9 @@ pub enum PlanError {
     UnacceptableTimelineName(String),
     UnrecognizedTypeInPostgresSource {
         cols: Vec<(String, Oid)>,
+    },
+    DanglingTextColumns {
+        items: Vec<PartialItemName>,
     },
     FetchingCsrSchemaFailed {
         schema_lookup: String,
@@ -198,6 +206,8 @@ pub enum PlanError {
     VarError(VarError),
     UnsolvablePolymorphicFunctionInput,
     ShowCommandInView,
+    WebhookValidationDoesNotUseColumns,
+    WebhookValidationNonDeterministic,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -217,7 +227,41 @@ impl PlanError {
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidOptionValue { err, .. } => err.detail(),
+            Self::UpsertSinkWithInvalidKey {
+                name,
+                desired_key,
+                valid_keys,
+            } => {
+                let valid_keys = if valid_keys.is_empty() {
+                    "There are no known valid unique keys for the underlying relation.".into()
+                } else {
+                    format!(
+                        "The following keys are known to be unique for the underlying relation:\n{}",
+                        valid_keys
+                            .iter()
+                            .map(|k|
+                                format!("  ({})", k.iter().map(|c| c.as_str().quoted()).join(", "))
+                            )
+                            .join("\n"),
+                    )
+                };
+                Some(format!(
+                    "Materialize could not prove that the specified upsert envelope key ({}) \
+                    was a unique key of the underlying relation {}. {valid_keys}",
+                    separated(", ", desired_key.iter().map(|c| c.as_str().quoted())),
+                    name.quoted()
+                ))
+            }
             Self::VarError(e) => e.detail(),
+            Self::DanglingTextColumns { items } => {
+                let mut items = items.to_owned();
+                items.sort();
+
+                Some(format!(
+                    "the following tables were referenced but not added: {}",
+                    itertools::join(items, ", ")
+                ))
+            }
             _ => None,
         }
     }
@@ -292,6 +336,9 @@ impl PlanError {
             }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
+            }
+            Self::UpsertSinkWithInvalidKey { .. } | Self::UpsertSinkWithoutKey => {
+                Some("See: https://materialize.com/s/sink-key-selection".into())
             }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
@@ -383,6 +430,9 @@ impl fmt::Display for PlanError {
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
+            Self::UpsertSinkWithInvalidKey { .. } => {
+                write!(f, "upsert key could not be validated as unique")
+            }
             Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
@@ -415,6 +465,12 @@ impl fmt::Display for PlanError {
                         cols.into_iter().map(|(col, Oid(oid))| format!("{} (OID {})", col, oid)),
                         "\n"
                     )
+                )
+            },
+            Self::DanglingTextColumns { .. } => {
+                write!(
+                    f,
+                    "TEXT COLUMNS can only refer to tables being added to source",
                 )
             },
             Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
@@ -494,6 +550,12 @@ impl fmt::Display for PlanError {
                 "could not determine polymorphic type because input has type unknown"
             ),
             Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
+            Self::WebhookValidationDoesNotUseColumns => f.write_str(
+                "expression provided in CHECK does not reference any columns"
+            ),
+            Self::WebhookValidationNonDeterministic => f.write_str(
+                "expression provided in CHECK is not deterministic"
+            ),
         }
     }
 }

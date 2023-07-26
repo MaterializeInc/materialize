@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +57,7 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
@@ -137,10 +137,15 @@ pub enum Outcome<'a> {
         cause: Box<Outcome<'a>>,
         location: Location,
     },
+    Warning {
+        cause: Box<Outcome<'a>>,
+        location: Location,
+    },
     Success,
 }
 
-const NUM_OUTCOMES: usize = 11;
+const NUM_OUTCOMES: usize = 12;
+const WARNING_OUTCOME: usize = NUM_OUTCOMES - 2;
 const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
 
 impl<'a> Outcome<'a> {
@@ -154,14 +159,19 @@ impl<'a> Outcome<'a> {
             Outcome::WrongColumnCount { .. } => 5,
             Outcome::WrongColumnNames { .. } => 6,
             Outcome::OutputFailure { .. } => 7,
-            Outcome::Bail { .. } => 8,
-            Outcome::InconsistentViewOutcome { .. } => 9,
-            Outcome::Success => 10,
+            Outcome::InconsistentViewOutcome { .. } => 8,
+            Outcome::Bail { .. } => 9,
+            Outcome::Warning { .. } => 10,
+            Outcome::Success => 11,
         }
     }
 
     fn success(&self) -> bool {
         matches!(self, Outcome::Success)
+    }
+
+    fn failure(&self) -> bool {
+        !matches!(self, Outcome::Success) && !matches!(self, Outcome::Warning { .. })
     }
 
     /// Returns an error message that will match self. Appropriate for
@@ -262,7 +272,6 @@ impl fmt::Display for Outcome<'_> {
                 "OutputFailure:{}{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
-            Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             InconsistentViewOutcome {
                 query_outcome,
                 view_outcome,
@@ -272,6 +281,8 @@ impl fmt::Display for Outcome<'_> {
                 "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
                 location, INDENT, query_outcome, INDENT, view_outcome, INDENT
             ),
+            Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
+            Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
             Success => f.write_str("Success"),
         }
     }
@@ -289,7 +300,7 @@ impl ops::AddAssign<Outcomes> for Outcomes {
 }
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
+        self.0[SUCCESS_OUTCOME] + self.0[WARNING_OUTCOME] < self.0.iter().sum::<usize>()
     }
 
     pub fn as_json(&self) -> serde_json::Value {
@@ -302,9 +313,10 @@ impl Outcomes {
             "wrong_column_count": self.0[5],
             "wrong_column_names": self.0[6],
             "output_failure": self.0[7],
-            "bail": self.0[8],
-            "inconsistent_view_outcome": self.0[9],
-            "success": self.0[10],
+            "inconsistent_view_outcome": self.0[8],
+            "bail": self.0[9],
+            "warning": self.0[10],
+            "success": self.0[11],
         })
     }
 
@@ -327,7 +339,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
         write!(
             f,
             "{}:",
-            if self.inner.0[SUCCESS_OUTCOME] == total {
+            if self.inner.0[SUCCESS_OUTCOME] + self.inner.0[WARNING_OUTCOME] == total {
                 "PASS"
             } else if self.no_fail {
                 "FAIL-IGNORE"
@@ -345,8 +357,9 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "wrong-column-count",
                 "wrong-column-names",
                 "output-failure",
-                "bail",
                 "inconsistent-view-outcome",
+                "bail",
+                "warning",
                 "success",
                 "total",
             ]
@@ -402,6 +415,9 @@ impl<'a> FromSql<'a> for Slt {
         mut raw: &'a [u8],
     ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
         Ok(match *ty {
+            PgType::ACLITEM => Self(Value::AclItem(AclItem::decode_binary(
+                types::bytea_from_sql(raw),
+            )?)),
             PgType::BOOL => Self(Value::Bool(types::bool_from_sql(raw)?)),
             PgType::BYTEA => Self(Value::Bytea(types::bytea_from_sql(raw).to_vec())),
             PgType::CHAR => Self(Value::Char(u8::from_be_bytes(
@@ -417,6 +433,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
+            PgType::NAME => Self(Value::Name(types::text_from_sql(raw)?.to_string())),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Oid(types::oid_from_sql(raw)?)),
             PgType::REGCLASS => Self(Value::Oid(types::oid_from_sql(raw)?)),
@@ -519,7 +536,8 @@ impl<'a> FromSql<'a> for Slt {
         }
         matches!(
             *ty,
-            PgType::BOOL
+            PgType::ACLITEM
+                | PgType::BOOL
                 | PgType::BYTEA
                 | PgType::CHAR
                 | PgType::DATE
@@ -530,6 +548,7 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::INT8
                 | PgType::INTERVAL
                 | PgType::JSONB
+                | PgType::NAME
                 | PgType::NUMERIC
                 | PgType::OID
                 | PgType::REGCLASS
@@ -862,6 +881,8 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        inner.ensure_fixed_features().await?;
+
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
@@ -873,6 +894,7 @@ impl<'a> Runner<'a> {
 impl<'a> RunnerInner<'a> {
     pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
@@ -923,7 +945,7 @@ impl<'a> RunnerInner<'a> {
                     .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
-                scratch_directory: None,
+                scratch_directory: scratch_dir.path().to_path_buf(),
             })
             .await?,
         );
@@ -938,6 +960,7 @@ impl<'a> RunnerInner<'a> {
         let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -954,17 +977,10 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory_enabled: false,
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,
             cloud_resource_controller: None,
-            // Setting the port to 0 means that the OS will automatically
-            // allocate an available port.
-            sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
@@ -976,7 +992,7 @@ impl<'a> RunnerInner<'a> {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: Default::default(),
+            system_parameter_defaults: config.system_parameter_defaults.clone(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
@@ -992,7 +1008,6 @@ impl<'a> RunnerInner<'a> {
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
-            waiting_on_leader_promotion: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1012,7 +1027,7 @@ impl<'a> RunnerInner<'a> {
                     return;
                 }
             };
-            let server = match runtime.block_on(mz_environmentd::serve(server_config)) {
+            let server = match runtime.block_on(listeners.serve(server_config)) {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
@@ -1035,7 +1050,7 @@ impl<'a> RunnerInner<'a> {
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
 
-        Ok(RunnerInner {
+        let inner = RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
@@ -1050,7 +1065,26 @@ impl<'a> RunnerInner<'a> {
             enable_table_keys: config.enable_table_keys,
             verbosity: config.verbosity,
             stdout: config.stdout,
-        })
+        };
+        inner.ensure_fixed_features().await?;
+
+        Ok(inner)
+    }
+
+    /// Set features that should be enabled regardless of whether reset-server was
+    /// called. These features may be set conditionally depending on the run configuration.
+    async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
+        // If auto_index_selects is on, we should turn on enable_monotonic_oneshot_selects.
+        // TODO(vmarcos): Remove this code when we retire the feature flag.
+        if self.auto_index_selects {
+            self.system_client
+                .execute(
+                    "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
+                    &[],
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run_record<'r>(
@@ -1216,7 +1250,7 @@ impl<'a> RunnerInner<'a> {
         };
         let statement = match &*statements {
             [] => bail!("Got zero statements?"),
-            [statement] => statement,
+            [statement] => &statement.ast,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
         let (is_select, num_attributes) = match statement {
@@ -1510,18 +1544,32 @@ impl<'a> RunnerInner<'a> {
                         // outcome for view-based execution exploiting analysis of the
                         // number of attributes. This two-level strategy can avoid errors
                         // produced by column ambiguity in the `SELECT`.
-                        let view_outcome = self
-                            .execute_view(sql, num_attributes, output, location.clone())
-                            .await?;
+                        let view_outcome = if num_attributes.is_some() {
+                            self.execute_view(sql, num_attributes, output, location.clone())
+                                .await?
+                        } else {
+                            view_outcome
+                        };
 
                         if std::mem::discriminant::<Outcome>(&query_outcome)
                             != std::mem::discriminant::<Outcome>(&view_outcome)
                         {
-                            return Ok(Outcome::InconsistentViewOutcome {
+                            let inconsistent_view_outcome = Outcome::InconsistentViewOutcome {
                                 query_outcome: Box::new(query_outcome),
                                 view_outcome: Box::new(view_outcome),
                                 location: location.clone(),
-                            });
+                            };
+                            // Determine if this inconsistent view outcome should be reported
+                            // as an error or only as a warning.
+                            let outcome = if should_warn(&inconsistent_view_outcome) {
+                                Outcome::Warning {
+                                    cause: Box::new(inconsistent_view_outcome),
+                                    location: location.clone(),
+                                }
+                            } else {
+                                inconsistent_view_outcome
+                            };
+                            return Ok(outcome);
                         }
                     }
                 }
@@ -1632,6 +1680,7 @@ pub struct RunConfig<'a> {
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -1649,6 +1698,50 @@ fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
 
 fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
     writeln!(stdout, "{}", crate::util::indent(sql, 4))
+}
+
+/// Regular expressions for matching error messages that should force a plan failure
+/// in an inconsistent view outcome into a warning if the corresponding query succeeds.
+const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
+    // The following are unfixable errors in indexed views given our
+    // current constraints.
+    "cannot materialize call to",
+    "SHOW commands are not allowed in views",
+    "cannot create view with unstable dependencies",
+    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects",
+    "no schema has been selected to create in",
+    r#"system schema '\w+' cannot be modified"#,
+    r#"permission denied for (SCHEMA|CLUSTER) "(\w+\.)?\w+""#,
+    // NOTE(vmarcos): Column ambiguity that could not be eliminated by our
+    // currently implemented syntactic rewrites is considered unfixable.
+    // In addition, if some column cannot be dealt with, e.g., in `ORDER BY`
+    // references, we treat this condition as unfixable as well.
+    r#"column "[\w\?]+" specified more than once"#,
+    r#"column "(\w+\.)?\w+" does not exist"#,
+];
+
+/// Evaluates if the given outcome should be returned directly or if it should
+/// be wrapped as a warning. Note that this function should be used for outcomes
+/// that can be judged in a context-independent manner, i.e., the outcome itself
+/// provides enough information as to whether a warning should be emitted or not.
+fn should_warn(outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::InconsistentViewOutcome {
+            query_outcome,
+            view_outcome,
+            ..
+        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
+            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+                INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
+                    Regex::new(s)
+                        .expect("unexpected error in regular expression parsing")
+                        .is_match(&format!("{:#}", error))
+                })
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 pub async fn run_string(
@@ -1679,7 +1772,7 @@ pub async fn run_string(
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
-        // Print failures in verbose mode.
+        // Print warnings and failures in verbose mode.
         if runner.config.verbosity >= 1 && !outcome.success() {
             if runner.config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
@@ -1688,14 +1781,23 @@ pub async fn run_string(
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
+                if !outcome.failure() {
+                    writeln!(
+                        runner.config.stdout,
+                        "{}",
+                        util::indent("Warning detected for: ", 4)
+                    );
+                }
                 print_record(runner.config, &record);
             }
-            writeln!(
-                runner.config.stdout,
-                "{}",
-                util::indent(&outcome.to_string(), 4)
-            );
-            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            if runner.config.verbosity >= 2 || outcome.failure() {
+                writeln!(
+                    runner.config.stdout,
+                    "{}",
+                    util::indent(&outcome.to_string(), 4)
+                );
+                writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            }
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -1704,7 +1806,7 @@ pub async fn run_string(
             break;
         }
 
-        if runner.config.fail_fast && !outcome.success() {
+        if runner.config.fail_fast && outcome.failure() {
             break;
         }
     }
@@ -1959,8 +2061,8 @@ fn generate_view_sql(
     // DDL cost drops dramatically in the future.
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     assert!(stmts.len() == 1);
-    let query = match &stmts[0] {
-        Statement::Select(stmt) => &stmt.query,
+    let (query, query_as_of) = match &stmts[0].ast {
+        Statement::Select(stmt) => (&stmt.query, &stmt.as_of),
         _ => unreachable!("This function should only be called for SELECTs"),
     };
 
@@ -2094,7 +2196,7 @@ fn generate_view_sql(
             limit: None,
             offset: None,
         },
-        as_of: None,
+        as_of: query_as_of.clone(),
     })
     .to_ast_string_stable();
 
@@ -2234,7 +2336,7 @@ fn mutate(sql: &str) -> Vec<String> {
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     let mut additional = Vec::new();
     for stmt in stmts {
-        match stmt {
+        match stmt.ast {
             AstStatement::CreateTable(stmt) => additional.push(
                 // CREATE TABLE -> CREATE INDEX. Specify all columns manually in case CREATE
                 // DEFAULT INDEX ever goes away.
@@ -2260,6 +2362,7 @@ fn mutate(sql: &str) -> Vec<String> {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_generate_view_sql() {
     let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
     let cases = vec![

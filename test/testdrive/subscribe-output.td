@@ -264,8 +264,10 @@ DELETE FROM t2 WHERE key = 1
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null>
 
-> FETCH 2 c
+> FETCH 1 c
 <TIMESTAMP> false upsert 2 3
+
+> FETCH 1 c
 <TIMESTAMP> true <null> <null> <null>
 
 > COMMIT
@@ -382,8 +384,10 @@ DELETE FROM t2 WHERE key = 1
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null> <null>
 
-> FETCH 2 c
+> FETCH 1 c
 <TIMESTAMP> false insert 2 <null> 3
+
+> FETCH 1 c
 <TIMESTAMP> true <null> <null> <null> <null>
 
 > COMMIT

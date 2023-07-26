@@ -50,138 +50,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-fn max_numeric<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<OrderedDecimal<numeric::Numeric>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_numeric())
-        .max();
-    x.map(Datum::Numeric).unwrap_or(Datum::Null)
-}
-
-fn max_int16<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<i16> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_int16())
-        .max();
-    Datum::from(x)
-}
-
-fn max_int32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<i32> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_int32())
-        .max();
-    Datum::from(x)
-}
-
-fn max_int64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<i64> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_int64())
-        .max();
-    Datum::from(x)
-}
-
-fn max_uint16<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<u16> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_uint16())
-        .max();
-    Datum::from(x)
-}
-
-fn max_uint32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<u32> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_uint32())
-        .max();
-    Datum::from(x)
-}
-
-fn max_uint64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<u64> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_uint64())
-        .max();
-    Datum::from(x)
-}
-
-fn max_mz_timestamp<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<mz_repr::Timestamp> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_mz_timestamp())
-        .max();
-    Datum::from(x)
-}
-
-fn max_float32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<OrderedFloat<f32>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_ordered_float32())
-        .max();
-    Datum::from(x)
-}
-
-fn max_float64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<OrderedFloat<f64>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_ordered_float64())
-        .max();
-    Datum::from(x)
-}
-
-fn max_bool<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<bool> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_bool())
-        .max();
-    Datum::from(x)
-}
-
 fn max_string<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -196,172 +64,36 @@ where
     }
 }
 
-fn max_date<'a, I>(datums: I) -> Datum<'a>
+fn max_datum<'a, I, DatumType>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
+    DatumType: TryFrom<Datum<'a>> + Ord,
+    <DatumType as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    Datum<'a>: From<Option<DatumType>>,
 {
-    let x: Option<Date> = datums
+    let x: Option<DatumType> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_date())
+        .map(|d| DatumType::try_from(d).expect("unexpected type"))
         .max();
-    Datum::from(x)
+
+    x.into()
 }
 
-fn max_timestamp<'a, I>(datums: I) -> Datum<'a>
+fn min_datum<'a, I, DatumType>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
+    DatumType: TryFrom<Datum<'a>> + Ord,
+    <DatumType as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    Datum<'a>: From<Option<DatumType>>,
 {
-    let x: Option<CheckedTimestamp<NaiveDateTime>> = datums
+    let x: Option<DatumType> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_timestamp())
-        .max();
-    Datum::from(x)
-}
-
-fn max_timestamptz<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<CheckedTimestamp<DateTime<Utc>>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_timestamptz())
-        .max();
-    Datum::from(x)
-}
-
-fn min_numeric<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<OrderedDecimal<numeric::Numeric>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_numeric())
+        .map(|d| DatumType::try_from(d).expect("unexpected type"))
         .min();
-    x.map(Datum::Numeric).unwrap_or(Datum::Null)
-}
 
-fn min_int16<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<i16> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_int16())
-        .min();
-    Datum::from(x)
-}
-
-fn min_int32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<i32> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_int32())
-        .min();
-    Datum::from(x)
-}
-
-fn min_int64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<i64> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_int64())
-        .min();
-    Datum::from(x)
-}
-
-fn min_uint16<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<u16> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_uint16())
-        .min();
-    Datum::from(x)
-}
-
-fn min_uint32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<u32> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_uint32())
-        .min();
-    Datum::from(x)
-}
-
-fn min_uint64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<u64> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_uint64())
-        .min();
-    Datum::from(x)
-}
-
-fn min_mz_timestamp<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<mz_repr::Timestamp> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_mz_timestamp())
-        .min();
-    Datum::from(x)
-}
-
-fn min_float32<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<OrderedFloat<f32>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_ordered_float32())
-        .min();
-    Datum::from(x)
-}
-
-fn min_float64<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<OrderedFloat<f64>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_ordered_float64())
-        .min();
-    Datum::from(x)
-}
-
-fn min_bool<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<bool> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_bool())
-        .min();
-    Datum::from(x)
+    x.into()
 }
 
 fn min_string<'a, I>(datums: I) -> Datum<'a>
@@ -376,42 +108,6 @@ where
         Some(datum) => datum,
         None => Datum::Null,
     }
-}
-
-fn min_date<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<Date> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_date())
-        .min();
-    Datum::from(x)
-}
-
-fn min_timestamp<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<CheckedTimestamp<NaiveDateTime>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_timestamp())
-        .min();
-    Datum::from(x)
-}
-
-fn min_timestamptz<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<CheckedTimestamp<DateTime<Utc>>> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_timestamptz())
-        .min();
-    Datum::from(x)
 }
 
 fn sum_datum<'a, I, DatumType, ResultType>(datums: I) -> Datum<'a>
@@ -1518,36 +1214,48 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum<'a>>,
     {
         match self {
-            AggregateFunc::MaxNumeric => max_numeric(datums),
-            AggregateFunc::MaxInt16 => max_int16(datums),
-            AggregateFunc::MaxInt32 => max_int32(datums),
-            AggregateFunc::MaxInt64 => max_int64(datums),
-            AggregateFunc::MaxUInt16 => max_uint16(datums),
-            AggregateFunc::MaxUInt32 => max_uint32(datums),
-            AggregateFunc::MaxUInt64 => max_uint64(datums),
-            AggregateFunc::MaxMzTimestamp => max_mz_timestamp(datums),
-            AggregateFunc::MaxFloat32 => max_float32(datums),
-            AggregateFunc::MaxFloat64 => max_float64(datums),
-            AggregateFunc::MaxBool => max_bool(datums),
+            AggregateFunc::MaxNumeric => {
+                max_datum::<'a, I, OrderedDecimal<numeric::Numeric>>(datums)
+            }
+            AggregateFunc::MaxInt16 => max_datum::<'a, I, i16>(datums),
+            AggregateFunc::MaxInt32 => max_datum::<'a, I, i32>(datums),
+            AggregateFunc::MaxInt64 => max_datum::<'a, I, i64>(datums),
+            AggregateFunc::MaxUInt16 => max_datum::<'a, I, u16>(datums),
+            AggregateFunc::MaxUInt32 => max_datum::<'a, I, u32>(datums),
+            AggregateFunc::MaxUInt64 => max_datum::<'a, I, u64>(datums),
+            AggregateFunc::MaxMzTimestamp => max_datum::<'a, I, mz_repr::Timestamp>(datums),
+            AggregateFunc::MaxFloat32 => max_datum::<'a, I, OrderedFloat<f32>>(datums),
+            AggregateFunc::MaxFloat64 => max_datum::<'a, I, OrderedFloat<f64>>(datums),
+            AggregateFunc::MaxBool => max_datum::<'a, I, bool>(datums),
             AggregateFunc::MaxString => max_string(datums),
-            AggregateFunc::MaxDate => max_date(datums),
-            AggregateFunc::MaxTimestamp => max_timestamp(datums),
-            AggregateFunc::MaxTimestampTz => max_timestamptz(datums),
-            AggregateFunc::MinNumeric => min_numeric(datums),
-            AggregateFunc::MinInt16 => min_int16(datums),
-            AggregateFunc::MinInt32 => min_int32(datums),
-            AggregateFunc::MinInt64 => min_int64(datums),
-            AggregateFunc::MinUInt16 => min_uint16(datums),
-            AggregateFunc::MinUInt32 => min_uint32(datums),
-            AggregateFunc::MinUInt64 => min_uint64(datums),
-            AggregateFunc::MinMzTimestamp => min_mz_timestamp(datums),
-            AggregateFunc::MinFloat32 => min_float32(datums),
-            AggregateFunc::MinFloat64 => min_float64(datums),
-            AggregateFunc::MinBool => min_bool(datums),
+            AggregateFunc::MaxDate => max_datum::<'a, I, Date>(datums),
+            AggregateFunc::MaxTimestamp => {
+                max_datum::<'a, I, CheckedTimestamp<NaiveDateTime>>(datums)
+            }
+            AggregateFunc::MaxTimestampTz => {
+                max_datum::<'a, I, CheckedTimestamp<DateTime<Utc>>>(datums)
+            }
+            AggregateFunc::MinNumeric => {
+                min_datum::<'a, I, OrderedDecimal<numeric::Numeric>>(datums)
+            }
+            AggregateFunc::MinInt16 => min_datum::<'a, I, i16>(datums),
+            AggregateFunc::MinInt32 => min_datum::<'a, I, i32>(datums),
+            AggregateFunc::MinInt64 => min_datum::<'a, I, i64>(datums),
+            AggregateFunc::MinUInt16 => min_datum::<'a, I, u16>(datums),
+            AggregateFunc::MinUInt32 => min_datum::<'a, I, u32>(datums),
+            AggregateFunc::MinUInt64 => min_datum::<'a, I, u64>(datums),
+            AggregateFunc::MinMzTimestamp => min_datum::<'a, I, mz_repr::Timestamp>(datums),
+            AggregateFunc::MinFloat32 => min_datum::<'a, I, OrderedFloat<f32>>(datums),
+            AggregateFunc::MinFloat64 => min_datum::<'a, I, OrderedFloat<f64>>(datums),
+            AggregateFunc::MinBool => min_datum::<'a, I, bool>(datums),
             AggregateFunc::MinString => min_string(datums),
-            AggregateFunc::MinDate => min_date(datums),
-            AggregateFunc::MinTimestamp => min_timestamp(datums),
-            AggregateFunc::MinTimestampTz => min_timestamptz(datums),
+            AggregateFunc::MinDate => min_datum::<'a, I, Date>(datums),
+            AggregateFunc::MinTimestamp => {
+                min_datum::<'a, I, CheckedTimestamp<NaiveDateTime>>(datums)
+            }
+            AggregateFunc::MinTimestampTz => {
+                min_datum::<'a, I, CheckedTimestamp<DateTime<Utc>>>(datums)
+            }
             AggregateFunc::SumInt16 => sum_datum::<'a, I, i16, i64>(datums),
             AggregateFunc::SumInt32 => sum_datum::<'a, I, i32, i64>(datums),
             AggregateFunc::SumInt64 => sum_datum::<'a, I, i64, i128>(datums),
@@ -2189,8 +1897,8 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
 }
 
 impl AnalyzedRegex {
-    pub fn new(s: &str) -> Result<Self, regex::Error> {
-        let r = regex::Regex::new(s)?;
+    pub fn new(s: String) -> Result<Self, regex::Error> {
+        let r = ReprRegex::new(s, false)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
         let descs: Vec<_> = r
@@ -2209,7 +1917,7 @@ impl AnalyzedRegex {
                 nullable: true,
             })
             .collect();
-        Ok(Self(ReprRegex(r), descs))
+        Ok(Self(r, descs))
     }
     pub fn capture_groups_len(&self) -> usize {
         self.1.len()
@@ -2218,7 +1926,7 @@ impl AnalyzedRegex {
         self.1.iter()
     }
     pub fn inner(&self) -> &Regex {
-        &(self.0).0
+        &(self.0).regex
     }
 }
 
@@ -2250,10 +1958,66 @@ fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row,
     datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
 }
 
+fn acl_explode<'a>(
+    acl_items: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let acl_items = acl_items.unwrap_array();
+    acl_items
+        .elements()
+        .iter()
+        .map(|acl_item| acl_item.unwrap_acl_item())
+        .flat_map(move |acl_item| {
+            acl_item
+                .acl_mode
+                .explode()
+                .into_iter()
+                .map(move |privilege| {
+                    [
+                        Datum::UInt32(acl_item.grantor.0),
+                        Datum::UInt32(acl_item.grantee.0),
+                        Datum::String(temp_storage.push_string(privilege.to_string())),
+                        // GRANT OPTION is not implemented, so we hardcode false.
+                        Datum::False,
+                    ]
+                })
+        })
+        .map(|row| (Row::pack_slice(&row), 1))
+}
+
+fn mz_acl_explode<'a>(
+    mz_acl_items: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let mz_acl_items = mz_acl_items.unwrap_array();
+    mz_acl_items
+        .elements()
+        .iter()
+        .map(|mz_acl_item| mz_acl_item.unwrap_mz_acl_item())
+        .flat_map(move |mz_acl_item| {
+            mz_acl_item
+                .acl_mode
+                .explode()
+                .into_iter()
+                .map(move |privilege| {
+                    [
+                        Datum::String(temp_storage.push_string(mz_acl_item.grantor.to_string())),
+                        Datum::String(temp_storage.push_string(mz_acl_item.grantee.to_string())),
+                        Datum::String(temp_storage.push_string(privilege.to_string())),
+                        // GRANT OPTION is not implemented, so we hardcode false.
+                        Datum::False,
+                    ]
+                })
+        })
+        .map(|row| (Row::pack_slice(&row), 1))
+}
+
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub enum TableFunc {
+    AclExplode,
+    MzAclExplode,
     JsonbEach {
         stringify: bool,
     },
@@ -2296,6 +2060,8 @@ impl RustType<ProtoTableFunc> for TableFunc {
 
         ProtoTableFunc {
             kind: Some(match self {
+                TableFunc::AclExplode => Kind::AclExplode(()),
+                TableFunc::MzAclExplode => Kind::MzAclExplode(()),
                 TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
                 TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
                 TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
@@ -2331,6 +2097,8 @@ impl RustType<ProtoTableFunc> for TableFunc {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
 
         Ok(match kind {
+            Kind::AclExplode(()) => TableFunc::AclExplode,
+            Kind::MzAclExplode(()) => TableFunc::MzAclExplode,
             Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
             Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
             Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
@@ -2372,6 +2140,8 @@ impl TableFunc {
             return Ok(Box::new(vec![].into_iter()));
         }
         match self {
+            TableFunc::AclExplode => Ok(Box::new(acl_explode(datums[0], temp_storage))),
+            TableFunc::MzAclExplode => Ok(Box::new(mz_acl_explode(datums[0], temp_storage))),
             TableFunc::JsonbEach { stringify } => {
                 Ok(Box::new(jsonb_each(datums[0], temp_storage, *stringify)))
             }
@@ -2439,6 +2209,26 @@ impl TableFunc {
 
     pub fn output_type(&self) -> RelationType {
         let (column_types, keys) = match self {
+            TableFunc::AclExplode => {
+                let column_types = vec![
+                    ScalarType::Oid.nullable(false),
+                    ScalarType::Oid.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Bool.nullable(false),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::MzAclExplode => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Bool.nullable(false),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::JsonbEach { stringify: true } => {
                 let column_types = vec![
                     ScalarType::String.nullable(false),
@@ -2544,6 +2334,8 @@ impl TableFunc {
 
     pub fn output_arity(&self) -> usize {
         match self {
+            TableFunc::AclExplode => 4,
+            TableFunc::MzAclExplode => 4,
             TableFunc::JsonbEach { .. } => 2,
             TableFunc::JsonbObjectKeys => 1,
             TableFunc::JsonbArrayElements { .. } => 1,
@@ -2564,7 +2356,9 @@ impl TableFunc {
 
     pub fn empty_on_null_input(&self) -> bool {
         match self {
-            TableFunc::JsonbEach { .. }
+            TableFunc::AclExplode
+            | TableFunc::MzAclExplode
+            | TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
             | TableFunc::JsonbArrayElements { .. }
             | TableFunc::GenerateSeriesInt32
@@ -2587,6 +2381,8 @@ impl TableFunc {
         // Most variants preserve monotonicity, but all variants are enumerated to
         // ensure that added variants at least check that this is the case.
         match self {
+            TableFunc::AclExplode => false,
+            TableFunc::MzAclExplode => false,
             TableFunc::JsonbEach { .. } => true,
             TableFunc::JsonbObjectKeys => true,
             TableFunc::JsonbArrayElements { .. } => true,
@@ -2609,6 +2405,8 @@ impl TableFunc {
 impl fmt::Display for TableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            TableFunc::AclExplode => f.write_str("aclexplode"),
+            TableFunc::MzAclExplode => f.write_str("mz_aclexplode"),
             TableFunc::JsonbEach { .. } => f.write_str("jsonb_each"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),
@@ -2637,6 +2435,7 @@ mod tests {
 
     proptest! {
        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
             assert!(actual.is_ok());
@@ -2646,6 +2445,7 @@ mod tests {
 
     proptest! {
        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
             assert!(actual.is_ok());

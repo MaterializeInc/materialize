@@ -17,6 +17,7 @@ from materialize.output_consistency.input_data.params.date_time_operation_param 
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     DATE_TIME_COMPONENT_PARAM,
+    ISO8601_TIMESTAMP_PARAM,
     TIME_ZONE_PARAM,
     TYPE_FORMAT_PARAM,
 )
@@ -158,6 +159,14 @@ DATE_TIME_OPERATION_TYPES.append(
         "to_char",
         [DateTimeOperationParam(support_time=False), TYPE_FORMAT_PARAM],
         TextReturnTypeSpec(),
+    )
+)
+
+DATE_TIME_OPERATION_TYPES.append(
+    DbFunction(
+        "try_parse_monotonic_iso8601_timestamp",
+        [ISO8601_TIMESTAMP_PARAM],
+        DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
     )
 )
 

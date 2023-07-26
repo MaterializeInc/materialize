@@ -769,8 +769,18 @@ SELECT * FROM bar;
 # Regression test for #19148: support mz_now() on select from indexed table
 # ---
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
 DROP SCHEMA IF EXISTS public CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 statement ok
 CREATE SCHEMA public;

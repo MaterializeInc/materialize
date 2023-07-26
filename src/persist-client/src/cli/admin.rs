@@ -28,7 +28,7 @@ use mz_persist_types::codec_impls::TodoSchema;
 use prometheus::proto::{MetricFamily, MetricType};
 use tracing::{info, warn};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -39,7 +39,7 @@ use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
-use crate::{Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
+use crate::{Diagnostics, Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
 
 /// Commands for read-write administration of persist state
 #[derive(Debug, clap::Args)]
@@ -179,17 +179,6 @@ pub async fn force_compaction(
     .await?;
 
     let writer_id = WriterId::new();
-    info!("registering writer {}", writer_id);
-    // We don't bother expiring this writer in various error codepaths, instead
-    // letting it time out. /shrug
-    let _ = machine
-        .register_writer(
-            &writer_id,
-            "persistcli admin force-compaction",
-            cfg.writer_lease_duration,
-            (cfg.now)(),
-        )
-        .await;
 
     let mut attempt = 0;
     'outer: loop {
@@ -200,7 +189,7 @@ pub async fn force_compaction(
             let req = CompactReq {
                 shard_id,
                 desc: req.desc,
-                inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
             };
             let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
             let bytes = req
@@ -230,13 +219,12 @@ pub async fn force_compaction(
             };
             let res =
                 Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    CompactConfig::from(&cfg),
+                    CompactConfig::new(&cfg, &writer_id),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
                     Arc::clone(&machine.applier.shard_metrics),
-                    Arc::new(CpuHeavyRuntime::new()),
+                    Arc::new(IsolatedRuntime::new()),
                     req,
-                    writer_id.clone(),
                     schemas,
                 )
                 .await?;
@@ -439,6 +427,8 @@ async fn make_machine(
         state_versions,
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
+        Arc::new(IsolatedRuntime::new()),
+        Diagnostics::from_purpose("admin"),
     )
     .await?;
 

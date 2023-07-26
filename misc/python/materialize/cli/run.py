@@ -11,6 +11,7 @@
 
 import argparse
 import os
+import shlex
 import shutil
 import signal
 import sys
@@ -120,6 +121,10 @@ def main() -> int:
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--wrapper",
+        help="Wrapper command for the program",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -146,12 +151,17 @@ def main() -> int:
         elif sys.platform == "darwin":
             _macos_codesign(path)
 
-        command = [str(path)]
+        if args.wrapper:
+            command = shlex.split(args.wrapper)
+        else:
+            command = []
+        command.append(str(path))
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
             mzdata = ROOT / "mzdata"
+            scratch = ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:
@@ -167,6 +177,7 @@ def main() -> int:
                 # the `prometheus` directory.
                 paths = list(mzdata.glob("prometheus/*"))
                 paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
                     if path.is_dir():
@@ -175,6 +186,7 @@ def main() -> int:
                         path.unlink()
 
             mzdata.mkdir(exist_ok=True)
+            scratch.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"
             try:
                 environment_id = environment_file.read_text().rstrip()
@@ -191,6 +203,7 @@ def main() -> int:
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
                 "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
+                f"--orchestrator-process-scratch-directory={scratch}",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",

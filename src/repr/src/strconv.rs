@@ -53,8 +53,9 @@ use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
-use crate::adt::mz_acl_item::MzAclItem;
+use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
 
@@ -604,6 +605,21 @@ where
 {
     buf.write_str(s);
     Nestable::MayNeedEscaping
+}
+
+pub fn parse_pg_legacy_name(s: &str) -> String {
+    // To match PostgreSQL, we truncate the string to 64 bytes, while being
+    // careful not to truncate in the middle of any multibyte characters.
+    let mut out = String::new();
+    let mut len = 0;
+    for c in s.chars() {
+        len += c.len_utf8();
+        if len > NAME_MAX_BYTES {
+            break;
+        }
+        out.push(c);
+    }
+    out
 }
 
 pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
@@ -1694,6 +1710,22 @@ pub fn parse_mz_acl_item(s: &str) -> Result<MzAclItem, ParseError> {
         .map_err(|e| ParseError::invalid_input_syntax("mz_aclitem", s).with_details(e))
 }
 
+/// Writes an `acl_item` to `buf`.
+pub fn format_acl_item<F>(buf: &mut F, acl_item: AclItem) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{acl_item}");
+    Nestable::Yes
+}
+
+/// Parses an AclItem from `s`.
+pub fn parse_acl_item(s: &str) -> Result<AclItem, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("aclitem", s).with_details(e))
+}
+
 pub trait ElementEscaper {
     fn needs_escaping(elem: &[u8]) -> bool;
     fn escape_char(c: u8) -> u8;
@@ -2092,6 +2124,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn parse_hex_error_protobuf_roundtrip(expect in any::<ParseHexError>()) {
             let actual = protobuf_roundtrip::<_, ProtoParseHexError>(&expect);
             assert!(actual.is_ok());
@@ -2117,5 +2150,24 @@ mod tests {
             format_nanos_to_micros(&mut buf, nanos);
             assert_eq!(&buf, expect);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_pg_legacy_name() {
+        let s = "hello world";
+        assert_eq!(s, parse_pg_legacy_name(s));
+
+        let s = "x".repeat(63);
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = "x".repeat(64);
+        assert_eq!("x".repeat(63), parse_pg_legacy_name(&s));
+
+        // The Hebrew character Aleph (א) has a length of 2 bytes.
+        let s = format!("{}{}", "x".repeat(61), "א");
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = format!("{}{}", "x".repeat(62), "א");
+        assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
     }
 }

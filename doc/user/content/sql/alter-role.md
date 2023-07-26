@@ -8,7 +8,7 @@ menu:
 
 `ALTER ROLE` alters the attributes of an existing role.
 
-{{< alpha />}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -49,6 +49,12 @@ SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 ```nofmt
 rj  true
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

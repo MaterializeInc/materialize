@@ -40,7 +40,7 @@ use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -78,6 +78,8 @@ mod command_wals;
 mod persist_handles;
 mod rehydration;
 mod statistics;
+
+pub use collection_mgmt::MonotonicAppender;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -135,6 +137,8 @@ pub enum DataSource {
     Introspection(IntrospectionType),
     /// Data comes from the source's remapping/reclock operator.
     Progress,
+    /// Data comes from external HTTP requests pushed to Materialize.
+    Webhook,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
@@ -181,9 +185,13 @@ impl<T> CollectionDescription<T> {
                 }
                 result.push(ingestion.remap_collection_id);
             }
-            DataSource::Introspection(_) | DataSource::Progress => {
-                // Introspection, Progress sources have no dependencies, for
-                // now.
+            DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
+                // Introspection, Progress, and Webhook sources have no dependencies, for now.
+                //
+                // TODO(parkmycar): Once webhook sources support validation, then they will have
+                // dependencies.
+                //
+                // See <https://github.com/MaterializeInc/materialize/issues/20211>.
             }
             DataSource::Other => {
                 // We don't know anything about it's dependencies.
@@ -270,7 +278,13 @@ pub trait StorageController: Debug + Send {
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
+    fn connect_replica(
+        &mut self,
+        id: StorageInstanceId,
+        location: ClusterReplicaLocation,
+        // The human readable `string` cluster size if there is one
+        cluster_size: Option<String>,
+    );
 
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(
@@ -404,6 +418,10 @@ pub trait StorageController: Debug + Send {
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
+    /// monotonically append to the specified [`GlobalId`].
+    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -824,8 +842,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
     config: StorageParameters,
-    /// Whther clusters have scratch directories enabled.
-    scratch_directory_enabled: bool,
 }
 
 /// A storage controller for a storage instance.
@@ -845,6 +861,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     persist: Arc<PersistClientCache>,
     /// Metrics of the Storage controller
     metrics: StorageControllerMetrics,
+    /// Mechanism for the storage controller to send itself feedback, potentially emulating the
+    /// responses we expect from clusters.
+    ///
+    /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
+    /// installed on a `clusterd` this can likely be refactored away.
+    internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
 }
 
 #[derive(Debug)]
@@ -857,6 +879,8 @@ pub enum StorageError {
     SinkIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
+    /// The provided identifier was invalid, maybe missing, wrong type, not registered, etc.
+    IdentifierInvalid(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
     /// The read was at a timestamp before the collection's since
@@ -882,6 +906,10 @@ pub enum StorageError {
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
+    /// The specified resource was exhausted, and is not currently accepting more requests.
+    ResourceExhausted(&'static str),
+    /// The specified component is shutting down.
+    ShuttingDown(&'static str),
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -893,6 +921,7 @@ impl Error for StorageError {
             Self::SourceIdReused(_) => None,
             Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
+            Self::IdentifierInvalid(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
             Self::InvalidUppers(_) => None,
@@ -902,6 +931,8 @@ impl Error for StorageError {
             Self::DataflowError(err) => Some(err),
             Self::InvalidAlterSource { .. } => None,
             Self::InvalidUsage(_) => None,
+            Self::ResourceExhausted(_) => None,
+            Self::ShuttingDown(_) => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -920,6 +951,7 @@ impl fmt::Display for StorageError {
                 "sink identifier was re-created after having been dropped: {id}"
             ),
             Self::IdentifierMissing(id) => write!(f, "collection identifier is not present: {id}"),
+            Self::IdentifierInvalid(id) => write!(f, "collection identifier is invalid {id}"),
             Self::UpdateBeyondUpper(id) => {
                 write!(
                     f,
@@ -962,6 +994,8 @@ impl fmt::Display for StorageError {
                 write!(f, "{id} cannot be altered in the requested way")
             }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
+            Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
+            Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }
@@ -988,7 +1022,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         now: NowFn,
         factory: &StashFactory,
         envd_epoch: NonZeroI64,
-        scratch_directory_enabled: bool,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -1075,7 +1108,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             clients: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
-            scratch_directory_enabled,
         }
     }
 }
@@ -1151,13 +1183,18 @@ where
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation) {
+    fn connect_replica(
+        &mut self,
+        id: StorageInstanceId,
+        location: ClusterReplicaLocation,
+        cluster_size: Option<String>,
+    ) {
         let client = self
             .state
             .clients
             .get_mut(&id)
             .unwrap_or_else(|| panic!("instance {id} does not exist"));
-        client.connect(location);
+        client.connect(location, cluster_size);
     }
 
     fn drop_replica(
@@ -1330,7 +1367,7 @@ where
 
                 let (write, since_handle) = this
                     .open_data_handles(
-                        format!("controller data {}", id).as_str(),
+                        &id,
                         metadata.data_shard,
                         description.since.as_ref(),
                         metadata.relation_desc.clone(),
@@ -1423,7 +1460,10 @@ where
                         &storage_dependencies,
                     )?;
                 }
-                DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
+                DataSource::Webhook
+                | DataSource::Introspection(_)
+                | DataSource::Progress
+                | DataSource::Other => {
                     // No since to patch up and no read holds to install on
                     // dependencies!
                 }
@@ -1466,7 +1506,7 @@ where
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.state.collection_manager.register_collection(id).await;
+                    self.state.collection_manager.register_collection(id);
 
                     match i {
                         IntrospectionType::ShardMapping => {
@@ -1515,6 +1555,10 @@ where
                             .await;
                         }
                     }
+                }
+                DataSource::Webhook => {
+                    // Register the collection so our manager knows about it.
+                    self.state.collection_manager.register_collection(id);
                 }
                 DataSource::Progress | DataSource::Other => {}
             }
@@ -1855,6 +1899,10 @@ where
         Ok(self.state.persist_write_handles.append(commands))
     }
 
+    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
+        self.state.collection_manager.monotonic_appender(id)
+    }
+
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
     // where the as_of frontier might have multiple elements. In the current form the mutually
     // incomparable updates will be accumulated together to a state of the collection that never
@@ -1881,9 +1929,12 @@ where
         let mut read_handle = persist_client
             .open_leased_reader::<SourceData, (), _, _>(
                 metadata.data_shard,
-                &format!("snapshot {}", id),
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: format!("snapshot {}", id),
+                },
             )
             .await
             .expect("invalid persist usage");
@@ -2149,7 +2200,7 @@ where
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
-                        // Drop all write handles. This is safe to do because there will be nno more
+                        // Drop all write handles. This is safe to do because there will be no more
                         // data passed to the write handle. n.b. we do not need to drop the read
                         // handle because this code is only ever executed in response to dropping a
                         // collection, which downgrades the write handle to the empty anitchain,
@@ -2245,6 +2296,26 @@ where
                     pending_sink_drops.push(id);
                 } else {
                     panic!("Reference to absent collection {id}");
+                }
+            }
+
+            // Check if the collection is for a Webhook source, unregister if so.
+            let collection = self.state.collections.get(&id);
+            if let Some(CollectionState { description, .. }) = collection {
+                if description.data_source == DataSource::Webhook && frontier.is_empty() {
+                    // Unregister our collection from the manager so writes should no longer occur.
+                    self.state
+                        .collection_manager
+                        .unregsiter_collection(id)
+                        .await;
+
+                    pending_source_drops.push(id);
+                    // Normally `clusterd` will emit this StorageResponse when it knows we can
+                    // drop an ID, but since Webhook sources don't run on a cluster, we manually
+                    // emit this event here.
+                    let _ = self
+                        .internal_response_sender
+                        .send(StorageResponse::DroppedIds([id].into()));
                 }
             }
 
@@ -2391,7 +2462,6 @@ where
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        scratch_directory_enabled: bool,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2399,13 +2469,13 @@ where
             build_info,
             state: StorageControllerState::new(
                 postgres_url,
-                tx,
+                tx.clone(),
                 now,
                 postgres_factory,
                 envd_epoch,
-                scratch_directory_enabled,
             )
             .await,
+            internal_response_sender: tx,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
@@ -2510,7 +2580,7 @@ where
     /// current epoch.
     async fn open_data_handles(
         &self,
-        purpose: &str,
+        id: &GlobalId,
         shard: ShardId,
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
@@ -2519,12 +2589,16 @@ where
         WriteHandle<SourceData, (), T, Diff>,
         SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
     ) {
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
         let write = persist_client
             .open_writer(
                 shard,
-                purpose,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
+                diagnostics.clone(),
             )
             .await
             .expect("invalid persist usage");
@@ -2534,7 +2608,7 @@ where
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, purpose)
+                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, diagnostics)
                 .await
                 .expect("invalid persist usage");
 
@@ -2902,7 +2976,7 @@ where
             // already updated all the persistent state (in stash).
             let (write, since_handle) = self
                 .open_data_handles(
-                    format!("controller data for {id}").as_str(),
+                    &id,
                     data_shard,
                     collection_desc.since.as_ref(),
                     relation_desc,
@@ -2951,9 +3025,10 @@ where
                 let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
                     .open_leased_reader(
                         shard_id,
-                        "finalizing shards",
                         Arc::new(RelationDesc::empty()),
                         Arc::new(UnitSchema),
+                        // TODO: thread the global ID into the shard finalization WAL
+                        Diagnostics::from_purpose("finalizing shards"),
                     )
                     .await
                     .expect("invalid persist usage");
@@ -2964,9 +3039,10 @@ where
                     let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
                         .open_writer(
                             shard_id,
-                            "finalizing shards",
                             Arc::new(RelationDesc::empty()),
                             Arc::new(UnitSchema),
+                            // TODO: thread the global ID into the shard finalization WAL
+                            Diagnostics::from_purpose("finalizing shards"),
                         )
                         .await
                         .expect("invalid persist usage");
@@ -3009,7 +3085,7 @@ where
     fn check_alter_collection_inner(
         &self,
         id: GlobalId,
-        ingestion: IngestionDescription,
+        mut ingestion: IngestionDescription,
     ) -> Result<(), StorageError> {
         // Check that the client exists.
         self.state.clients.get(&ingestion.instance_id).ok_or(
@@ -3019,9 +3095,6 @@ where
             },
         )?;
 
-        // Describe the ingestion in terms of collection metadata.
-        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
-
         // Take a cloned copy of the description because we are going to treat it as a "scratch
         // space".
         let mut collection_description = self.collection(id)?.description.clone();
@@ -3029,6 +3102,16 @@ where
         // Get the previous storage dependencies; we need these to understand if something has
         // changed in what we depend upon.
         let prev_storage_dependencies = collection_description.get_storage_dependencies();
+
+        // We cannot know the metadata of exports yet to be created, so we have
+        // to remove them. However, we know that adding source exports is
+        // compatible, so still OK to proceed.
+        ingestion
+            .source_exports
+            .retain(|id, _| self.collection(*id).is_ok());
+
+        // Describe the ingestion in terms of collection metadata.
+        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
 
         // Check compatibility between current and new ingestions and install new ingestion in
         // collection description.
@@ -3190,16 +3273,6 @@ where
             source_imports.insert(id, metadata);
         }
 
-        if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
-            if upsert.disk && !self.state.scratch_directory_enabled {
-                return Err(StorageError::InvalidUsage(
-                    "Attempting to render `ON DISK` source without a \
-                    configured scratch directory. This is a bug."
-                        .into(),
-                ));
-            }
-        }
-
         // The ingestion metadata is simply the collection metadata of the collection with
         // the associated ingestion
         let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
@@ -3284,7 +3357,10 @@ impl<T: Timestamp> CollectionState<T> {
     fn cluster_id(&self) -> Option<StorageInstanceId> {
         match &self.description.data_source {
             DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Introspection(_) | DataSource::Other | DataSource::Progress => None,
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Other
+            | DataSource::Progress => None,
         }
     }
 }

@@ -635,6 +635,13 @@ pub struct SerdeLeasedBatchPart {
     filter_pushdown_audit: bool,
 }
 
+impl SerdeLeasedBatchPart {
+    /// Returns the encoded size of the given part.
+    pub fn encoded_size_bytes(&self) -> usize {
+        self.encoded_size_bytes
+    }
+}
+
 impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     ///

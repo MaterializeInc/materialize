@@ -22,17 +22,19 @@ mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
+paste = "1.0.11"
 postgres-openssl = { version = "0.5.0" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 serde = "1.0.152"
 serde_json = "1.0.89"
+static_assertions = "1.1"
 timely = { version = "0.12.0", default-features = false }
 tokio = "1.24.2"
-tokio-postgres = { version = "0.7.8", features = [ "with-serde_json-1" ] }
+tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
 tracing = "0.1.37"
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

@@ -442,16 +442,28 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             ValueOrReader::Value(val) => {
                 JsonbPacker::new(self.packer)
                     .pack_serde_json(val.clone())
-                    .map_err(|e| e.to_string_with_causes())
-                    .map_err(DecodeError::Custom)?;
+                    .map_err(|e| {
+                        // Technically, these are not the original bytes;
+                        // they've gone through a deserialize-serialize
+                        // round trip. Hopefully they will be close enough to still
+                        // be useful for debugging.
+                        let bytes = val.to_string().into_bytes();
+
+                        DecodeError::BadJson {
+                            category: e.classify(),
+                            bytes,
+                        }
+                    })?;
             }
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
                 JsonbPacker::new(self.packer)
                     .pack_slice(self.buf)
-                    .map_err(|e| e.to_string_with_causes())
-                    .map_err(DecodeError::Custom)?;
+                    .map_err(|e| DecodeError::BadJson {
+                        category: e.classify(),
+                        bytes: self.buf.to_owned(),
+                    })?;
             }
         }
         Ok(())

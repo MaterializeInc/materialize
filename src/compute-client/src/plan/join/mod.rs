@@ -421,6 +421,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
             assert!(actual.is_ok());

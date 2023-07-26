@@ -468,8 +468,18 @@ EOF
 # One more for https://github.com/MaterializeInc/materialize/issues/16128
 # https://github.com/MaterializeInc/materialize/pull/16147#issuecomment-1322042176
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
 DROP SCHEMA public CASCADE ;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 statement ok
 CREATE SCHEMA public ;
@@ -866,3 +876,29 @@ with
   )
 select * from v1
 WHERE credits_per_hour > credits_per_hour;
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20199
+
+statement ok
+CREATE ROLE r2;
+
+statement ok
+SELECT
+    member.name AS grantee,
+    role.name AS role_name
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+WHERE pg_has_role('r2', member.oid, 'USAGE');
+
+query error db error: ERROR: role "r555" does not exist
+SELECT
+    member.name AS grantee,
+    role.name AS role_name
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+WHERE pg_has_role('r555', member.oid, 'USAGE');
+
+query error db error: ERROR: role "aaa" does not exist
+select * from (select 'aaa' as aaa) where pg_has_role('r2', aaa, 'USAGE');

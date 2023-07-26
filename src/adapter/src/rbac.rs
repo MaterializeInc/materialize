@@ -20,7 +20,9 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
 };
-use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SystemObjectId};
+use mz_sql::names::{
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SystemObjectId,
+};
 use mz_sql::plan::{
     AbortTransactionPlan, AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -49,6 +51,34 @@ use crate::command::Command;
 use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
 use crate::AdapterError;
+
+/// Common checks that need to be performed before we can start checking a role's privileges.
+macro_rules! rbac_preamble {
+    ($catalog:expr, $session:expr) => {
+        // PostgreSQL allows users that have their role dropped to perform some actions,
+        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+        // role is dropped.
+        let current_role_id = $session.current_role_id();
+        if $catalog.try_get_role(current_role_id).is_none() {
+            return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
+        };
+        let session_role_id = $session.session_role_id();
+        if $catalog.try_get_role(session_role_id).is_none() {
+            return Err(AdapterError::ConcurrentRoleDrop(session_role_id.clone()));
+        };
+
+        // Skip RBAC checks if RBAC is disabled.
+        if !is_rbac_enabled_for_session($catalog.system_vars(), $session) {
+            return Ok(());
+        }
+
+        // Skip RBAC checks if the session is a superuser.
+        if $session.is_superuser() {
+            return Ok(());
+        }
+    };
+}
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
@@ -130,8 +160,44 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::CopyRows { .. }
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }
+        | Command::AppendWebhook { .. }
         | Command::Terminate { .. } => Ok(()),
     }
+}
+
+/// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
+pub fn check_item_usage(
+    catalog: &impl SessionCatalog,
+    session: &Session,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), AdapterError> {
+    rbac_preamble!(catalog, session);
+
+    // Obtain all roles that the current session is a member of.
+    let current_role_id = session.current_role_id();
+    let role_membership = catalog.collect_role_membership(current_role_id);
+
+    // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
+    // need to filter those out.
+    let existing_resolved_ids = resolved_ids
+        .0
+        .iter()
+        .filter(|id| catalog.try_get_item(id).is_some())
+        .cloned()
+        .collect();
+    let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
+    let required_privileges =
+        generate_item_usage_privileges(catalog, &existing_resolved_ids, *current_role_id)
+            .into_iter()
+            .collect();
+    check_object_privileges(
+        catalog,
+        required_privileges,
+        role_membership,
+        *current_role_id,
+    )?;
+
+    Ok(())
 }
 
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
@@ -141,35 +207,14 @@ pub fn check_plan(
     session: &Session,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
-    let current_role_id = session.current_role_id();
-    if catalog.try_get_role(current_role_id).is_none() {
-        // PostgreSQL allows users that have their role dropped to perform some actions,
-        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
-        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
-        // role is dropped.
-        return Err(AdapterError::ConcurrentRoleDrop(current_role_id.clone()));
-    };
+    rbac_preamble!(catalog, session);
 
-    let session_role_id = session.session_role_id();
-    if catalog.try_get_role(session_role_id).is_none() {
-        // PostgreSQL allows users that have their role dropped to perform some actions,
-        // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
-        // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
-        // role is dropped.
-        return Err(AdapterError::ConcurrentRoleDrop(session_role_id.clone()));
-    };
-
-    if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
-        return Ok(());
-    }
-
-    if session.is_superuser() {
-        return Ok(());
-    }
+    check_item_usage(catalog, session, resolved_ids)?;
 
     // Obtain all roles that the current session is a member of.
+    let current_role_id = session.current_role_id();
     let role_membership = catalog.collect_role_membership(current_role_id);
 
     // Validate that the current session has the required role membership to execute the provided
@@ -202,31 +247,17 @@ pub fn check_plan(
         catalog,
         plan,
         target_cluster_id,
-        depends_on,
+        resolved_ids,
         *current_role_id,
     );
-    let mut role_memberships = BTreeMap::new();
-    role_memberships.insert(*current_role_id, role_membership);
-    check_object_privileges(catalog, required_privileges, role_memberships)?;
+    check_object_privileges(
+        catalog,
+        required_privileges,
+        role_membership,
+        *current_role_id,
+    )?;
 
-    // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
-    // that currently exist and roles that will exist in the future. It's impossible for an exising
-    // role to be a member of a role that doesn't exist yet, so no current role could possibly have
-    // the privileges required to alter default privileges for the PUBLIC role. Therefore we
-    // only superusers can alter default privileges for the PUBLIC role.
-    if let Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
-        privilege_objects, ..
-    }) = &plan
-    {
-        if privilege_objects
-            .iter()
-            .any(|privilege_object| privilege_object.role_id.is_public())
-        {
-            return Err(AdapterError::Unauthorized(UnauthorizedError::Superuser {
-                action: "ALTER DEFAULT PRIVILEGES FOR ALL ROLES".to_string(),
-            }));
-        }
-    }
+    check_superuser_required(plan)?;
 
     Ok(())
 }
@@ -328,6 +359,7 @@ pub fn generate_required_role_membership(
         | Plan::AlterIndexResetOptions(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
@@ -422,7 +454,9 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterIndexSetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterIndexResetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSink(plan) => vec![ObjectId::Item(plan.id)],
-        Plan::AlterSource(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterSource(alter_source) | Plan::PurifiedAlterSource { alter_source, .. } => {
+            vec![ObjectId::Item(alter_source.id)]
+        }
         Plan::AlterItemRename(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
         Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
@@ -507,7 +541,7 @@ fn generate_required_privileges(
     catalog: &impl SessionCatalog,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
-    depends_on: &Vec<GlobalId>,
+    resolved_ids: &ResolvedIds,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     // When adding a new plan, make sure that the plan struct is fully expanded. This helps ensure
@@ -520,13 +554,11 @@ fn generate_required_privileges(
             connection: _,
             validate: _,
         }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
-            privileges
+            )]
         }
         Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
@@ -587,9 +619,7 @@ fn generate_required_privileges(
             if_not_exists: _,
             timeline: _,
             cluster_config,
-        }) => {
-            generate_required_source_privileges(catalog, name, cluster_config, depends_on, role_id)
-        }
+        }) => generate_required_source_privileges(name, cluster_config, role_id),
         Plan::CreateSources(plans) => plans
             .iter()
             .flat_map(
@@ -603,22 +633,33 @@ fn generate_required_privileges(
                              timeline: _,
                              cluster_config,
                          },
-                     depends_on,
+                     resolved_ids: _,
                  }| {
-                    // Sub-sources depend on not-yet created sources, so we need to filter those out.
-                    let existing_depends_on = depends_on
-                        .iter()
-                        .filter(|id| catalog.try_get_item(id).is_some())
-                        .cloned()
-                        .collect();
-                    generate_required_source_privileges(
-                        catalog,
-                        name,
-                        cluster_config,
-                        &existing_depends_on,
-                        role_id,
-                    )
-                    .into_iter()
+                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
+                },
+            )
+            .collect(),
+        Plan::PurifiedAlterSource {
+            // Keep in sync with  AlterSourcePlan elsewhere; right now this does
+            // not affect the output privileges.
+            alter_source: AlterSourcePlan { id: _, action: _ },
+            subsources,
+        } => subsources
+            .iter()
+            .flat_map(
+                |CreateSourcePlans {
+                     source_id: _,
+                     plan:
+                         CreateSourcePlan {
+                             name,
+                             source: _,
+                             if_not_exists: _,
+                             timeline: _,
+                             cluster_config,
+                         },
+                     resolved_ids: _,
+                 }| {
+                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
                 },
             )
             .collect(),
@@ -661,13 +702,11 @@ fn generate_required_privileges(
             table: _,
             if_not_exists: _,
         }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
-            privileges
+            )]
         }
         Plan::CreateView(CreateViewPlan {
             name,
@@ -677,13 +716,11 @@ fn generate_required_privileges(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
-            privileges
+            )]
         }
         Plan::CreateMaterializedView(CreateMaterializedViewPlan {
             name,
@@ -693,7 +730,7 @@ fn generate_required_privileges(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => {
-            let mut privileges = vec![
+            vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),
                     AclMode::CREATE,
@@ -704,9 +741,7 @@ fn generate_required_privileges(
                     AclMode::CREATE,
                     role_id,
                 ),
-            ];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
-            privileges
+            ]
         }
         Plan::CreateIndex(CreateIndexPlan {
             name,
@@ -714,7 +749,7 @@ fn generate_required_privileges(
             options: _,
             if_not_exists: _,
         }) => {
-            let mut privileges = vec![
+            vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),
                     AclMode::CREATE,
@@ -725,18 +760,14 @@ fn generate_required_privileges(
                     AclMode::CREATE,
                     role_id,
                 ),
-            ];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
-            privileges
+            ]
         }
         Plan::CreateType(CreateTypePlan { name, typ: _ }) => {
-            let mut privileges = vec![(
+            vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )];
-            privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
-            privileges
+            )]
         }
         Plan::DropObjects(DropObjectsPlan {
             referenced_ids,
@@ -791,7 +822,7 @@ fn generate_required_privileges(
             copy_to: _,
         }) => {
             let mut privileges =
-                generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
+                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id);
             if let Some(privilege) =
                 generate_cluster_usage_privileges(source, target_cluster_id, role_id)
             {
@@ -809,7 +840,7 @@ fn generate_required_privileges(
             output: _,
         }) => {
             let mut privileges =
-                generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
+                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -827,7 +858,7 @@ fn generate_required_privileges(
             config: _,
             no_errors: _,
             explainee: _,
-        }) => generate_read_privileges(catalog, depends_on.iter().cloned(), role_id),
+        }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
         Plan::CopyFrom(CopyFromPlan {
             id,
             columns: _,
@@ -874,18 +905,6 @@ fn generate_required_privileges(
                 values.depends_on().into_iter(),
                 role_id,
                 &mut seen,
-            ));
-
-            // Collect additional USAGE privileges, like those in the returning clause.
-            let seen = privileges
-                .iter()
-                .filter_map(|(id, _, _)| match id {
-                    SystemObjectId::Object(ObjectId::Item(id)) => Some(*id),
-                    _ => None,
-                })
-                .collect();
-            privileges.extend(generate_item_usage_privileges_inner(
-                catalog, depends_on, role_id, seen,
             ));
 
             if let Some(privilege) =
@@ -953,43 +972,12 @@ fn generate_required_privileges(
                 &mut seen,
             ));
 
-            // Collect additional USAGE privileges, like those in the returning clause.
-            let seen = privileges
-                .iter()
-                .filter_map(|(id, _, _)| match id {
-                    SystemObjectId::Object(ObjectId::Item(id)) => Some(*id),
-                    _ => None,
-                })
-                .collect();
-            privileges.extend(generate_item_usage_privileges_inner(
-                catalog, depends_on, role_id, seen,
-            ));
-
             if let Some(privilege) =
                 generate_cluster_usage_privileges(selection, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
             }
             privileges
-        }
-        Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id, options: _ })
-        | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id, options: _ })
-        | Plan::AlterSink(AlterSinkPlan { id, size: _ })
-        | Plan::AlterSource(AlterSourcePlan { id, action: _ })
-        | Plan::AlterItemRename(AlterItemRenamePlan {
-            id,
-            current_full_name: _,
-            to_name: _,
-            object_type: _,
-        })
-        | Plan::AlterSecret(AlterSecretPlan { id, secret_as: _ })
-        | Plan::RotateKeys(RotateKeysPlan { id }) => {
-            let item = catalog.get_item(id);
-            vec![(
-                SystemObjectId::Object(item.name().qualifiers.clone().into()),
-                AclMode::CREATE,
-                role_id,
-            )]
         }
         Plan::AlterOwner(AlterOwnerPlan {
             id,
@@ -1142,10 +1130,29 @@ fn generate_required_privileges(
             rows: _,
         })
         | Plan::AlterNoop(AlterNoopPlan { object_type: _ })
+        | Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id: _, options: _ })
+        | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id: _, options: _ })
+        | Plan::AlterSink(AlterSinkPlan { id: _, size: _ })
+        | Plan::AlterSource(AlterSourcePlan { id: _, action: _ })
+        | Plan::AlterItemRename(AlterItemRenamePlan {
+            id: _,
+            current_full_name: _,
+            to_name: _,
+            object_type: _,
+        })
+        | Plan::AlterSecret(AlterSecretPlan {
+            id: _,
+            secret_as: _,
+        })
+        | Plan::RotateKeys(RotateKeysPlan { id: _ })
         | Plan::AlterSystemSet(AlterSystemSetPlan { name: _, value: _ })
         | Plan::AlterSystemReset(AlterSystemResetPlan { name: _ })
         | Plan::AlterSystemResetAll(AlterSystemResetAllPlan {})
-        | Plan::Declare(DeclarePlan { name: _, stmt: _ })
+        | Plan::Declare(DeclarePlan {
+            name: _,
+            stmt: _,
+            sql: _,
+        })
         | Plan::Fetch(FetchPlan {
             name: _,
             count: _,
@@ -1156,6 +1163,7 @@ fn generate_required_privileges(
             name: _,
             stmt: _,
             desc: _,
+            sql: _,
         })
         | Plan::Execute(ExecutePlan { name: _, params: _ })
         | Plan::Deallocate(DeallocatePlan { name: _ })
@@ -1176,10 +1184,8 @@ fn generate_required_privileges(
 }
 
 fn generate_required_source_privileges(
-    catalog: &impl SessionCatalog,
     name: &QualifiedItemName,
     cluster_config: &SourceSinkClusterConfig,
-    depends_on: &Vec<GlobalId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = vec![(
@@ -1191,7 +1197,6 @@ fn generate_required_source_privileges(
         Some(id) => privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id)),
         None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
     }
-    privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
     privileges
 }
 
@@ -1229,7 +1234,7 @@ fn generate_read_privileges_inner(
             match item.item_type() {
                 CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.uses().iter().cloned(), item.owner_id()));
+                    views.push((item.uses().0.iter().cloned(), item.owner_id()));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1251,29 +1256,23 @@ fn generate_read_privileges_inner(
     privileges
 }
 
-fn generate_item_usage_privileges<'a>(
-    catalog: &'a impl SessionCatalog,
-    ids: &'a Vec<GlobalId>,
+fn generate_item_usage_privileges(
+    catalog: &impl SessionCatalog,
+    ids: &ResolvedIds,
     role_id: RoleId,
-) -> impl Iterator<Item = (SystemObjectId, AclMode, RoleId)> + 'a {
-    generate_item_usage_privileges_inner(catalog, ids, role_id, BTreeSet::new())
-}
-
-fn generate_item_usage_privileges_inner<'a>(
-    catalog: &'a impl SessionCatalog,
-    ids: &'a Vec<GlobalId>,
-    role_id: RoleId,
-    seen: BTreeSet<GlobalId>,
-) -> impl Iterator<Item = (SystemObjectId, AclMode, RoleId)> + 'a {
-    // Use a `BTreeSet` to remove duplicate IDs.
-    BTreeSet::from_iter(ids.iter())
-        .into_iter()
-        .filter(move |id| !seen.contains(id))
+) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
+    // Use a `BTreeSet` to remove duplicate privileges.
+    ids.0
+        .iter()
         .filter_map(move |id| {
             let item = catalog.get_item(id);
             match item.item_type() {
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
-                    Some((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id))
+                    let schema_id = item.name().qualifiers.clone().into();
+                    Some([
+                        (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
+                        (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
+                    ])
                 }
                 CatalogItemType::Table
                 | CatalogItemType::Source
@@ -1284,6 +1283,8 @@ fn generate_item_usage_privileges_inner<'a>(
                 | CatalogItemType::Func => None,
             }
         })
+        .flatten()
+        .collect()
 }
 
 fn generate_cluster_usage_privileges(
@@ -1309,8 +1310,11 @@ fn generate_cluster_usage_privileges(
 fn check_object_privileges(
     catalog: &impl SessionCatalog,
     privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
-    mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>>,
+    role_membership: BTreeSet<RoleId>,
+    current_role_id: RoleId,
 ) -> Result<(), UnauthorizedError> {
+    let mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>> = BTreeMap::new();
+    role_memberships.insert(current_role_id, role_membership);
     for (object_id, acl_mode, role_id) in privileges {
         let role_membership = role_memberships
             .entry(role_id)
@@ -1331,6 +1335,44 @@ fn check_object_privileges(
     }
 
     Ok(())
+}
+
+fn check_superuser_required(plan: &Plan) -> Result<(), UnauthorizedError> {
+    match plan {
+        // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
+        // that currently exist and roles that will exist in the future. It's impossible for an exising
+        // role to be a member of a role that doesn't exist yet, so no current role could possibly have
+        // the privileges required to alter default privileges for the PUBLIC role. Therefore we
+        // only superusers can alter default privileges for the PUBLIC role.
+        Plan::AlterDefaultPrivileges(AlterDefaultPrivilegesPlan {
+            privilege_objects, ..
+        }) if privilege_objects
+            .iter()
+            .any(|privilege_object| privilege_object.role_id.is_public()) =>
+        {
+            Err(UnauthorizedError::Superuser {
+                action: "ALTER DEFAULT PRIVILEGES FOR ALL ROLES".to_string(),
+            })
+        }
+        // To grant/revoke a privilege on some object, generally the grantor/revoker must be the
+        // owner of that object (or have a grant option on that object which isn't implemented in
+        // Materialize yet). There is no owner of the entire system, so it's only reasonable to
+        // restrict granting/revoking system privileges to superusers.
+        Plan::GrantPrivileges(GrantPrivilegesPlan {
+            update_privileges, ..
+        })
+        | Plan::RevokePrivileges(RevokePrivilegesPlan {
+            update_privileges, ..
+        }) if update_privileges
+            .iter()
+            .any(|update_privilege| update_privilege.target_id.is_system()) =>
+        {
+            Err(UnauthorizedError::Superuser {
+                action: "GRANT/REVOKE SYSTEM PRIVILEGES".to_string(),
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {

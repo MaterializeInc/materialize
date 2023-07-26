@@ -96,7 +96,7 @@ use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsConfig, BUILD_INFO};
+use mz_environmentd::{Listeners, ListenersConfig, TlsConfig, BUILD_INFO};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
@@ -110,10 +110,10 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
-use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -128,7 +128,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 use uuid::Uuid;
@@ -330,8 +330,16 @@ pub struct Args {
     /// The init container for services created by the Kubernetes orchestrator.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_INIT_CONTAINER_IMAGE")]
     orchestrator_kubernetes_init_container_image: Option<String>,
-    /// Prefix commands issued by the process orchestrator with the supplied
-    /// value.
+    /// The Kubernetes StorageClass to use for the ephemeral volume attached to
+    /// services that request disk.
+    ///
+    /// If unspecified, the Kubernetes orchestrator will refuse to create
+    /// services that request disk.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_EPHEMERAL_VOLUME_CLASS")]
+    orchestrator_kubernetes_ephemeral_volume_class: Option<String>,
+    /// The optional fs group for service's pods' `securityContext`.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_FS_GROUP")]
+    orchestrator_kubernetes_service_fs_group: Option<i64>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -608,15 +616,34 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    let (tracing_handle, _tracing_guard) =
-        runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
+
+    let metrics_registry = MetricsRegistry::new();
+    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
+        StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
-        }))?;
+        },
+        metrics_registry.clone(),
+    ))?;
+
+    if args.tracing.log_filter.is_some() {
+        halt!(
+            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
+             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
+        )
+    }
+    if args.tracing.opentelemetry_filter.is_some() {
+        halt!(
+            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
+            is needed before the process has access to the system variable, use \
+            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+        )
+    }
 
     let span = tracing::info_span!("environmentd::run").entered();
 
-    let metrics_registry = MetricsRegistry::new();
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
@@ -710,6 +737,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
                         coverage: args.orchestrator_kubernetes_coverage,
+                        ephemeral_volume_storage_class: args
+                            .orchestrator_kubernetes_ephemeral_volume_class
+                            .clone(),
+                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -722,6 +753,15 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             )
         }
         OrchestratorKind::Process => {
+            if args
+                .orchestrator_kubernetes_ephemeral_volume_class
+                .is_some()
+            {
+                bail!(
+                    "--orchestrator-kubernetes-ephemeral-volume-class is \
+                      not usable with the process orchestrator"
+                );
+            }
             let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
@@ -747,7 +787,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
-                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
+                        scratch_directory: args
+                            .orchestrator_process_scratch_directory
+                            .expect("process orchestrator requires scratch directory"),
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -807,7 +849,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory_enabled: args.orchestrator_process_scratch_directory.is_some(),
         persist_pubsub_url: args.persist_pubsub_url,
     };
 
@@ -829,56 +870,62 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
 
-    let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
-        sql_listen_addr: args.sql_listen_addr,
-        http_listen_addr: args.http_listen_addr,
-        internal_sql_listen_addr: args.internal_sql_listen_addr,
-        internal_http_listen_addr: args.internal_http_listen_addr,
-        tls,
-        frontegg,
-        cors_allowed_origin,
-        adapter_stash_url: args.adapter_stash_url,
-        controller,
-        secrets_controller,
-        cloud_resource_controller,
-        unsafe_mode: args.unsafe_mode,
-        all_features: args.all_features,
-        metrics_registry,
-        now,
-        environment_id: args.environment_id,
-        cluster_replica_sizes,
-        default_storage_cluster_size: args.default_storage_host_size,
-        bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-        bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        system_parameter_defaults: args
-            .system_parameter_default
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
-        availability_zones: args.availability_zone,
-        connection_context: ConnectionContext::from_cli_args(
-            args.tracing.log_filter.as_ref(),
-            args.aws_external_id_prefix,
-            secrets_reader,
-        ),
-        tracing_handle,
-        storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
-        storage_usage_retention_period: args.storage_usage_retention_period,
-        segment_api_key: args.segment_api_key,
-        egress_ips: args.announce_egress_ip,
-        aws_account_id: args.aws_account_id,
-        aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
-        launchdarkly_sdk_key: args.launchdarkly_sdk_key,
-        launchdarkly_key_map: args
-            .launchdarkly_key_map
-            .into_iter()
-            .map(|kv| (kv.key, kv.value))
-            .collect(),
-        config_sync_loop_interval: args.config_sync_loop_interval,
-        bootstrap_role: args.bootstrap_role,
-        deploy_generation: args.deploy_generation,
-        waiting_on_leader_promotion: None,
-    }))?;
+    let server = runtime.block_on(async {
+        let listeners = Listeners::bind(ListenersConfig {
+            sql_listen_addr: args.sql_listen_addr,
+            http_listen_addr: args.http_listen_addr,
+            internal_sql_listen_addr: args.internal_sql_listen_addr,
+            internal_http_listen_addr: args.internal_http_listen_addr,
+        })
+        .await?;
+        listeners
+            .serve(mz_environmentd::Config {
+                tls,
+                frontegg,
+                cors_allowed_origin,
+                adapter_stash_url: args.adapter_stash_url,
+                controller,
+                secrets_controller,
+                cloud_resource_controller,
+                unsafe_mode: args.unsafe_mode,
+                all_features: args.all_features,
+                metrics_registry,
+                now,
+                environment_id: args.environment_id,
+                cluster_replica_sizes,
+                default_storage_cluster_size: args.default_storage_host_size,
+                bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+                bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
+                system_parameter_defaults: args
+                    .system_parameter_default
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                availability_zones: args.availability_zone,
+                connection_context: ConnectionContext::from_cli_args(
+                    &args.tracing.startup_log_filter,
+                    args.aws_external_id_prefix,
+                    secrets_reader,
+                ),
+                tracing_handle,
+                storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+                storage_usage_retention_period: args.storage_usage_retention_period,
+                segment_api_key: args.segment_api_key,
+                egress_ips: args.announce_egress_ip,
+                aws_account_id: args.aws_account_id,
+                aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
+                launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_key_map: args
+                    .launchdarkly_key_map
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                config_sync_loop_interval: args.config_sync_loop_interval,
+                bootstrap_role: args.bootstrap_role,
+                deploy_generation: args.deploy_generation,
+            })
+            .await
+    })?;
 
     metrics.start_time_environmentd.set(
         envd_start

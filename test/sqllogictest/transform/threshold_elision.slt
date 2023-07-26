@@ -269,7 +269,7 @@ Explained Query:
     Union // { non_negative: false }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter "J%" ~~(#0) // { non_negative: true }
+        Filter like["J%"](#0) // { non_negative: true }
           Get l0 // { non_negative: true }
   With
     cte l0 =
@@ -329,7 +329,7 @@ Explained Query:
     Union // { non_negative: false }
       Get l0 // { non_negative: false }
       Negate // { non_negative: false }
-        Filter "P%" ~~(#1) // { non_negative: false }
+        Filter like["P%"](#1) // { non_negative: false }
           Get l0 // { non_negative: false }
   With
     cte l0 =
@@ -337,7 +337,7 @@ Explained Query:
         Union // { non_negative: false }
           Get materialize.public.people // { non_negative: true }
           Negate // { non_negative: false }
-            Filter "J%" ~~(#1) // { non_negative: true }
+            Filter like["J%"](#1) // { non_negative: true }
               Get materialize.public.people // { non_negative: true }
 
 EOF

@@ -123,6 +123,7 @@ pub mod reduce_elision;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
+pub mod symbolic;
 pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;
@@ -151,6 +152,8 @@ macro_rules! any {
 pub struct TransformArgs<'a> {
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
+    /// Statistical estiamtes.
+    pub stats: &'a dyn StatisticsOracle,
     /// The global ID for this query (if it exists),
     pub global_id: Option<&'a GlobalId>,
 }
@@ -160,6 +163,7 @@ impl<'a> TransformArgs<'a> {
     pub fn anonymous(indexes: &'a dyn IndexOracle) -> Self {
         Self {
             indexes,
+            stats: &EmptyStatisticsOracle,
             global_id: None,
         }
     }
@@ -168,6 +172,20 @@ impl<'a> TransformArgs<'a> {
     pub fn with_id(indexes: &'a dyn IndexOracle, global_id: &'a GlobalId) -> Self {
         Self {
             indexes,
+            stats: &EmptyStatisticsOracle,
+            global_id: Some(global_id),
+        }
+    }
+
+    /// Geneates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with a `GlobalId`
+    pub fn with_id_and_stats(
+        indexes: &'a dyn IndexOracle,
+        stats: &'a dyn StatisticsOracle,
+        global_id: &'a GlobalId,
+    ) -> Self {
+        Self {
+            indexes,
+            stats,
             global_id: Some(global_id),
         }
     }
@@ -248,6 +266,24 @@ pub struct EmptyIndexOracle;
 impl IndexOracle for EmptyIndexOracle {
     fn indexes_on(&self, _: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
         Box::new(iter::empty())
+    }
+}
+
+/// A trait for a type that can estimate statistics about a given `GlobalId`
+pub trait StatisticsOracle: fmt::Debug {
+    /// Returns a cardinality estimate for the given identifier
+    ///
+    /// Returning `None` means "no estimate"; returning `Some(0)` means estimating that the shard backing `id` is empty
+    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize>;
+}
+
+/// A [`StatisticsOracle`] that knows nothing and can give no estimates.
+#[derive(Debug)]
+pub struct EmptyStatisticsOracle;
+
+impl StatisticsOracle for EmptyStatisticsOracle {
+    fn cardinality_estimate(&self, _: GlobalId) -> Option<usize> {
+        None
     }
 }
 

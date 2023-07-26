@@ -13,6 +13,7 @@
 
 use std::fmt::Debug;
 use std::mem;
+use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -116,24 +117,26 @@ impl RoutineMaintenance {
 
         if let Some(rollup_seqno) = self.write_rollup {
             let mut machine = machine.clone();
+            let isolated_runtime = Arc::clone(&machine.isolated_runtime);
             futures.push(
-                mz_ore::task::spawn(|| "persist::write_rollup", async move {
-                    machine
-                        .applier
-                        .fetch_and_update_state(Some(rollup_seqno))
-                        .await;
-                    // We don't have to write at exactly rollup_seqno, just need
-                    // something recent.
-                    assert!(
-                        machine.seqno() >= rollup_seqno,
-                        "{} vs {}",
-                        machine.seqno(),
-                        rollup_seqno
-                    );
-                    machine.add_rollup_for_current_seqno().await
-                })
-                .map(Result::unwrap_or_default)
-                .boxed(),
+                isolated_runtime
+                    .spawn_named(|| "persist::write_rollup", async move {
+                        machine
+                            .applier
+                            .fetch_and_update_state(Some(rollup_seqno))
+                            .await;
+                        // We don't have to write at exactly rollup_seqno, just need
+                        // something recent.
+                        assert!(
+                            machine.seqno() >= rollup_seqno,
+                            "{} vs {}",
+                            machine.seqno(),
+                            rollup_seqno
+                        );
+                        machine.add_rollup_for_current_seqno().await
+                    })
+                    .map(Result::unwrap_or_default)
+                    .boxed(),
             );
         }
 

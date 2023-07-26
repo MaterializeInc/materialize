@@ -405,12 +405,11 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     c.up("testdrive", persistent=True)
 
-    logging_env = ["CLUSTERD_LOG_FILTER=mz_compute::server=debug,info"]
     nodes = [
-        Clusterd(name="clusterd_1_1", environment_extra=logging_env),
-        Clusterd(name="clusterd_1_2", environment_extra=logging_env),
-        Clusterd(name="clusterd_2_1", environment_extra=logging_env),
-        Clusterd(name="clusterd_2_2", environment_extra=logging_env),
+        Clusterd(name="clusterd_1_1"),
+        Clusterd(name="clusterd_1_2"),
+        Clusterd(name="clusterd_2_1"),
+        Clusterd(name="clusterd_2_2"),
     ]
 
     with c.override(*nodes):

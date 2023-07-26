@@ -12,12 +12,10 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
@@ -26,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
@@ -38,8 +35,8 @@ use crate::internal::compact::Compactor;
 use crate::internal::encoding::{Schemas, SerdeWriterEnrichedHollowBatch};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HollowBatch, Upper};
-use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig, ShardId};
+use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -135,15 +132,13 @@ where
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) compact: Option<Compactor<K, V, T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
-    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) writer_id: WriterId,
+    pub(crate) debug_state: HandleDebugState,
     pub(crate) schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
-
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -153,6 +148,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    // We don't actually do an async call in here at the moment, but we used to and may
+    // again later, so let's reserve the right for now.
+    #[allow(clippy::unused_async)]
     pub(crate) async fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
@@ -160,26 +158,29 @@ where
         gc: GarbageCollector<K, V, T, D>,
         compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
+        purpose: &str,
         schemas: Schemas<K, V>,
         upper: Antichain<T>,
-        last_heartbeat: EpochMillis,
     ) -> Self {
+        let debug_state = HandleDebugState {
+            hostname: cfg.hostname.to_owned(),
+            purpose: purpose.to_owned(),
+        };
         WriteHandle {
             cfg,
             metrics,
-            machine: machine.clone(),
-            gc: gc.clone(),
+            machine,
+            gc,
             compact,
             blob,
-            cpu_heavy_runtime,
-            writer_id: writer_id.clone(),
+            isolated_runtime,
+            writer_id,
+            debug_state,
             schemas,
             upper,
-            last_heartbeat,
             explicitly_expired: false,
-            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id, gc).await),
         }
     }
 
@@ -225,9 +226,8 @@ where
     /// this shard, promising that no more data is ever incoming.
     ///
     /// `updates` may be empty, which allows for downgrading `upper` to
-    /// communicate progress. It is possible to heartbeat a writer lease by
-    /// calling this with `upper` equal to `self.upper()` and an empty `updates`
-    /// (making the call a no-op).
+    /// communicate progress. It is possible to call this with `upper` equal to
+    /// `self.upper()` and an empty `updates` (making the call a no-op).
     ///
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
@@ -364,12 +364,6 @@ where
                     return Ok(Ok(()));
                 }
                 Err(mismatch) => {
-                    // it's possible a client using `append_batch` continually fails if
-                    // it's racing with another writer. that's perfectly fine, but we should
-                    // be sure to heartbeat our writer explicitly if it's not getting a
-                    // chance to renew its lease through `[Self::compare_and_append]`
-                    self.maybe_heartbeat_writer().await;
-
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&mismatch.current, &lower) {
                         self.upper = mismatch.current.clone();
@@ -477,6 +471,7 @@ where
                     runs: vec![],
                 },
                 &self.writer_id,
+                &self.debug_state,
                 heartbeat_timestamp,
             )
             .await;
@@ -484,7 +479,6 @@ where
         let maintenance = match res {
             Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
-                self.last_heartbeat = heartbeat_timestamp;
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
@@ -543,17 +537,16 @@ where
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::from(&self.cfg),
+            BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
             self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             self.machine.shard_id().clone(),
             self.cfg.build_version.clone(),
-            self.writer_id.clone(),
             Antichain::from_elem(T::minimum()),
             None,
             false,
@@ -589,14 +582,7 @@ where
             let ((k, v), t, d) = update.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             match builder.add(k, v, t, d).await {
-                Ok(Added::Record) => (),
-                // We need to maintain this writer's lease in case the batch is taking an
-                // exceptionally long time to write, so that our staged blobs don't get GC'd
-                // while we're still processing the batch.
-                //
-                // Here, we check if we need to heartbeat the writer each time we completed
-                // and began uploading a batch part.
-                Ok(Added::RecordAndParts) => self.maybe_heartbeat_writer().await,
+                Ok(Added::Record | Added::RecordAndParts) => (),
                 Err(invalid_usage) => return Err(invalid_usage),
             }
         }
@@ -604,49 +590,7 @@ where
         builder.finish(upper.clone()).await
     }
 
-    /// Heartbeats the writer lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this on some interval that is
-    /// "frequent" compared to PersistConfig::writer_lease_duration
-    pub async fn maybe_heartbeat_writer(&mut self) {
-        let min_elapsed = self.cfg.writer_lease_duration / 4;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.applier.cfg.writer_lease_duration {
-                warn!(
-                    "writer ({}) of shard ({}) went {}s between heartbeats",
-                    self.writer_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_writer(&self.writer_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.is_tombstone() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this writer. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the WriterId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.writer_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
-        }
-    }
-
-    /// Politely expires this writer, releasing its lease.
+    /// Politely expires this writer, releasing any associated state.
     ///
     /// There is a best-effort impl in Drop to expire a writer that wasn't
     /// explictly expired with this method. When possible, explicit expiry is
@@ -745,9 +689,6 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
-        }
         if self.explicitly_expired {
             return;
         }

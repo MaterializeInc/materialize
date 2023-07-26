@@ -598,6 +598,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
             let trace = BlobTraceBatchPart {

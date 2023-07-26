@@ -148,7 +148,7 @@ pub struct ProcessOrchestratorConfig {
     /// browsers).
     pub tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     /// A scratch directory that orchestrated processes can use for ephemeral storage.
-    pub scratch_directory: Option<PathBuf>,
+    pub scratch_directory: PathBuf,
 }
 
 /// Configures the TCP proxy for a [`ProcessOrchestrator`].
@@ -189,7 +189,7 @@ pub struct ProcessOrchestrator {
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
-    scratch_directory: Option<PathBuf>,
+    scratch_directory: PathBuf,
 }
 
 impl ProcessOrchestrator {
@@ -275,7 +275,7 @@ struct NamespacedProcessOrchestrator {
     system: Mutex<System>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
-    scratch_directory: Option<PathBuf>,
+    scratch_directory: PathBuf,
 }
 
 #[async_trait]
@@ -342,6 +342,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             labels,
             availability_zone: _,
             anti_affinity: _,
+            disk,
+            disk_limit: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
@@ -350,6 +352,15 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         fs::create_dir_all(&run_dir)
             .await
             .context("creating run directory")?;
+        let scratch_dir = if disk {
+            let scratch_dir = self.scratch_directory.join(&full_id);
+            fs::create_dir_all(&scratch_dir)
+                .await
+                .context("creating scratch directory")?;
+            Some(fs::canonicalize(&scratch_dir).await?)
+        } else {
+            None
+        };
 
         {
             let mut services = self.services.lock().expect("lock poisoned");
@@ -389,10 +400,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     self.supervise_service_process(ServiceProcessConfig {
                         id: id.to_string(),
                         run_dir: run_dir.clone(),
+                        scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
                         args,
                         ports,
+                        disk,
                     }),
                 );
 
@@ -463,10 +476,12 @@ impl NamespacedProcessOrchestrator {
         ServiceProcessConfig {
             id,
             run_dir,
+            scratch_dir,
             i,
             image,
             args,
             ports,
+            disk,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
         let suppress_output = self.suppress_output;
@@ -478,7 +493,7 @@ impl NamespacedProcessOrchestrator {
 
         let state_updater = ProcessStateUpdater {
             namespace: self.namespace.clone(),
-            id: id.clone(),
+            id,
             i,
             services: Arc::clone(&self.services),
             service_event_tx: self.service_event_tx.clone(),
@@ -499,13 +514,16 @@ impl NamespacedProcessOrchestrator {
             self.secrets_dir.display()
         ));
 
-        let scratch_directory = self.scratch_directory.as_ref().map(|dir| dir.join(id));
-        if let Some(scratch_directory) = &scratch_directory {
-            args.push(format!(
-                "--scratch-directory={}",
-                scratch_directory.display()
-            ));
-        }
+        let scratch_directory = if disk {
+            if let Some(scratch) = &scratch_dir {
+                args.push(format!("--scratch-directory={}", scratch.display()));
+            } else {
+                panic!("internal error: service requested disk but no scratch directory was configured");
+            }
+            scratch_dir
+        } else {
+            None
+        };
 
         async move {
             let mut proxy_handles = vec![];
@@ -643,10 +661,12 @@ impl NamespacedProcessOrchestrator {
 struct ServiceProcessConfig<'a> {
     id: String,
     run_dir: PathBuf,
+    scratch_dir: Option<PathBuf>,
     i: usize,
     image: String,
     args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
     ports: Vec<ServiceProcessPort>,
+    disk: bool,
 }
 
 struct ServiceProcessPort {
