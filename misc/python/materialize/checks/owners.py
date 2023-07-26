@@ -37,6 +37,7 @@ class Owners(Check):
             CREATE VIEW owner_v{i} AS SELECT * FROM owner_t{i}
             CREATE MATERIALIZED VIEW owner_mv{i} AS SELECT * FROM owner_t{i}
             CREATE SECRET owner_secret{i} AS 'MY_SECRET'
+            GRANT INSERT ON TABLE owner_t{i} TO other_owner
             """
         )
         if expensive:
@@ -47,6 +48,12 @@ class Owners(Check):
                 CREATE CLUSTER owner_cluster{i} REPLICAS (owner_cluster_r{i} (SIZE '4'))
                 """
             )
+        s += dedent(
+            f"""
+            $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            ALTER CONNECTION owner_kafka_conn{i} OWNER TO other_owner
+            """
+        )
 
         return s
 
@@ -61,7 +68,6 @@ class Owners(Check):
             f"DROP TABLE owner_t{i}",
             f"DROP TYPE owner_type{i}",
             f"DROP CONNECTION owner_csr_conn{i}",
-            f"DROP CONNECTION owner_kafka_conn{i}",
             f"DROP SCHEMA owner_schema{i}",
             f"DROP DATABASE owner_db{i}",
         ]
@@ -76,11 +82,14 @@ class Owners(Check):
                 f"$ postgres-execute connection=postgres://{role}@materialized:6875/materialize\n"
                 + "\n".join(cmds)
                 + "\n"
+                + "$ postgres-execute connection=postgres://other_owner@materialized:6875/materialize\n"
+                + f"DROP CONNECTION owner_kafka_conn{i}\n"
             )
         if role != "materialize":
             raise ValueError(
                 "Can't check for failures with user other than materialize"
             )
+        cmds += [f"DROP CONNECTION owner_kafka_conn{i}"]
         return "\n".join(
             [f"! {cmd} CASCADE\ncontains: must be owner of\n" for cmd in cmds]
         )
@@ -106,6 +115,8 @@ class Owners(Check):
 
                 $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
+
+                > CREATE ROLE other_owner
                 """
             )
             + self._create_objects("owner_role_01", 1, expensive=True)
@@ -281,13 +292,13 @@ class Owners(Check):
                 owner_csr_conn5 owner_role_01
                 owner_csr_conn6 owner_role_02
                 owner_csr_conn7 owner_role_03
-                owner_kafka_conn1 owner_role_01
-                owner_kafka_conn2 owner_role_01
-                owner_kafka_conn3 owner_role_01
-                owner_kafka_conn4 owner_role_02
-                owner_kafka_conn5 owner_role_01
-                owner_kafka_conn6 owner_role_02
-                owner_kafka_conn7 owner_role_03
+                owner_kafka_conn1 other_owner
+                owner_kafka_conn2 other_owner
+                owner_kafka_conn3 other_owner
+                owner_kafka_conn4 other_owner
+                owner_kafka_conn5 other_owner
+                owner_kafka_conn6 other_owner
+                owner_kafka_conn7 other_owner
 
                 > SELECT name, unnest(privileges)::text FROM mz_databases WHERE name LIKE 'owner_db%'
                 owner_db1 owner_role_01=UC/owner_role_01
@@ -323,12 +334,19 @@ class Owners(Check):
 
                 > SELECT name, unnest(privileges)::text FROM mz_tables WHERE name LIKE 'owner_t%'
                 owner_t1 owner_role_01=arwd/owner_role_01
+                owner_t1 other_owner=a/owner_role_01
                 owner_t2 owner_role_01=arwd/owner_role_01
+                owner_t2 other_owner=a/owner_role_01
                 owner_t3 owner_role_01=arwd/owner_role_01
+                owner_t3 other_owner=a/owner_role_01
                 owner_t4 owner_role_02=arwd/owner_role_02
+                owner_t4 other_owner=a/owner_role_02
                 owner_t5 owner_role_01=arwd/owner_role_01
+                owner_t5 other_owner=a/owner_role_01
                 owner_t6 owner_role_02=arwd/owner_role_02
+                owner_t6 other_owner=a/owner_role_02
                 owner_t7 owner_role_03=arwd/owner_role_03
+                owner_t7 other_owner=a/owner_role_03
 
                 > SELECT name, unnest(privileges)::text FROM mz_views WHERE name LIKE 'owner_v%'
                 owner_v1 owner_role_01=r/owner_role_01
@@ -391,13 +409,13 @@ class Owners(Check):
                 owner_csr_conn5 owner_role_01=U/owner_role_01
                 owner_csr_conn6 owner_role_02=U/owner_role_02
                 owner_csr_conn7 owner_role_03=U/owner_role_03
-                owner_kafka_conn1 owner_role_01=U/owner_role_01
-                owner_kafka_conn2 owner_role_01=U/owner_role_01
-                owner_kafka_conn3 owner_role_01=U/owner_role_01
-                owner_kafka_conn4 owner_role_02=U/owner_role_02
-                owner_kafka_conn5 owner_role_01=U/owner_role_01
-                owner_kafka_conn6 owner_role_02=U/owner_role_02
-                owner_kafka_conn7 owner_role_03=U/owner_role_03
+                owner_kafka_conn1 other_owner=U/other_owner
+                owner_kafka_conn2 other_owner=U/other_owner
+                owner_kafka_conn3 other_owner=U/other_owner
+                owner_kafka_conn4 other_owner=U/other_owner
+                owner_kafka_conn5 other_owner=U/other_owner
+                owner_kafka_conn6 other_owner=U/other_owner
+                owner_kafka_conn7 other_owner=U/other_owner
                 """
             )
             + self._drop_objects("owner_role_01", 5)
