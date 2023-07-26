@@ -167,6 +167,16 @@ pub(crate) fn subscribe() {
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of the `counter_sum` view contains all of the columns of the view, prepended with several additional columns that describe the nature of the update.
 
+## Clean up
+
+To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
+
+```sql
+DROP MATERIALIZED VIEW IF EXISTS counter_sum;
+DROP SOURCE IF EXISTS counter;
+DROP TABLE IF EXISTS countries;
+```
+
 ## ORM
 
 Rust ORMs like `Diesel` and `sqlx` tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if a tool is compatible with PostgreSQL, it’s not guaranteed that the same integration will work out-of-the-box.
