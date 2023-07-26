@@ -1,6 +1,6 @@
 ---
 title: "Rust cheatsheet"
-description: "Use Rust tokio-postgres to connect, insert, manage, query and stream from Materialize."
+description: "Use Rust postgres-openssl to connect, insert, manage, query and stream from Materialize."
 aliases:
   - /guides/rust
 menu:
@@ -9,11 +9,11 @@ menu:
     name: "Rust"
 ---
 
-Materialize is **wire-compatible** with PostgreSQL, which means that Rust applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the [`tokio-postgres`](https://docs.rs/tokio-postgres/0.7.2/tokio_postgres/) crate to connect to Materialize and issue SQL commands.
+Materialize is **wire-compatible** with PostgreSQL, which means that Rust applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the [`postgres-openssl`](https://docs.rs/postgres-openssl/latest/postgres_openssl/) crate (the TLS support for [`tokio-postgres`](https://crates.io/crates/tokio-postgres) via `openssl`) to connect to Materialize and issue SQL commands.
 
 ## Connect
 
-To connect to Materialize using `tokio-postgres`:
+To connect to Materialize using `postgres-openssl`:
 
 ```rust
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
