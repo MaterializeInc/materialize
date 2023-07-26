@@ -122,12 +122,6 @@ class DebeziumPostgres(Check):
         return Testdrive(
             dedent(
                 """
-                # Restart Debezium in case the Scenario in which this Check is being run restarts Postgres
-                # The Debezium connector is unable to handle all Postgres restarts -- it will stop replicating
-                # and require a manual restart via its REST API in order to continue.
-                $ http-request method=POST url=http://debezium:8083/connectors/psql-connector/restart content-type=application/json accept-additional-status-codes=409
-                { }
-
                 > SELECT * FROM debezium_view1;
                 A 5 16000
                 B 5 16000
