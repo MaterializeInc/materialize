@@ -735,33 +735,33 @@ where
             .observe(f64::cast_lossy(stats.updates));
 
         self.snapshot_stats += stats;
+        // Updating the metrics
+        self.worker_metrics.rehydration_total.set(
+            self.snapshot_stats.values_diff.try_into().unwrap_or_else(
+                |e: std::num::TryFromIntError| {
+                    tracing::warn!(
+                        "rehydration_total metric overflowed or is negative \
+                        and is innacurate: {}. Defaulting to 0",
+                        e.display_with_causes(),
+                    );
+
+                    0
+                },
+            ),
+        );
+        self.worker_metrics
+            .rehydration_updates
+            .set(self.snapshot_stats.updates);
+        // These `set_` functions also ensure that these values are non-negative.
+        self.stats
+            .set_envelope_state_bytes(self.snapshot_stats.size_diff);
+        self.stats
+            .set_envelope_state_count(self.snapshot_stats.values_diff);
 
         if completed {
             self.worker_metrics
                 .rehydration_latency
                 .set(self.snapshot_start.elapsed().as_secs_f64());
-            self.worker_metrics
-                .rehydration_updates
-                .set(self.snapshot_stats.updates);
-            self.worker_metrics.rehydration_total.set(
-                self.snapshot_stats.values_diff.try_into().unwrap_or_else(
-                    |e: std::num::TryFromIntError| {
-                        tracing::warn!(
-                            "rehydration_total metric overflowed or is negative \
-                            and is innacurate: {}. Defaulting to 0",
-                            e.display_with_causes(),
-                        );
-
-                        0
-                    },
-                ),
-            );
-
-            // These `set_` functions also ensure that these values are non-negative.
-            self.stats
-                .set_envelope_state_bytes(self.snapshot_stats.size_diff);
-            self.stats
-                .set_envelope_state_count(self.snapshot_stats.values_diff);
 
             self.snapshot_completed = true;
         }
