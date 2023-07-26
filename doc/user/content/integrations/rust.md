@@ -145,7 +145,7 @@ pub(crate) fn create_materialized_view() -> Result<u64, Error> {
 
 ## Stream
 
-Materialize is designed to stream changes to views. To subscribe to a stream of updates in Rust, you can use PostgreSQL's LISTEN/NOTIFY feature. Here's how to subscribe to a stream:
+Materialize is designed to stream changes to views. To subscribe to a stream of updates in Rust, you can use the `SUBSCRIBE` feature. Here's how to subscribe to a stream:
 
 ```rust
 use std::{thread::sleep, time::Duration};
