@@ -2265,8 +2265,8 @@ DROP TABLE t
 ----
 COMPLETE 0
 
-# Test that linked clusters, linked replicas, and subsources are consistent with their linked
-# object and primary source
+# Test that linked cluster, linked replica, and subsource owners are consistent with their linked
+# object and primary source owners.
 
 statement ok
 CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1')
@@ -2298,7 +2298,7 @@ query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
   FROM mz_cluster_replicas
   LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 linked  materialize
@@ -2342,7 +2342,7 @@ query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
   FROM mz_cluster_replicas
   LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 linked  materialize
@@ -2379,13 +2379,116 @@ query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
   FROM mz_cluster_replicas
   LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 linked  joe
 
 simple conn=mz_system,user=mz_system
 DROP SOURCE s
+----
+COMPLETE 0
+
+# Test that managed cluster replica owners are consistent with their managed cluster owner.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_managed_clusters = true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT joe TO materialize
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+
+statement ok
+ALTER CLUSTER REPLICA c.r1 OWNER TO joe
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+c  materialize
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c' AND mz_cluster_replicas.name = 'r1'
+----
+r1  joe
+
+statement ok
+ALTER CLUSTER c SET (MANAGED);
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+c  materialize
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c' AND mz_cluster_replicas.name = 'r1'
+----
+r1  materialize
+
+statement error cannot modify managed cluster c
+ALTER CLUSTER REPLICA c.r1 OWNER TO joe
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+c  materialize
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c' AND mz_cluster_replicas.name = 'r1'
+----
+r1  materialize
+
+statement ok
+ALTER CLUSTER c OWNER TO joe
+
+query TT
+SELECT mz_clusters.name, mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+c  joe
+
+query TT
+SELECT mz_cluster_replicas.name, mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c' AND mz_cluster_replicas.name = 'r1'
+----
+r1  joe
+
+statement ok
+DROP CLUSTER c
+
+simple conn=mz_system,user=mz_system
+REVOKE joe FROM materialize
 ----
 COMPLETE 0
 

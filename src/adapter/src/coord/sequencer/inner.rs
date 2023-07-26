@@ -4776,6 +4776,22 @@ impl Coordinator {
             ops.extend(dependent_subsources);
         }
 
+        if let ObjectId::Cluster(cluster_id) = &id {
+            let cluster = self.catalog().get_cluster(*cluster_id);
+            // Alter owner cascades down to managed cluster replicas.
+            if cluster.is_managed() {
+                let managed_cluster_replica_ops =
+                    cluster
+                        .replicas_by_id
+                        .keys()
+                        .map(|replica_id| Op::UpdateOwner {
+                            id: ObjectId::ClusterReplica((cluster.id(), *replica_id)),
+                            new_owner,
+                        });
+                ops.extend(managed_cluster_replica_ops);
+            }
+        }
+
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))

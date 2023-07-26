@@ -18,7 +18,9 @@ use mz_controller::clusters::{
     DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_ore::cast::CastFrom;
-use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogClusterReplica, CatalogItem, CatalogItemType, ObjectType,
+};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
@@ -914,6 +916,7 @@ impl Coordinator {
         let mut names = BTreeSet::new();
         let mut sizes = BTreeSet::new();
         let mut disks = BTreeSet::new();
+        let mut non_owned_replicas = Vec::new();
 
         // Validate per-replica configuration
         for replica in cluster.replicas_by_id.values() {
@@ -926,6 +929,9 @@ impl Coordinator {
                     sizes.insert(location.size.clone());
                     disks.insert(location.disk);
                 }
+            }
+            if replica.owner_id() != cluster.owner_id() {
+                non_owned_replicas.push(replica.replica_id());
             }
         }
 
@@ -992,6 +998,16 @@ impl Coordinator {
         }
 
         let mut ops = vec![];
+
+        // Update the owners of non-owned replicas.
+        ops.extend(
+            non_owned_replicas
+                .into_iter()
+                .map(|replica_id| catalog::Op::UpdateOwner {
+                    id: ObjectId::ClusterReplica((cluster_id, replica_id)),
+                    new_owner: cluster.owner_id(),
+                }),
+        );
 
         let variant = ClusterVariant::Managed(new_config);
         ops.push(catalog::Op::UpdateClusterConfig {
