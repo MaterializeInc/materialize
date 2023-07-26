@@ -55,13 +55,13 @@ use mz_repr::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CreateWebhookSourceCheck, CreateWebhookSourceSecret, CteBlock,
-    DeleteStatement, Distinct, Expr, Function, FunctionArgs, HomogenizingFunction, Ident,
-    InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, MutRecBlock,
-    MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption,
-    SelectOptionName, SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias,
-    TableFactor, TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowSpec,
+    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
+    Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
+    JoinConstraint, JoinOperator, Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName,
+    OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator,
+    ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
+    UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use uuid::Uuid;
 
@@ -921,25 +921,72 @@ pub fn plan_webhook_validate_using(
         using: mut expr,
     } = validate_using;
 
-    // We _always_ provide the body of the request as bytes and include the headers when validating
-    // a request, regardless of what has otherwise been specified for the source.
-    let mut column_typs = vec![
-        ColumnType {
-            scalar_type: ScalarType::Bytes,
+    let mut column_typs = vec![];
+    let mut column_names = vec![];
+
+    let (bodies, headers, secrets) = options
+        .map(|o| (o.bodies, o.headers, o.secrets))
+        .unwrap_or_default();
+
+    // Append all of the bodies so they can be used in the expression.
+    let mut body_tuples = vec![];
+    for CreateWebhookSourceBody { alias, use_bytes } in bodies {
+        let scalar_type = use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+        let name = alias
+            .map(|a| a.into_string())
+            .unwrap_or_else(|| "body".to_string());
+
+        column_typs.push(ColumnType {
+            scalar_type,
             nullable: false,
-        },
-        ColumnType {
+        });
+        column_names.push(name);
+
+        // Store the column index so we can be sure to provide this body correctly.
+        let column_idx = column_typs.len() - 1;
+        // Double check we're consistent with column names.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "body column names and types don't match"
+        );
+        body_tuples.push((column_idx, use_bytes));
+    }
+
+    // Append all of the headers so they can be used in the expression.
+    let mut header_tuples = vec![];
+
+    for CreateWebhookSourceHeader { alias, use_bytes } in headers {
+        let value_type = use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+        let name = alias
+            .map(|a| a.into_string())
+            .unwrap_or_else(|| "headers".to_string());
+
+        column_typs.push(ColumnType {
             scalar_type: ScalarType::Map {
-                value_type: Box::new(ScalarType::String),
+                value_type: Box::new(value_type),
                 custom_id: None,
             },
             nullable: false,
-        },
-    ];
-    let mut column_names = vec!["body".to_string(), "headers".to_string()];
+        });
+        column_names.push(name);
+
+        // Store the column index so we can be sure to provide this body correctly.
+        let column_idx = column_typs.len() - 1;
+        // Double check we're consistent with column names.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "header column names and types don't match"
+        );
+        header_tuples.push((column_idx, use_bytes));
+    }
 
     // Append all secrets so they can be used in the expression.
-    let secrets = options.map(|o| o.secrets).unwrap_or_default();
     let mut validation_secrets = vec![];
 
     for CreateWebhookSourceSecret {
@@ -949,11 +996,9 @@ pub fn plan_webhook_validate_using(
     } in secrets
     {
         // Either provide the secret to the validation expression as Bytes or a String.
-        let scalar_type = if use_bytes {
-            ScalarType::Bytes
-        } else {
-            ScalarType::String
-        };
+        let scalar_type = use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
 
         column_typs.push(ColumnType {
             scalar_type,
@@ -1009,6 +1054,8 @@ pub fn plan_webhook_validate_using(
         .lower_uncorrelated()?;
     let validation = WebhookValidation {
         expression: expr,
+        bodies: body_tuples,
+        headers: header_tuples,
         secrets: validation_secrets,
     };
     Ok(validation)

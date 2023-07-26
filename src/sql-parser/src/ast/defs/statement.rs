@@ -719,13 +719,28 @@ impl_display_t!(CreateWebhookSourceCheck);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateWebhookSourceCheckOptions<T: AstInfo> {
     pub secrets: Vec<CreateWebhookSourceSecret<T>>,
+    pub headers: Vec<CreateWebhookSourceHeader>,
+    pub bodies: Vec<CreateWebhookSourceBody>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateWebhookSourceCheckOptions<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("WITH (");
 
-        f.write_node(&display::comma_separated(&self.secrets[..]));
+        let mut delim = "";
+        if !self.headers.is_empty() {
+            f.write_node(&display::comma_separated(&self.headers[..]));
+            delim = ", ";
+        }
+        if !self.bodies.is_empty() {
+            f.write_str(delim);
+            f.write_node(&display::comma_separated(&self.bodies[..]));
+            delim = ", ";
+        }
+        if !self.secrets.is_empty() {
+            f.write_str(delim);
+            f.write_node(&display::comma_separated(&self.secrets[..]));
+        }
 
         f.write_str(")");
     }
@@ -758,6 +773,54 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceSecret<T> {
 }
 
 impl_display_t!(CreateWebhookSourceSecret);
+
+/// `HEADER [AS ...] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceHeader {
+    pub alias: Option<Ident>,
+    pub use_bytes: bool,
+}
+
+impl AstDisplay for CreateWebhookSourceHeader {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("HEADERS");
+
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceHeader);
+
+/// `BODY [AS ...] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceBody {
+    pub alias: Option<Ident>,
+    pub use_bytes: bool,
+}
+
+impl AstDisplay for CreateWebhookSourceBody {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("BODY");
+
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceBody);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

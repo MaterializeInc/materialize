@@ -2882,28 +2882,55 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<CreateWebhookSourceCheckOptions<Raw>, ParserError> {
         let mut secrets = vec![];
+        let mut headers = vec![];
+        let mut bodies = vec![];
 
-        self.parse_comma_separated(|f| match f.expect_one_of_keywords(&[SECRET])? {
-            SECRET => {
-                let secret = f.parse_raw_name()?;
-                let alias = f
-                    .parse_keyword(AS)
-                    .then(|| f.parse_identifier())
-                    .transpose()?;
-                let use_bytes = f.parse_keyword(Keyword::Bytes);
+        fn parse_alias(parser: &mut Parser<'_>) -> Result<Option<Ident>, ParserError> {
+            parser
+                .parse_keyword(AS)
+                .then(|| parser.parse_identifier())
+                .transpose()
+        }
 
-                secrets.push(CreateWebhookSourceSecret {
-                    secret,
-                    alias,
-                    use_bytes,
-                });
+        self.parse_comma_separated(|f| {
+            match f.expect_one_of_keywords(&[SECRET, HEADERS, BODY])? {
+                SECRET => {
+                    let secret = f.parse_raw_name()?;
+                    let alias = parse_alias(f)?;
+                    let use_bytes = f.parse_keyword(Keyword::Bytes);
 
-                Ok(())
+                    secrets.push(CreateWebhookSourceSecret {
+                        secret,
+                        alias,
+                        use_bytes,
+                    });
+
+                    Ok(())
+                }
+                HEADERS => {
+                    // TODO(parkmycar): Support filtering down to specific headers.
+                    let alias = parse_alias(f)?;
+                    let use_bytes = f.parse_keyword(Keyword::Bytes);
+                    headers.push(CreateWebhookSourceHeader { alias, use_bytes });
+
+                    Ok(())
+                }
+                BODY => {
+                    let alias = parse_alias(f)?;
+                    let use_bytes = f.parse_keyword(Keyword::Bytes);
+                    bodies.push(CreateWebhookSourceBody { alias, use_bytes });
+
+                    Ok(())
+                }
+                k => unreachable!("Unexpected keyword! {k}"),
             }
-            k => unreachable!("Unexpected keyword! {k}"),
         })?;
 
-        Ok(CreateWebhookSourceCheckOptions { secrets })
+        Ok(CreateWebhookSourceCheckOptions {
+            secrets,
+            headers,
+            bodies,
+        })
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
