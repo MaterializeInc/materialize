@@ -353,7 +353,7 @@ fn sync_source_owners(catalog: &Catalog, tx: &mut Transaction) {
                 .iter()
                 .find(|id| catalog.get_entry(id).item_type() == CatalogItemType::Source)
                 .expect("subsource must have primary source");
-            let primary_source_owner = catalog.get_entry(&primary_source).owner_id();
+            let primary_source_owner = catalog.get_entry(primary_source).owner_id();
             if source.owner_id() != primary_source_owner {
                 let mut new_source = source.clone();
                 new_source.owner_id = *primary_source_owner;
