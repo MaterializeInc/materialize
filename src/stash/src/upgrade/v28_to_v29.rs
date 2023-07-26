@@ -251,11 +251,6 @@ mod tests {
                 value: Some(objects_v29::database_id::Value::User(42)),
             }),
         };
-        const DANGLING_DATABASE_ID_V29: objects_v29::DatabaseKey = objects_v29::DatabaseKey {
-            id: Some(objects_v29::DatabaseId {
-                value: Some(objects_v29::database_id::Value::User(1)),
-            }),
-        };
 
         const SCHEMA_ID_V28: objects_v28::SchemaKey = objects_v28::SchemaKey {
             id: Some(objects_v28::SchemaId {
@@ -270,11 +265,6 @@ mod tests {
         const SCHEMA_ID_V29: objects_v29::SchemaKey = objects_v29::SchemaKey {
             id: Some(objects_v29::SchemaId {
                 value: Some(objects_v29::schema_id::Value::User(42)),
-            }),
-        };
-        const DANGLING_SCHEMA_ID_V29: objects_v29::SchemaKey = objects_v29::SchemaKey {
-            id: Some(objects_v29::SchemaId {
-                value: Some(objects_v29::schema_id::Value::User(1)),
             }),
         };
 
