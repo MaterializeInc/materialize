@@ -152,10 +152,19 @@ impl HttpServer {
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
                 frontegg,
-                adapter_client,
+                adapter_client: adapter_client.clone(),
                 active_connection_count,
             });
-        let router = Router::new().merge(base_router).merge(ws_router);
+        let webhook_router = Router::new()
+            .route(
+                "/api/webhook/:database/:schema/:id",
+                routing::post(webhook::handle_webhook),
+            )
+            .with_state(adapter_client);
+        let router = Router::new()
+            .merge(base_router)
+            .merge(ws_router)
+            .merge(webhook_router);
         HttpServer { tls, router }
     }
 
@@ -761,10 +770,6 @@ fn base_router(BaseRouterConfig { profiling, metrics }: BaseRouterConfig) -> Rou
             routing::get(move || async move { root::handle_home(profiling).await }),
         )
         .route("/api/sql", routing::post(sql::handle_sql))
-        .route(
-            "/api/webhook/:database/:schema/:id",
-            routing::post(webhook::handle_webhook),
-        )
         .route("/memory", routing::get(memory::handle_memory))
         .route(
             "/hierarchical-memory",

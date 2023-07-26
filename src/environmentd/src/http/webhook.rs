@@ -19,23 +19,23 @@ use mz_repr::{ColumnType, Datum, Row, ScalarType};
 use mz_storage_client::controller::StorageError;
 
 use anyhow::Context;
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::Extension;
+// use axum::Extension;
 use bytes::Bytes;
 use http::StatusCode;
 use thiserror::Error;
 
-use crate::http::Delayed;
+// use crate::http::Delayed;
 
 pub async fn handle_webhook(
-    Extension(client): Extension<Delayed<mz_adapter::Client>>,
+    State(client): State<mz_adapter::Client>,
     Path((database, schema, name)): Path<(String, String, String)>,
     headers: http::HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     // Get our adapter client.
-    let client = client.await.context("receiving client")?;
+    // let client = client.await.context("receiving client")?;
     let conn_id = client.new_conn_id().context("allocate connection id")?;
 
     // Collect headers into a map, while converting them into strings.
