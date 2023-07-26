@@ -165,7 +165,7 @@ pub(crate) fn subscribe() {
 }
 ```
 
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `results` contains all of the columns of `market_orders`, prepended with several additional columns that describe the nature of the update.
+The [SUBSCRIBE output format](/sql/subscribe/#output) of the `counter_sum` view contains all of the columns of the view, prepended with several additional columns that describe the nature of the update.
 
 ## ORM
 
