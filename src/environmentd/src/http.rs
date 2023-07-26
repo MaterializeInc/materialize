@@ -152,7 +152,7 @@ impl HttpServer {
                 active_connection_count,
             });
 
-        let webhhook_router = Router::new()
+        let webhook_router = Router::new()
             .route(
                 "/api/webhook/:database/:schema/:id",
                 routing::post(webhook::handle_webhook),
@@ -162,13 +162,8 @@ impl HttpServer {
         let router = Router::new()
             .merge(base_router)
             .merge(ws_router)
-            .merge(webhhook_router)
-            // Layers that get applied for __all__ routes.
-            //
-            // Note: if there are layers that should only get applied for certain routes, add them
-            // to specific routers.
-            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-            .layer(metrics::PrometheusLayer::new(metrics));
+            .merge(webhook_router)
+            .apply_default_layers(metrics);
 
         HttpServer { tls, router }
     }
@@ -405,12 +400,7 @@ impl InternalHttpServer {
 
         let router = router
             .merge(leader_router)
-            // Layers that get applied for __all__ routes.
-            //
-            // Note: if there are layers that should only get applied for certain routes, add them
-            // to specific routers.
-            .layer(metrics::PrometheusLayer::new(metrics))
-            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE));
+            .apply_default_layers(metrics);
 
         InternalHttpServer { router }
     }
@@ -788,4 +778,17 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
     }
 
     router
+}
+
+/// Default layers that should be applied to all routes, and should get applied to both the
+/// internal http and external http routers.
+trait DefaultLayers {
+    fn apply_default_layers(self, metrics: Metrics) -> Self;
+}
+
+impl DefaultLayers for Router {
+    fn apply_default_layers(self, metrics: Metrics) -> Self {
+        self.layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
+            .layer(metrics::PrometheusLayer::new(metrics))
+    }
 }
