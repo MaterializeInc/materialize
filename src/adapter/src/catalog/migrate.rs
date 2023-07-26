@@ -13,12 +13,13 @@ use futures::future::BoxFuture;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, Value};
+use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogItem, CatalogItemType};
 use mz_storage_client::types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
 use crate::catalog::storage::Transaction;
-use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
+use crate::catalog::{storage, Catalog, ConnCatalog, SerializedCatalogItem};
 
 async fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
@@ -88,6 +89,9 @@ pub(crate) async fn migrate(
         })
     })
     .await?;
+
+    sync_source_owners(&cat, &mut tx);
+
     tx.commit().await?;
     info!(
         "migration from catalog version {:?} complete",
@@ -304,4 +308,75 @@ async fn pg_source_table_metadata_rewrite(
             ))),
         });
     }
+}
+
+// Update the owners of all linked clusters, linked cluster replicas, and subsources so that their
+// owners match their linked object or primary source.
+//
+// TODO(migration): delete in version v.64 (released in v0.63 + 1 additional
+// release)
+fn sync_source_owners(catalog: &Catalog, tx: &mut Transaction) {
+    let mut updated_clusters = BTreeMap::new();
+    let mut updated_cluster_replicas = BTreeMap::new();
+    let mut updated_items = BTreeMap::new();
+
+    for cluster in catalog.user_clusters() {
+        if let Some(linked_id) = cluster.linked_object_id() {
+            let linked_owner_id = catalog.get_entry(&linked_id).owner_id();
+            if &cluster.owner_id() != linked_owner_id {
+                let mut new_cluster = cluster.clone();
+                new_cluster.owner_id = *linked_owner_id;
+                updated_clusters.insert(cluster.id(), new_cluster);
+            }
+        }
+    }
+
+    for cluster_replica in catalog.user_cluster_replicas() {
+        let cluster = catalog.get_cluster(cluster_replica.cluster_id());
+        if let Some(linked_id) = cluster.linked_object_id() {
+            let linked_owner_id = catalog.get_entry(&linked_id).owner_id();
+            if &cluster.owner_id() != linked_owner_id {
+                let mut new_replica = cluster_replica.clone();
+                new_replica.owner_id = *linked_owner_id;
+                updated_cluster_replicas.insert(
+                    cluster_replica.replica_id(),
+                    (cluster_replica.cluster_id(), new_replica),
+                );
+            }
+        }
+    }
+
+    for source in catalog.user_sources() {
+        if source.is_subsource() {
+            let primary_source = source
+                .used_by()
+                .iter()
+                .find(|id| catalog.get_entry(id).item_type() == CatalogItemType::Source)
+                .expect("subsource must have primary source");
+            let primary_source_owner = catalog.get_entry(&primary_source).owner_id();
+            if source.owner_id() != primary_source_owner {
+                let mut new_source = source.clone();
+                new_source.owner_id = *primary_source_owner;
+                let definition = SerializedCatalogItem::V1 {
+                    create_sql: new_source.create_sql().to_string(),
+                };
+                updated_items.insert(
+                    source.id,
+                    storage::Item {
+                        id: new_source.id,
+                        name: new_source.name,
+                        definition,
+                        owner_id: new_source.owner_id,
+                        privileges: new_source.privileges.all_values_owned().collect(),
+                    },
+                );
+            }
+        }
+    }
+
+    tx.update_clusters(updated_clusters)
+        .expect("corrupt catalog");
+    tx.update_cluster_replicas(updated_cluster_replicas)
+        .expect("corrupt catalog");
+    tx.update_items(updated_items).expect("corrupt catalog");
 }
