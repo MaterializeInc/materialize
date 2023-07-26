@@ -123,38 +123,53 @@ impl HttpServer {
             .send(adapter_client.clone())
             .expect("rx known to be live");
 
-        let base_router = base_router(BaseRouterConfig {
-            profiling: false,
-            metrics,
-        })
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-        .layer(middleware::from_fn(move |req, next| {
-            let base_frontegg = Arc::clone(&base_frontegg);
-            async move { http_auth(req, next, tls_mode, &base_frontegg).await }
-        }))
-        .layer(Extension(adapter_client_rx.shared()))
-        .layer(Extension(Arc::clone(&active_connection_count)))
-        .layer(
-            CorsLayer::new()
-                .allow_credentials(false)
-                .allow_headers([
-                    AUTHORIZATION,
-                    CONTENT_TYPE,
-                    HeaderName::from_static("x-materialize-version"),
-                ])
-                .allow_methods(Any)
-                .allow_origin(allowed_origin)
-                .expose_headers(Any)
-                .max_age(Duration::from_secs(60) * 60),
-        );
+        let base_router = base_router(BaseRouterConfig { profiling: false })
+            .layer(middleware::from_fn(move |req, next| {
+                let base_frontegg = Arc::clone(&base_frontegg);
+                async move { http_auth(req, next, tls_mode, &base_frontegg).await }
+            }))
+            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(Arc::clone(&active_connection_count)))
+            .layer(
+                CorsLayer::new()
+                    .allow_credentials(false)
+                    .allow_headers([
+                        AUTHORIZATION,
+                        CONTENT_TYPE,
+                        HeaderName::from_static("x-materialize-version"),
+                    ])
+                    .allow_methods(Any)
+                    .allow_origin(allowed_origin)
+                    .expose_headers(Any)
+                    .max_age(Duration::from_secs(60) * 60),
+            );
+
         let ws_router = Router::new()
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
                 frontegg,
-                adapter_client,
+                adapter_client: adapter_client.clone(),
                 active_connection_count,
             });
-        let router = Router::new().merge(base_router).merge(ws_router);
+
+        let webhhook_router = Router::new()
+            .route(
+                "/api/webhook/:database/:schema/:id",
+                routing::post(webhook::handle_webhook),
+            )
+            .with_state(adapter_client);
+
+        let router = Router::new()
+            .merge(base_router)
+            .merge(ws_router)
+            .merge(webhhook_router)
+            // Layers that get applied for __all__ routes.
+            //
+            // Note: if there are layers that should only get applied for certain routes, add them
+            // to specific routers.
+            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
+            .layer(metrics::PrometheusLayer::new(metrics));
+
         HttpServer { tls, router }
     }
 
@@ -333,56 +348,52 @@ impl InternalHttpServer {
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let metrics = Metrics::register_into(&metrics_registry, "mz_internal_http");
-        let router = base_router(BaseRouterConfig {
-            profiling: true,
-            metrics,
-        })
-        .route(
-            "/metrics",
-            routing::get(move || async move {
-                mz_http_util::handle_prometheus(&metrics_registry).await
-            }),
-        )
-        .route(
-            "/api/livez",
-            routing::get(mz_http_util::handle_liveness_check),
-        )
-        .route("/api/readyz", routing::get(probe::handle_ready))
-        .route(
-            "/api/opentelemetry/config",
-            routing::put({
-                move |_: axum::Json<DynamicFilterTarget>| async {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        "This endpoint has been replaced. \
+        let router = base_router(BaseRouterConfig { profiling: true })
+            .route(
+                "/metrics",
+                routing::get(move || async move {
+                    mz_http_util::handle_prometheus(&metrics_registry).await
+                }),
+            )
+            .route(
+                "/api/livez",
+                routing::get(mz_http_util::handle_liveness_check),
+            )
+            .route("/api/readyz", routing::get(probe::handle_ready))
+            .route(
+                "/api/opentelemetry/config",
+                routing::put({
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
                             Use the `opentelemetry_filter` system variable."
-                            .to_string(),
-                    )
-                }
-            }),
-        )
-        .route(
-            "/api/stderr/config",
-            routing::put({
-                move |_: axum::Json<DynamicFilterTarget>| async {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        "This endpoint has been replaced. \
+                                .to_string(),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/api/stderr/config",
+                routing::put({
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
                             Use the `log_filter` system variable."
-                            .to_string(),
-                    )
-                }
-            }),
-        )
-        .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
-        .route(
-            "/api/catalog",
-            routing::get(catalog::handle_internal_catalog),
-        )
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-        .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
-        .layer(Extension(adapter_client_rx.shared()))
-        .layer(Extension(active_connection_count));
+                                .to_string(),
+                        )
+                    }
+                }),
+            )
+            .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
+            .route(
+                "/api/catalog",
+                routing::get(catalog::handle_internal_catalog),
+            )
+            .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
+            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(active_connection_count));
 
         let leader_router = Router::new()
             .route("/api/leader/status", routing::get(handle_leader_status))
@@ -392,9 +403,16 @@ impl InternalHttpServer {
                 ready_to_promote,
             })));
 
-        InternalHttpServer {
-            router: router.merge(leader_router),
-        }
+        let router = router
+            .merge(leader_router)
+            // Layers that get applied for __all__ routes.
+            //
+            // Note: if there are layers that should only get applied for certain routes, add them
+            // to specific routers.
+            .layer(metrics::PrometheusLayer::new(metrics))
+            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE));
+
+        InternalHttpServer { router }
     }
 }
 
@@ -745,13 +763,11 @@ async fn auth(
 struct BaseRouterConfig {
     /// Whether to enable the profiling routes.
     profiling: bool,
-    /// Optionally track metrics for all of our endpoints.
-    metrics: Metrics,
 }
 
 /// Returns the router for routes that are shared between the internal and
 /// external HTTP servers.
-fn base_router(BaseRouterConfig { profiling, metrics }: BaseRouterConfig) -> Router {
+fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
     // Adding a layer with in this function will only apply to the routes defined in this function.
     // https://docs.rs/axum/0.6.1/axum/routing/struct.Router.html#method.layer
     let mut router = Router::new()
@@ -760,10 +776,6 @@ fn base_router(BaseRouterConfig { profiling, metrics }: BaseRouterConfig) -> Rou
             routing::get(move || async move { root::handle_home(profiling).await }),
         )
         .route("/api/sql", routing::post(sql::handle_sql))
-        .route(
-            "/api/webhook/:database/:schema/:id",
-            routing::post(webhook::handle_webhook),
-        )
         .route("/memory", routing::get(memory::handle_memory))
         .route(
             "/hierarchical-memory",
@@ -775,5 +787,5 @@ fn base_router(BaseRouterConfig { profiling, metrics }: BaseRouterConfig) -> Rou
         router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
     }
 
-    router.layer(metrics::PrometheusLayer::new(metrics))
+    router
 }
