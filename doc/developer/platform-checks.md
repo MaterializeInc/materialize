@@ -105,7 +105,7 @@ All checks are located in the `misc/python/materialize/checks/` directory, funct
 the creation of a particular type of resource is usually placed in the same file as the `Check` that validates the deletion of the
 same resource type.
 
-Checks need to be imported into the `test/platform_checks/mzcompose.py` file:
+Checks need to be imported into the `misc/python/materialize/checks/all_checks.py` file:
 
 ```
 from materialize.checks.my_new_check_file import *  # noqa: F401 F403
