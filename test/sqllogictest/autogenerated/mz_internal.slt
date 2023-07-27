@@ -129,6 +129,148 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  connected_at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  database  text
+4  schema  text
+5  name  text
+6  object_type  text
+7  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_cluster_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  name  text
+4  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_database_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  name  text
+4  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_default_privileges' ORDER BY position
+----
+1  object_owner  text
+2  database  text
+3  schema  text
+4  object_type  text
+5  grantee  text
+6  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_object_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  database  text
+4  schema  text
+5  name  text
+6  object_type  text
+7  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_role_members' ORDER BY position
+----
+1  role  text
+2  member  text
+3  grantor  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_schema_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  database  text
+4  name  text
+5  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_system_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_my_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  database  text
+4  schema  text
+5  name  text
+6  object_type  text
+7  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_cluster_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  name  text
+4  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_database_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  name  text
+4  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_default_privileges' ORDER BY position
+----
+1  object_owner  text
+2  database  text
+3  schema  text
+4  object_type  text
+5  grantee  text
+6  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_object_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  database  text
+4  schema  text
+5  name  text
+6  object_type  text
+7  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_role_members' ORDER BY position
+----
+1  role  text
+2  member  text
+3  grantor  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_schema_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  database  text
+4  name  text
+5  privilege_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_system_privileges' ORDER BY position
+----
+1  grantor  text
+2  grantee  text
+3  privilege_type  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
 ----
 1  id  text
@@ -434,9 +576,25 @@ mz_scheduling_parks_histogram
 mz_scheduling_parks_histogram_per_worker
 mz_scheduling_parks_histogram_raw
 mz_sessions
+mz_show_all_my_privileges
+mz_show_all_privileges
+mz_show_cluster_privileges
 mz_show_cluster_replicas
+mz_show_database_privileges
+mz_show_default_privileges
 mz_show_indexes
 mz_show_materialized_views
+mz_show_my_cluster_privileges
+mz_show_my_database_privileges
+mz_show_my_default_privileges
+mz_show_my_object_privileges
+mz_show_my_role_members
+mz_show_my_schema_privileges
+mz_show_my_system_privileges
+mz_show_object_privileges
+mz_show_role_members
+mz_show_schema_privileges
+mz_show_system_privileges
 mz_sink_statistics
 mz_sink_status_history
 mz_sink_statuses

@@ -20,7 +20,6 @@ use std::sync::Arc;
 use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_expr::MirScalarExpr;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
@@ -28,7 +27,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, PlanKind, WebhookValidationSecret};
+use mz_sql::plan::{ExecuteTimeout, PlanKind, WebhookValidation, WebhookValidationSecret};
 use mz_sql::session::vars::Var;
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{oneshot, watch};
@@ -289,6 +288,8 @@ pub enum AppendWebhookError {
     // A secret that we need for validation has gone missing.
     #[error("could not read a required secret")]
     MissingSecret,
+    #[error("the provided request body is not UTF-8")]
+    NonUtf8Body,
     // Note: we should _NEVER_ add more detail to this error, including the actual error we got
     // when running validation. This is because the error messages might contain info about the
     // arguments provided to the validation expression, we could contains user SECRETs. So by
@@ -304,20 +305,14 @@ pub enum AppendWebhookError {
 ///
 /// To actually validate a webhook request call [`AppendWebhookValidator::eval`].
 pub struct AppendWebhookValidator {
-    expr: MirScalarExpr,
-    secrets: Vec<WebhookValidationSecret>,
+    validation: WebhookValidation,
     secrets_reader: CachingSecretsReader,
 }
 
 impl AppendWebhookValidator {
-    pub fn new(
-        expr: MirScalarExpr,
-        secrets: Vec<WebhookValidationSecret>,
-        secrets_reader: CachingSecretsReader,
-    ) -> Self {
+    pub fn new(validation: WebhookValidation, secrets_reader: CachingSecretsReader) -> Self {
         AppendWebhookValidator {
-            expr,
-            secrets,
+            validation,
             secrets_reader,
         }
     }
@@ -328,10 +323,16 @@ impl AppendWebhookValidator {
         headers: Arc<BTreeMap<String, String>>,
     ) -> Result<bool, AppendWebhookError> {
         let AppendWebhookValidator {
-            expr,
-            secrets,
+            validation,
             secrets_reader,
         } = self;
+
+        let WebhookValidation {
+            expression,
+            secrets,
+            bodies: body_columns,
+            headers: header_columns,
+        } = validation;
 
         // Use the secrets reader to get any secrets.
         let mut secret_contents = BTreeMap::new();
@@ -351,25 +352,61 @@ impl AppendWebhookValidator {
         // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
         // work.
         let validate = move || {
-            // Use a RowPacker to form a Datum::Map.
-            let mut row = Row::with_capacity(1);
-            let mut packer = row.packer();
-            packer.push_dict(
-                headers
-                    .iter()
-                    .map(|(name, val)| (name.as_str(), Datum::String(val))),
-            );
-            let headers = row.unpack_first();
-            let body = Datum::Bytes(&body[..]);
-
             // Gather our Datums for evaluation
             //
             // TODO(parkmycar): Re-use the RowArena when we implement rate limiting.
             let temp_storage = RowArena::default();
-            let mut datums = Vec::with_capacity(2 + secret_contents.len());
+            let mut datums = Vec::with_capacity(
+                body_columns.len() + header_columns.len() + secret_contents.len(),
+            );
 
-            datums.push(body);
-            datums.push(headers);
+            // Append all of our body columns.
+            for (column_idx, use_bytes) in body_columns {
+                assert_eq!(column_idx, datums.len(), "body index and datums mismatch!");
+
+                let datum = if use_bytes {
+                    Datum::Bytes(&body[..])
+                } else {
+                    let s = std::str::from_utf8(&body[..])
+                        .map_err(|_| AppendWebhookError::NonUtf8Body)?;
+                    Datum::String(s)
+                };
+                datums.push(datum);
+            }
+
+            // Append all of our header columns, re-using Row packings.
+            //
+            // TODO(parkmycar): Use `std::cell::OnceCell` when #20779 merges.
+            let headers_byte = once_cell::unsync::OnceCell::new();
+            let headers_text = once_cell::unsync::OnceCell::new();
+            for (column_idx, use_bytes) in header_columns {
+                assert_eq!(column_idx, datums.len(), "index and datums mismatch!");
+
+                let row = if use_bytes {
+                    headers_byte.get_or_init(|| {
+                        let mut row = Row::with_capacity(1);
+                        let mut packer = row.packer();
+                        packer.push_dict(
+                            headers
+                                .iter()
+                                .map(|(name, val)| (name.as_str(), Datum::Bytes(val.as_bytes()))),
+                        );
+                        row
+                    })
+                } else {
+                    headers_text.get_or_init(|| {
+                        let mut row = Row::with_capacity(1);
+                        let mut packer = row.packer();
+                        packer.push_dict(
+                            headers
+                                .iter()
+                                .map(|(name, val)| (name.as_str(), Datum::String(val))),
+                        );
+                        row
+                    })
+                };
+                datums.push(row.unpack_first());
+            }
 
             // Append all of our secrets to our datums, in the correct column order.
             for column_idx in datums.len()..datums.len() + secret_contents.len() {
@@ -387,7 +424,7 @@ impl AppendWebhookValidator {
             }
 
             // Run our validation
-            let valid = expr
+            let valid = expression
                 .eval(&datums[..], &temp_storage)
                 .map_err(|_| AppendWebhookError::ValidationError)?;
             match valid {

@@ -18,7 +18,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use reqwest::{Method, StatusCode};
+use reqwest::Method;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::client::cloud_provider::CloudProvider;
@@ -61,12 +61,7 @@ impl Client {
 
         match self.send_request(req).await {
             Ok(region) => Ok(region),
-            Err(Error::Api(err)) => {
-                if err.status_code == StatusCode::NOT_FOUND {
-                    return Err(Error::EmptyRegion);
-                }
-                Err(Error::Api(err))
-            }
+            Err(Error::SuccesfullButNoContent) => Err(Error::EmptyRegion),
             Err(e) => Err(e),
         }
     }

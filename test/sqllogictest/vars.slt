@@ -421,3 +421,18 @@ public
 
 query error db error: ERROR: SHOW variable in subqueries not yet supported
 SELECT * FROM (show client_encoding)
+
+statement ok
+SET max_query_result_size = 100
+
+query T
+SELECT generate_series(1, 2)
+----
+1
+2
+
+query error db error: ERROR: result exceeds max size of 100 B
+SELECT generate_series(1, 10)
+
+statement ok
+RESET max_query_result_size

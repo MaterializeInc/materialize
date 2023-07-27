@@ -378,7 +378,7 @@ simple conn=joe,user=joe
 CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
-    WITH ( SECRET webhook_key BYTES )
+    WITH ( BODY, SECRET webhook_key )
     body = webhook_key
   )
 ----
@@ -388,7 +388,7 @@ simple conn=child,user=child
 CREATE SOURCE webhook_text_with_secret1 IN CLUSTER source_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
-    WITH ( SECRET webhook_key BYTES )
+    WITH ( BODY, SECRET webhook_key )
     body = webhook_key
   )
 ----
@@ -403,7 +403,7 @@ simple conn=joe,user=joe
 CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
-    WITH ( SECRET webhook_key BYTES )
+    WITH ( BODY, SECRET webhook_key )
     body = webhook_key
   )
 ----
@@ -413,7 +413,7 @@ simple conn=child,user=child
 CREATE SOURCE webhook_text_with_secret1 IN CLUSTER source_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
-    WITH ( SECRET webhook_key BYTES )
+    WITH ( BODY, SECRET webhook_key )
     body = webhook_key
   )
 ----
@@ -428,7 +428,7 @@ simple conn=joe,user=joe
 CREATE SOURCE webhook_text_with_secret IN CLUSTER source_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
-    WITH ( SECRET webhook_key BYTES )
+    WITH ( BODY, SECRET webhook_key )
     body = webhook_key
   )
 ----

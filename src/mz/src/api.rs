@@ -63,7 +63,6 @@ impl FromStr for CloudProviderRegion {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-
 pub struct RegionInfo {
     pub sql_address: String,
     pub http_address: String,
@@ -175,6 +174,14 @@ pub async fn get_region(
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Region, anyhow::Error> {
+    // Help us decode API responses that may be empty
+    #[derive(Debug, Deserialize, Clone)]
+    #[serde(untagged)]
+    enum APIResponse {
+        Empty,
+        Region(Region),
+    }
+
     let mut region_api_url = cloud_provider_region.url.clone();
     region_api_url.push_str("/api/region");
 
@@ -183,8 +190,12 @@ pub async fn get_region(
         .authenticate(&valid_profile.frontegg_auth)
         .send()
         .await?;
+
     ensure!(response.status().is_success());
-    Ok(response.json::<Region>().await?)
+    match response.json::<APIResponse>().await? {
+        APIResponse::Empty => bail!("The region is empty"),
+        APIResponse::Region(region) => Ok(region),
+    }
 }
 
 /// List all the available regions for a list of cloud providers.

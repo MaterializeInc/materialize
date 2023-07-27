@@ -209,6 +209,236 @@ The `mz_sessions` table contains a row for each active session in the system.
 | `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
 | `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
+### `mz_show_all_privileges`
+
+The `mz_show_all_privileges` view contains a row for each privilege granted
+in the system on user objects to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_all_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the privilege target.               |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+
+### `mz_show_cluster_privileges`
+
+The `mz_show_cluster_privileges` view contains a row for each cluster privilege granted
+in the system on user clusters to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_cluster_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the cluster.                    |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_database_privileges`
+
+The `mz_show_database_privileges` view contains a row for each database privilege granted
+in the system on user databases to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_database_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the database.                   |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_default_privileges`
+
+The `mz_show_default_privileges` view contains a row for each default privilege granted
+in the system in user databases and schemas to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_default_privileges -->
+| Field            | Type     | Meaning                                                                                             |
+|------------------|----------|-----------------------------------------------------------------------------------------------------|
+| `object_owner`   | [`text`] | Privileges described in this row will be granted on objects created by `object_owner`.              |
+| `database`       | [`text`] | Privileges described in this row will be granted only on objects created in `database` if non-null. |
+| `schema`         | [`text`] | Privileges described in this row will be granted only on objects created in `schema` if non-null.   |
+| `object_type`    | [`text`] | Privileges described in this row will be granted only on objects of type `object_type`.             |
+| `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
+| `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
+
+### `mz_show_object_privileges`
+
+The `mz_show_object_privileges` view contains a row for each object privilege granted
+in the system on user objects to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_object_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the object.                         |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_role_members`
+
+The `mz_show_role_members` view contains a row for each role membership in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_show_role_members -->
+| Field     | Type     | Meaning                                                 |
+|-----------|----------|---------------------------------------------------------|
+| `role`    | [`text`] | The role that `member` is a member of.                  |
+| `member`  | [`text`] | The role that is a member of `role`.                    |
+| `grantor` | [`text`] | The role that granted membership of `member` to `role`. |
+
+### `mz_show_schema_privileges`
+
+The `mz_show_schema_privileges` view contains a row for each schema privilege granted
+in the system on user schemas to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_schema_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the schema. |
+| `name`           | [`text`] | The name of the schema.                         |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_system_privileges`
+
+The `mz_show_system_privileges` view contains a row for each system privilege granted
+in the system on to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_system_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_all_my_privileges`
+
+The `mz_show_all_my_privileges` view is the same as
+[`mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_all_my_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the privilege target.               |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_my_cluster_privileges`
+
+The `mz_show_my_cluster_privileges` view is the same as
+[`mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_cluster_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the cluster.                    |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_my_database_privileges`
+
+The `mz_show_my_database_privileges` view is the same as
+[`mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_database_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the cluster.                    |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_my_default_privileges`
+
+The `mz_show_my_default_privileges` view is the same as
+[`mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_default_privileges -->
+| Field            | Type     | Meaning                                                                                             |
+|------------------|----------|-----------------------------------------------------------------------------------------------------|
+| `object_owner`   | [`text`] | Privileges described in this row will be granted on objects created by `object_owner`.              |
+| `database`       | [`text`] | Privileges described in this row will be granted only on objects created in `database` if non-null. |
+| `schema`         | [`text`] | Privileges described in this row will be granted only on objects created in `schema` if non-null.   |
+| `object_type`    | [`text`] | Privileges described in this row will be granted only on objects of type `object_type`.             |
+| `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
+| `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
+
+### `mz_show_my_object_privileges`
+
+The `mz_show_my_object_privileges` view is the same as
+[`mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_object_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the object.                         |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_my_role_members`
+
+The `mz_show_my_role_members` view is the same as
+[`mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members), but
+only includes rows where the current role is a direct or indirect member of `member`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_role_members -->
+| Field     | Type     | Meaning                                                 |
+|-----------|----------|---------------------------------------------------------|
+| `role`    | [`text`] | The role that `member` is a member of.                  |
+| `member`  | [`text`] | The role that is a member of `role`.                    |
+| `grantor` | [`text`] | The role that granted membership of `member` to `role`. |
+
+### `mz_show_my_schema_privileges`
+
+The `mz_show_my_schema_privileges` view is the same as
+[`mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_schema_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the schema. |
+| `name`           | [`text`] | The name of the schema.                         |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_my_system_privileges`
+
+The `mz_show_my_system_privileges` view is the same as
+[`mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_system_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
 ### `mz_sink_statistics`
 
 The `mz_sink_statistics` table contains statistics for each worker thread of

@@ -93,6 +93,7 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -395,6 +396,18 @@ pub struct Args {
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
     orchestrator_kubernetes_coverage: bool,
+    /// The secrets controller implementation to use.
+    #[structopt(
+        long,
+        arg_enum,
+        env = "SECRETS_CONTROLLER",
+        default_value_ifs(&[
+            ("orchestrator", Some("kubernetes"), Some("kubernetes")),
+            ("orchestrator", Some("process"), Some("local-file"))
+        ]),
+        default_value("kubernetes"), // This shouldn't be possible, but it makes clap happy.
+    )]
+    secrets_controller: SecretsControllerKind,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -557,6 +570,17 @@ pub struct Args {
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
 
+    /// The list of tags to be set on AWS Secrets Manager secrets created by the
+    /// AwsSecretsController.
+    #[clap(
+        long,
+        env = "AWS_SECRETS_CONTROLLER_TAGS",
+        multiple = true,
+        value_delimiter = ';',
+        required_if_eq("secrets-controller", "aws-secrets-manager")
+    )]
+    aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
+
     #[clap(long, env = "DEPLOY_GENERATION")]
     deploy_generation: Option<u64>,
 
@@ -569,6 +593,13 @@ pub struct Args {
 enum OrchestratorKind {
     Kubernetes,
     Process,
+}
+
+#[derive(ArgEnum, Debug, Clone)]
+enum SecretsControllerKind {
+    Kubernetes,
+    AwsSecretsManager,
+    LocalFile,
 }
 
 fn main() {
@@ -744,7 +775,30 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
-            let secrets_controller = Arc::clone(&orchestrator);
+            let secrets_controller: Arc<dyn SecretsController> =
+                match args.secrets_controller {
+                    SecretsControllerKind::Kubernetes => {
+                        let sc = Arc::clone(&orchestrator);
+                        let sc: Arc<dyn SecretsController> = sc;
+                        sc
+                    }
+                    SecretsControllerKind::AwsSecretsManager => {
+                        let aws_secrets_controller = Arc::new(
+                            runtime.block_on(AwsSecretsController::new(
+                                args.environment_id.clone(),
+                                args.aws_secrets_controller_tags
+                                    .into_iter()
+                                    .map(|tag| (tag.key, tag.value))
+                                    .collect(),
+                            )),
+                        );
+                        // One-time migrate any existing kubernetes secrets
+                        // TODO [Alex Hunt] Remove after all customers have been migrated.
+                        runtime.block_on(aws_secrets_controller.migrate_from(&*orchestrator))?;
+                        aws_secrets_controller
+                    }
+                    SecretsControllerKind::LocalFile => bail!("SecretsControllerKind::LocalFile is not compatible with Orchestrator::Kubernetes."),
+                };
             let cloud_resource_controller = Arc::clone(&orchestrator);
             (
                 orchestrator,
@@ -793,7 +847,30 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating process orchestrator")?,
             );
-            let secrets_controller = Arc::clone(&orchestrator);
+            let secrets_controller: Arc<dyn SecretsController> =
+                match args.secrets_controller {
+                    SecretsControllerKind::Kubernetes => bail!("SecretsControllerKind::Kubernetes is not compatible with Orchestrator::Process."),
+                    SecretsControllerKind::AwsSecretsManager => {
+                        let aws_secrets_controller = Arc::new(
+                            runtime.block_on(AwsSecretsController::new(
+                                args.environment_id.clone(),
+                                args.aws_secrets_controller_tags
+                                    .into_iter()
+                                    .map(|tag| (tag.key, tag.value))
+                                    .collect(),
+                            )),
+                        );
+                        // One-time migrate any existing kubernetes secrets
+                        // TODO [Alex Hunt] Remove after all customers have been migrated.
+                        runtime.block_on(aws_secrets_controller.migrate_from(&*orchestrator))?;
+                        aws_secrets_controller
+                    }
+                    SecretsControllerKind::LocalFile => {
+                        let sc = Arc::clone(&orchestrator);
+                        let sc: Arc<dyn SecretsController> = sc;
+                        sc
+                    }
+                };
             (orchestrator, secrets_controller, None)
         }
     };

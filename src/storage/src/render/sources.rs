@@ -397,8 +397,8 @@ where
                                                         .upsert_backpressure_specific
                                                         .emitted_bytes
                                                         .get_delete_on_drop_counter(vec![
-                                                            dbg!(id.to_string()),
-                                                            dbg!(scope.index().to_string()),
+                                                            id.to_string(),
+                                                            scope.index().to_string(),
                                                         ]),
                                                 ),
                                                 last_backpressured_bytes: Arc::new(
@@ -407,8 +407,8 @@ where
                                                         .upsert_backpressure_specific
                                                         .last_backpressured_bytes
                                                         .get_delete_on_drop_gauge(vec![
-                                                            dbg!(id.to_string()),
-                                                            dbg!(scope.index().to_string()),
+                                                            id.to_string(),
+                                                            scope.index().to_string(),
                                                         ]),
                                                 ),
                                                 retired_bytes: Arc::new(
@@ -417,8 +417,8 @@ where
                                                         .upsert_backpressure_specific
                                                         .retired_bytes
                                                         .get_delete_on_drop_counter(vec![
-                                                            dbg!(id.to_string()),
-                                                            dbg!(scope.index().to_string()),
+                                                            id.to_string(),
+                                                            scope.index().to_string(),
                                                         ]),
                                                 ),
                                             });

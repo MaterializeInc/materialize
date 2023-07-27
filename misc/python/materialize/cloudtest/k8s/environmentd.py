@@ -205,6 +205,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 # Kind sets up a basic local-file storage class based on Rancher, named `standard`
                 "--orchestrator-kubernetes-ephemeral-volume-class=standard"
             ]
+        if self._meets_minimum_version("0.63.0-dev"):
+            args += ["--secrets-controller=kubernetes"]
         container = V1Container(
             name="environmentd",
             image=self.image(
