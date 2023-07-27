@@ -74,7 +74,7 @@ use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Enter, Leave
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace, warn};
@@ -638,6 +638,7 @@ impl futures::Stream for RemapClock {
     type Item = (mz_repr::Timestamp, Antichain<mz_repr::Timestamp>);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // TODO: add some offset to the returned time and/or upper
         loop {
             futures::ready!(self.sleep.as_mut().poll(cx));
             let now = (self.now)();
@@ -648,8 +649,16 @@ impl futures::Stream for RemapClock {
             let new_ts: mz_repr::Timestamp = new_ts.try_into().expect("must fit");
 
             if self.upper.less_equal(&new_ts) {
-                self.upper = Antichain::from_elem(new_ts.step_forward());
-                return Poll::Ready(Some((new_ts, self.upper.clone())));
+                self.upper = Antichain::from_elem(
+                    new_ts
+                        .step_forward()
+                        .results_in(&mz_repr::Timestamp::new(1000))
+                        .unwrap(),
+                );
+                return Poll::Ready(Some((
+                    new_ts.results_in(&mz_repr::Timestamp::new(1000)).unwrap(),
+                    self.upper.clone(),
+                )));
             } else {
                 let upper_ts = self.upper.as_option().expect("no more timestamps to mint");
                 let upper: u64 = upper_ts.into();

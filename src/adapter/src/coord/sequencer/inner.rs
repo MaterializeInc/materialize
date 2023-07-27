@@ -219,7 +219,7 @@ impl Coordinator {
             sources,
             if_not_exists_ids,
         } = self.create_source_inner(session, plans).await?;
-
+        let default_read_retention = self.catalog().system_config().default_read_retention();
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 let mut source_ids = Vec::with_capacity(sources.len());
@@ -262,11 +262,8 @@ impl Coordinator {
                     source_ids.push(source_id);
                 }
 
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                self.initialize_storage_read_policies(source_ids, Some(default_read_retention))
+                    .await;
 
                 Ok(ExecuteResponse::CreatedSource)
             }
@@ -518,6 +515,7 @@ impl Coordinator {
         plan: CreateTablePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let default_read_retention = self.catalog().system_config().default_read_retention();
         let CreateTablePlan {
             name,
             table,
@@ -536,7 +534,9 @@ impl Coordinator {
             defaults: table.defaults,
             conn_id: conn_id.cloned(),
             resolved_ids,
-            custom_logical_compaction_window: None,
+            custom_logical_compaction_window: Some(Duration::from_millis(u64::from(
+                default_read_retention,
+            ))),
             is_retained_metrics_object: false,
         };
         let table_oid = self.catalog_mut().allocate_oid()?;
@@ -564,11 +564,8 @@ impl Coordinator {
                     .storage
                     .set_read_policy(vec![(table_id, policy)]);
 
-                self.initialize_storage_read_policies(
-                    vec![table_id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![table_id], Some(default_read_retention))
+                    .await;
 
                 // Advance the new table to a timestamp higher than the current read timestamp so
                 // that the table is immediately readable.
@@ -914,6 +911,7 @@ impl Coordinator {
         plan: CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let default_read_retention = self.catalog().system_config().default_read_retention();
         let CreateMaterializedViewPlan {
             name,
             materialized_view:
@@ -1027,11 +1025,8 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("cannot fail to append");
 
-                self.initialize_storage_read_policies(
-                    vec![id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![id], Some(default_read_retention))
+                    .await;
 
                 df.set_as_of(as_of);
                 self.must_ship_dataflow(df, cluster_id).await;
@@ -4231,6 +4226,8 @@ impl Coordinator {
                     to_item: CatalogItem::Source(source),
                 });
 
+                let default_read_retention =
+                    self.catalog().system_config().default_read_retention();
                 self.catalog_transact(Some(session), ops).await?;
 
                 let mut source_ids = Vec::with_capacity(sources.len());
@@ -4275,11 +4272,8 @@ impl Coordinator {
                     .await
                     .expect("altering collection after txn must succeed");
 
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                self.initialize_storage_read_policies(source_ids, Some(default_read_retention))
+                    .await;
             }
         }
 
