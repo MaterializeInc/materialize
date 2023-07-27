@@ -503,6 +503,14 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_result_size"),
     // 1 GiB
     value: &1_073_741_824,
+    description: "The maximum size in bytes for an internal query result (Materialize).",
+    internal: false,
+};
+
+pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_query_result_size"),
+    // 1 GiB
+    value: &1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -1344,6 +1352,7 @@ impl SessionVars {
                 &ENABLE_SESSION_CARDINALITY_ESTIMATES,
                 &ENABLE_CARDINALITY_ESTIMATES,
             )
+            .with_var(&MAX_QUERY_RESULT_SIZE)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1717,6 +1726,11 @@ impl SessionVars {
     /// Returns the user associated with this `SessionVars` instance.
     pub fn user(&self) -> &User {
         &self.user
+    }
+
+    /// Returns the value of the `max_query_result_size` configuration parameter.
+    pub fn max_query_result_size(&self) -> u32 {
+        *self.expect_value(&MAX_QUERY_RESULT_SIZE)
     }
 
     /// Sets the external metadata associated with the user.

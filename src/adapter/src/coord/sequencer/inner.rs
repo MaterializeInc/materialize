@@ -2256,9 +2256,19 @@ impl Coordinator {
 
         let determination = peek_plan.determination.clone();
 
+        let max_query_result_size = std::cmp::min(
+            session.vars().max_query_result_size(),
+            self.catalog().system_config().max_result_size(),
+        );
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_peek_plan(peek_plan, finishing, cluster_id, target_replica)
+            .implement_peek_plan(
+                peek_plan,
+                finishing,
+                cluster_id,
+                target_replica,
+                max_query_result_size,
+            )
             .await?;
 
         if session.vars().emit_timestamp_notice() {
