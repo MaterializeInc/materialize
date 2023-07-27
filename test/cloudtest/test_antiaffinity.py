@@ -38,8 +38,15 @@ def zones_used(mz: MaterializeApplication) -> int:
         )
         spec = compute_pod.spec
         assert spec is not None
+        assert spec.node_name is not None
 
-        nodes[spec.node_name] = 1
+        node = mz.environmentd.api().read_node(spec.node_name)
+        assert node is not None
+        assert node.metadata is not None
+        assert isinstance(node.metadata.labels, dict)
+
+        zone = node.metadata.labels["materialize.cloud/availability-zone"]
+        nodes[zone] = 1
 
     return len(nodes.keys())
 
@@ -76,7 +83,6 @@ def test_create_cluster_replica_antiaffinity(mz: MaterializeApplication) -> None
     mz.environmentd.sql("DROP CLUSTER antiaffinity_cluster1 CASCADE")
 
 
-@pytest.mark.skip(reason="https://github.com/MaterializeInc/materialize/issues/14170")
 def test_create_cluster_replica_zone_specified(mz: MaterializeApplication) -> None:
     """Test that the AVAILABILITY ZONE argument to CREATE CLUSTER REPLICA is observed."""
     mz.environmentd.sql(
@@ -89,6 +95,22 @@ def test_create_cluster_replica_zone_specified(mz: MaterializeApplication) -> No
     )
 
     assert zones_used(mz) == 1
+
+    mz.environmentd.sql("DROP CLUSTER antiaffinity_cluster1 CASCADE")
+
+
+def test_create_cluster_replica_zone_mixed(mz: MaterializeApplication) -> None:
+    """Test that the AVAILABILITY ZONE argument to CREATE CLUSTER REPLICA is observed."""
+    mz.environmentd.sql(
+        """
+        CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE '1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE '1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE '1';
+        """
+    )
+
+    assert zones_used(mz) == 2
 
     mz.environmentd.sql("DROP CLUSTER antiaffinity_cluster1 CASCADE")
 

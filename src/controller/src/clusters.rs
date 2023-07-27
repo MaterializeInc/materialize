@@ -551,29 +551,66 @@ where
                         ("workers".into(), location.allocation.workers.to_string()),
                         ("size".into(), location.size.to_string()),
                     ]),
-                    availability_zone: Some(location.availability_zone),
-                    // This constrains the orchestrator (for those orchestrators that support
-                    // anti-affinity, today just k8s) to never schedule pods for different replicas
-                    // of the same cluster on the same node. Pods from the _same_ replica are fine;
-                    // pods from different clusters are also fine.
-                    //
-                    // The point is that if pods of two replicas are on the same node, that node
-                    // going down would kill both replicas, and so the replication factor of the
-                    // cluster in question is illusory.
-                    anti_affinity: Some(vec![
+                    availability_zone: if location.az_user_specified {
+                        Some(location.availability_zone)
+                    } else {
+                        None
+                    },
+                    // This provides the orchestrator with some label selectors that
+                    // are used to constraint the scheduling of replicas, based on
+                    // its internal configuration.
+                    other_replicas_selector: vec![
                         LabelSelector {
                             label_name: "cluster-id".to_string(),
                             logic: LabelSelectionLogic::Eq {
                                 value: cluster_id.to_string(),
                             },
                         },
+                        // Select other replicas (but not oneself)
                         LabelSelector {
                             label_name: "replica-id".into(),
                             logic: LabelSelectionLogic::NotEq {
                                 value: replica_id.to_string(),
                             },
                         },
-                    ]),
+                    ],
+                    replicas_selector: vec![LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    }],
+                    replicas_selector_ignoring_scale: vec![
+                        LabelSelector {
+                            label_name: "cluster-id".to_string(),
+                            logic: LabelSelectionLogic::Eq {
+                                value: cluster_id.to_string(),
+                            },
+                        },
+                        // Ignoring replicas with more than 1 pod.
+                        LabelSelector {
+                            label_name: "scale".into(),
+                            logic: LabelSelectionLogic::Eq {
+                                value: "1".to_string(),
+                            },
+                        },
+                    ],
+                    horizontal_scale_selector: vec![
+                        LabelSelector {
+                            label_name: "cluster-id".to_string(),
+                            logic: LabelSelectionLogic::Eq {
+                                value: cluster_id.to_string(),
+                            },
+                        },
+                        // Select specifically pods in the same replica.
+                        LabelSelector {
+                            label_name: "replica-id".into(),
+                            logic: LabelSelectionLogic::Eq {
+                                value: replica_id.to_string(),
+                            },
+                        },
+                    ],
                     disk_limit: location.allocation.disk_limit,
                     disk: location.disk,
                 },
