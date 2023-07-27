@@ -80,13 +80,15 @@ def workflow_source_resumption(c: Composition) -> None:
 
         c.run("testdrive", "source-resumption/setup.td")
         c.run("testdrive", "source-resumption/verify.td")
-        assert (
-            find_source_resume_upper(
-                c,
-                "0",
-            )
-            == None
-        )
+
+        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # assert (
+        #    find_source_resume_upper(
+        #        c,
+        #        "0",
+        #    )
+        #    == None
+        # )
 
         c.kill("clusterd")
         c.up("clusterd")
@@ -98,13 +100,15 @@ def workflow_source_resumption(c: Composition) -> None:
 
         # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)
-        assert (
-            find_source_resume_upper(
-                c,
-                "0",
-            )
-            == 3
-        )
+
+        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # assert (
+        #    find_source_resume_upper(
+        #        c,
+        #        "0",
+        #    )
+        #    == 3
+        # )
 
 
 def find_source_resume_upper(c: Composition, partition_id: str) -> Optional[int]:

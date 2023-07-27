@@ -590,6 +590,7 @@ To see the available workflows, run:
 
             # Upload test report to Buildkite Test Analytics.
             junit_suite = junit_xml.TestSuite(composition.name)
+
             for (name, result) in composition.test_results.items():
                 test_case = junit_xml.TestCase(name, composition.name, result.duration)
                 if result.error:
@@ -600,7 +601,9 @@ To see the available workflows, run:
                 junit_xml.to_xml_report_file(f, [junit_suite])
             ci_util.upload_junit_report("mzcompose", junit_report)
 
-            if any(result.error for result in composition.test_results.values()):
+            if any(
+                result.error is not None for result in composition.test_results.values()
+            ):
                 raise UIError("at least one test case failed")
 
 
