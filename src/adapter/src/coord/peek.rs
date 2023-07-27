@@ -12,6 +12,7 @@
 //! This module determines if a dataflow can be short-cut, by returning constant values
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
+use differential_dataflow::consolidation::consolidate;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -375,12 +376,12 @@ impl crate::coord::Coordinator {
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
-            let rows = match rows {
+            let mut rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
             };
             // Consolidate down the results to get correct totals.
-            let rows = consolidate_constant_updates(rows);
+            consolidate(&mut rows);
 
             let mut results = Vec::new();
             for (row, count) in rows {
@@ -672,19 +673,6 @@ impl crate::coord::Coordinator {
             span: tracing::Span::none(),
         }
     }
-}
-
-fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
-    // The consolidate API requires timestamps for all rows, so we assigned every row the
-    // same timestamp. The actual value of that timestamp doesn't matter.
-    let mut rows = rows
-        .into_iter()
-        .map(|(row, diff)| (row, mz_repr::Timestamp::minimum(), diff))
-        .collect();
-    differential_dataflow::consolidation::consolidate_updates(&mut rows);
-    rows.into_iter()
-        .map(|(row, _time, diff)| (row, diff))
-        .collect()
 }
 
 #[cfg(test)]
