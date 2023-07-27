@@ -23,7 +23,7 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;
@@ -80,7 +80,7 @@ pub struct Config<'a> {
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
@@ -185,7 +185,7 @@ impl Default for ClusterReplicaSizeMap {
 ///
 /// In the case of AWS PrivateLink connections, Materialize will connect to the
 /// VPC endpoint as the AWS Principal generated via this context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AwsPrincipalContext {
     pub aws_account_id: String,
     pub aws_external_id_prefix: AwsExternalIdPrefix,

@@ -80,7 +80,7 @@ impl From<FullItemName> for UnresolvedItemName {
 
 /// A fully-qualified non-human readable name of an item in the catalog using IDs for the database
 /// and schema.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize)]
 pub struct QualifiedItemName {
     pub qualifiers: ItemQualifiers,
     pub item: String,
@@ -386,7 +386,7 @@ impl From<SchemaSpecifier> for SchemaId {
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone, Default)]
 pub struct Aug;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ItemQualifiers {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_spec: SchemaSpecifier,

@@ -1447,7 +1447,7 @@ impl Display for ErrorMessageObjectDescription {
 }
 
 /// Specification for objects that will be affected by a default privilege.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct DefaultPrivilegeObject {
     /// The role id that created the object.
     pub role_id: RoleId,
@@ -1476,8 +1476,15 @@ impl DefaultPrivilegeObject {
     }
 }
 
+impl std::fmt::Display for DefaultPrivilegeObject {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // TODO: Don't just wrap Debug.
+        write!(f, "{self:?}")
+    }
+}
+
 /// Specification for the privileges that will be granted from default privileges.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct DefaultPrivilegeAclItem {
     /// The role that will receive the privileges.
     pub grantee: RoleId,
