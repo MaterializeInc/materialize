@@ -180,10 +180,6 @@ pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
-/// A dummy availability zone to use when no availability zones are explicitly
-/// specified.
-pub const DUMMY_AVAILABILITY_ZONE: &str = "";
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -1731,12 +1727,6 @@ pub async fn serve(
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
         coord_bail!("availability zones must be unique");
-    }
-    // Later on, we choose an AZ for every replica, so we need to have at least
-    // one. If we're using an orchestrator that doesn't have the notion of AZs,
-    // just create a fake, blank one.
-    if availability_zones.is_empty() {
-        availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
 
     let aws_principal_context = if aws_account_id.is_some()

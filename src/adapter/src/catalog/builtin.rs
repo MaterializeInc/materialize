@@ -1775,6 +1775,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
+        // `NULL` for un-orchestrated clusters and for replicas where the user
+        // hasn't specified them.
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true)),

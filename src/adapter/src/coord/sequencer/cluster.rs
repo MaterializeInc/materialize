@@ -172,7 +172,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_managed_cluster");
 
-        let (azs, az_user_specified) = if availability_zones.is_empty() {
+        let (azs, _az_user_specified) = if availability_zones.is_empty() {
             (self.catalog().state().availability_zones(), false)
         } else {
             (&*availability_zones, true)
@@ -204,7 +204,6 @@ impl Coordinator {
                 cluster_id,
                 id,
                 replica_name,
-                az_user_specified,
                 &compute,
                 &size,
                 &mut ops,
@@ -226,7 +225,6 @@ impl Coordinator {
         cluster_id: ClusterId,
         id: ReplicaId,
         name: String,
-        az_user_specified: bool,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
         ops: &mut Vec<Op>,
@@ -234,11 +232,10 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let availability_zone = az_helper.choose_az_and_increment();
+        // TODO(guswynn): limit az's
         let location = SerializedReplicaLocation::Managed {
             size: size.clone(),
-            availability_zone,
-            az_user_specified,
+            availability_zone: None,
             disk,
         };
 
@@ -341,13 +338,9 @@ impl Coordinator {
                     compute,
                     disk,
                 } => {
-                    let (availability_zone, user_specified) = availability_zone
-                        .map(|az| (az, true))
-                        .unwrap_or_else(|| (az_helper.choose_az_and_increment(), false));
                     let location = SerializedReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
-                        az_user_specified: user_specified,
                         disk,
                     };
                     (compute, location)
@@ -462,7 +455,7 @@ impl Coordinator {
                 compute,
                 disk,
             } => {
-                let (availability_zone, user_specified) = match availability_zone {
+                let availability_zone = match availability_zone {
                     Some(az) => {
                         let azs = self.catalog().state().availability_zones();
                         if !azs.contains(&az) {
@@ -471,28 +464,13 @@ impl Coordinator {
                                 expected: azs.to_vec(),
                             });
                         }
-                        (az, true)
+                        Some(az)
                     }
-                    None => {
-                        // Choose the least popular AZ among all replicas of this cluster as the default
-                        // if none was specified. If there is a tie for "least popular", pick the first one.
-                        // That is globally unbiased (for Materialize, not necessarily for this customer)
-                        // because we shuffle the AZs on boot in `crate::serve`.
-                        let cluster = self.catalog().get_cluster(cluster_id);
-                        let azs = self.catalog().state().availability_zones();
-                        let mut az_helper = AzHelper::new(azs);
-                        for r in cluster.replicas_by_id.values() {
-                            if let Some(az) = r.config.location.availability_zone() {
-                                az_helper.increment(az);
-                            }
-                        }
-                        (az_helper.choose_az(), false)
-                    }
+                    None => None,
                 };
                 let location = SerializedReplicaLocation::Managed {
                     size,
                     availability_zone,
-                    az_user_specified: user_specified,
                     disk,
                 };
                 (compute, location)
@@ -761,7 +739,8 @@ impl Coordinator {
         self.catalog
             .ensure_valid_replica_size(allowed_replica_sizes, new_size)?;
 
-        let (azs, az_user_specified) = if new_availability_zones.is_empty() {
+        // TODO(guswynn): make this conversion work
+        let (azs, _az_user_specified) = if new_availability_zones.is_empty() {
             (self.catalog().state().availability_zones(), false)
         } else {
             (&**new_availability_zones, true)
@@ -815,7 +794,6 @@ impl Coordinator {
                     cluster_id,
                     id,
                     name,
-                    az_user_specified,
                     &compute,
                     new_size,
                     &mut ops,
@@ -857,7 +835,6 @@ impl Coordinator {
                     cluster_id,
                     id,
                     name,
-                    az_user_specified,
                     &compute,
                     new_size,
                     &mut ops,

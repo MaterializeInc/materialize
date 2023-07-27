@@ -118,7 +118,7 @@ impl ReplicaLocation {
     pub fn availability_zone(&self) -> Option<&str> {
         match self {
             ReplicaLocation::Unmanaged(_) => None,
-            ReplicaLocation::Managed(m) => Some(&m.availability_zone),
+            ReplicaLocation::Managed(m) => m.availability_zone.as_deref(),
         }
     }
 
@@ -176,11 +176,8 @@ pub struct ManagedReplicaLocation {
     pub allocation: ReplicaAllocation,
     /// SQL size parameter used for allocation
     pub size: String,
-    /// The replica's availability zone
-    pub availability_zone: String,
-    /// `true` if the AZ was specified by the user and must be respected;
-    /// `false` if it was picked arbitrarily by Materialize.
-    pub az_user_specified: bool,
+    /// The replica's availability zone, if specified.
+    pub availability_zone: Option<String>,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
 }
@@ -551,11 +548,7 @@ where
                         ("workers".into(), location.allocation.workers.to_string()),
                         ("size".into(), location.size.to_string()),
                     ]),
-                    availability_zone: if location.az_user_specified {
-                        Some(location.availability_zone)
-                    } else {
-                        None
-                    },
+                    availability_zone: location.availability_zone,
                     // This provides the orchestrator with some label selectors that
                     // are used to constraint the scheduling of replicas, based on
                     // its internal configuration.
