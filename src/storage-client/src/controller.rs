@@ -1167,6 +1167,7 @@ where
             self.build_info,
             self.metrics.for_instance(id),
             self.state.envd_epoch,
+            self.state.config.grpc_client.clone(),
         );
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);

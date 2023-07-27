@@ -12,6 +12,7 @@
 use std::fmt::{self, Debug};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -19,9 +20,10 @@ use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::uri::PathAndQuery;
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use semver::Version;
+use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -38,6 +40,8 @@ use tracing::{debug, error, info};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 use crate::codec::{StatCodec, StatsCollector};
+
+include!(concat!(env!("OUT_DIR"), "/mz_service.params.rs"));
 
 pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
 
@@ -86,11 +90,24 @@ where
         addr: String,
         version: Version,
         metrics: G::STATS,
+        params: &GrpcClientParameters,
     ) -> Result<Self, anyhow::Error> {
         debug!("GrpcClient {}: Attempt to connect", addr);
 
         let channel = match SocketAddrType::guess(&addr) {
-            SocketAddrType::Inet => Endpoint::new(format!("http://{}", addr))?.connect().await?,
+            SocketAddrType::Inet => {
+                let mut endpoint = Endpoint::new(format!("http://{}", addr))?;
+                if let Some(connect_timeout) = params.connect_timeout {
+                    endpoint = endpoint.connect_timeout(connect_timeout);
+                }
+                if let Some(keep_alive_timeout) = params.http2_keep_alive_timeout {
+                    endpoint = endpoint.keep_alive_timeout(keep_alive_timeout);
+                }
+                if let Some(keep_alive_interval) = params.http2_keep_alive_interval {
+                    endpoint = endpoint.http2_keep_alive_interval(keep_alive_interval);
+                }
+                endpoint.connect().await?
+            }
             SocketAddrType::Unix => {
                 let addr = addr.clone();
                 Endpoint::from_static("http://localhost") // URI is ignored
@@ -115,6 +132,7 @@ where
     pub async fn connect_partitioned<C, R>(
         dests: Vec<(String, G::STATS)>,
         version: Version,
+        params: &GrpcClientParameters,
     ) -> Result<Partitioned<Self, C, R>, anyhow::Error>
     where
         (C, R): Partitionable<C, R>,
@@ -122,7 +140,7 @@ where
         let clients = future::try_join_all(
             dests
                 .into_iter()
-                .map(|(addr, metrics)| Self::connect(addr, version.clone(), metrics)),
+                .map(|(addr, metrics)| Self::connect(addr, version.clone(), metrics, params)),
         )
         .await?;
         Ok(Partitioned::new(clients))
@@ -402,5 +420,62 @@ impl Interceptor for VersionCheckExactInterceptor {
                 version, self.version
             ))),
         }
+    }
+}
+
+/// gRPC client parameters.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct GrpcClientParameters {
+    /// Timeout to apply to initial connection establishment.
+    pub connect_timeout: Option<Duration>,
+    /// Time waited after the last received HTTP/2 frame before sending
+    /// a keep-alive PING to the server. Note that this is an HTTP/2
+    /// keep-alive, and is separate from TCP keep-alives.
+    pub http2_keep_alive_interval: Option<Duration>,
+    /// Time waited without response after a keep-alive PING before
+    /// terminating the connection.
+    pub http2_keep_alive_timeout: Option<Duration>,
+}
+
+impl GrpcClientParameters {
+    pub fn update(&mut self, other: Self) {
+        let Self {
+            connect_timeout,
+            http2_keep_alive_interval,
+            http2_keep_alive_timeout,
+        } = self;
+        let Self {
+            connect_timeout: other_connect_timeout,
+            http2_keep_alive_interval: other_http2_keep_alive_interval,
+            http2_keep_alive_timeout: other_http2_keep_alive_timeout,
+        } = other;
+
+        if let Some(v) = other_connect_timeout {
+            *connect_timeout = Some(v);
+        }
+        if let Some(v) = other_http2_keep_alive_interval {
+            *http2_keep_alive_interval = Some(v);
+        }
+        if let Some(v) = other_http2_keep_alive_timeout {
+            *http2_keep_alive_timeout = Some(v);
+        }
+    }
+}
+
+impl RustType<ProtoGrpcClientParameters> for GrpcClientParameters {
+    fn into_proto(&self) -> ProtoGrpcClientParameters {
+        ProtoGrpcClientParameters {
+            connect_timeout: self.connect_timeout.into_proto(),
+            http2_keep_alive_interval: self.http2_keep_alive_interval.into_proto(),
+            http2_keep_alive_timeout: self.http2_keep_alive_timeout.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoGrpcClientParameters) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            connect_timeout: proto.connect_timeout.into_rust()?,
+            http2_keep_alive_interval: proto.http2_keep_alive_interval.into_rust()?,
+            http2_keep_alive_timeout: proto.http2_keep_alive_timeout.into_rust()?,
+        })
     }
 }
