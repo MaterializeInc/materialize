@@ -17,7 +17,7 @@
 //! Frontegg client is used to request and manage the access token.
 use std::sync::Arc;
 
-use reqwest::{Method, RequestBuilder, Url};
+use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -125,7 +125,11 @@ impl Client {
         let res = req.send().await?;
         let status_code = res.status();
         if status_code.is_success() {
-            Ok(res.json().await?)
+            if status_code == StatusCode::NO_CONTENT {
+                Err(Error::SuccesfullButNoContent)
+            } else {
+                Ok(res.json().await?)
+            }
         } else {
             match res.json::<ErrorResponse>().await {
                 Ok(e) => {
