@@ -155,6 +155,19 @@ create_source_postgres ::=
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+create_source_webhook ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'IN CLUSTER' cluster_name
+  'FROM' 'WEBHOOK'
+  'BODY FORMAT' (webhook_body_format)
+  ('INCLUDE HEADERS')?
+  ('CHECK'
+    ('WITH' '(' (',' (webhook_check_option))* ')' )?
+    check_expression
+  )?
+webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
+webhook_check_option ::=
+  ('BODY' | 'HEADERS' | 'SECRET' secret_name) ('AS' alias)? ('BYTES')?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
