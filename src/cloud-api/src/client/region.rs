@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::Method;
-use serde::{Deserialize, Serialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::client::cloud_provider::CloudProvider;
 use crate::client::{Client, Error};
@@ -51,7 +51,6 @@ pub struct RegionInfo {
     pub enabled_at: Option<DateTime<Utc>>,
 }
 
-
 impl Client {
     /// Get a customer region in a partciular cloud region for the current user.
     pub async fn get_region(&self, provider: CloudProvider) -> Result<Region, Error> {
@@ -61,12 +60,8 @@ impl Client {
             .await?;
 
         match self.send_request(req).await {
-            Ok(region) => {
-                Ok(region)
-            },
-            Err(Error::SuccesfullButNoContent) => {
-                Err(Error::EmptyRegion)
-            }
+            Ok(region) => Ok(region),
+            Err(Error::SuccesfullButNoContent) => Err(Error::EmptyRegion),
             Err(e) => Err(e),
         }
     }

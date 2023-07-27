@@ -17,7 +17,7 @@
 //! Frontegg client is used to request and manage the access token.
 use std::sync::Arc;
 
-use reqwest::{Method, RequestBuilder, Url, StatusCode};
+use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
