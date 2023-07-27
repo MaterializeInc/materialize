@@ -18,6 +18,7 @@ use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, Tim
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
+use mz_service::params::GrpcClientParameters;
 use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
@@ -36,6 +37,7 @@ pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
     pub idle_arrangement_merge_effort: u32,
+    pub grpc_client: GrpcClientParameters,
 }
 
 /// State for a single replica.
@@ -182,6 +184,7 @@ where
             addrs,
             cmd_spec,
             metrics,
+            config.grpc_client,
         )
         .await;
 
@@ -207,6 +210,7 @@ async fn run_message_loop<T>(
     addrs: Vec<String>,
     cmd_spec: CommandSpecialization,
     metrics: ReplicaMetrics,
+    grpc_client_params: GrpcClientParameters,
 ) -> Result<(), anyhow::Error>
 where
     T: Timestamp + Lattice,
@@ -221,9 +225,10 @@ where
                 .map(|addr| (addr, metrics.clone()))
                 .collect();
             let version = build_info.semver_version();
+            let client_params = grpc_client_params.clone();
 
             async move {
-                match ComputeGrpcClient::connect_partitioned(dests, version).await {
+                match ComputeGrpcClient::connect_partitioned(dests, version, &client_params).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
                         if state.i >= mz_service::retry::INFO_MIN_RETRIES {

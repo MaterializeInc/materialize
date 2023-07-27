@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_service.params.rs"));
 
 /// gRPC client parameters.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, Arbitrary)]
 pub struct GrpcClientParameters {
     /// Timeout to apply to initial connection establishment.
     pub connect_timeout: Option<Duration>,
@@ -28,6 +29,7 @@ pub struct GrpcClientParameters {
 }
 
 impl GrpcClientParameters {
+    /// Update the parameter values with the set ones from `other`.
     pub fn update(&mut self, other: Self) {
         let Self {
             connect_timeout,
@@ -49,6 +51,11 @@ impl GrpcClientParameters {
         if let Some(v) = other_http2_keep_alive_timeout {
             *http2_keep_alive_timeout = Some(v);
         }
+    }
+
+    /// Return whether all parameters are unset.
+    pub fn all_unset(&self) -> bool {
+        *self == Self::default()
     }
 }
 

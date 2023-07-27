@@ -13,6 +13,7 @@ use mz_compute_client::protocol::command::ComputeParameters;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
+use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_client::types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
@@ -29,6 +30,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         persist: persist_config(config),
         tracing: tracing_config(config),
+        grpc_client: grpc_client_config(config),
     }
 }
 
@@ -96,6 +98,7 @@ pub fn storage_config(
                 .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
             cluster_size_memory_map,
         },
+        grpc_client: grpc_client_config(config),
     }
 }
 
@@ -140,5 +143,13 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
+    }
+}
+
+fn grpc_client_config(config: &SystemVars) -> GrpcClientParameters {
+    GrpcClientParameters {
+        connect_timeout: Some(config.grpc_connect_timeout()),
+        http2_keep_alive_interval: Some(config.grpc_client_http2_keep_alive_interval()),
+        http2_keep_alive_timeout: Some(config.grpc_client_http2_keep_alive_timeout()),
     }
 }
