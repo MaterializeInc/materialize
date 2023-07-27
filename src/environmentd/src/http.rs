@@ -398,9 +398,7 @@ impl InternalHttpServer {
                 ready_to_promote,
             })));
 
-        let router = router
-            .merge(leader_router)
-            .apply_default_layers(metrics);
+        let router = router.merge(leader_router).apply_default_layers(metrics);
 
         InternalHttpServer { router }
     }
