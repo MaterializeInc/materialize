@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::{context::RegionContext, error::Error};
 
-use mz_cloud_api::client::{cloud_provider::CloudProvider, environment::Environment};
+use mz_cloud_api::client::{cloud_provider::CloudProvider, region::RegionInfo};
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 use tokio::time::sleep;
@@ -39,20 +39,19 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
 
     loading_spinner.set_message("Enabling the region...");
     cx.cloud_client()
-        .create_environment(None, vec![], cloud_provider.clone())
+        .create_region(None, vec![], cloud_provider.clone())
         .await?;
 
     loading_spinner.set_message("Waiting for the region to be online...");
-    let region = cx.get_region().await?;
 
     let mut tries = 0;
 
-    let environment: Environment = loop {
+    let region_info: RegionInfo = loop {
         tries += 1;
-        match cx.get_environment(region.clone()).await {
-            Ok(environment) => {
-                if environment.resolvable {
-                    break Ok(environment);
+        match cx.get_region().await {
+            Ok(region) => {
+                if let Some(region_info) = region.region_info {
+                    break Ok(region_info);
                 }
             }
             Err(e) => {
@@ -68,7 +67,7 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     loop {
         if cx
             .sql_client()
-            .is_ready(&environment, cx.admin_client().claims().await?.email)?
+            .is_ready(&region_info, cx.admin_client().claims().await?.email)?
         {
             break;
         }
@@ -89,7 +88,7 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
 
     loading_spinner.set_message("Disabling region...");
     cx.cloud_client()
-        .delete_environment(cloud_provider.clone())
+        .delete_region(cloud_provider.clone())
         .await?;
 
     loading_spinner.finish_with_message("Region disabled.");
@@ -119,12 +118,13 @@ pub async fn list(cx: RegionContext) -> Result<(), Error> {
                 region: cloud_provider.id,
                 status: "enabled",
             }),
-            Err(mz_cloud_api::error::Error::InvalidEnvironmentAssignment) => regions.push(Region {
+            Err(mz_cloud_api::error::Error::EmptyRegion) => regions.push(Region {
                 region: cloud_provider.id,
                 status: "disabled",
             }),
-            // TODO: Handle error
-            Err(_) => {}
+            Err(err) => {
+                println!("Error: {:?}", err)
+            }
         }
     }
 
@@ -141,13 +141,12 @@ pub async fn show(cx: RegionContext) -> Result<(), Error> {
     let output_formatter = cx.output_formatter();
     let loading_spinner = output_formatter.loading_spinner("Retrieving region...");
 
-    let region = cx.get_region().await?;
+    let region_info = cx.get_region_info().await?;
 
     loading_spinner.set_message("Checking environment health...");
-    let environment = cx.get_environment(region.clone()).await?;
     let claims = cx.admin_client().claims().await?;
     let sql_client = cx.sql_client();
-    let environment_health = match sql_client.is_ready(&environment, claims.email) {
+    let environment_health = match sql_client.is_ready(&region_info, claims.email) {
         Ok(healthy) => match healthy {
             true => "yes",
             _ => "no",
@@ -157,14 +156,8 @@ pub async fn show(cx: RegionContext) -> Result<(), Error> {
 
     loading_spinner.finish_and_clear();
     output_formatter.output_scalar(Some(&format!("Healthy: \t{}", environment_health)))?;
-    output_formatter.output_scalar(Some(&format!(
-        "SQL address: \t{}",
-        environment.environmentd_pgwire_address
-    )))?;
-    output_formatter.output_scalar(Some(&format!(
-        "HTTP URL: \t{}",
-        environment.environmentd_https_address
-    )))?;
+    output_formatter.output_scalar(Some(&format!("SQL address: \t{}", region_info.sql_address)))?;
+    output_formatter.output_scalar(Some(&format!("HTTP URL: \t{}", region_info.http_address)))?;
 
     Ok(())
 }

@@ -79,8 +79,12 @@ pub enum Error {
     /// Error that happens when a user cancels a login from the console UI.
     #[error("Login canceled.")]
     LoginOperationCanceled,
-    /// Error that happens occures when the clientid or secret are invalid.
+    /// Error that raises when the clientid or secret are invalid.
     /// It is a simpler alternative for parsing errors.
     #[error("Invalid app-password.")]
     InvalidAppPassword,
+    /// Error that raises when the region is enabled
+    /// but not ready yet.
+    #[error("The region is not ready yet.")]
+    NotReadyRegion,
 }

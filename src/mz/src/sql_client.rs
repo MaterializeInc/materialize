@@ -13,7 +13,7 @@ use std::{
     process::Command,
 };
 
-use mz_cloud_api::client::environment::Environment;
+use mz_cloud_api::client::region::RegionInfo;
 use mz_frontegg_auth::AppPassword;
 use url::Url;
 
@@ -43,12 +43,9 @@ impl Client {
     }
 
     /// Build the PSQL url to connect into a environment
-    fn build_psql_url(&self, environment: &Environment, email: String) -> Url {
-        let mut url = Url::parse(&format!(
-            "postgres://{}",
-            environment.environmentd_pgwire_address
-        ))
-        .expect("url known to be valid");
+    fn build_psql_url(&self, region_info: &RegionInfo, email: String) -> Url {
+        let mut url = Url::parse(&format!("postgres://{}", region_info.sql_address))
+            .expect("url known to be valid");
         url.set_username(&email).unwrap();
         url.set_path("materialize");
 
@@ -64,10 +61,10 @@ impl Client {
     }
 
     /// Returns a sql shell command associated with this context
-    pub fn shell(&self, environment: &Environment, email: String) -> Command {
+    pub fn shell(&self, region_info: &RegionInfo, email: String) -> Command {
         let mut command = Command::new("psql");
         command
-            .arg(self.build_psql_url(environment, email).as_str())
+            .arg(self.build_psql_url(region_info, email).as_str())
             .env("PGPASSWORD", &self.app_password.to_string())
             .env("PGAPPNAME", PG_APPLICATION_NAME);
 
@@ -93,14 +90,14 @@ impl Client {
     }
 
     /// Runs pg_isready to check if an environment is healthy
-    pub fn is_ready(&self, environment: &Environment, email: String) -> Result<bool, Error> {
+    pub fn is_ready(&self, region_info: &RegionInfo, email: String) -> Result<bool, Error> {
         if self.find("pg_isready").is_some() {
             let mut command = Command::new("pg_isready");
             Ok(command
                 .args(vec![
                     "-q",
                     "-d",
-                    self.build_psql_url(environment, email).as_str(),
+                    self.build_psql_url(region_info, email).as_str(),
                 ])
                 .env("PGPASSWORD", &self.app_password.to_string())
                 .env("PGAPPNAME", PG_APPLICATION_NAME)

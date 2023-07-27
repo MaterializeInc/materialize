@@ -33,11 +33,10 @@ pub struct RunArgs {
 pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Result<(), Error> {
     let sql_client = cx.sql_client();
     let claims = cx.admin_client().claims();
-    let region = cx.get_region().await?;
-    let enviornment = cx.get_environment(region).await?;
+    let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
-    let _error = sql_client.shell(&enviornment, email).args(psql_args).exec();
+    let _error = sql_client.shell(&region_info, email).args(psql_args).exec();
 
     Ok(())
 }

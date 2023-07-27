@@ -27,8 +27,7 @@ use crate::error::Error;
 use crate::sql_client::{Client as SqlClient, ClientConfig as SqlClientConfig};
 use crate::ui::{OutputFormat, OutputFormatter};
 use mz_cloud_api::client::cloud_provider::CloudProvider;
-use mz_cloud_api::client::environment::Environment;
-use mz_cloud_api::client::region::Region;
+use mz_cloud_api::client::region::{Region, RegionInfo};
 use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::config::{
     ClientBuilder as CloudClientBuilder, ClientConfig as CloudClientConfig,
@@ -235,12 +234,13 @@ impl RegionContext {
         Ok(region)
     }
 
-    /// Returns the environment from the region of the context.
-    pub async fn get_environment(&self, region: Region) -> Result<Environment, Error> {
-        let client = &self.context.cloud_client;
-        let environment = client.get_environment(region).await?;
+    /// Returns the cloud provider region of the context.
+    pub async fn get_region_info(&self) -> Result<RegionInfo, Error> {
+        let client = self.cloud_client();
+        let cloud_provider = self.get_cloud_provider().await?;
+        let region = client.get_region(cloud_provider).await?;
 
-        Ok(environment)
+        region.region_info.ok_or_else(|| Error::NotReadyRegion)
     }
 
     /// Returns the configuration file loaded by this context.
