@@ -18,8 +18,8 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use reqwest::{Method, StatusCode};
-use serde::{Deserialize, Serialize};
+use reqwest::Method;
+use serde::{Deserialize, Serialize, Deserializer};
 
 use crate::client::cloud_provider::CloudProvider;
 use crate::client::{Client, Error};
@@ -51,12 +51,6 @@ pub struct RegionInfo {
     pub enabled_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(untagged)]
-enum APIResponse {
-    Empty,
-    Region(Region),
-}
 
 impl Client {
     /// Get a customer region in a partciular cloud region for the current user.
@@ -66,14 +60,12 @@ impl Client {
             .build_region_request(Method::GET, ["api", "region"], &provider)
             .await?;
 
-        match self.send_request::<APIResponse>(req).await {
-            Ok(APIResponse::Region(region)) => Ok(region),
-            Ok(APIResponse::Empty) => Err(Error::EmptyRegion),
-            Err(Error::Api(err)) => {
-                if err.status_code == StatusCode::NOT_FOUND {
-                    return Err(Error::EmptyRegion);
-                }
-                Err(Error::Api(err))
+        match self.send_request(req).await {
+            Ok(region) => {
+                Ok(region)
+            },
+            Err(Error::SuccesfullButNoContent) => {
+                Err(Error::EmptyRegion)
             }
             Err(e) => Err(e),
         }
@@ -141,6 +133,20 @@ impl Client {
     /// A request returning a 202 indicates that
     /// no region is available to delete (the delete request is complete.)
     pub async fn delete_region(&self, cloud_provider: CloudProvider) -> Result<(), Error> {
+        /// A struct that deserializes nothing.
+        ///
+        /// Useful for deserializing empty response bodies.
+        struct Empty;
+
+        impl<'de> Deserialize<'de> for Empty {
+            fn deserialize<D>(_: D) -> Result<Empty, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Ok(Empty)
+            }
+        }
+
         // We need to continuously try to delete the environment
         // until it succeeds (Status code: 202) or an unexpected error occurs.
         let mut loops = 0;
@@ -154,7 +160,7 @@ impl Client {
             // This timeout corresponds to the same in our cloud services tests.
             let req = req.timeout(Duration::from_secs(305));
 
-            match self.send_request::<APIResponse>(req).await {
+            match self.send_request::<Empty>(req).await {
                 Ok(_) => break Ok(()), // The request was successful, no environment is available to delete anymore.
                 Err(Error::Api(err)) => {
                     if err.status_code != 504 {
