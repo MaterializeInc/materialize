@@ -530,7 +530,7 @@ impl Coordinator {
         // Put the session into single statement implicit so anything can execute.
         let (tx, internal_cmd_tx, mut session, extra) = ctx.into_parts();
         assert!(matches!(session.transaction(), TransactionStatus::Default));
-        session.start_transaction_implicit(self.now_datetime(), 1);
+        session.start_transaction_single_stmt(self.now_datetime());
         let conn_id = session.conn_id().unhandled();
 
         // Execute the saved statement in a temp transmitter so we can run COMMIT.

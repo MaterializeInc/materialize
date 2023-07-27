@@ -309,6 +309,11 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
+    /// Starts a single statement transaction, but only if no transaction has been started already.
+    pub fn start_transaction_single_stmt(&mut self, wall_time: DateTime<Utc>) {
+        self.start_transaction_implicit(wall_time, 1);
+    }
+
     /// Clears a transaction, setting its state to Default and destroying all
     /// portals. Returned are:
     /// - sinks that were started in this transaction and need to be dropped

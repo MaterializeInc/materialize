@@ -78,7 +78,7 @@ The `ReadyForQuery` message is sent by the server when it is ready to receive ne
 
 The pgwire, http, and ws handlers enforce these requirements and state changes.
 
-#### Changes from this design
+### Changes from this design
 
 This design adds a new operation to the inner transaction: `SingleStatement`.
 This operation records a single statement.
@@ -91,6 +91,20 @@ This method:
 5. The transaction should again be in `Default`.
 
 The `sequence_execute_single_statement_transaction` function is acting as a handler and must ensure the correct state transitions and invariants as the other handlers.
+
+### Example with state transitions
+
+1. Session starts in `Default`.
+2. User initiates a query, the session sets the transaction to some in-progress status (doesn't matter which).
+3. User executes `BEGIN` from the query of the previous step. Transaction status changes to `InTransaction`.
+4. User executes some statement. Inner transaction operation set to `SingleStatement`.
+5. User executes `COMMIT`. The transaction status is set to `Default` and its inner operation saved.
+6. The inner operation side effect is processed: `SingleStatement` enqueues a Coordinator message with the statement and session.
+7. The Coordinator begins processing the message, setting the session's transaction status to `Started`.
+8. The saved statement is executed, setting the inner transaction operation to whatever the statement needs.
+9. An implicit `COMMIT` is executed. The transaction status is set to `Default` and its inner operation saved.
+10. The inner operation is processed.
+11. A result is sent back to the `COMMIT` statement from step 5, and control of the session is returned to the user.
 
 ## Alternatives
 
