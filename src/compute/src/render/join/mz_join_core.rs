@@ -47,6 +47,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_repr::{Diff, Row};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Capability, Operator};
@@ -419,13 +420,24 @@ where
 
         let temp = &mut self.temp;
 
+        let flush = |data: &mut Vec<_>, session: &mut Session<_, _, _>| {
+            let old_len = data.len();
+            // TODO: This consolidation is optional, and it may not be very
+            //       helpful. We might try harder to understand whether we
+            //       should do this work here, or downstream at consumers.
+            consolidate_updates(data);
+            let recovered = old_len - data.len();
+            session.give_iterator(data.drain(..));
+            recovered
+        };
+
+        assert_eq!(temp.len(), 0);
+
         while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
             match cursor1.key(storage1).cmp(cursor2.key(storage2)) {
                 Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
                 Ordering::Greater => cursor2.seek_key(storage2, cursor1.key(storage1)),
                 Ordering::Equal => {
-                    assert_eq!(temp.len(), 0);
-
                     // Populate `temp` with the results, as long as fuel remains.
                     let key = cursor2.key(storage2);
                     while let Some(val1) = cursor1.get_val(storage1) {
@@ -446,19 +458,16 @@ where
                         cursor1.step_val(storage1);
                         cursor2.rewind_vals(storage2);
 
-                        // TODO: This consolidation is optional, and it may not be very
-                        //       helpful. We might try harder to understand whether we
-                        //       should do this work here, or downstream at consumers.
-                        consolidate_updates(temp);
-
                         *fuel = fuel.saturating_sub(temp.len());
-                        session.give_iterator(temp.drain(..));
 
                         if *fuel == 0 {
                             // The fuel is exhausted, so we should yield. Returning here is only
                             // allowed because we leave the cursors in a state that will let us
                             // pick up the work correctly on the next invocation.
-                            return;
+                            *fuel += flush(temp, &mut session);
+                            if *fuel == 0 {
+                                return;
+                            }
                         }
                     }
 
@@ -466,6 +475,10 @@ where
                     cursor2.step_key(storage2);
                 }
             }
+        }
+
+        if !temp.is_empty() {
+            flush(temp, &mut session);
         }
 
         // We only get here after having iterated through all keys.
