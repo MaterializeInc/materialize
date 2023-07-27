@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use mz_proto::IntoRustIfSome;
 use timely::progress::Antichain;
 
@@ -179,7 +180,15 @@ impl From<String> for proto::StringWrapper {
 /// Denotes that `Self` is wire compatible with type `T`.
 ///
 /// You should not implement this yourself, instead use the `wire_compatible!` macro.
-pub unsafe trait WireCompatible<T> {}
+pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
+    /// Converts the type `T` into `Self` by serializing `T` and deserializing as `Self`.
+    fn convert(old: T) -> Self {
+        let bytes = old.encode_to_vec();
+        // Note: use Bytes to enable possible re-use of the underlying buffer.
+        let bytes = Bytes::from(bytes);
+        Self::decode(bytes).expect("wire compatible")
+    }
+}
 
 /// Defines one protobuf type as wire compatible with another.
 ///
@@ -194,14 +203,14 @@ pub unsafe trait WireCompatible<T> {}
 macro_rules! wire_compatible {
     ($a:ident $(:: $a_sub:ident)* with $b:ident $(:: $b_sub:ident)*) => {
         ::static_assertions::assert_impl_all!(
-            $a $(::$a_sub)* : ::proptest::arbitrary::Arbitrary,
-            ::prost::Message
+            $a $(::$a_sub)* : ::proptest::arbitrary::Arbitrary, ::prost::Message, Default,
         );
         ::static_assertions::assert_impl_all!(
-            $b $(::$b_sub)*  : ::proptest::arbitrary::Arbitrary,
-            ::prost::Message
+            $b $(::$b_sub)*  : ::proptest::arbitrary::Arbitrary, ::prost::Message, Default,
         );
 
+        // SAFETY: Below we assert that these types are wire compatible by generating arbitrary
+        // structs, encoding in one, and then decoding in the other.
         unsafe impl $crate::objects::WireCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
         unsafe impl $crate::objects::WireCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
 
@@ -212,10 +221,15 @@ macro_rules! wire_compatible {
                 fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
                     use ::prost::Message;
                     let a_bytes = a.encode_to_vec();
-                    let decoded = $b $(::$b_sub)*::decode(&a_bytes[..]);
-                    ::proptest::prelude::prop_assert!(decoded.is_ok());
+                    let b_decoded = $b $(::$b_sub)*::decode(&a_bytes[..]);
+                    ::proptest::prelude::prop_assert!(b_decoded.is_ok());
 
-                    let b_bytes = decoded.expect("asserted Ok").encode_to_vec();
+                    // Maybe superfluous, but this is a method called in production.
+                    let b_decoded = b_decoded.expect("asserted Ok");
+                    let b_converted: $b $(::$b_sub)* = $crate::objects::WireCompatible::convert(a);
+                    assert_eq!(b_decoded, b_converted);
+
+                    let b_bytes = b_decoded.encode_to_vec();
                     ::proptest::prelude::prop_assert_eq!(a_bytes, b_bytes, "a and b serialize differently");
                 }
 
@@ -224,10 +238,15 @@ macro_rules! wire_compatible {
                 fn [<proptest_wire_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
                     use ::prost::Message;
                     let b_bytes = b.encode_to_vec();
-                    let decoded = $a $(::$a_sub)*::decode(&b_bytes[..]);
-                    ::proptest::prelude::prop_assert!(decoded.is_ok());
+                    let a_decoded = $a $(::$a_sub)*::decode(&b_bytes[..]);
+                    ::proptest::prelude::prop_assert!(a_decoded.is_ok());
 
-                    let a_bytes = decoded.expect("asserted Ok").encode_to_vec();
+                    // Maybe superfluous, but this is a method called in production.
+                    let a_decoded = a_decoded.expect("asserted Ok");
+                    let a_converted: $a $(::$a_sub)* = $crate::objects::WireCompatible::convert(b);
+                    assert_eq!(a_decoded, a_converted);
+
+                    let a_bytes = a_decoded.encode_to_vec();
                     ::proptest::prelude::prop_assert_eq!(a_bytes, b_bytes, "a and b serialize differently");
                 }
             }
