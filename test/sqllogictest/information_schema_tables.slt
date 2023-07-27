@@ -505,6 +505,10 @@ mz_sessions
 BASE TABLE
 materialize
 mz_internal
+mz_show_all_my_privileges
+VIEW
+materialize
+mz_internal
 mz_show_all_privileges
 VIEW
 materialize
@@ -530,10 +534,6 @@ VIEW
 materialize
 mz_internal
 mz_show_materialized_views
-VIEW
-materialize
-mz_internal
-mz_show_all_my_privileges
 VIEW
 materialize
 mz_internal
