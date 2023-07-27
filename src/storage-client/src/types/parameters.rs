@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_service::grpc::GrpcClientParameters;
+use mz_service::params::GrpcClientParameters;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
 
@@ -202,7 +202,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 )?,
             grpc_client: proto
                 .grpc_client
-                .into_rust_if_some("ProtoStorageParameters::grpc_client"),
+                .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
         })
     }
 }

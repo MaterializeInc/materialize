@@ -30,7 +30,7 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
-use mz_service::grpc::GrpcClientParameters;
+use mz_service::params::GrpcClientParameters;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
