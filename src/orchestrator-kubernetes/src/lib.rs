@@ -87,9 +87,10 @@ use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
     EphemeralVolumeSource, ObjectFieldSelector, ObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodAffinityTerm,
+    PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm,
     PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
+    Service as K8sService, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint, Volume,
+    VolumeMount, WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -110,12 +111,87 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
+use scheduling_config::*;
+
 pub mod cloud_resource_controller;
 pub mod secrets;
 pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+
+pub mod scheduling_config {
+    #[derive(Debug, Clone)]
+    pub struct ServiceTopologySpreadConfig {
+        /// If `true`, enable spread for replicated services.
+        ///
+        /// Defaults to `true`.
+        pub enabled: bool,
+        /// If `true`, ignore services with `scale` > 1 when expressing
+        /// spread constraints.
+        ///
+        /// Default to `true`.
+        pub ignore_non_singular_scale: bool,
+        /// The `maxSkew` for spread constraints.
+        /// See
+        /// <https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/>
+        /// for more details.
+        ///
+        /// Defaults to `1`.
+        pub max_skew: i32,
+        /// If `true`, make the spread constraints into a preference.
+        ///
+        /// Defaults to `false`.
+        pub soft: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ServiceSchedulingConfig {
+        /// If `Some`, add a affinity preference with the given
+        /// weight for services that horizontally scale.
+        ///
+        /// Defaults to `Some(100)`.
+        pub multi_pod_az_affinity_weight: Option<i32>,
+        // TODO(guswynn): soften az node selector config
+        /// If `true`, make the node-level anti-affinity between
+        /// replicated services a preference over a constraint.
+        ///
+        /// Defaults to `false`.
+        pub soften_replication_anti_affinity: bool,
+        /// The weight for `soften_replication_anti_affinity.
+        ///
+        /// Defaults to `100`.
+        pub soft_replication_anti_affinity_weight: i32,
+        /// Configuration for `TopologySpreadConstraint`'s
+        pub topology_spread: ServiceTopologySpreadConfig,
+    }
+
+    pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
+    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY: bool = false;
+    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: i32 = 100;
+
+    pub const DEFAULT_TOPOLOGY_SPREAD_ENABLED: bool = true;
+    pub const DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: bool = true;
+    pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
+    pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
+
+    impl Default for ServiceSchedulingConfig {
+        fn default() -> Self {
+            ServiceSchedulingConfig {
+                multi_pod_az_affinity_weight: DEFAULT_POD_AZ_AFFINITY_WEIGHT,
+                soften_replication_anti_affinity: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
+                soft_replication_anti_affinity_weight:
+                    DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+                topology_spread: ServiceTopologySpreadConfig {
+                    enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
+                    ignore_non_singular_scale: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+                    max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+                    soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
+                },
+            }
+        }
+    }
+}
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -219,6 +295,8 @@ impl Orchestrator for KubernetesOrchestrator {
                 kubernetes_namespace: self.kubernetes_namespace.clone(),
                 namespace: namespace.into(),
                 config: self.config.clone(),
+                // TODO(guswynn): make this configurable.
+                scheduling_config: Default::default(),
                 service_infos: std::sync::Mutex::new(BTreeMap::new()),
             })
         }))
@@ -241,6 +319,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
+    scheduling_config: ServiceSchedulingConfig,
     service_infos: std::sync::Mutex<BTreeMap<String, ServiceInfo>>,
 }
 
@@ -741,7 +820,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             scale,
             labels: labels_in,
             availability_zone,
-            anti_affinity,
+            other_replicas_selector,
+            replicas_selector,
+            replicas_selector_ignoring_scale,
+            horizontal_scale_selector,
             disk,
             disk_limit,
         }: ServiceConfig<'_>,
@@ -823,27 +905,112 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .collect::<BTreeMap<_, _>>();
         let mut args = args(&listen_addrs);
 
-        let anti_affinity = anti_affinity
-            .map(|label_selectors| -> Result<_, anyhow::Error> {
-                let label_selector_requirements = label_selectors
-                    .into_iter()
-                    .map(|ls| self.label_selector_to_k8s(ls))
-                    .collect::<Result<Vec<_>, _>>()?;
+        // This constrains the orchestrator (for those orchestrators that support
+        // anti-affinity, today just k8s) to never schedule pods for different replicas
+        // of the same cluster on the same node. Pods from the _same_ replica are fine;
+        // pods from different clusters are also fine.
+        //
+        // The point is that if pods of two replicas are on the same node, that node
+        // going down would kill both replicas, and so the replication factor of the
+        // cluster in question is illusory.
+        let anti_affinity = Some({
+            let label_selector_requirements = other_replicas_selector
+                .clone()
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ls = LabelSelector {
+                match_expressions: Some(label_selector_requirements),
+                ..Default::default()
+            };
+            let pat = PodAffinityTerm {
+                label_selector: Some(ls),
+                topology_key: "kubernetes.io/hostname".to_string(),
+                ..Default::default()
+            };
+
+            if !self.scheduling_config.soften_replication_anti_affinity {
+                PodAntiAffinity {
+                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
+                    ..Default::default()
+                }
+            } else {
+                PodAntiAffinity {
+                    preferred_during_scheduling_ignored_during_execution: Some(vec![
+                        WeightedPodAffinityTerm {
+                            weight: self.scheduling_config.soft_replication_anti_affinity_weight,
+                            pod_affinity_term: pat,
+                        },
+                    ]),
+                    ..Default::default()
+                }
+            }
+        });
+
+        let affinity = if let Some(weight) = self.scheduling_config.multi_pod_az_affinity_weight {
+            let label_selector_requirements = horizontal_scale_selector
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ls = LabelSelector {
+                match_expressions: Some(label_selector_requirements),
+                ..Default::default()
+            };
+            let pat = PodAffinityTerm {
+                label_selector: Some(ls),
+                topology_key: "topology.kubernetes.io/zone".to_string(),
+                ..Default::default()
+            };
+
+            Some(PodAffinity {
+                preferred_during_scheduling_ignored_during_execution: Some(vec![
+                    WeightedPodAffinityTerm {
+                        weight,
+                        pod_affinity_term: pat,
+                    },
+                ]),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let topology_spread = if self.scheduling_config.topology_spread.enabled {
+            let config = &self.scheduling_config.topology_spread;
+
+            if !config.ignore_non_singular_scale || scale <= 1 {
+                let label_selector_requirements = (if config.ignore_non_singular_scale {
+                    replicas_selector_ignoring_scale
+                } else {
+                    replicas_selector
+                })
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
                 let ls = LabelSelector {
                     match_expressions: Some(label_selector_requirements),
                     ..Default::default()
                 };
-                let pat = PodAffinityTerm {
+
+                let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    topology_key: "kubernetes.io/hostname".to_string(),
-                    ..Default::default()
+                    min_domains: None,
+                    max_skew: config.max_skew,
+                    topology_key: "topology.kubernetes.io/zone".to_string(),
+                    when_unsatisfiable: if config.soft {
+                        "ScheduleAnyway".to_string()
+                    } else {
+                        "DoNotSchedule".to_string()
+                    },
                 };
-                Ok(PodAntiAffinity {
-                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
-                    ..Default::default()
-                })
-            })
-            .transpose()?;
+                Some(vec![constraint])
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let pod_annotations = btreemap! {
             // Prevent the cluster-autoscaler from evicting these pods in attempts to scale down
             // and terminate nodes.
@@ -1091,8 +1258,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_account: self.config.service_account.clone(),
                 affinity: Some(Affinity {
                     pod_anti_affinity: anti_affinity,
+                    pod_affinity: affinity,
                     ..Default::default()
                 }),
+                topology_spread_constraints: topology_spread,
                 tolerations,
                 // Setting a 0s termination grace period has the side effect of
                 // automatically starting a new pod when the previous pod is
