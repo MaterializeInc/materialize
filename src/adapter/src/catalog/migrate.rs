@@ -354,7 +354,7 @@ fn sync_source_owners(
         let cluster = catalog.get_cluster(cluster_replica.cluster_id());
         if let Some(linked_id) = cluster.linked_object_id() {
             let linked_owner_id = catalog.get_entry(&linked_id).owner_id();
-            let old_owner = cluster.owner_id();
+            let old_owner = cluster_replica.owner_id();
             if &old_owner != linked_owner_id {
                 let mut new_replica = cluster_replica.clone();
                 new_replica.owner_id = *linked_owner_id;
