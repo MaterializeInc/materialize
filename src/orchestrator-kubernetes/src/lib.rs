@@ -86,9 +86,10 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
-    EphemeralVolumeSource, ObjectFieldSelector, ObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm,
-    PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
+    EphemeralVolumeSource, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+    ObjectFieldSelector, ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
+    PodSecurityContext, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
     Service as K8sService, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint, Volume,
     VolumeMount, WeightedPodAffinityTerm,
 };
@@ -819,7 +820,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             cpu_limit,
             scale,
             labels: labels_in,
-            availability_zone,
+            availability_zones,
             other_replicas_selector,
             replicas_selector,
             replicas_selector_ignoring_scale,
@@ -947,7 +948,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }
         });
 
-        let affinity = if let Some(weight) = self.scheduling_config.multi_pod_az_affinity_weight {
+        let pod_affinity = if let Some(weight) = self.scheduling_config.multi_pod_az_affinity_weight
+        {
             let label_selector_requirements = horizontal_scale_selector
                 .into_iter()
                 .map(|ls| self.label_selector_to_k8s(ls))
@@ -1026,12 +1028,24 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .clone()
             .into_iter()
             .collect();
-        if let Some(availability_zone) = availability_zone {
-            node_selector.insert(
-                "materialize.cloud/availability-zone".to_string(),
-                availability_zone,
-            );
-        }
+
+        let node_affinity = if let Some(availability_zones) = availability_zones {
+            Some(NodeAffinity {
+                preferred_during_scheduling_ignored_during_execution: None,
+                required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                    node_selector_terms: vec![NodeSelectorTerm {
+                        match_expressions: Some(vec![NodeSelectorRequirement {
+                            key: "materialize.cloud/availability-zone".to_string(),
+                            operator: "In".to_string(),
+                            values: Some(availability_zones),
+                        }]),
+                        match_fields: None,
+                    }],
+                }),
+            })
+        } else {
+            None
+        };
 
         node_selector.insert("materialize.cloud/disk".to_string(), disk.to_string());
 
@@ -1258,7 +1272,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_account: self.config.service_account.clone(),
                 affinity: Some(Affinity {
                     pod_anti_affinity: anti_affinity,
-                    pod_affinity: affinity,
+                    pod_affinity,
+                    node_affinity,
                     ..Default::default()
                 }),
                 topology_spread_constraints: topology_spread,

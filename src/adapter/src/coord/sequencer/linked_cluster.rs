@@ -25,7 +25,6 @@ use mz_sql::plan::SourceSinkClusterConfig;
 use crate::catalog::{
     self, ClusterConfig, ClusterVariant, SerializedReplicaLocation, LINKED_CLUSTER_REPLICA_NAME,
 };
-use crate::coord::sequencer::cluster::AzHelper;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -94,6 +93,7 @@ impl Coordinator {
                 .catalog()
                 .system_config()
                 .allowed_cluster_replica_sizes(),
+            None,
         )?;
         let logging = {
             ReplicaLogging {

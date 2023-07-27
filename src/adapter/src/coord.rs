@@ -1704,7 +1704,7 @@ pub async fn serve(
         cluster_replica_sizes,
         default_storage_cluster_size,
         system_parameter_defaults,
-        mut availability_zones,
+        availability_zones,
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,

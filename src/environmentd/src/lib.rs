@@ -108,7 +108,6 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use rand::seq::SliceRandom;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;

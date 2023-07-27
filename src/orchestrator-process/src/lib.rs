@@ -341,7 +341,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             scale,
             labels,
             // Scheduling constraints are entirely ignored by the process orchestrator.
-            availability_zone: _,
+            availability_zones: _,
             other_replicas_selector: _,
             replicas_selector: _,
             replicas_selector_ignoring_scale: _,

@@ -227,6 +227,9 @@ impl CatalogState {
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zone,
+                // This is filled in durin concretization, and is exposed on the cluster
+                // in `mz_clusters`.
+                allowed_availability_zones: _,
                 allocation: _,
                 disk,
             }) => (Some(&**size), Some(*disk), availability_zone.as_deref()),
