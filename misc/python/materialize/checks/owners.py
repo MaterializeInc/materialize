@@ -72,7 +72,6 @@ class Owners(Check):
                 ALTER SOURCE owner_source{i} OWNER TO other_owner
                 ALTER SINK owner_sink{i} OWNER TO other_owner
                 ALTER CLUSTER owner_cluster{i} OWNER TO other_owner
-                ALTER CLUSTER REPLICA owner_cluster{i}.owner_cluster_r{i} OWNER TO other_owner
                 """
             )
 

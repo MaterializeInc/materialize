@@ -18,9 +18,8 @@ use mz_controller::clusters::{
     DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_ore::cast::CastFrom;
-use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogItem, CatalogItemType, ObjectType,
-};
+use mz_repr::role_id::RoleId;
+use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
@@ -202,7 +201,6 @@ impl Coordinator {
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             let id = self.catalog_mut().allocate_replica_id().await?;
             self.create_managed_cluster_replica_op(
-                session,
                 cluster_id,
                 id,
                 replica_name,
@@ -212,6 +210,7 @@ impl Coordinator {
                 &mut ops,
                 &mut az_helper,
                 disk,
+                *session.current_role_id(),
             )?;
         }
 
@@ -224,7 +223,6 @@ impl Coordinator {
 
     fn create_managed_cluster_replica_op(
         &mut self,
-        session: &Session,
         cluster_id: ClusterId,
         id: ReplicaId,
         name: String,
@@ -234,6 +232,7 @@ impl Coordinator {
         ops: &mut Vec<Op>,
         az_helper: &mut AzHelper,
         disk: bool,
+        owner_id: RoleId,
     ) -> Result<(), AdapterError> {
         let availability_zone = az_helper.choose_az_and_increment();
         let location = SerializedReplicaLocation::Managed {
@@ -271,7 +270,7 @@ impl Coordinator {
             id,
             name,
             config,
-            owner_id: *session.current_role_id(),
+            owner_id,
         });
         Ok(())
     }
@@ -524,12 +523,14 @@ impl Coordinator {
         };
 
         let id = self.catalog_mut().allocate_replica_id().await?;
+        // Replicas have the same owner as their cluster.
+        let owner_id = self.catalog().get_cluster(cluster_id).owner_id();
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
             name: name.clone(),
             config,
-            owner_id: *session.current_role_id(),
+            owner_id,
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -731,6 +732,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
+        let owner_id = cluster.owner_id();
         let mut ops = vec![];
 
         let (
@@ -810,7 +812,6 @@ impl Coordinator {
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
                 let id = self.catalog_mut().allocate_replica_id().await?;
                 self.create_managed_cluster_replica_op(
-                    session,
                     cluster_id,
                     id,
                     name,
@@ -820,6 +821,7 @@ impl Coordinator {
                     &mut ops,
                     &mut az_helper,
                     *new_disk,
+                    owner_id,
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
@@ -852,7 +854,6 @@ impl Coordinator {
             {
                 let id = self.catalog_mut().allocate_replica_id().await?;
                 self.create_managed_cluster_replica_op(
-                    session,
                     cluster_id,
                     id,
                     name,
@@ -862,6 +863,7 @@ impl Coordinator {
                     &mut ops,
                     &mut az_helper,
                     *new_disk,
+                    owner_id,
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
@@ -916,7 +918,6 @@ impl Coordinator {
         let mut names = BTreeSet::new();
         let mut sizes = BTreeSet::new();
         let mut disks = BTreeSet::new();
-        let mut non_owned_replicas = Vec::new();
 
         // Validate per-replica configuration
         for replica in cluster.replicas_by_id.values() {
@@ -929,9 +930,6 @@ impl Coordinator {
                     sizes.insert(location.size.clone());
                     disks.insert(location.disk);
                 }
-            }
-            if replica.owner_id() != cluster.owner_id() {
-                non_owned_replicas.push(replica.replica_id());
             }
         }
 
@@ -998,16 +996,6 @@ impl Coordinator {
         }
 
         let mut ops = vec![];
-
-        // Update the owners of non-owned replicas.
-        ops.extend(
-            non_owned_replicas
-                .into_iter()
-                .map(|replica_id| catalog::Op::UpdateOwner {
-                    id: ObjectId::ClusterReplica((cluster_id, replica_id)),
-                    new_owner: cluster.owner_id(),
-                }),
-        );
 
         let variant = ClusterVariant::Managed(new_config);
         ops.push(catalog::Op::UpdateClusterConfig {

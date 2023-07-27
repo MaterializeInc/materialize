@@ -417,7 +417,12 @@ SELECT COUNT(name) FROM mz_indexes;
 ----
 81
 
-statement error nvalid SIZE: must provide a string value
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER default OWNER TO materialize
+----
+COMPLETE 0
+
+statement error invalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;
 
 statement ok

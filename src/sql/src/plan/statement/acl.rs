@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use itertools::Itertools;
 use mz_sql_parser::ast::display::AstDisplay;
 
-use crate::ast::{Ident, QualifiedReplica, UnresolvedDatabaseName};
+use crate::ast::{Ident, UnresolvedDatabaseName};
 use crate::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
     ErrorMessageObjectDescription, ObjectType, SystemObjectType,
@@ -27,8 +27,7 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
-    ensure_cluster_is_not_linked, ensure_cluster_is_not_managed, resolve_cluster,
-    resolve_cluster_replica, resolve_database, resolve_item, resolve_schema,
+    ensure_cluster_is_not_linked, resolve_cluster, resolve_database, resolve_item, resolve_schema,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -68,8 +67,8 @@ pub fn plan_alter_owner(
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
-            plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(_)) => {
+            bail_never_supported!("altering the owner of a cluster replica");
         }
         (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
             plan_alter_database_owner(scx, if_exists, name, new_owner.id)
@@ -125,35 +124,6 @@ fn plan_alter_cluster_owner(
             });
             Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Cluster,
-            }))
-        }
-    }
-}
-
-fn plan_alter_cluster_replica_owner(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: QualifiedReplica,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster, replica_id)) => {
-            ensure_cluster_is_not_linked(scx, cluster.id())?;
-            ensure_cluster_is_not_managed(scx, cluster.id())?;
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::ClusterReplica((cluster.id(), replica_id)),
-                object_type: ObjectType::ClusterReplica,
-                new_owner,
-            }))
-        }
-        None => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
-                object_type: ObjectType::ClusterReplica,
-            });
-
-            Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::ClusterReplica,
             }))
         }
     }

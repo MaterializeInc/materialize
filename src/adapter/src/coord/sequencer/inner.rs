@@ -4730,56 +4730,56 @@ impl Coordinator {
             new_owner,
         }];
 
-        if let ObjectId::Item(global_id) = &id {
-            let entry = self.catalog().get_entry(global_id);
+        match &id {
+            ObjectId::Item(global_id) => {
+                let entry = self.catalog().get_entry(global_id);
 
-            // Cannot directly change the owner of an index.
-            if entry.is_index() {
-                let name = self
-                    .catalog()
-                    .resolve_full_name(entry.name(), Some(session.conn_id()))
-                    .to_string();
-                session.add_notice(AdapterNotice::AlterIndexOwner { name });
-                return Ok(ExecuteResponse::AlteredObject(object_type));
-            }
+                // Cannot directly change the owner of an index.
+                if entry.is_index() {
+                    let name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), Some(session.conn_id()))
+                        .to_string();
+                    session.add_notice(AdapterNotice::AlterIndexOwner { name });
+                    return Ok(ExecuteResponse::AlteredObject(object_type));
+                }
 
-            // Alter owner cascades down to dependent indexes.
-            let dependent_index_ops = entry
-                .used_by()
-                .into_iter()
-                .filter(|id| self.catalog().get_entry(id).is_index())
-                .map(|id| Op::UpdateOwner {
-                    id: ObjectId::Item(*id),
-                    new_owner,
-                });
-            ops.extend(dependent_index_ops);
-
-            // Alter owner cascades down to linked clusters and replicas.
-            if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
-                let linked_cluster_replica_ops =
-                    cluster.replicas_by_id.keys().map(|id| Op::UpdateOwner {
-                        id: ObjectId::ClusterReplica((cluster.id(), *id)),
+                // Alter owner cascades down to dependent indexes.
+                let dependent_index_ops = entry
+                    .used_by()
+                    .into_iter()
+                    .filter(|id| self.catalog().get_entry(id).is_index())
+                    .map(|id| Op::UpdateOwner {
+                        id: ObjectId::Item(*id),
                         new_owner,
                     });
-                ops.extend(linked_cluster_replica_ops);
-                ops.push(Op::UpdateOwner {
-                    id: ObjectId::Cluster(cluster.id()),
-                    new_owner,
-                });
+                ops.extend(dependent_index_ops);
+
+                // Alter owner cascades down to linked clusters and replicas.
+                if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
+                    let linked_cluster_replica_ops =
+                        cluster.replicas_by_id.keys().map(|id| Op::UpdateOwner {
+                            id: ObjectId::ClusterReplica((cluster.id(), *id)),
+                            new_owner,
+                        });
+                    ops.extend(linked_cluster_replica_ops);
+                    ops.push(Op::UpdateOwner {
+                        id: ObjectId::Cluster(cluster.id()),
+                        new_owner,
+                    });
+                }
+
+                // Alter owner cascades down to sub-sources and progress collections.
+                let dependent_subsources =
+                    entry.subsources().into_iter().map(|id| Op::UpdateOwner {
+                        id: ObjectId::Item(id),
+                        new_owner,
+                    });
+                ops.extend(dependent_subsources);
             }
-
-            // Alter owner cascades down to sub-sources and progress collections.
-            let dependent_subsources = entry.subsources().into_iter().map(|id| Op::UpdateOwner {
-                id: ObjectId::Item(id),
-                new_owner,
-            });
-            ops.extend(dependent_subsources);
-        }
-
-        if let ObjectId::Cluster(cluster_id) = &id {
-            let cluster = self.catalog().get_cluster(*cluster_id);
-            // Alter owner cascades down to managed cluster replicas.
-            if cluster.is_managed() {
+            ObjectId::Cluster(cluster_id) => {
+                let cluster = self.catalog().get_cluster(*cluster_id);
+                // Alter owner cascades down to cluster replicas.
                 let managed_cluster_replica_ops =
                     cluster
                         .replicas_by_id
@@ -4790,6 +4790,7 @@ impl Coordinator {
                         });
                 ops.extend(managed_cluster_replica_ops);
             }
+            _ => {}
         }
 
         self.catalog_transact(Some(session), ops)

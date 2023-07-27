@@ -391,7 +391,6 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::CreateSchema(_)
         | Plan::CreateRole(_)
         | Plan::CreateCluster(_)
-        | Plan::CreateClusterReplica(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -437,6 +436,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => Vec::new(),
+        Plan::CreateClusterReplica(plan) => vec![ObjectId::Cluster(plan.cluster_id)],
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -601,17 +601,6 @@ fn generate_required_privileges(
             attributes: _,
         }) => {
             vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)]
-        }
-        Plan::CreateClusterReplica(CreateClusterReplicaPlan {
-            cluster_id,
-            name: _,
-            config: _,
-        }) => {
-            vec![(
-                SystemObjectId::Object(cluster_id.into()),
-                AclMode::CREATE,
-                role_id,
-            )]
         }
         Plan::CreateSource(CreateSourcePlan {
             name,
@@ -1100,6 +1089,11 @@ fn generate_required_privileges(
             id: _,
             name: _,
             options: _,
+        })
+        | Plan::CreateClusterReplica(CreateClusterReplicaPlan {
+            cluster_id: _,
+            name: _,
+            config: _,
         })
         | Plan::DiscardTemp
         | Plan::DiscardAll
