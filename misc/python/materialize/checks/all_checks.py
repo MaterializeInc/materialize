@@ -43,7 +43,9 @@ from materialize.checks.nested_types import *  # noqa: F401 F403
 from materialize.checks.null_value import *  # noqa: F401 F403
 from materialize.checks.numeric_types import *  # noqa: F401 F403
 from materialize.checks.owners import *  # noqa: F401 F403
-from materialize.checks.peek_cancellation import *  # noqa: F401 F403
+
+# Disabled due to #20743
+# from materialize.checks.peek_cancellation import *  # noqa: F401 F403
 from materialize.checks.pg_cdc import *  # noqa: F401 F403
 from materialize.checks.range import *  # noqa: F401 F403
 from materialize.checks.regex import *  # noqa: F401 F403
