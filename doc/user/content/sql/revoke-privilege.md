@@ -113,7 +113,7 @@ The privileges required to execute this statement are:
 - [`mz_internal.mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges)
 - [`mz_internal.mz_show_my_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_object_privileges)
 - [`mz_internal.mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges)
-- [`mz_internal.mz_show_my_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_all_privileges)
+- [`mz_internal.mz_show_all_my_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_my_privileges)
 
 ## Related pages
 

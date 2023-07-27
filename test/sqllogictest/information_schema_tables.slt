@@ -533,7 +533,7 @@ mz_show_materialized_views
 VIEW
 materialize
 mz_internal
-mz_show_my_all_privileges
+mz_show_all_my_privileges
 VIEW
 materialize
 mz_internal

@@ -200,7 +200,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  privilege_type  text
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_all_privileges' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_my_privileges' ORDER BY position
 ----
 1  grantor  text
 2  grantee  text
@@ -576,6 +576,7 @@ mz_scheduling_parks_histogram
 mz_scheduling_parks_histogram_per_worker
 mz_scheduling_parks_histogram_raw
 mz_sessions
+mz_show_all_my_privileges
 mz_show_all_privileges
 mz_show_cluster_privileges
 mz_show_cluster_replicas
@@ -583,7 +584,6 @@ mz_show_database_privileges
 mz_show_default_privileges
 mz_show_indexes
 mz_show_materialized_views
-mz_show_my_all_privileges
 mz_show_my_cluster_privileges
 mz_show_my_database_privileges
 mz_show_my_default_privileges

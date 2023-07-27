@@ -328,7 +328,7 @@ materialize  r2           materialize  public  t            table  SELECT
 materialize  r5           materialize  public  t            table  DELETE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_all_privileges ORDER BY object_type, database, schema, name, grantee
+SELECT * FROM mz_internal.mz_show_all_my_privileges ORDER BY object_type, database, schema, name, grantee
 ----
 materialize,PUBLIC,NULL,NULL,c,cluster,USAGE
 materialize,r1,NULL,NULL,c,cluster,USAGE

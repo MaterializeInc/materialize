@@ -608,7 +608,7 @@ mz_show_all_privileges
 mz_show_cluster_privileges
 mz_show_database_privileges
 mz_show_default_privileges
-mz_show_my_all_privileges
+mz_show_all_my_privileges
 mz_show_my_cluster_privileges
 mz_show_cluster_replicas
 mz_show_my_database_privileges

@@ -320,13 +320,13 @@ in the system on to user roles.
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_show_my_all_privileges`
+### `mz_show_all_my_privileges`
 
-The `mz_show_my_all_privileges` view is the same as
+The `mz_show_all_my_privileges` view is the same as
 [`mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_all_privileges -->
+<!-- RELATION_SPEC mz_internal.mz_show_all_my_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |

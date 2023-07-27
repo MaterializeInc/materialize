@@ -3955,10 +3955,10 @@ SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_object_privileges"#,
 };
 
-pub const MZ_SHOW_MY_ALL_PRIVILEGES: BuiltinView = BuiltinView {
-    name: "mz_show_my_all_privileges",
+pub const MZ_SHOW_ALL_MY_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_all_my_privileges",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: r#"CREATE VIEW mz_internal.mz_show_my_all_privileges
+    sql: r#"CREATE VIEW mz_internal.mz_show_all_my_privileges
 AS SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_all_privileges
 WHERE
@@ -4605,7 +4605,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SHOW_OBJECT_PRIVILEGES),
         Builtin::View(&MZ_SHOW_MY_OBJECT_PRIVILEGES),
         Builtin::View(&MZ_SHOW_ALL_PRIVILEGES),
-        Builtin::View(&MZ_SHOW_MY_ALL_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_ALL_MY_PRIVILEGES),
         Builtin::View(&MZ_SHOW_DEFAULT_PRIVILEGES),
         Builtin::View(&MZ_SHOW_MY_DEFAULT_PRIVILEGES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
