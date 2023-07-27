@@ -69,7 +69,7 @@ pub(crate) async fn migrate(
 
     info!("migrating from catalog version {:?}", catalog_version);
 
-    let now = (catalog.config().now)().into();
+    let now = (catalog.config().now)();
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
     // rewrite_items(&mut tx, None, |_tx, _cat, _stmt| Box::pin(async { Ok(()) })).await?;
