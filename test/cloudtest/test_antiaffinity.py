@@ -8,18 +8,20 @@
 # by the Apache License, Version 2.0.
 
 import pytest
+from typing import Optional
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
 
-def zones_used(mz: MaterializeApplication) -> int:
-    replica_names = [
-        "antiaffinity_replica1",
-        "antiaffinity_replica2",
-        "antiaffinity_replica3",
-    ]
+def zones_used(mz: MaterializeApplication, replica_names: Optional[list[str]] = None ) -> int:
+    if replica_names is None:
+        replica_names = [
+            "antiaffinity_replica1",
+            "antiaffinity_replica2",
+            "antiaffinity_replica3",
+        ]
     nodes = {}
 
     for replica_name in replica_names:
@@ -111,6 +113,33 @@ def test_create_cluster_replica_zone_mixed(mz: MaterializeApplication) -> None:
     )
 
     assert zones_used(mz) == 2
+
+    mz.environmentd.sql("DROP CLUSTER antiaffinity_cluster1 CASCADE")
+
+
+def test_managed_set_azs(mz: MaterializeApplication) -> None:
+    """Test that the AVAILABILITY ZONE argument to CREATE CLUSTER REPLICA is observed."""
+
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET enable_managed_clusters = true",
+        port="internal",
+        user="mz_system",
+    )
+
+    mz.environmentd.sql(
+        """
+        CREATE CLUSTER antiaffinity_cluster1 SIZE '1', REPLICATION FACTOR 3, AVAILABILITY ZONES ('1', '3')
+        """
+    )
+
+    assert zones_used(
+        mz,
+        replica_names=[
+            "r1",
+            "r2",
+            "r3",
+        ]
+    ) == 2
 
     mz.environmentd.sql("DROP CLUSTER antiaffinity_cluster1 CASCADE")
 

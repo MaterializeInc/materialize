@@ -266,9 +266,9 @@ pub struct ServiceConfig<'a> {
     ///
     /// The orchestrator backend may apply a prefix to the key if appropriate.
     pub labels: BTreeMap<String, String>,
-    /// The availability zone the service should be run in. If no availability
-    /// zone is specified, the orchestrator is free to choose one.
-    pub availability_zone: Option<String>,
+    /// The availability zones the service can be run in. If no availability
+    /// zones are specified, the orchestrator is free to choose one.
+    pub availability_zones: Option<Vec<String>>,
     /// A set of label selectors selecting all _other_ services that are replicas of this one.
     ///
     /// This may be used to implement anti-affinity. If _all_ such selectors

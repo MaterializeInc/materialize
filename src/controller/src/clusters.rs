@@ -113,15 +113,6 @@ pub enum ReplicaLocation {
 }
 
 impl ReplicaLocation {
-    /// Returns the availability zone specified by this replica location, if
-    /// any.
-    pub fn availability_zone(&self) -> Option<&str> {
-        match self {
-            ReplicaLocation::Unmanaged(_) => None,
-            ReplicaLocation::Managed(m) => m.availability_zone.as_deref(),
-        }
-    }
-
     /// Returns the number of processes specified by this replica location.
     pub fn num_processes(&self) -> usize {
         match self {
@@ -178,6 +169,12 @@ pub struct ManagedReplicaLocation {
     pub size: String,
     /// The replica's availability zone, if specified.
     pub availability_zone: Option<String>,
+    /// The replica's availability zones, if specified.
+    /// Always `None` if `availability_zone` is `Some`.
+    ///
+    /// This is placed here during replica concretization for convenience.
+    /// It is never serialized anywhere.
+    pub allowed_availability_zones: Option<Vec<String>>,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
 }
@@ -548,7 +545,9 @@ where
                         ("workers".into(), location.allocation.workers.to_string()),
                         ("size".into(), location.size.to_string()),
                     ]),
-                    availability_zone: location.availability_zone,
+                    availability_zones: location
+                        .availability_zone
+                        .map_or(location.allowed_availability_zones, |zone| Some(vec![zone])),
                     // This provides the orchestrator with some label selectors that
                     // are used to constraint the scheduling of replicas, based on
                     // its internal configuration.
