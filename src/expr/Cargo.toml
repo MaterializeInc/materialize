@@ -57,7 +57,7 @@ criterion = { version = "0.4.0" }
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.47"
+proc-macro2 = "1.0.60"
 
 [build-dependencies]
 prost-build = "0.11.2"

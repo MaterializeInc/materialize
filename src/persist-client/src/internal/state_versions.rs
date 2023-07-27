@@ -968,8 +968,6 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
-        use std::borrow::Borrow;
-
         use mz_ore::collections::HashSet;
         use timely::PartialOrder;
 
@@ -1001,13 +999,13 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| x.key.borrow())
+            .map(|x| &*x.key)
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| x.key.borrow())
+            .map(|x| &*x.key)
             .collect();
         assert_eq!(inc_parts, full_parts);
 
