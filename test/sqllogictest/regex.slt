@@ -113,7 +113,7 @@ SELECT regexp_match('ABC', 'a.*', 'ci');
 ----
 {ABC}
 
-query error db error: ERROR: invalid regular expression: regex parse error:
+query error invalid regular expression: regex parse error:
 SELECT 'abs' ~ '\';
 
 # Case-insensitive vs. case-sensitive regexes when there is no full const folding, but MirScalarExpr::reduce changes
