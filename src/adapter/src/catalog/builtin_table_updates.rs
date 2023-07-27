@@ -227,10 +227,9 @@ impl CatalogState {
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zone,
-                az_user_specified: _,
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), Some(availability_zone.as_str())),
+            }) => (Some(&**size), Some(*disk), availability_zone.as_deref()),
             ReplicaLocation::Unmanaged(_) => (None, None, None),
         };
 

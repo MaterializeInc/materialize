@@ -155,8 +155,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
     SerializedReplicaConfig {
         location: SerializedReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
-            availability_zone: bootstrap_args.default_availability_zone.clone(),
-            az_user_specified: false,
+            availability_zone: None,
             disk: false,
         },
         logging: default_logging_config(),
@@ -175,7 +174,6 @@ fn default_logging_config() -> SerializedReplicaLogging {
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
-    pub default_availability_zone: String,
     pub bootstrap_role: Option<String>,
 }
 

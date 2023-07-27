@@ -108,7 +108,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
@@ -4653,7 +4653,6 @@ impl Catalog {
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
                 bootstrap_role: None,
             },
             None,
@@ -5234,7 +5233,6 @@ impl Catalog {
             SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
-                az_user_specified,
                 disk,
             } => {
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
@@ -5248,7 +5246,6 @@ impl Catalog {
                         .clone(),
                     availability_zone,
                     size,
-                    az_user_specified,
                     disk,
                 })
             }
@@ -8032,10 +8029,8 @@ pub enum SerializedReplicaLocation {
     },
     Managed {
         size: String,
-        availability_zone: String,
-        /// `true` if the AZ was specified by the user and must be respected;
-        /// `false` if it was picked arbitrarily by Materialize.
-        az_user_specified: bool,
+        /// `Some(az)` if the AZ was specified by the user and must be respected;
+        availability_zone: Option<String>,
         disk: bool,
     },
 }
@@ -8060,12 +8055,10 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
                 allocation: _,
                 size,
                 availability_zone,
-                az_user_specified,
                 disk,
             }) => SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
-                az_user_specified,
                 disk,
             },
         }

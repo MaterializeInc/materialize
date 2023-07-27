@@ -83,14 +83,9 @@ impl Coordinator {
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let availability_zone = {
-            let azs = self.catalog().state().availability_zones();
-            AzHelper::new(azs).choose_az()
-        };
         let location = SerializedReplicaLocation::Managed {
             size: size.to_string(),
-            availability_zone,
-            az_user_specified: false,
+            availability_zone: None,
             disk,
         };
         let location = self.catalog().concretize_replica_location(
