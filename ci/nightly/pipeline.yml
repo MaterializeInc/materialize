@@ -38,7 +38,8 @@ steps:
           - { value: zippy-postgres-cdc }
           - { value: zippy-cluster-replicas }
           - { value: zippy-crdb-latest }
-          - { value: secrets }
+          - { value: secrets-aws-secrets-manager }
+          - { value: secrets-local-file }
           - { value: checks-restart-cockroach }
           - { value: checks-restart-entire-mz }
           - { value: checks-parallel-drop-create-default-replica }
@@ -354,15 +355,25 @@ steps:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=55m]
 
-  - id: secrets
-    label: "Secrets"
+  - id: secrets-aws-secrets-manager
+    label: "Secrets AWS"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: secrets
+          composition: secrets-aws-secrets-manager
+
+  - id: secrets-local-file
+    label: "Secrets Local File"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets-local-file
 
   - id: checks-restart-cockroach
     label: "Checks + restart Cockroach"
