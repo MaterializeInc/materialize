@@ -478,7 +478,7 @@ where
         }
 
         if !temp.is_empty() {
-            flush(temp, &mut session);
+            *fuel += flush(temp, &mut session);
         }
 
         // We only get here after having iterated through all keys.
