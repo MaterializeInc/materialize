@@ -89,7 +89,7 @@ pub enum Error {
     #[error("Timeout reached.")]
     TimeoutError,
     /// Indicates that the request was executed successfully but returns no content (204).
-    /// E.g.: It happens when the region is enabled but not ready yet.
+    /// E.g.: It happens when trying to request information from a not enabled region.
     #[error("Succesfull but no content.")]
     SuccesfullButNoContent,
 }
