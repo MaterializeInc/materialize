@@ -98,7 +98,7 @@ use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_ore::task;
+use mz_ore::task::{self, RuntimeExt};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
 use rand::RngCore;
@@ -2229,15 +2229,18 @@ fn webhook_concurrency_limit() {
         let http_client_ = http_client.clone();
         let webhook_url_ = webhook_url.clone();
 
-        let handle = server.runtime.spawn(async move {
-            let resp = http_client_
-                .post(webhook_url_)
-                .body("a")
-                .send()
-                .await
-                .expect("response to succeed");
-            resp.status()
-        });
+        let handle = server.runtime.spawn_named(
+            || "webhook-concurrency-limit-test".to_string(),
+            async move {
+                let resp = http_client_
+                    .post(webhook_url_)
+                    .body("a")
+                    .send()
+                    .await
+                    .expect("response to succeed");
+                resp.status()
+            },
+        );
         handles.push(handle);
     }
     let results = server
