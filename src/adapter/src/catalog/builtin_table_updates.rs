@@ -189,26 +189,40 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
-        let (size, disk, replication_factor) = match &cluster.config.variant {
+        let (size, disk, replication_factor, azs) = match &cluster.config.variant {
             ClusterVariant::Managed(config) => (
                 Some(config.size.as_str()),
                 Some(config.disk),
                 Some(config.replication_factor),
+                if config.availability_zones.is_empty() {
+                    None
+                } else {
+                    Some(config.availability_zones.clone())
+                },
             ),
-            ClusterVariant::Unmanaged => (None, None, None),
+            ClusterVariant::Unmanaged => (None, None, None, None),
         };
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([
+            Datum::String(&id.to_string()),
+            Datum::String(name),
+            Datum::String(&cluster.owner_id.to_string()),
+            privileges,
+            cluster.is_managed().into(),
+            size.into(),
+            replication_factor.into(),
+            disk.into(),
+        ]);
+        if let Some(azs) = azs {
+            packer.push_list(azs.iter().map(|az| Datum::String(az)));
+        } else {
+            packer.push(Datum::Null);
+        }
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(name),
-                Datum::String(&cluster.owner_id.to_string()),
-                privileges,
-                cluster.is_managed().into(),
-                size.into(),
-                replication_factor.into(),
-                disk.into(),
-            ]),
+            row,
             diff,
         }
     }

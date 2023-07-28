@@ -1739,7 +1739,15 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("managed", ScalarType::Bool.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("replication_factor", ScalarType::UInt32.nullable(true))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column(
+            "availability_zones",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(true),
+        ),
     is_retained_metrics_object: false,
 });
 
