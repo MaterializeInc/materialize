@@ -641,7 +641,7 @@ impl futures::Stream for RemapClock {
         // TODO: add some offset to the returned time and/or upper
         loop {
             futures::ready!(self.sleep.as_mut().poll(cx));
-            let now = (self.now)();
+            let now = (self.now)() + 1000;
             let mut new_ts = now - now % self.update_interval_ms;
             if (now % self.update_interval_ms) != 0 {
                 new_ts += self.update_interval_ms;
@@ -650,15 +650,7 @@ impl futures::Stream for RemapClock {
 
             if self.upper.less_equal(&new_ts) {
                 self.upper = Antichain::from_elem(new_ts.step_forward());
-                return Poll::Ready(Some((
-                    new_ts.results_in(&mz_repr::Timestamp::new(1000)).unwrap(),
-                    Antichain::from_elem(
-                        new_ts
-                            .step_forward()
-                            .results_in(&mz_repr::Timestamp::new(1000))
-                            .unwrap(),
-                    ),
-                )));
+                return Poll::Ready(Some((new_ts, self.upper.clone())));
             } else {
                 let upper_ts = self.upper.as_option().expect("no more timestamps to mint");
                 let upper: u64 = upper_ts.into();
