@@ -52,7 +52,7 @@ def generate_version(
         is_development = True
     else:
         buildkite_tag = os.environ.get("BUILDKITE_TAG")
-        # buildkite_tag starts with a 'v'.
+        # buildkite_tag starts with a 'v' and node_version does not.
         assert (
             buildkite_tag == f"v{node_version}"
         ), f"Buildkite tag ({buildkite_tag}) does not match environmentd version ({crate_version})"
