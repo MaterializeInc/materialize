@@ -1064,12 +1064,14 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
 };
 
 static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
-pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
+pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
+    ServerVar {
     name: UncasedStr::new("statement_logging_sample_rate"),
     value: &DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE,
     description: "User-facing session variable indicating how many statement executions should be \
     logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize).",
     internal: false,
+}
 });
 
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
@@ -1095,8 +1097,7 @@ static DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("statement_logging_max_sample_rate"),
     value: &DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE,
-    description:
-        "The maximum rate at which statements may be logged. If this value is less than \
+    description: "The maximum rate at which statements may be logged. If this value is less than \
 that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
     internal: false,
 });

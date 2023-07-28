@@ -79,4 +79,13 @@ pub enum StatementLoggingEvent {
     Prepared(StatementPreparedRecord),
     BeganExecution(StatementBeganExecutionRecord),
     EndedExecution(StatementEndedExecutionRecord),
+    BeganSession(SessionHistoryEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionHistoryEvent {
+    pub id: Uuid,
+    pub connected_at: EpochMillis,
+    pub application_name: String,
+    pub authenticated_user: String,
 }

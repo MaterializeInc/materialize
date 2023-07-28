@@ -15,8 +15,9 @@ use std::time::Duration;
 use mz_ore::now::EpochMillis;
 use mz_proto::IntoRustIfSome;
 use mz_repr::statement_logging::{
-    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
-    StatementExecutionStrategy, StatementLoggingEvent, StatementPreparedRecord,
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementExecutionStrategy, StatementLoggingEvent,
+    StatementPreparedRecord,
 };
 use timely::progress::Antichain;
 
@@ -369,6 +370,22 @@ impl RustType<proto::StatementLoggingEvent> for StatementLoggingEvent {
                         },
                     )
                 }
+                StatementLoggingEvent::BeganSession(sh) => {
+                    let SessionHistoryEvent {
+                        id,
+                        connected_at,
+                        application_name,
+                        authenticated_user,
+                    } = sh;
+                    proto::statement_logging_event::Value::BeganSession(
+                        proto::statement_logging_event::SessionHistory {
+                            id: id.to_string(),
+                            connected_at: Some(connected_at.into_proto()),
+                            application_name: application_name.clone(),
+                            authenticated_user: authenticated_user.clone(),
+                        },
+                    )
+                }
             }),
         }
     }
@@ -502,6 +519,26 @@ impl RustType<proto::StatementLoggingEvent> for StatementLoggingEvent {
                         ended_at: EpochMillis::from_proto(ended_at)?,
                     },
                 ))
+            }
+            Some(proto::statement_logging_event::Value::BeganSession(
+                proto::statement_logging_event::SessionHistory {
+                    id,
+                    connected_at,
+                    application_name,
+                    authenticated_user,
+                },
+            )) => {
+                let id = uuid::Uuid::parse_str(&id).map_err(TryFromProtoError::InvalidUuid)?;
+                let connected_at = connected_at.ok_or_else(|| {
+                    TryFromProtoError::MissingField("StatementBeganExecution.ended_at".to_string())
+                })?;
+                let connected_at = EpochMillis::from_proto(connected_at)?;
+                Ok(StatementLoggingEvent::BeganSession(SessionHistoryEvent {
+                    id,
+                    connected_at,
+                    application_name,
+                    authenticated_user,
+                }))
             }
             None => Err(TryFromProtoError::MissingField(
                 "StatementLoggingEvent.value".to_string(),

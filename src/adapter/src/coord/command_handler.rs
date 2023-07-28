@@ -360,22 +360,26 @@ impl Coordinator {
             },
         );
         let update = self.catalog().state().pack_session_update(&session, 1);
-        let history_update = self.catalog().state().pack_session_history_update(&session);
-        self.send_builtin_table_updates(vec![update, history_update])
-            .await;
+        self.begin_session(&session);
+        self.send_builtin_table_updates(vec![update]).await;
 
         ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
             .send(Ok(StartupResponse { messages }), session)
     }
 
     /// Handles an execute command.
-    /// XXX[btv]: document `outer_context`
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn handle_execute(
         &mut self,
         portal_name: String,
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
+        // If this command was part of another execute command
+        // (for example, executing a `FETCH` statement causes an execute to be
+        //  issued for the cursor it references),
+        // then `outer_context` should be `Some`.
+        // This instructs the coordinator that the
+        // outer execute should be considered finished once the inner one is.
         outer_context: Option<ExecuteContextExtra>,
     ) {
         if session.vars().emit_trace_id_notice() {

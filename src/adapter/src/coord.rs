@@ -99,8 +99,8 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::{
-    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementExecutionStrategy,
-    StatementLoggingEvent,
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementExecutionStrategy, StatementLoggingEvent,
 };
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -1023,6 +1023,11 @@ pub struct Coordinator {
     /// the system table entries (so that we can update them when the
     /// execution finished.)
     statement_logging_executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
+
+    /// Information about sessions that have been started, but which
+    /// have not yet been logged in `mz_session_history`.
+    /// They may be logged as part of a statement being executed (and chosen for logging).
+    statement_logging_unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
 
     /// A reproducible RNG for deciding whether to sample statement executions.
     /// Only used by tests; otherwise, `rand::thread_rng()` is used.
@@ -1965,6 +1970,7 @@ pub async fn serve(
                 statement_logging_executions_begun: BTreeMap::new(),
                 statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
                 statement_logging_pending_events: Vec::new(),
+                statement_logging_unlogged_sessions: BTreeMap::new(),
             };
             let bootstrap = handle.block_on(async {
                 coord

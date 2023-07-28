@@ -627,9 +627,16 @@ message StatementLoggingEvent {
         string id = 5;
         EpochMillis ended_at = 6;
     }
+    message SessionHistory {
+        string id = 1;
+        EpochMillis connected_at = 2;
+        string application_name = 3;
+        string authenticated_user = 4;
+    }
     oneof value {
         StatementPrepared prepared = 1;
         StatementBeganExecution began_execution = 2;
         StatementEndedExecution ended_execution = 3;
+        SessionHistory began_session = 4;
     }
 }

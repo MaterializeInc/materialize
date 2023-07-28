@@ -22,8 +22,8 @@ use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::{
-    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
-    StatementLoggingEvent, StatementPreparedRecord,
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementLoggingEvent, StatementPreparedRecord,
 };
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -468,6 +468,7 @@ impl Connection {
         (
             Vec<StatementPreparedRecord>,
             Vec<(StatementBeganExecutionRecord, StatementEndedExecutionRecord)>,
+            Vec<SessionHistoryEvent>,
         ),
         Error,
     > {
@@ -485,6 +486,7 @@ impl Connection {
                     let mut prepared_statements = BTreeMap::new();
                     let mut began_execution = BTreeMap::new();
                     let mut ended_execution = BTreeMap::new();
+                    let mut session_history = BTreeMap::new();
                     for (ev, ()) in tx.peek_one(collection).await?.into_iter() {
                         let ev = ev.into_rust().expect("valid items in stash");
                         match ev {
@@ -497,6 +499,9 @@ impl Connection {
                             StatementLoggingEvent::EndedExecution(ee) => {
                                 ended_execution.insert(ee.id, Some(ee));
                             }
+                            StatementLoggingEvent::BeganSession(sh) => {
+                                session_history.insert(sh.id, Some(sh));
+                            }
                         }
                     }
 
@@ -505,8 +510,8 @@ impl Connection {
                     //     retention period, we keep both parts.
                     // (2) If any execution we keep due to rule 1 above references a prepared statement,
                     //     we keep that prepared statement regardless of its age
-                    // (3) We also keep any prepared statement that is younger than the retention period,
-                    //     even if otherwise unreferenced.
+                    // (3) If any prepared statement we keep references a session history event, we
+                    //     keep that event.
                     // (4) All other events are removed.
                     // (5) If we decided to keep a Begin but there is no corresponding End,
                     //     this means that environmentd died before the statement finished
@@ -520,12 +525,17 @@ impl Connection {
 
                     let mut prepared_out = vec![];
                     let mut execution_out = vec![];
+                    let mut session_out = vec![];
                     for (id, opt_be) in began_execution.iter_mut() {
                         if let Some(be) = opt_be.as_mut() {
                             if is_recent_enough(be.began_at) {
                                 let ps_id = be.prepared_statement_id;
                                 let be = opt_be.take().expect("verified above");
                                 if let Some(ps) = prepared_statements.remove(&ps_id).flatten() {
+                                    if let Some(sh) = session_history.remove(&ps.session_id).flatten() {
+                                        // Rule (3)
+                                        session_out.push(sh);
+                                    }
                                     // Rule (2)
                                     prepared_out.push(ps);
                                 }
@@ -569,15 +579,6 @@ impl Connection {
                             }
                         }
                     }
-                    for (_, opt_ps) in prepared_statements.iter_mut() {
-                        if let Some(ps) = opt_ps.as_mut() {
-                            if is_recent_enough(ps.prepared_at) {
-                                let ps = opt_ps.take().expect("verified above");
-                                // Rule (3)
-                                prepared_out.push(ps);
-                            }
-                        }
-                    }
 
                     // Rule (4)
                     for (_, opt_be) in began_execution {
@@ -610,10 +611,20 @@ impl Connection {
                             );
                         }
                     }
+                    for (_, opt_sh) in session_history {
+                        if let Some(sh) = opt_sh {
+                            collection.append_to_batch(
+                                &mut updates,
+                                &StatementLoggingEvent::BeganSession(sh).into_proto(),
+                                &(),
+                                -1,
+                            );
+                        }
+                    }
                     if !is_readonly {
                         tx.append(vec![updates]).await?;
                     }
-                    Ok((prepared_out, execution_out))
+                    Ok((prepared_out, execution_out, session_out))
                 })
             })
             .await?;

@@ -10,11 +10,10 @@
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use chrono::Utc;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::statement_logging::{
-    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
-    StatementLoggingEvent, StatementPreparedRecord,
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementLoggingEvent, StatementPreparedRecord,
 };
 use mz_sql::plan::Params;
 use mz_stash::TypedCollection;
@@ -141,7 +140,7 @@ impl Coordinator {
         StatementLoggingId(id): StatementLoggingId,
         reason: StatementEndedExecutionReason,
     ) {
-        let now = Utc::now();
+        let now = self.now_datetime();
         let now_millis = now.timestamp_millis().try_into().expect("sane system time");
         let ended_record = StatementEndedExecutionRecord {
             id,
@@ -222,10 +221,7 @@ impl Coordinator {
             prepared_statement_id: ps_uuid,
             sample_rate,
             params,
-            began_at: Utc::now()
-                .timestamp_millis()
-                .try_into()
-                .expect("sane system time"),
+            began_at: self.now(),
         };
         self.statement_logging_pending_events
             .push(StatementLoggingEvent::BeganExecution(record.clone()));
@@ -238,16 +234,41 @@ impl Coordinator {
         let updates = if let Some(ps_record) = ps_record {
             self.statement_logging_pending_events
                 .push(StatementLoggingEvent::Prepared(ps_record.clone()));
-            vec![
-                self.catalog
-                    .state()
-                    .pack_statement_prepared_update(&ps_record),
-                ev,
-            ]
+            let ps_ev = self
+                .catalog
+                .state()
+                .pack_statement_prepared_update(&ps_record);
+            if let Some(sh) = self
+                .statement_logging_unlogged_sessions
+                .remove(&ps_record.session_id)
+            {
+                let sh_ev = self.catalog.state().pack_session_history_update(&sh);
+                self.statement_logging_pending_events
+                    .push(StatementLoggingEvent::BeganSession(sh));
+                vec![sh_ev, ps_ev, ev]
+            } else {
+                vec![ps_ev, ev]
+            }
         } else {
             vec![ev]
         };
         self.buffer_builtin_table_updates(updates);
         Some(StatementLoggingId(ev_id))
+    }
+
+    /// Record a new connection event
+    pub fn begin_session(&mut self, session: &Session) {
+        let id = session.uuid();
+        let connected_at = session.connect_time();
+        let application_name = session.application_name().to_owned();
+        let session_role = session.session_role_id();
+        let authenticated_user = self.catalog.get_role(session_role).name.clone();
+        let event = SessionHistoryEvent {
+            id,
+            connected_at,
+            application_name,
+            authenticated_user,
+        };
+        self.statement_logging_unlogged_sessions.insert(id, event);
     }
 }

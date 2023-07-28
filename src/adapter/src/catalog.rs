@@ -3861,7 +3861,7 @@ impl Catalog {
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
-        let (prepared_statement_log, executed_statement_log) = catalog
+        let (prepared_statement_log, executed_statement_log, session_history_log) = catalog
             .storage()
             .await
             .fetch_and_prune_statement_log(config.statement_logging_retention_period)
@@ -3871,6 +3871,9 @@ impl Catalog {
         }
         for (be, ee) in executed_statement_log {
             builtin_table_updates.push(catalog.state.pack_full_statement_execution_update(&be, &ee))
+        }
+        for sh in session_history_log {
+            builtin_table_updates.push(catalog.state.pack_session_history_update(&sh));
         }
 
         for ip in &catalog.state.egress_ips {
