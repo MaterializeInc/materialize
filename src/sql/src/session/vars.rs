@@ -1386,6 +1386,10 @@ feature_flags!(
         enable_dangerous_functions,
         "executing potentially dangerous functions"
     ),
+    (
+        enable_managed_availability_zones,
+        "MANAGED, AVAILABILITY ZONES syntax"
+    )
 );
 
 /// Represents the input to a variable.
