@@ -18,9 +18,6 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_types::errors::DataflowError;
@@ -209,18 +206,6 @@ where
     };
 
     collection
-}
-
-/// Args for creating a healthchecker.  Not done inline because it requires async.
-pub struct HealthcheckerArgs {
-    /// persist_clients
-    pub persist_clients: Arc<PersistClientCache>,
-    /// location of persist
-    pub persist_location: PersistLocation,
-    /// id of status shard for updates
-    pub status_shard_id: Option<ShardId>,
-    /// now_fn
-    pub now_fn: NowFn,
 }
 
 /// A type that can be rendered as a dataflow sink.
