@@ -34,6 +34,8 @@ alter_source_add_clause ::=
 alter_source_drop_clause ::=
   'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
 alter_source_set_clause ::= 'SET' '(' 'SIZE' value ')'
+alter_set_cluster ::=
+  'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
