@@ -526,8 +526,6 @@ pub enum ExecuteResponse {
     CreatedWebhookSource,
     /// The requested source was created.
     CreatedSource,
-    /// The requested sources were created.
-    CreatedSources,
     /// The requested table was created.
     CreatedTable,
     /// The requested view was created.
@@ -613,6 +611,77 @@ pub enum ExecuteResponse {
     ValidatedConnection,
 }
 
+impl TryInto<ExecuteResponse> for ExecuteResponseKind {
+    type Error = ();
+
+    /// Attempts to convert into an ExecuteResponse. Returns an error if not possible without
+    /// actually executing a statement.
+    fn try_into(self) -> Result<ExecuteResponse, Self::Error> {
+        match self {
+            ExecuteResponseKind::AlteredDefaultPrivileges => {
+                Ok(ExecuteResponse::AlteredDefaultPrivileges)
+            }
+            ExecuteResponseKind::AlteredObject => Err(()),
+            ExecuteResponseKind::AlteredIndexLogicalCompaction => {
+                Ok(ExecuteResponse::AlteredIndexLogicalCompaction)
+            }
+            ExecuteResponseKind::AlteredRole => Ok(ExecuteResponse::AlteredRole),
+            ExecuteResponseKind::AlteredSystemConfiguration => {
+                Ok(ExecuteResponse::AlteredSystemConfiguration)
+            }
+            ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
+            ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
+            ExecuteResponseKind::CopyTo => Err(()),
+            ExecuteResponseKind::CopyFrom => Err(()),
+            ExecuteResponseKind::CreatedConnection => Ok(ExecuteResponse::CreatedConnection),
+            ExecuteResponseKind::CreatedDatabase => Ok(ExecuteResponse::CreatedDatabase),
+            ExecuteResponseKind::CreatedSchema => Ok(ExecuteResponse::CreatedSchema),
+            ExecuteResponseKind::CreatedRole => Ok(ExecuteResponse::CreatedRole),
+            ExecuteResponseKind::CreatedCluster => Ok(ExecuteResponse::CreatedCluster),
+            ExecuteResponseKind::CreatedClusterReplica => {
+                Ok(ExecuteResponse::CreatedClusterReplica)
+            }
+            ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
+            ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
+            ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
+            ExecuteResponseKind::CreatedWebhookSource => Ok(ExecuteResponse::CreatedWebhookSource),
+            ExecuteResponseKind::CreatedSource => Ok(ExecuteResponse::CreatedSource),
+            ExecuteResponseKind::CreatedTable => Ok(ExecuteResponse::CreatedTable),
+            ExecuteResponseKind::CreatedView => Ok(ExecuteResponse::CreatedView),
+            ExecuteResponseKind::CreatedViews => Ok(ExecuteResponse::CreatedViews),
+            ExecuteResponseKind::CreatedMaterializedView => {
+                Ok(ExecuteResponse::CreatedMaterializedView)
+            }
+            ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
+            ExecuteResponseKind::Deallocate => Err(()),
+            ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
+            ExecuteResponseKind::Deleted => Err(()),
+            ExecuteResponseKind::DiscardedTemp => Ok(ExecuteResponse::DiscardedTemp),
+            ExecuteResponseKind::DiscardedAll => Ok(ExecuteResponse::DiscardedAll),
+            ExecuteResponseKind::DroppedObject => Err(()),
+            ExecuteResponseKind::DroppedOwned => Ok(ExecuteResponse::DroppedOwned),
+            ExecuteResponseKind::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
+            ExecuteResponseKind::Fetch => Err(()),
+            ExecuteResponseKind::GrantedPrivilege => Ok(ExecuteResponse::GrantedPrivilege),
+            ExecuteResponseKind::GrantedRole => Ok(ExecuteResponse::GrantedRole),
+            ExecuteResponseKind::Inserted => Err(()),
+            ExecuteResponseKind::Prepare => Ok(ExecuteResponse::Prepare),
+            ExecuteResponseKind::Raised => Ok(ExecuteResponse::Raised),
+            ExecuteResponseKind::ReassignOwned => Ok(ExecuteResponse::ReassignOwned),
+            ExecuteResponseKind::RevokedPrivilege => Ok(ExecuteResponse::RevokedPrivilege),
+            ExecuteResponseKind::RevokedRole => Ok(ExecuteResponse::RevokedRole),
+            ExecuteResponseKind::SendingRows => Err(()),
+            ExecuteResponseKind::SetVariable => Err(()),
+            ExecuteResponseKind::StartedTransaction => Ok(ExecuteResponse::StartedTransaction),
+            ExecuteResponseKind::Subscribing => Err(()),
+            ExecuteResponseKind::TransactionCommitted => Err(()),
+            ExecuteResponseKind::TransactionRolledBack => Err(()),
+            ExecuteResponseKind::Updated => Err(()),
+            ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
+        }
+    }
+}
+
 impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
         use ExecuteResponse::*;
@@ -637,7 +706,6 @@ impl ExecuteResponse {
             CreatedSink { .. } => Some("CREATE SINK".into()),
             CreatedWebhookSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
-            CreatedSources => Some("CREATE SOURCES".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
@@ -719,7 +787,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
-            CreateSource | CreateSources => vec![CreatedSource, CreatedSources],
+            CreateSource | CreateSources => vec![CreatedSource],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
             CreateTable => vec![CreatedTable],

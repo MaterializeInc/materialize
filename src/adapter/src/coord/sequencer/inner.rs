@@ -1816,6 +1816,12 @@ impl Coordinator {
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
+            Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
+                self.internal_cmd_tx
+                    .send(Message::ExecuteSingleStatementTransaction { ctx, stmt, params })
+                    .expect("must send");
+                return;
+            }
             Ok((_, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };

@@ -694,3 +694,84 @@ RESET TRANSACTION_ISOLATION
 
 statement ok
 ROLLBACK
+
+# Test explicit single statement transactions.
+
+reset-server
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE t (i INT)
+
+# Should not have executed.
+simple conn=c1
+SHOW tables
+----
+COMPLETE 0
+
+statement ok
+COMMIT
+
+simple conn=c1
+SHOW tables
+----
+t
+COMPLETE 1
+
+statement ok
+BEGIN
+
+# No error yet because we didn't try to execute.
+statement ok
+CREATE TABLE t (i INT)
+
+statement error db error: ERROR: table "materialize\.public\.t" already exists
+COMMIT
+
+statement ok
+BEGIN
+
+# No error yet because we didn't try to execute.
+statement ok
+CREATE TABLE t (i INT)
+
+statement error db error: ERROR: this transaction can only execute a single statement
+SELECT 1
+
+statement ok
+ROLLBACK
+
+# Test CREATE SOURCE for its off thread purify.
+statement ok
+BEGIN
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER
+
+statement ok
+COMMIT
+
+simple
+SHOW SOURCES
+----
+s,load-generator,1
+s_progress,progress,NULL
+COMPLETE 2
+
+# Test a statement that doesn't work even in this mode because of ambiguous responses.
+statement ok
+CREATE DEFAULT INDEX ON s
+
+statement ok
+BEGIN
+
+statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(LOGICAL COMPACTION WINDOW = 0\) cannot be run inside a transaction block
+ALTER INDEX s_primary_idx SET (LOGICAL COMPACTION WINDOW = 0)
+
+query error db error: ERROR: current transaction is aborted, commands ignored until end of transaction block
+SELECT 1
+
+statement ok
+ROLLBACK
