@@ -2,11 +2,12 @@
 \set person2Id 15393162796819
 \set startDate '\'2012-11-06\''::timestamp
 \set endDate '\'2012-11-10\''::timestamp
--- materialize=> \i q15.sql
--- ^CCancel request sent
--- psql:q15.sql:114: ERROR:  canceling statement due to user request
--- Time: 895779.453 ms (14:55.779)
--- materialize=>
+--  coalesce
+-- ----------
+--         4
+-- (1 row)
+--
+-- Time: 144025.594 ms (02:24.026)
 
 /* Q15. Trusted connection paths through forums created in a given timeframe
 \set person1Id 21990232564808
@@ -14,6 +15,62 @@
 \set startDate '\'2010-11-01\''::timestamp
 \set endDate '\'2010-12-01\''::timestamp
  */
+
+WITH
+  -- forums within the date range
+  myForums AS (
+      SELECT id FROM Forum f WHERE f.creationDate BETWEEN :startDate AND :endDate
+  ),
+  -- the (inverse) interaction scores between folks who know each other
+  mm AS (
+      SELECT least(msg.CreatorPersonId, reply.CreatorPersonId) AS src,
+             greatest(msg.CreatorPersonId, reply.CreatorPersonId) AS dst,
+             sum(case when msg.ParentMessageId is null then 10 else 5 end) AS w
+      FROM Person_knows_Person pp, Message msg, Message reply
+      WHERE true
+            AND pp.person1id = msg.CreatorPersonId
+            AND pp.person2id = reply.CreatorPersonId
+            AND reply.ParentMessageId = msg.MessageId
+            AND EXISTS (SELECT * FROM myForums f WHERE f.id = msg.containerforumid)
+            AND EXISTS (SELECT * FROM myForums f WHERE f.id = reply.containerforumid)
+      GROUP BY src, dst
+  ),
+  -- the true interaction scores, with 0 default for folks with no interactions
+  edge AS (
+      SELECT pp.person1id AS src,
+             pp.person2id AS dst,
+             10::double precision / (coalesce(w, 0) + 10) AS w
+        FROM Person_knows_Person pp
+   LEFT JOIN mm
+          ON least(pp.person1id, pp.person2id) = mm.src
+         AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  completed_paths AS (
+    WITH MUTUALLY RECURSIVE
+      paths (src bigint, dst bigint, w double precision) AS (
+          SELECT :person1Id AS src, :person1Id AS dst, 0::double precision AS w
+          UNION
+          SELECT paths1.src, paths2.dst, paths1.w + paths2.w
+            FROM minimal_paths paths1
+            JOIN edge paths2 -- step-transitive closure
+              ON paths1.dst = paths2.src
+      ),
+      minimal_paths (src bigint, dst bigint, w double precision) AS (
+        SELECT src, dst, min(w)
+          FROM paths
+      GROUP BY src, dst
+      )
+    SELECT src, dst, w
+      FROM minimal_paths
+     WHERE dst = :person2Id),
+  results AS (
+    SELECT dst, w
+      FROM completed_paths
+     WHERE w IN (SELECT min(w) FROM completed_paths)
+  )
+SELECT coalesce(w, -1) FROM results ORDER BY w ASC LIMIT 20;
+
+/*
 EXPLAIN WITH MUTUALLY RECURSIVE
   srcs (f bigint) AS (SELECT :person1Id),
   dsts (t bigint) AS (SELECT :person2Id),
@@ -117,3 +174,4 @@ EXPLAIN WITH MUTUALLY RECURSIVE
       GROUP BY l.gsrc, r.gsrc
   )
 SELECT coalesce(min(w), -1) FROM results;
+*/
