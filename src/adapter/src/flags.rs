@@ -157,7 +157,7 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
     ServiceSchedulingConfig {
         multi_pod_az_affinity_weight: config.cluster_multi_process_replica_az_affinity_weight(),
         soften_replication_anti_affinity: config.cluster_soften_replication_anti_affinity(),
-        soft_replication_anti_affinity_weight: config
+        soften_replication_anti_affinity_weight: config
             .cluster_soften_replication_anti_affinity_weight(),
         topology_spread: ServiceTopologySpreadConfig {
             enabled: config.cluster_enable_topology_spread(),
@@ -165,5 +165,7 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
             max_skew: config.cluster_topology_spread_max_skew(),
             soft: config.cluster_topology_spread_soft(),
         },
+        soften_az_affinity: config.cluster_soften_az_affinity(),
+        soften_az_affinity_weight: config.cluster_soften_az_affinity_weight(),
     }
 }

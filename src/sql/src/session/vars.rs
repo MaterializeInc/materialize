@@ -1184,7 +1184,8 @@ mod cluster_scheduling {
         ServerVar {
             name: UncasedStr::new("cluster_multi_process_replica_az_affinity_weight"),
             value: &DEFAULT_POD_AZ_AFFINITY_WEIGHT,
-            description: "Whether or to add an availability zone affinity between instances of \
+            description:
+                "Whether or not to add an availability zone affinity between instances of \
             multi-process replicas. Either an affinity weight or empty (off) (Materialize).",
             internal: true,
         };
@@ -1192,7 +1193,7 @@ mod cluster_scheduling {
     pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("cluster_soften_replication_anti_affinity"),
         value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
-        description: "Whether or to turn the node-level anti affinity between replicas \
+        description: "Whether or not to turn the node-scope anti affinity between replicas \
             in the same cluster into a preference (Materialize).",
         internal: true,
     };
@@ -1232,6 +1233,21 @@ mod cluster_scheduling {
         name: UncasedStr::new("cluster_topology_spread_soft"),
         value: &DEFAULT_TOPOLOGY_SPREAD_SOFT,
         description: "If true, soften the topology spread constraints for replicas (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_SOFTEN_AZ_AFFINITY: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_soften_az_affinity"),
+        value: &DEFAULT_SOFTEN_AZ_AFFINITY,
+        description: "Whether or not to turn the az-scope node affinity for replicas. \
+            Note this could violate requests from the user (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("cluster_soften_az_affinity_weight"),
+        value: &DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
+        description: "The preference weight for `cluster_soften_az_affinity` (Materialize).",
         internal: true,
     };
 }
@@ -2070,7 +2086,10 @@ impl SystemVars {
             .with_var(&cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD)
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE)
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
-            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT);
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT);
+
         vars.refresh_internal_state();
         vars
     }
@@ -2671,6 +2690,14 @@ impl SystemVars {
 
     pub fn cluster_topology_spread_soft(&self) -> bool {
         *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
+    }
+
+    pub fn cluster_soften_az_affinity(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
+    }
+
+    pub fn cluster_soften_az_affinity_weight(&self) -> i32 {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
     }
 }
 
@@ -4091,6 +4118,8 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE.name()
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW.name()
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

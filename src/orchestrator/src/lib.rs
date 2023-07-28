@@ -492,8 +492,7 @@ pub mod scheduling_config {
         ///
         /// Defaults to `Some(100)`.
         pub multi_pod_az_affinity_weight: Option<i32>,
-        // TODO(guswynn): soften az node selector config
-        /// If `true`, make the node-level anti-affinity between
+        /// If `true`, make the node-scope anti-affinity between
         /// replicated services a preference over a constraint.
         ///
         /// Defaults to `false`.
@@ -501,9 +500,17 @@ pub mod scheduling_config {
         /// The weight for `soften_replication_anti_affinity.
         ///
         /// Defaults to `100`.
-        pub soft_replication_anti_affinity_weight: i32,
+        pub soften_replication_anti_affinity_weight: i32,
         /// Configuration for `TopologySpreadConstraint`'s
         pub topology_spread: ServiceTopologySpreadConfig,
+        /// If `true`, make the az-scope node affinity soft.
+        ///
+        /// Defaults to `false`.
+        pub soften_az_affinity: bool,
+        /// The weight for `soften_replication_anti_affinity.
+        ///
+        /// Defaults to `100`.
+        pub soften_az_affinity_weight: i32,
     }
 
     pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
@@ -515,12 +522,15 @@ pub mod scheduling_config {
     pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
     pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
 
+    pub const DEFAULT_SOFTEN_AZ_AFFINITY: bool = false;
+    pub const DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT: i32 = 100;
+
     impl Default for ServiceSchedulingConfig {
         fn default() -> Self {
             ServiceSchedulingConfig {
                 multi_pod_az_affinity_weight: DEFAULT_POD_AZ_AFFINITY_WEIGHT,
                 soften_replication_anti_affinity: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
-                soft_replication_anti_affinity_weight:
+                soften_replication_anti_affinity_weight:
                     DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
                 topology_spread: ServiceTopologySpreadConfig {
                     enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
@@ -528,6 +538,8 @@ pub mod scheduling_config {
                     max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
                     soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
                 },
+                soften_az_affinity: DEFAULT_SOFTEN_AZ_AFFINITY,
+                soften_az_affinity_weight: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
             }
         }
     }
