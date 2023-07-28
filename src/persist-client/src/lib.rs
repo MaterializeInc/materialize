@@ -880,6 +880,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn sanity_check() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -927,6 +928,7 @@ mod tests {
 
     // Sanity check that the open_reader and open_writer calls work.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn open_reader_writer() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1238,6 +1240,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn multiple_shards() {
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1278,6 +1281,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_upper() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1309,6 +1313,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn append_with_invalid_upper() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1372,6 +1377,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1428,6 +1434,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1478,6 +1485,7 @@ mod tests {
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_append() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1525,6 +1533,7 @@ mod tests {
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_append_per_writer() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1567,6 +1576,7 @@ mod tests {
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_compare_and_append() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1613,6 +1623,7 @@ mod tests {
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_compare_and_append_per_writer() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1820,6 +1831,7 @@ mod tests {
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_blocking_reads() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -1891,6 +1903,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
@@ -1920,6 +1933,7 @@ mod tests {
     /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
     /// would panic.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_16743_heartbeat_tombstone() {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
         let (mut write, mut read) = new_test_client()

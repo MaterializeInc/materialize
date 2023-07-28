@@ -732,6 +732,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn empty_batches() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -771,6 +772,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append_batch_multi() {
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -838,6 +840,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn hollow_batch_roundtrip() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),

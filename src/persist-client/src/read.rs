@@ -1168,6 +1168,7 @@ mod tests {
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn drop_unused_subscribe() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
