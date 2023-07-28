@@ -7,15 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import pytest
 from typing import Optional
+
+import pytest
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
 
-def zones_used(mz: MaterializeApplication, replica_names: Optional[list[str]] = None ) -> int:
+def zones_used(
+    mz: MaterializeApplication, replica_names: Optional[list[str]] = None
+) -> int:
     if replica_names is None:
         replica_names = [
             "antiaffinity_replica1",
@@ -132,14 +135,17 @@ def test_managed_set_azs(mz: MaterializeApplication) -> None:
         """
     )
 
-    assert zones_used(
-        mz,
-        replica_names=[
-            "r1",
-            "r2",
-            "r3",
-        ]
-    ) == 2
+    assert (
+        zones_used(
+            mz,
+            replica_names=[
+                "r1",
+                "r2",
+                "r3",
+            ],
+        )
+        == 2
+    )
 
     mz.environmentd.sql("DROP CLUSTER antiaffinity_cluster1 CASCADE")
 

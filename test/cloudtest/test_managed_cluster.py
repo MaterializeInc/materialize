@@ -22,6 +22,26 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     )[0][0]
     assert cluster_id is not None
 
+    check = mz.environmentd.sql_query(
+        "SELECT availability_zones IS NULL FROM mz_clusters WHERE name = 'sized1'"
+    )[0][0]
+    assert check is not None
+    assert check == True
+
+    mz.environmentd.sql("ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('1', '2', '3'))")
+    check = mz.environmentd.sql_query(
+        "SELECT list_length(availability_zones) = 3 FROM mz_clusters WHERE name = 'sized1'"
+    )[0][0]
+    assert check is not None
+    assert check == True
+
+    try:
+        mz.environmentd.sql("ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('4'))")
+    except:
+        pass
+    else:
+        assert False, "We shouldn't be able to set az's to an unknown az"
+
     replicas = mz.environmentd.sql_query(
         "SELECT mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'sized1' ORDER BY 1"
     )
