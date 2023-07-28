@@ -104,7 +104,7 @@ use crate::catalog::builtin::{
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
-use crate::config::{SynchronizedParameters, SystemParameterFrontend};
+use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
@@ -3333,7 +3333,7 @@ impl Catalog {
         catalog
             .load_system_configuration(
                 config.system_parameter_defaults,
-                config.system_parameter_frontend,
+                config.system_parameter_sync_config,
             )
             .await?;
 
@@ -3887,14 +3887,14 @@ impl Catalog {
     ///    `system_parameter_defaults` map.
     /// 3. Overwrite and persist selected parameter values from the
     ///    configuration that can be pulled from the provided
-    ///    `system_parameter_frontend` (if present).
+    ///    `system_parameter_sync_config` (if present).
     ///
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+        system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
             let mut storage = self.storage().await;
@@ -3926,7 +3926,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        if let Some(system_parameter_frontend) = system_parameter_frontend {
+        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
             if !self.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
 
@@ -3968,10 +3968,10 @@ impl Catalog {
                 //       LaunchDarkly configuration, for when LaunchDarkly comes
                 //       back online.
                 //    6. Reboot environmentd.
-                system_parameter_frontend.ensure_initialized().await;
 
                 let mut params = SynchronizedParameters::new(self.state.system_config().clone());
-                system_parameter_frontend.pull(&mut params);
+                let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+                frontend.pull(&mut params);
                 let ops = params
                     .modified()
                     .into_iter()
@@ -4641,7 +4641,7 @@ impl Catalog {
             egress_ips: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
-            system_parameter_frontend: None,
+            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
             connection_context: None,

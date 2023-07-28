@@ -26,7 +26,7 @@ use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::storage;
-use crate::config::SystemParameterFrontend;
+use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -66,7 +66,7 @@ pub struct Config<'a> {
     /// A optional frontend used to pull system parameters for initial sync in
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
-    pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
     /// Needed only for migrating PG source column metadata. If `None`, will

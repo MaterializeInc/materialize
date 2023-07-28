@@ -126,7 +126,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::config::SystemParameterFrontend;
+use crate::config::SystemParameterSyncConfig;
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
@@ -466,7 +466,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
@@ -1651,7 +1651,7 @@ pub async fn serve(
         egress_ips,
         aws_account_id,
         aws_privatelink_availability_zones,
-        system_parameter_frontend,
+        system_parameter_sync_config,
         active_connection_count,
         tracing_handle,
     }: Config,
@@ -1709,7 +1709,7 @@ pub async fn serve(
             egress_ips,
             aws_principal_context,
             aws_privatelink_availability_zones,
-            system_parameter_frontend,
+            system_parameter_sync_config,
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
