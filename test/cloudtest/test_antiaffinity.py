@@ -128,6 +128,11 @@ def test_managed_set_azs(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET enable_managed_availability_zones = true",
+        port="internal",
+        user="mz_system",
+    )
 
     mz.environmentd.sql(
         """
