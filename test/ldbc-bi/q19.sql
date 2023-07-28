@@ -11,6 +11,15 @@
 -- (1 row)
 --
 -- Time: 8267.997 ms (00:08.268)
+--
+-- our simpler query
+--
+--       src       |      dst       | w
+-- ----------------+----------------+----
+--  24189255818627 | 26388279072272 | 39
+-- (1 row)
+--
+-- Time: 21601.377 ms (00:21.601)
 
 /* Q19. Interaction path between cities
 \set city1Id 608
@@ -19,22 +28,66 @@
 
 CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
 WITH
-weights(src, dst, w) AS (
+  -- asymmetrize...
+  knows_asymmetric AS (
+    SELECT person1id, person2id
+      FROM Person_knows_person
+     WHERE person1id < person2id
+  ),
+  -- compute interaction scores (no interactions means we ignore that 'knows' relationship)
+  weights(src, dst, w) AS (
     SELECT
         person1id AS src,
         person2id AS dst,
         greatest(round(40 - sqrt(count(*)))::bigint, 1) AS w
-    FROM (SELECT person1id, person2id FROM Person_knows_person WHERE person1id < person2id) pp, Message m1, Message m2
-    WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid) and pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid) and m1.parentmessageid = m2.messageid and m1.creatorpersonid <> m2.creatorpersonid
-    GROUP BY src, dst
+    FROM knows_asymmetric pp,
+         Message m1,
+         Message m2
+    WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid)
+      AND pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid)
+      AND m1.parentmessageid = m2.messageid
+      AND m1.creatorpersonid <> m2.creatorpersonid
+ GROUP BY src, dst
 )
+-- resymmetrize
 SELECT src, dst, w FROM weights
 UNION ALL
 SELECT dst, src, w FROM weights;
 
-CREATE INDEX PathQ19_src_dst ON PathQ19 (src, dst);
+CREATE INDEX PathQ19_src ON PathQ19 (src);
 
+WITH
+  srcs AS (SELECT id FROM Person WHERE locationcityid = :city1Id),
+  dsts AS (SELECT id FROM Person WHERE locationcityid = :city2Id),
+  completed_paths AS (
+    WITH MUTUALLY RECURSIVE
+      paths (src bigint, dst bigint, w double precision) AS (
+          SELECT id AS src,
+                 id AS dst,
+                 0::double precision AS w
+                 FROM srcs
+          UNION
+          SELECT paths1.src AS src,
+                 paths2.dst AS dst,
+                 paths1.w + paths2.w AS w
+            FROM minimal_paths paths1
+            JOIN PathQ19 paths2 -- step-transitive closure
+              ON paths1.dst = paths2.src
+      ),
+      minimal_paths (src bigint, dst bigint, w double precision) AS (
+        SELECT src, dst, min(w)
+          FROM paths
+      GROUP BY src, dst
+      )
+    SELECT src, dst, w
+      FROM minimal_paths
+     WHERE dst = ANY (SELECT id FROM dsts)
+  )
+SELECT src, dst, w
+  FROM completed_paths
+ WHERE w = (SELECT min(w) FROM completed_paths);
 
+/*
 WITH MUTUALLY RECURSIVE
   srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = :city1Id),
   dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = :city2Id),
@@ -85,3 +138,4 @@ WITH MUTUALLY RECURSIVE
       GROUP BY l.gsrc, r.gsrc
   )
 SELECT * FROM results WHERE w = (SELECT min(w) FROM results) ORDER BY f, t;
+*/
