@@ -88,6 +88,14 @@ impl SystemParameterFrontend {
     }
 }
 
+impl Drop for SystemParameterFrontend {
+    fn drop(&mut self) {
+        tracing::info!("closing LaunchDarkly client");
+        self.ld_client.close();
+        tracing::info!("closed LaunchDarkly client");
+    }
+}
+
 fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
     ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
         .event_processor(ld::EventProcessorBuilder::new().on_success({

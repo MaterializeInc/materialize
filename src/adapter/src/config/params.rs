@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_sql::session::vars::{SystemVars, VarInput};
+use mz_sql::session::vars::{SystemVars, Value, Var, VarInput, ENABLE_LAUNCHDARKLY};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {
@@ -130,6 +130,12 @@ impl SynchronizedParameters {
             tracing::error!("cannot modify unsynchronized system parameter {}", name);
             false
         }
+    }
+
+    pub fn enable_launchdarkly(&self) -> bool {
+        let var_name = self.get(ENABLE_LAUNCHDARKLY.name());
+        let var_input = VarInput::Flat(&var_name);
+        bool::parse(&ENABLE_LAUNCHDARKLY, var_input).expect("This is known to be a bool")
     }
 }
 

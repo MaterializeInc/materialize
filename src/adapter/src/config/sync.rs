@@ -9,7 +9,6 @@
 
 use std::time::Duration;
 
-use mz_sql::session::vars::{Value, Var, VarInput, ENABLE_LAUNCHDARKLY};
 use tokio::time;
 
 use crate::config::{
@@ -32,8 +31,12 @@ pub async fn system_parameter_sync(
     };
 
     // Ensure the frontend client is initialized.
-    let frontend = SystemParameterFrontend::from(&sync_config).await?;
+    let mut frontend = Option::<SystemParameterFrontend>::None; // lazy initialize the frontend below
     let mut backend = SystemParameterBackend::new(adapter_client).await?;
+
+    // Tick every `tick_duration` ms, skipping missed ticks.
+    let mut interval = time::interval(tick_interval);
+    interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
     // Run the synchronization loop.
     tracing::info!(
@@ -41,21 +44,35 @@ pub async fn system_parameter_sync(
         tick_interval.as_secs()
     );
 
-    // Tick every `tick_duration` ms, skipping missed ticks.
-    let mut interval = time::interval(tick_interval);
-    interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
     let mut params = SynchronizedParameters::default();
     loop {
+        // Wait for the next sync period
         interval.tick().await;
+
+        // Fetch current parameter values from the backend
         backend.pull(&mut params).await;
-        let launchdarkly_enabled = <bool as Value>::parse(
-            &ENABLE_LAUNCHDARKLY,
-            VarInput::Flat(&params.get(ENABLE_LAUNCHDARKLY.name())),
-        )
-        .expect("This is known to be a bool");
-        if launchdarkly_enabled && frontend.pull(&mut params) {
-            backend.push(&mut params).await;
+
+        if !params.enable_launchdarkly() {
+            if frontend.is_some() {
+                tracing::info!("stopping system parameter frontend");
+                frontend = None;
+            } else {
+                tracing::info!("system parameter sync is disabled; not syncing")
+            }
+
+            // Don't do anything until the next loop.
+            continue;
+        } else {
+            if frontend.is_none() {
+                tracing::info!("initializing system parameter frontend");
+                frontend = Some(SystemParameterFrontend::from(&sync_config).await?);
+            }
+
+            // Pull latest state from frontend and push changes to backend.
+            let frontend = frontend.as_ref().expect("frontend exists");
+            if frontend.pull(&mut params) {
+                backend.push(&mut params).await;
+            }
         }
     }
 }
