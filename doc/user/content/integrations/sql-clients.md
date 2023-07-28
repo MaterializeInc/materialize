@@ -80,11 +80,28 @@ Download and install the [PostgreSQL installer](https://www.postgresql.org/downl
 
 ## DBeaver
 
-To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/), follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/) and use the **PostgreSQL database driver** with the credentials provided in the Materialize UI.
+To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/), follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/) and use the **Materialize database driver** with the credentials provided in the Materialize UI.
 
 <br>
 
-<img width="1314" alt="DBeaver Materialize Connection Details" src="https://user-images.githubusercontent.com/23521087/209447654-11a51e45-b68f-4e11-8e82-9036d8f7aed8.png">
+<img width="1314" alt="DBeaver Materialize Connection Details" src="https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/256839946-f13c941d-4857-4c87-b3d3-56ca29a525a2.png">
+
+The Materialize database driver is available in DBeaver 23.1.3 and later and requires the PostgreSQL driver to be installed.
+
+You can download the recent version of PostgreSQL JDBC Driver from PostgreSQL's [official website](https://jdbc.postgresql.org/download.html).
+
+### Connect to a specific cluster
+
+To connect to a specific [cluster](/get-started/key-concepts/#clusters) in Materialize, define a bootstrap query in the connection settings.
+
+For example, to connect to the `materialize` cluster, go to the **Connection Settings**, click on **Initialization**, click on **Bootstrap Query** and enter the following query:
+
+```sql
+SET cluster = 'materialize';
+```
+
+<img width="1314" alt="DBeaver Materialize Specify Cluster" src="https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/256840992-13a1556f-94b0-4f7f-88b5-72700cc2a0e5.png">
+
 
 ## DataGrip
 
