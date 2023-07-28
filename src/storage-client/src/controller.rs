@@ -60,8 +60,9 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use crate::client::{
-    CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
+    CreateSinkCommand, ObjectStatusUpdate, ProtoStorageCommand, ProtoStorageResponse,
+    RunIngestionCommand, SinkStatisticsUpdate, SinkStatusUpdate, SourceStatisticsUpdate,
+    SourceStatusUpdate, StorageCommand, StorageResponse, Update,
 };
 use crate::controller::command_wals::ProtoShardId;
 use crate::controller::rehydration::RehydratingStorageClient;
@@ -828,7 +829,7 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(super) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
+    pub(super) introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -1114,7 +1115,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            introspection_ids: BTreeMap::new(),
+            introspection_ids: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
@@ -1190,6 +1191,9 @@ where
             self.metrics.for_instance(id),
             self.state.envd_epoch,
             self.state.config.grpc_client.clone(),
+            self.state.collection_manager.clone(),
+            Arc::clone(&self.state.introspection_ids),
+            self.state.now.clone(),
         );
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -1523,7 +1527,12 @@ where
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
-                    let prev = self.state.introspection_ids.insert(i, id);
+                    let prev = self
+                        .state
+                        .introspection_ids
+                        .lock()
+                        .expect("poisoned lock")
+                        .insert(i, id);
                     assert!(
                         prev.is_none(),
                         "cannot have multiple IDs for introspection type"
@@ -2300,6 +2309,72 @@ where
                     }
                 }
             }
+            Some(StorageResponse::StatusUpdates(updates)) => {
+                let mut sink_status_updates = vec![];
+                let mut source_status_updates = vec![];
+
+                for update in updates.into_iter() {
+                    match update {
+                        ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                            id,
+                            status,
+                            error,
+                            hint,
+                            timestamp,
+                        }) => {
+                            let row = crate::healthcheck::pack_status_row(
+                                id,
+                                status.as_str(),
+                                error.as_deref(),
+                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
+                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
+                                // will always be. Since this timestamp always refers to the row representation,
+                                // is there a need to make it generic?
+                                <u64 as Codec64>::decode(timestamp.encode()),
+                                hint.as_deref(),
+                            );
+
+                            sink_status_updates.push((row, 1));
+                        }
+                        ObjectStatusUpdate::Source(SourceStatusUpdate {
+                            id,
+                            status,
+                            error,
+                            hint,
+                            timestamp,
+                        }) => {
+                            let row = crate::healthcheck::pack_status_row(
+                                id,
+                                status.as_str(),
+                                error.as_deref(),
+                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
+                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
+                                // will always be. Since this timestamp always refers to the row representation,
+                                // is there a need to make it generic?
+                                <u64 as Codec64>::decode(timestamp.encode()),
+                                hint.as_deref(),
+                            );
+
+                            source_status_updates.push((row, 1));
+                        }
+                    }
+                }
+
+                let (source_status_history_id, sink_status_history_id) = {
+                    let introspection_ids =
+                        self.state.introspection_ids.lock().expect("poisoned lock");
+
+                    (
+                        introspection_ids[&IntrospectionType::SourceStatusHistory],
+                        introspection_ids[&IntrospectionType::SinkStatusHistory],
+                    )
+                };
+
+                self.append_to_managed_collection(source_status_history_id, source_status_updates)
+                    .await;
+                self.append_to_managed_collection(sink_status_history_id, sink_status_updates)
+                    .await;
+            }
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -2379,8 +2454,8 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let source_status_history_id =
-            self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+        let source_status_history_id = self.state.introspection_ids.lock().expect("poisoned lock")
+            [&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
             let status_row =
@@ -2399,8 +2474,8 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let sink_status_history_id =
-            self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
+        let sink_status_history_id = self.state.introspection_ids.lock().expect("poisoned lock")
+            [&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
         {
             let mut sink_statistics = self.state.sink_statistics.lock().expect("poisoned");
@@ -2830,7 +2905,8 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.state.introspection_ids[&IntrospectionType::ShardMapping];
+        let id = self.state.introspection_ids.lock().expect("poisoned lock")
+            [&IntrospectionType::ShardMapping];
 
         let mut row_buf = Row::default();
         let mut updates = Vec::with_capacity(self.state.collections.len());
@@ -2864,7 +2940,7 @@ where
             _ => unreachable!(),
         };
 
-        let id = self.state.introspection_ids[&collection];
+        let id = self.state.introspection_ids.lock().expect("poisoned lock")[&collection];
 
         let rows = match self.state.collections[&id]
             .write_frontier
@@ -2962,6 +3038,8 @@ where
         let id = match self
             .state
             .introspection_ids
+            .lock()
+            .expect("poisoned lock")
             .get(&IntrospectionType::ShardMapping)
         {
             Some(id) => *id,

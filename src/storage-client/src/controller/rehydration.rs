@@ -18,6 +18,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -25,6 +26,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
@@ -43,8 +45,11 @@ use crate::client::{
     CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
+use crate::controller::IntrospectionType;
 use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
+
+use super::collection_mgmt::CollectionManager;
 
 /// A storage client that replays the command stream on failure.
 ///
@@ -70,6 +75,9 @@ where
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
         grpc_client_params: GrpcClientParameters,
+        collection_manager: CollectionManager,
+        introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+        now: NowFn,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -86,6 +94,9 @@ where
             config: Default::default(),
             metrics,
             grpc_client_params,
+            collection_manager,
+            introspection_ids,
+            now,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -164,6 +175,12 @@ struct RehydrationTask<T> {
     metrics: RehydratingStorageClientMetrics,
     /// gRPC client parameters.
     grpc_client_params: GrpcClientParameters,
+    /// A function that returns the current time.
+    now: NowFn,
+    /// Interface for managed collections
+    collection_manager: CollectionManager,
+    /// A list of introspection IDs
+    introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -215,8 +232,19 @@ where
                 }
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
+
+                    match command {
+                        // If we receive this command while we are in the `AwaitAddress` state,
+                        // we should set the status of any sources/sink that this task manages
+                        // to `paused`
+                        StorageCommand::RunIngestions(_) => {
+                            self.set_internal_collection_statuses(InternalCollectionStatus::Paused)
+                                .await;
+                        }
+                        _ => {}
+                    }
                 }
-                Some(RehydrationCommand::Reset) => {}
+                Some(RehydrationCommand::Reset { .. }) => {}
             }
         }
     }
@@ -245,7 +273,9 @@ where
                     Ok(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
                     }
-                    Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
+                    Ok(RehydrationCommand::Reset { .. }) => {
+                        return RehydrationTaskState::AwaitAddress
+                    }
                     Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
                     Err(TryRecvError::Empty) => break,
                 }
@@ -342,6 +372,7 @@ where
                     self.send_commands(location, client, vec![command]).await
                 }
                 Some(RehydrationCommand::Reset) => {
+                    self.set_internal_collection_statuses(InternalCollectionStatus::Paused).await;
                     RehydrationTaskState::AwaitAddress
                 }
             },
@@ -358,9 +389,65 @@ where
                     Some(response) => response,
                 };
 
+                if let Err(e) = &response {
+                    self.set_internal_collection_statuses(InternalCollectionStatus::Unknown { error_details: Some(e.to_string()) }).await;
+                }
+
                 self.send_response(location, client, response)
             }
         }
+    }
+
+    /// Sets the internal collection status for sources/sinks this task manages
+    async fn set_internal_collection_statuses(&self, status: InternalCollectionStatus) {
+        let (source_status_history_id, sink_status_history_id) = {
+            let introspection_ids = self.introspection_ids.lock().expect("poisoned lock");
+
+            (
+                introspection_ids[&IntrospectionType::SourceStatusHistory],
+                introspection_ids[&IntrospectionType::SinkStatusHistory],
+            )
+        };
+
+        self.collection_manager
+            .append_to_collection(
+                source_status_history_id,
+                self.sources
+                    .keys()
+                    .map(|id| {
+                        let row = crate::healthcheck::pack_status_row(
+                            *id,
+                            status.name(),
+                            status.error_details(),
+                            (self.now)(),
+                            None,
+                        );
+
+                        (row, 1)
+                    })
+                    .collect(),
+            )
+            .await;
+
+        self.collection_manager
+            .append_to_collection(
+                sink_status_history_id,
+                self.sinks
+                    .keys()
+                    .map(|id| {
+                        let row = crate::healthcheck::pack_status_row(
+                            *id,
+                            status.name(),
+                            status.error_details(),
+                            (self.now)(),
+                            None,
+                        );
+
+                        (row, 1)
+                    })
+                    .collect(),
+            )
+            .await;
     }
 
     async fn send_commands(
@@ -491,6 +578,42 @@ where
             StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along.
                 Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats))
+            }
+            StorageResponse::StatusUpdates(updates) => {
+                // Just forward it along.
+                Some(StorageResponse::StatusUpdates(updates))
+            }
+        }
+    }
+}
+
+/// Status updates that only the storage controller has enough context
+/// to deduce. Generally status updates for a collection are sent from
+/// a storage replica, however there are some cases in which only the
+/// controller has enough context to conclude a status
+enum InternalCollectionStatus {
+    /// There are no resources for computation to occur. For example,
+    /// if 0 replicas are allocated to a source/sink for computation,
+    /// its status should be this
+    Paused,
+    /// Indicates that the storage controller has lost contact with a
+    /// storage replica
+    Unknown { error_details: Option<String> },
+}
+
+impl InternalCollectionStatus {
+    pub fn name(&self) -> &'static str {
+        match self {
+            InternalCollectionStatus::Paused => "paused",
+            InternalCollectionStatus::Unknown { .. } => "unknown",
+        }
+    }
+
+    pub fn error_details(&self) -> Option<&str> {
+        match self {
+            InternalCollectionStatus::Paused => None,
+            InternalCollectionStatus::Unknown { error_details } => {
+                error_details.as_ref().map(|e| e.as_str())
             }
         }
     }
