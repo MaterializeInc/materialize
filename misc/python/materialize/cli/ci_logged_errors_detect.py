@@ -57,6 +57,8 @@ ERROR_RE = re.compile(
     (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
     # Emitted by webhook source tests that explicitly panic the validation.
     (?!.*webhook\ panic\ test')
+    # Emitted by unit test at src/persist-client/src/cache.rs:765
+    (?!.*thread\ 'cache::tests::state_cache'\ panicked\ at\ 'boom')
     """,
     re.VERBOSE,
 )
