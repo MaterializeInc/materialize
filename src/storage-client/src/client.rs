@@ -34,6 +34,7 @@ use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 
+use crate::client::proto_storage_response::ProtoStatusUpdates;
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
 use crate::metrics::RehydratingStorageClientMetrics;
@@ -330,6 +331,34 @@ pub struct SinkStatisticsUpdate {
     pub bytes_committed: u64,
 }
 
+/// Represents a status update for a given object type. The inner value for each
+/// variant should be able to be packed into a status row that conforms to the schema
+/// for the object's status history relation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ObjectStatusUpdate<T> {
+    Sink(SinkStatusUpdate<T>),
+    Source(SourceStatusUpdate<T>),
+}
+
+/// A source status update
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SourceStatusUpdate<T = mz_repr::Timestamp> {
+    pub id: GlobalId,
+    pub status: String,
+    pub error: Option<String>,
+    pub hint: Option<String>,
+    pub timestamp: T,
+}
+
+/// A sink status update
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SinkStatusUpdate<T = mz_repr::Timestamp> {
+    pub id: GlobalId,
+    pub status: String,
+    pub error: Option<String>,
+    pub hint: Option<String>,
+    pub timestamp: T,
+}
 /// A trait that abstracts over user-facing statistics objects, used
 /// by `spawn_statistics_scraper`.
 pub trait PackableStats {
@@ -375,14 +404,18 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
+    /// A list of status updates for sources and sinks. Periodically sent from
+    /// storage workers to convey the latest status information about an object.
+    StatusUpdates(Vec<ObjectStatusUpdate<T>>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
         use proto_storage_response::{
-            ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
-            ProtoStatisticsUpdates,
+            proto_object_status_update, ProtoDroppedIds, ProtoObjectStatusUpdate,
+            ProtoSinkStatisticsUpdate, ProtoSinkStatusUpdate, ProtoSourceStatisticsUpdate,
+            ProtoSourceStatusUpdate, ProtoStatisticsUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
@@ -419,13 +452,55 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             .collect(),
                     })
                 }
+                StorageResponse::StatusUpdates(updates) => StatusUpdates(ProtoStatusUpdates {
+                    updates: updates
+                        .iter()
+                        .map(|update| ProtoObjectStatusUpdate {
+                            kind: Some(match update {
+                                ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                                    id,
+                                    status,
+                                    error,
+                                    hint,
+                                    timestamp,
+                                }) => {
+                                    proto_object_status_update::Kind::Sink(ProtoSinkStatusUpdate {
+                                        id: Some(id.into_proto()),
+                                        status: status.clone(),
+                                        error: error.clone(),
+                                        hint: hint.clone(),
+                                        timestamp: timestamp.into(),
+                                    })
+                                }
+                                ObjectStatusUpdate::Source(SourceStatusUpdate {
+                                    id,
+                                    status,
+                                    error,
+                                    hint,
+                                    timestamp,
+                                }) => proto_object_status_update::Kind::Source(
+                                    ProtoSourceStatusUpdate {
+                                        id: Some(id.into_proto()),
+                                        status: status.clone(),
+                                        error: error.clone(),
+                                        hint: hint.clone(),
+                                        timestamp: timestamp.into(),
+                                    },
+                                ),
+                            }),
+                        })
+                        .collect(),
+                }),
             }),
         }
     }
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::ProtoDroppedIds;
+        use proto_storage_response::{
+            proto_object_status_update, ProtoDroppedIds, ProtoSinkStatusUpdate,
+            ProtoSourceStatusUpdate,
+        };
         match proto.kind {
             Some(DroppedIds(ProtoDroppedIds { ids })) => {
                 Ok(StorageResponse::DroppedIds(ids.into_rust()?))
@@ -470,6 +545,52 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
+            Some(StatusUpdates(ProtoStatusUpdates { updates })) => {
+                Ok(StorageResponse::StatusUpdates(
+                    updates
+                        .into_iter()
+                        .map(|update| match update.kind {
+                            Some(proto_object_status_update::Kind::Sink(
+                                ProtoSinkStatusUpdate {
+                                    id,
+                                    status,
+                                    error,
+                                    hint,
+                                    timestamp,
+                                },
+                            )) => Ok(ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                                id: id.into_rust_if_some(
+                                    "ProtoStorageResponse::status_updates::sink::id",
+                                )?,
+                                status,
+                                error,
+                                hint,
+                                timestamp: mz_repr::Timestamp::from(timestamp),
+                            })),
+                            Some(proto_object_status_update::Kind::Source(
+                                ProtoSourceStatusUpdate {
+                                    id,
+                                    status,
+                                    error,
+                                    hint,
+                                    timestamp,
+                                },
+                            )) => Ok(ObjectStatusUpdate::Source(SourceStatusUpdate {
+                                id: id.into_rust_if_some(
+                                    "ProtoStorageResponse::status_updates::source::id",
+                                )?,
+                                status,
+                                error,
+                                hint,
+                                timestamp: mz_repr::Timestamp::from(timestamp),
+                            })),
+                            None => Err(TryFromProtoError::missing_field(
+                                "ProtoStorageResponse::status_updates::kind",
+                            )),
+                        })
+                        .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+                ))
+            }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageResponse::kind",
             )),
@@ -680,6 +801,9 @@ where
                     source_stats,
                     sink_stats,
                 )))
+            }
+            StorageResponse::StatusUpdates(updates) => {
+                Some(Ok(StorageResponse::StatusUpdates(updates)))
             }
         }
     }
