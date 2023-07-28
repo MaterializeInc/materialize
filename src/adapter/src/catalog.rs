@@ -8765,6 +8765,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
     }
+
+    fn cluster_id(&self) -> Option<ClusterId> {
+        self.item().cluster_id()
+    }
 }
 
 #[cfg(test)]
