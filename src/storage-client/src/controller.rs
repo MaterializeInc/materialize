@@ -2453,14 +2453,14 @@ where
 
         // Enrich `frontiers` with storage frontiers.
         // Make sure to not add frontiers for objects already present in `frontiers`
-        for (object_id, collection) in &self.state.collections {
-            if !external_ids.contains(object_id) {
+        for (object_id, collection) in self.active_collections() {
+            if !external_ids.contains(&object_id) {
                 let replica_id = collection
                     .cluster_id()
                     .and_then(|c| self.state.replicas.get(&c))
                     .copied();
                 let frontier = collection.write_frontier.clone();
-                frontiers.insert((*object_id, replica_id), frontier);
+                frontiers.insert((object_id, replica_id), frontier);
             }
         }
         for (object_id, export) in &self.state.exports {
@@ -2609,6 +2609,15 @@ where
             self.export(id)?;
         }
         Ok(())
+    }
+
+    /// Iterate over collections that have not been dropped.
+    fn active_collections(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
+        self.state
+            .collections
+            .iter()
+            .filter(|(_id, c)| !c.is_dropped())
+            .map(|(id, c)| (*id, c))
     }
 
     /// Return the since frontier at which we can read from all the given
@@ -3471,6 +3480,11 @@ impl<T: Timestamp> CollectionState<T> {
             | DataSource::Other
             | DataSource::Progress => None,
         }
+    }
+
+    /// Returns whether the collection was dropped.
+    fn is_dropped(&self) -> bool {
+        self.read_capabilities.is_empty()
     }
 }
 
