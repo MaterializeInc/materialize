@@ -166,7 +166,7 @@ impl Coordinator {
 
             Command::DumpCatalog { session, tx } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(Ok(self.catalog().dump()), session);
+                tx.send(self.catalog().dump().map_err(AdapterError::from), session);
             }
 
             Command::CopyRows {
