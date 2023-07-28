@@ -102,6 +102,7 @@ class MaterializeApplication(Application):
         self.images = ["environmentd", "clusterd", "testdrive", "postgres"]
 
         super().__init__()
+        super().create()
 
     def create(self) -> None:
         super().create()

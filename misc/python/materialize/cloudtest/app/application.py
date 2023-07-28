@@ -23,7 +23,7 @@ class Application:
     aws_region: Optional[str]
 
     def __init__(self) -> None:
-        self.create()
+        pass
 
     def create(self) -> None:
         self.acquire_images()
