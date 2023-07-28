@@ -104,15 +104,13 @@ use maplit::btreemap;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
-    NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
-    ServiceStatus,
+    scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
+    NamespacedOrchestrator, NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics, ServiceStatus,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tracing::warn;
-
-use scheduling_config::*;
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -120,79 +118,6 @@ pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
-
-pub mod scheduling_config {
-    #[derive(Debug, Clone)]
-    pub struct ServiceTopologySpreadConfig {
-        /// If `true`, enable spread for replicated services.
-        ///
-        /// Defaults to `true`.
-        pub enabled: bool,
-        /// If `true`, ignore services with `scale` > 1 when expressing
-        /// spread constraints.
-        ///
-        /// Default to `true`.
-        pub ignore_non_singular_scale: bool,
-        /// The `maxSkew` for spread constraints.
-        /// See
-        /// <https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/>
-        /// for more details.
-        ///
-        /// Defaults to `1`.
-        pub max_skew: i32,
-        /// If `true`, make the spread constraints into a preference.
-        ///
-        /// Defaults to `false`.
-        pub soft: bool,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct ServiceSchedulingConfig {
-        /// If `Some`, add a affinity preference with the given
-        /// weight for services that horizontally scale.
-        ///
-        /// Defaults to `Some(100)`.
-        pub multi_pod_az_affinity_weight: Option<i32>,
-        // TODO(guswynn): soften az node selector config
-        /// If `true`, make the node-level anti-affinity between
-        /// replicated services a preference over a constraint.
-        ///
-        /// Defaults to `false`.
-        pub soften_replication_anti_affinity: bool,
-        /// The weight for `soften_replication_anti_affinity.
-        ///
-        /// Defaults to `100`.
-        pub soft_replication_anti_affinity_weight: i32,
-        /// Configuration for `TopologySpreadConstraint`'s
-        pub topology_spread: ServiceTopologySpreadConfig,
-    }
-
-    pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
-    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY: bool = false;
-    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: i32 = 100;
-
-    pub const DEFAULT_TOPOLOGY_SPREAD_ENABLED: bool = true;
-    pub const DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: bool = true;
-    pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
-    pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
-
-    impl Default for ServiceSchedulingConfig {
-        fn default() -> Self {
-            ServiceSchedulingConfig {
-                multi_pod_az_affinity_weight: DEFAULT_POD_AZ_AFFINITY_WEIGHT,
-                soften_replication_anti_affinity: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
-                soft_replication_anti_affinity_weight:
-                    DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
-                topology_spread: ServiceTopologySpreadConfig {
-                    enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
-                    ignore_non_singular_scale: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
-                    max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
-                    soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
-                },
-            }
-        }
-    }
-}
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -320,7 +245,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
-    scheduling_config: ServiceSchedulingConfig,
+    scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
     service_infos: std::sync::Mutex<BTreeMap<String, ServiceInfo>>,
 }
 
@@ -829,6 +754,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             disk_limit,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
+        // This is extremely cheap to clone, so just look into the lock once.
+        let scheduling_config: ServiceSchedulingConfig =
+            self.scheduling_config.read().expect("poisoned").clone();
+
         let name = format!("{}-{id}", self.namespace);
         // The match labels should be the minimal set of labels that uniquely
         // identify the pods in the stateful set. Changing these after the
@@ -930,7 +859,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 ..Default::default()
             };
 
-            if !self.scheduling_config.soften_replication_anti_affinity {
+            if !scheduling_config.soften_replication_anti_affinity {
                 PodAntiAffinity {
                     required_during_scheduling_ignored_during_execution: Some(vec![pat]),
                     ..Default::default()
@@ -939,7 +868,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 PodAntiAffinity {
                     preferred_during_scheduling_ignored_during_execution: Some(vec![
                         WeightedPodAffinityTerm {
-                            weight: self.scheduling_config.soft_replication_anti_affinity_weight,
+                            weight: scheduling_config.soft_replication_anti_affinity_weight,
                             pod_affinity_term: pat,
                         },
                     ]),
@@ -948,8 +877,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }
         });
 
-        let pod_affinity = if let Some(weight) = self.scheduling_config.multi_pod_az_affinity_weight
-        {
+        let pod_affinity = if let Some(weight) = scheduling_config.multi_pod_az_affinity_weight {
             let label_selector_requirements = horizontal_scale_selector
                 .into_iter()
                 .map(|ls| self.label_selector_to_k8s(ls))
@@ -977,8 +905,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let topology_spread = if self.scheduling_config.topology_spread.enabled {
-            let config = &self.scheduling_config.topology_spread;
+        let topology_spread = if scheduling_config.topology_spread.enabled {
+            let config = &scheduling_config.topology_spread;
 
             if !config.ignore_non_singular_scale || scale <= 1 {
                 let label_selector_requirements = (if config.ignore_non_singular_scale {
@@ -1515,6 +1443,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             });
         Box::pin(stream)
+    }
+
+    fn update_scheduling_config(&self, config: ServiceSchedulingConfig) {
+        *self.scheduling_config.write().expect("poisoned") = config;
     }
 }
 

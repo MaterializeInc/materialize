@@ -1175,6 +1175,67 @@ mod grpc_client {
     };
 }
 
+/// Configuration for how cluster replicas are scheduled.
+mod cluster_scheduling {
+    use super::*;
+    use mz_orchestrator::scheduling_config::*;
+
+    pub const CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT: ServerVar<Option<i32>> =
+        ServerVar {
+            name: UncasedStr::new("cluster_multi_process_replica_az_affinity_weight"),
+            value: &DEFAULT_POD_AZ_AFFINITY_WEIGHT,
+            description: "Whether or to add an availability zone affinity between instances of \
+            multi-process replicas. Either an affinity weight or empty (off) (Materialize).",
+            internal: true,
+        };
+
+    pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_soften_replication_anti_affinity"),
+        value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
+        description: "Whether or to turn the node-level anti affinity between replicas \
+            in the same cluster into a preference (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("cluster_soften_replication_anti_affinity_weight"),
+        value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+        description:
+            "The preference weight for `cluster_soften_replication_anti_affinity` (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_ENABLE_TOPOLOGY_SPREAD: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_enable_topology_spread"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_ENABLED,
+        description:
+            "Whether or not to add topology spread constraints among replicas in the same cluster (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_topology_spread_ignore_non_singular_scale"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+        description:
+            "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("cluster_topology_spread_max_skew"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+        description: "The `maxSkew` for replica topology spread constraints (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_TOPOLOGY_SPREAD_SOFT: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_topology_spread_soft"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_SOFT,
+        description: "If true, soften the topology spread constraints for replicas (Materialize).",
+        internal: true,
+    };
+}
+
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 /// availability of features.
 ///
@@ -1998,7 +2059,14 @@ impl SystemVars {
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
-            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT);
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .with_var(&cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD)
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE)
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT);
         vars.refresh_internal_state();
         vars
     }
@@ -2571,6 +2639,34 @@ impl SystemVars {
 
     pub fn grpc_connect_timeout(&self) -> Duration {
         *self.expect_value(&grpc_client::CONNECT_TIMEOUT)
+    }
+
+    pub fn cluster_multi_process_replica_az_affinity_weight(&self) -> Option<i32> {
+        *self.expect_value(&cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT)
+    }
+
+    pub fn cluster_soften_replication_anti_affinity(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY)
+    }
+
+    pub fn cluster_soften_replication_anti_affinity_weight(&self) -> i32 {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT)
+    }
+
+    pub fn cluster_enable_topology_spread(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD)
+    }
+
+    pub fn cluster_topology_spread_ignore_non_singular_scale(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE)
+    }
+
+    pub fn cluster_topology_spread_max_skew(&self) -> i32 {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
+    }
+
+    pub fn cluster_topology_spread_soft(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
     }
 }
 
@@ -3980,6 +4076,17 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_FILTER_ENABLED.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+}
+
+/// Returns whether the named variable is a cluster scheduling config
+pub fn is_cluster_scheduling_var(name: &str) -> bool {
+    name == cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD.name()
+        || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE.name()
+        || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW.name()
+        || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

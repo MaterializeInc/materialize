@@ -885,6 +885,10 @@ impl Coordinator {
         self.controller.compute.update_configuration(compute_config);
         let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
+        let orchestrator_scheduling_config =
+            flags::orchestrator_scheduling_config(self.catalog().system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(orchestrator_scheduling_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
