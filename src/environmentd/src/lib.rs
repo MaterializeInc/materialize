@@ -143,6 +143,8 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
+    /// Number of concurrent requests accepted for webhooks, `None` indicates a default limit.
+    pub concurrent_webhook_req_count: Option<usize>,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -586,6 +588,9 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
+                concurrent_webhook_req_count: config
+                    .concurrent_webhook_req_count
+                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics,
             });
             server::serve(http_conns, http_server)

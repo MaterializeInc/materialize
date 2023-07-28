@@ -102,7 +102,7 @@ tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
-tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
+tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.3.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
@@ -204,7 +204,7 @@ tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
-tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
+tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.3.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
