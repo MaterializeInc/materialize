@@ -68,6 +68,7 @@ mod webhook;
 
 pub use metrics::Metrics;
 pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
+pub use webhook::CONCURRENCY_LIMIT as WEBHOOK_CONCURRENCY_LIMIT;
 
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
@@ -79,7 +80,7 @@ pub struct HttpConfig {
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    pub concurrent_webhook_req_count: Option<usize>,
+    pub concurrent_webhook_req_count: usize,
     pub metrics: Metrics,
 }
 
@@ -157,7 +158,6 @@ impl HttpServer {
                 active_connection_count,
             });
 
-        let concurrency_limit = concurrent_webhook_req_count.unwrap_or(webhook::CONCURRENCY_LIMIT);
         let webhook_router = Router::new()
             .route(
                 "/api/webhook/:database/:schema/:id",
@@ -168,7 +168,7 @@ impl HttpServer {
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_load_error))
                     .load_shed()
-                    .concurrency_limit(concurrency_limit),
+                    .concurrency_limit(concurrent_webhook_req_count),
             );
 
         let router = Router::new()
@@ -817,6 +817,8 @@ async fn handle_load_error(error: tower::BoxError) -> impl IntoResponse {
         );
     }
 
+    // Note: This should be unreachable because at the time of writing our only use case is a
+    // layer that emits `tower::load_shed::error::Overloaded`, which is handled above.
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Cow::from(format!("Unhandled internal error: {}", error)),

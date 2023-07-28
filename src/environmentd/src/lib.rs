@@ -588,7 +588,9 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
-                concurrent_webhook_req_count: config.concurrent_webhook_req_count,
+                concurrent_webhook_req_count: config
+                    .concurrent_webhook_req_count
+                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics,
             });
             server::serve(http_conns, http_server)
