@@ -638,9 +638,10 @@ impl futures::Stream for RemapClock {
     type Item = (mz_repr::Timestamp, Antichain<mz_repr::Timestamp>);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // TODO: add some offset to the returned time and/or upper
         loop {
             futures::ready!(self.sleep.as_mut().poll(cx));
-            let now = (self.now)();
+            let now = (self.now)() + 1000;
             let mut new_ts = now - now % self.update_interval_ms;
             if (now % self.update_interval_ms) != 0 {
                 new_ts += self.update_interval_ms;

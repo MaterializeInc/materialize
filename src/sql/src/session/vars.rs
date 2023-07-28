@@ -528,6 +528,13 @@ pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+pub const DEFAULT_READ_RETENTION: ServerVar<mz_repr::Timestamp> = ServerVar {
+    name: UncasedStr::new("default_read_retention"),
+    value: &mz_repr::Timestamp::new(1000),
+    description: "The time to retain cluster utilization metrics (Materialize).",
+    internal: true,
+};
+
 static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<Ident>> = Lazy::new(Vec::new);
 static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("allowed_cluster_replica_sizes"),
@@ -1891,6 +1898,7 @@ impl SystemVars {
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
             .with_var(&METRICS_RETENTION)
+            .with_var(&DEFAULT_READ_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
@@ -2392,6 +2400,11 @@ impl SystemVars {
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.expect_value(&METRICS_RETENTION)
+    }
+
+    /// Returns the `default_read_retention` configuration parameter.
+    pub fn default_read_retention(&self) -> mz_repr::Timestamp {
+        *self.expect_value(&DEFAULT_READ_RETENTION)
     }
 
     /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.
