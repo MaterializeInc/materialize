@@ -32,10 +32,11 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::client::SinkStatisticsUpdate;
+use mz_storage_client::client::{ObjectStatusUpdate, SinkStatisticsUpdate, SinkStatusUpdate};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
@@ -60,8 +61,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
-use crate::render::sinks::{HealthcheckerArgs, SinkRender};
-use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
+use crate::render::sinks::SinkRender;
+use crate::sink::{KafkaBaseMetrics, SinkStatus};
 use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
 
@@ -97,7 +98,6 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
-        healthchecker_args: HealthcheckerArgs,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -121,6 +121,8 @@ where
         }));
 
         let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
+        let object_status_updates = Rc::clone(&storage_state.object_status_updates);
+        let now_fn = storage_state.now.clone();
 
         let token = kafka(
             sinked_collection,
@@ -136,7 +138,8 @@ where
                 .expect("statistics initialized")
                 .clone(),
             storage_state.connection_context.clone(),
-            healthchecker_args,
+            object_status_updates,
+            now_fn,
             internal_cmd_tx,
         );
 
@@ -382,13 +385,18 @@ struct KafkaSinkState {
     progress_key: String,
     progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>>,
 
-    healthchecker: Option<Mutex<Healthchecker>>,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 
     /// Timestamp of the latest progress record that was written out to Kafka.
     latest_progress_ts: Timestamp,
 
+    /// Last status update for this sink
+    latest_status: Option<SinkStatus>,
+    /// Status updates that are periodically drained to the storage controller
+    object_status_updates: Rc<RefCell<Vec<ObjectStatusUpdate<Timestamp>>>>,
+    /// Function that returns the system or mocked time
+    now: NowFn,
     /// Write frontier of this sink.
     ///
     /// The write frontier potentially blocks compaction of timestamp bindings
@@ -411,7 +419,8 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
-        healthchecker: Option<Healthchecker>,
+        object_status_updates: Rc<RefCell<Vec<ObjectStatusUpdate<Timestamp>>>>,
+        now: NowFn,
     ) -> Self {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -427,10 +436,9 @@ impl KafkaSinkState {
             retry_manager: Arc::clone(&retry_manager),
         };
 
-        let healthchecker = healthchecker.map(Mutex::new);
-
         let producer = halt_on_err(
-            &healthchecker,
+            &object_status_updates,
+            now.clone(),
             *sink_id,
             &internal_cmd_tx,
             (|| async {
@@ -484,7 +492,8 @@ impl KafkaSinkState {
         };
 
         let progress_client = halt_on_err(
-            &healthchecker,
+            &object_status_updates,
+            now.clone(),
             *sink_id,
             &internal_cmd_tx,
             connection
@@ -516,10 +525,12 @@ impl KafkaSinkState {
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
-            healthchecker,
+            object_status_updates,
+            now,
             internal_cmd_tx,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
+            latest_status: None,
             write_frontier,
         }
     }
@@ -902,14 +913,25 @@ impl KafkaSinkState {
         progress_emitted
     }
 
-    async fn update_status(&self, status: SinkStatus) {
-        update_status(&self.healthchecker, status).await;
+    fn update_status(&self, status: SinkStatus) {
+        if SinkStatus::can_transition(self.latest_status.as_ref(), &status) {
+            self.object_status_updates
+                .borrow_mut()
+                .push(ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                    id: self.sink_id,
+                    status: status.name().to_string(),
+                    error: status.error().map(|s| s.to_string()),
+                    hint: status.hint().map(|s| s.to_string()),
+                    timestamp: (self.now)().into(),
+                }))
+        }
     }
 
     /// Report a SinkStatus::Stalled and then halt with the same message.
     pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
         halt_on_err(
-            &self.healthchecker,
+            &self.object_status_updates,
+            self.now.clone(),
             self.sink_id,
             &self.internal_cmd_tx,
             result,
@@ -918,14 +940,9 @@ impl KafkaSinkState {
     }
 }
 
-async fn update_status(healthchecker: &Option<Mutex<Healthchecker>>, status: SinkStatus) {
-    if let Some(hc) = healthchecker {
-        hc.lock().await.update_status(status).await;
-    }
-}
-
 async fn halt_on_err<T>(
-    healthchecker: &Option<Mutex<Healthchecker>>,
+    object_status_updates: &Rc<RefCell<Vec<ObjectStatusUpdate<Timestamp>>>>,
+    now_fn: NowFn,
     sink_id: GlobalId,
     internal_cmd_tx: &RefCell<dyn InternalCommandSender>,
     result: Result<T, anyhow::Error>,
@@ -952,14 +969,21 @@ async fn halt_on_err<T>(
                         }
                     });
 
-            update_status(
-                healthchecker,
-                SinkStatus::Stalled {
-                    error: format!("{}", error.display_with_causes()),
-                    hint,
-                },
-            )
-            .await;
+            let status = SinkStatus::Stalled {
+                error: format!("{}", error.display_with_causes()),
+                hint,
+            };
+
+            object_status_updates
+                .borrow_mut()
+                .push(ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                    id: sink_id,
+                    status: status.name().to_string(),
+                    error: status.error().map(|s| s.to_string()),
+                    hint: status.hint().map(|s| s.to_string()),
+                    timestamp: now_fn().into(),
+                }));
+
             internal_cmd_tx
                 .borrow_mut()
                 .broadcast(InternalStorageCommand::SuspendAndRestart {
@@ -992,7 +1016,8 @@ fn kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-    healthchecker_args: HealthcheckerArgs,
+    object_status_updates: Rc<RefCell<Vec<ObjectStatusUpdate<Timestamp>>>>,
+    now_fn: NowFn,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
@@ -1059,7 +1084,8 @@ where
         metrics,
         sink_statistics,
         connection_context,
-        healthchecker_args,
+        object_status_updates,
+        now_fn,
         internal_cmd_tx,
     )
 }
@@ -1086,7 +1112,8 @@ pub fn produce_to_kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-    healthchecker_args: HealthcheckerArgs,
+    object_status_updates: Rc<RefCell<Vec<ObjectStatusUpdate<Timestamp>>>>,
+    now_fn: NowFn,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
@@ -1111,20 +1138,6 @@ where
             return;
         }
 
-        let healthchecker = if let Some(status_shard_id) = healthchecker_args.status_shard_id {
-            let hc = Healthchecker::new(
-                id,
-                &healthchecker_args.persist_clients,
-                healthchecker_args.persist_location.clone(),
-                status_shard_id,
-                healthchecker_args.now_fn.clone(),
-            )
-            .await
-            .expect("error initializing healthchecker");
-            Some(hc)
-        } else {
-            None
-        };
         let mut s = KafkaSinkState::new(
             connection,
             name,
@@ -1135,11 +1148,12 @@ where
             &connection_context,
             Rc::clone(&shared_gate_ts),
             internal_cmd_tx,
-            healthchecker,
+            object_status_updates,
+            now_fn,
         )
         .await;
 
-        s.update_status(SinkStatus::Starting).await;
+        s.update_status(SinkStatus::Starting);
 
         s.halt_on_err(
             s.producer
@@ -1169,7 +1183,7 @@ where
             s.maybe_update_progress(&gate);
         }
 
-        s.update_status(SinkStatus::Running).await;
+        s.update_status(SinkStatus::Running);
 
         while let Some(event) = input.next_mut().await {
             match event {
