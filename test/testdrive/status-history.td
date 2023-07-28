@@ -10,6 +10,36 @@
 # Specify the behaviour of the status history tables
 $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<TIMESTAMP>"
 
+> DROP CLUSTER IF EXISTS c CASCADE
+
+> CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 0
+
+> CREATE SOURCE counter in cluster c FROM LOAD GENERATOR COUNTER
+
+$ set-from-sql var=load_id
+SELECT id FROM mz_sources WHERE name = 'counter'
+
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${load_id}' ORDER BY occurred_at DESC LIMIT 1;
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+
+> ALTER CLUSTER c SET (REPLICATION FACTOR 1)
+
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${load_id}' ORDER BY occurred_at DESC LIMIT 3;
+"<TIMESTAMP> UTC" ${load_id} running <null> <null>
+"<TIMESTAMP> UTC" ${load_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+
+> ALTER CLUSTER c SET (REPLICATION FACTOR 0)
+
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${load_id}' ORDER BY occurred_at DESC LIMIT 4;
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+"<TIMESTAMP> UTC" ${load_id} running <null> <null>
+"<TIMESTAMP> UTC" ${load_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+
+> DROP CLUSTER c CASCADE
+
+
 $ kafka-create-topic topic=status-history
 
 > CREATE CONNECTION kafka_conn

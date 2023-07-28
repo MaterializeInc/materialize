@@ -84,6 +84,7 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -114,17 +115,13 @@ use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate, StorageCommand, StorageResponse,
     TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
     StorageController,
-};
-use mz_storage_client::healthcheck::{
-    self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
-    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -147,10 +144,15 @@ use tokio_stream::StreamMap;
 use tracing::{debug, error, info, warn};
 
 use crate::command_wals::ProtoShardId;
+use crate::healthcheck::{
+    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
+    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+};
 use crate::rehydration::RehydratingStorageClient;
 
 mod collection_mgmt;
 mod command_wals;
+mod healthcheck;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -308,8 +310,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
+
+    /// Facility for appending status updates for sources/sinks
+    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(crate) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
+    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -318,13 +323,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics: Arc<
-        std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>,
-    >,
+    source_statistics:
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -417,6 +421,7 @@ where
             self.metrics.for_instance(id),
             self.envd_epoch,
             self.config.grpc_client.clone(),
+            self.now.clone(),
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -820,7 +825,11 @@ where
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
-                    let prev = self.introspection_ids.insert(i, id);
+                    let prev = self
+                        .introspection_ids
+                        .lock()
+                        .expect("poisoned lock")
+                        .insert(i, id);
                     assert!(
                         prev.is_none(),
                         "cannot have multiple IDs for introspection type"
@@ -1728,6 +1737,9 @@ where
                     }
                 }
             }
+            Some(StorageResponse::StatusUpdates(updates)) => {
+                self.record_status_updates(updates).await;
+            }
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -1804,22 +1816,13 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let source_status_history_id =
-            self.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(
-                id,
-                "dropped",
-                None,
-                &Default::default(),
-                &Default::default(),
-                (self.now)(),
-            );
-            updates.push((status_row, 1));
+            updates.push(id);
         }
 
-        self.append_to_managed_collection(source_status_history_id, updates)
+        self.collection_status_manager
+            .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
         {
@@ -1830,25 +1833,16 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let sink_status_history_id = self.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                let status_row = healthcheck::pack_status_row(
-                    id,
-                    "dropped",
-                    None,
-                    &Default::default(),
-                    &Default::default(),
-                    (self.now)(),
-                );
-                updates.push((status_row, 1));
-
+                updates.push(id);
                 sink_statistics.remove(&id);
             }
         }
-        self.append_to_managed_collection(sink_status_history_id, updates)
+        self.collection_status_manager
+            .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
         Ok(())
@@ -1930,11 +1924,8 @@ where
             push_update(id, old, -1);
         }
 
-        self.append_to_managed_collection(
-            self.introspection_ids[&IntrospectionType::Frontiers],
-            updates,
-        )
-        .await;
+        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_replica_frontiers(
@@ -1993,11 +1984,9 @@ where
             push_update(key, old, -1);
         }
 
-        self.append_to_managed_collection(
-            self.introspection_ids[&IntrospectionType::ReplicaFrontiers],
-            updates,
-        )
-        .await;
+        let id =
+            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_introspection_updates(
@@ -2005,7 +1994,7 @@ where
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
-        let id = self.introspection_ids[&type_];
+        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
         self.append_to_managed_collection(id, updates).await;
     }
 }
@@ -2164,6 +2153,13 @@ where
         let collection_manager =
             collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
 
+        let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+            collection_manager.clone(),
+            Arc::clone(&introspection_ids),
+        );
+
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2176,12 +2172,13 @@ where
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            introspection_ids: BTreeMap::new(),
+            collection_status_manager,
+            introspection_ids,
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
-            source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
-            sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
+            sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,
@@ -2425,7 +2422,8 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.introspection_ids[&IntrospectionType::ShardMapping];
+        let id =
+            self.introspection_ids.lock().expect("poisoned lock")[&IntrospectionType::ShardMapping];
 
         let mut row_buf = Row::default();
         let mut updates = Vec::with_capacity(self.collections.len());
@@ -2484,9 +2482,13 @@ where
                     .try_into()
                     .expect("sane config value"),
             );
-        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
+
+        let mseh_id = self.introspection_ids.lock().expect("poisoned")
+            [&IntrospectionType::StatementExecutionHistory];
+        let mpsh_id = self.introspection_ids.lock().expect("poisoned")
+            [&IntrospectionType::PreparedStatementHistory];
+        let msh_id =
+            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::SessionHistory];
         let mseh_ts = match self.collections[&mseh_id]
             .write_frontier
             .elements()
@@ -2671,7 +2673,7 @@ where
             _ => unreachable!(),
         };
 
-        let id = self.introspection_ids[&collection];
+        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
         let mut rows = match self.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
@@ -2771,7 +2773,12 @@ where
     {
         mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
-        let id = match self.introspection_ids.get(&IntrospectionType::ShardMapping) {
+        let id = match self
+            .introspection_ids
+            .lock()
+            .expect("poisoned")
+            .get(&IntrospectionType::ShardMapping)
+        {
             Some(id) => *id,
             _ => return,
         };
@@ -3346,5 +3353,36 @@ where
                 }
             }
         }
+    }
+    /// Handles writing of status updates for sources/sinks to the appropriate
+    /// status relation
+    async fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+        let mut sink_status_updates = vec![];
+        let mut source_status_updates = vec![];
+
+        for update in updates {
+            let id = update.id;
+            let update = healthcheck::RawStatusUpdate {
+                id,
+                ts: update.timestamp,
+                status_name: update.status,
+                error: update.error,
+                hints: update.hints,
+                namespaced_errors: update.namespaced_errors,
+            };
+
+            if self.exports.contains_key(&id) {
+                sink_status_updates.push(update);
+            } else if self.collections.contains_key(&id) {
+                source_status_updates.push(update);
+            }
+        }
+
+        self.collection_status_manager
+            .append_source_updates(source_status_updates)
+            .await;
+        self.collection_status_manager
+            .append_sink_updates(sink_status_updates)
+            .await;
     }
 }

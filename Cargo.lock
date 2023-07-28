@@ -5669,6 +5669,7 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
+ "once_cell",
  "proptest",
  "prost",
  "serde",
