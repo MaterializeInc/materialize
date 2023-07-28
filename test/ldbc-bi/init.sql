@@ -9,7 +9,7 @@
 --
 --  init — initial bulk load of LDBC BI
 
-\timing
+\timing on
 \! date +%s
 \i ddl.sql
 \! ./generate-copy.sh
