@@ -1,0 +1,160 @@
+openapi: 3.0.3
+info:
+  title: materialize
+  version: 0.1.0
+paths:
+  /api/sql:
+    post:
+      summary: execute sql statement(s)
+      parameters:
+        - in: query
+          name: options
+          schema:
+            type: string
+          description: |-
+            A json object containing sessions parameters.
+
+            A simple example:
+            {"application_name":"example_app","cluster":"quickstart"}
+
+            Refer to the documentation for all available session variables:
+            https://materialize.com/docs/sql/show/#session-variables
+
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/SimpleRequest"
+                - $ref: "#/components/schemas/ExtendedRequest"
+        required: true
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Response"
+        "422":
+          description: Invalid body or parameters
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: Invalid sql supplied
+          content:
+            text/plain:
+              schema:
+                type: string
+      security:
+        - tokenAuth: []
+components:
+  schemas:
+    Response:
+      type: object
+      properties:
+        results:
+          type: object
+          oneOf:
+            - $ref: "#/components/schemas/ErrorResponse"
+            - $ref: "#/components/schemas/NoticeResponse"
+            - $ref: "#/components/schemas/QueryResponse"
+    QueryResponse:
+      type: object
+      properties:
+        tag:
+          type: string
+        rows:
+          type: array
+          items:
+            type: object
+        desc:
+          type: array
+          items:
+            $ref: "#/components/schemas/Column"
+    NoticeResponse:
+      type: object
+      properties:
+        ok:
+          type: string
+        notices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notice"
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        notices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notice"
+    Column:
+      type: object
+      properties:
+        name:
+          type: string
+        type_oid:
+          type: number
+          format: u32
+        type_len:
+          type: number
+          format: i16
+        type_mod:
+          type: number
+          format: i32
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+        detail:
+          type: string
+          nullable: true
+        hint:
+          type: string
+          nullable: true
+    Notice:
+      type: object
+      properties:
+        message:
+          type: string
+        severity:
+          type: string
+        detail:
+          type: string
+          nullable: true
+        hint:
+          type: string
+          nullable: true
+    SimpleRequest:
+      type: object
+      properties:
+        query:
+          type: string
+    Query:
+      type: object
+      properties:
+        query:
+          type: string
+        params:
+          type: array
+          nullable: true
+          items:
+            nullable: true
+            type: string
+    ExtendedRequest:
+      type: object
+      properties:
+        queries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Query"
+  securitySchemes:
+    tokenAuth:
+      type: http
+      scheme: bearer
