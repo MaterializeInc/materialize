@@ -116,6 +116,6 @@ CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
 
 The privileges required to execute this statement are:
 
-- `CREATE` privileges on the containing cluster.
+- Ownership of `cluster_name`.
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

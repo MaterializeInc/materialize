@@ -93,6 +93,7 @@ pub(crate) async fn migrate(
     })
     .await?;
 
+    sync_cluster_replica_owners(&cat, &mut tx, now)?;
     sync_source_owners(&cat, &mut tx, now)?;
 
     tx.commit().await?;
@@ -427,6 +428,48 @@ fn sync_source_owners(
         .expect("corrupt catalog");
     tx.update_items(updated_items).expect("corrupt catalog");
 
+    Ok(())
+}
+
+// Update the owners of all cluster replicas so that their owners match their cluster.
+//
+// TODO(migration): delete in version v.64 (released in v0.63 + 1 additional
+// release)
+fn sync_cluster_replica_owners(
+    catalog: &Catalog,
+    tx: &mut Transaction,
+    now: EpochMillis,
+) -> Result<(), anyhow::Error> {
+    let mut updated_cluster_replicas = BTreeMap::new();
+    for cluster_replica in catalog.user_cluster_replicas() {
+        let cluster = catalog.get_cluster(cluster_replica.cluster_id());
+        let old_owner = cluster_replica.owner_id();
+        if old_owner != cluster.owner_id() {
+            let mut new_replica = cluster_replica.clone();
+            new_replica.owner_id = cluster.owner_id();
+            updated_cluster_replicas.insert(
+                cluster_replica.replica_id(),
+                (cluster_replica.cluster_id(), new_replica),
+            );
+            add_to_audit_log(
+                tx,
+                mz_audit_log::EventType::Alter,
+                mz_audit_log::ObjectType::ClusterReplica,
+                mz_audit_log::EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                    object_id: ObjectId::ClusterReplica((
+                        cluster_replica.cluster_id(),
+                        cluster_replica.replica_id(),
+                    ))
+                    .to_string(),
+                    old_owner_id: old_owner.to_string(),
+                    new_owner_id: cluster.owner_id().to_string(),
+                }),
+                now,
+            )?;
+        }
+    }
+    tx.update_cluster_replicas(updated_cluster_replicas)
+        .expect("corrupt catalog");
     Ok(())
 }
 

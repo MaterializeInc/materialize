@@ -5050,7 +5050,7 @@ pub(crate) fn ensure_cluster_is_not_linked(
 }
 
 /// Returns an error if the given cluster is a managed cluster
-pub(crate) fn ensure_cluster_is_not_managed(
+fn ensure_cluster_is_not_managed(
     scx: &StatementContext,
     cluster_id: ClusterId,
 ) -> Result<(), PlanError> {

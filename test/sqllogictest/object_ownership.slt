@@ -864,7 +864,7 @@ SELECT mz_roles.name
   LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_cluster_replicas.name = 'mr1'
 ----
-materialize
+group_materialize
 
 statement ok
 DROP CLUSTER mclus
@@ -909,10 +909,18 @@ COMPLETE 0
 statement error must be owner of CLUSTER jclus
 ALTER CLUSTER jclus OWNER TO group_materialize
 
+simple conn=joe,user=joe
+DROP CLUSTER jclus;
+----
+COMPLETE 0
+
 ## Cluster Replicas
 
 statement ok
-CREATE CLUSTER REPLICA default.mr2 SIZE '1';
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+
+statement ok
+CREATE CLUSTER REPLICA mclus.mr2 SIZE '1';
 
 query T
 SELECT mz_roles.name
@@ -922,11 +930,11 @@ SELECT mz_roles.name
 ----
 materialize
 
-statement error must be a member of "group_no_one"
-ALTER CLUSTER REPLICA default.mr2 OWNER TO group_no_one
+statement error altering the owner of a cluster replica is not supported
+ALTER CLUSTER REPLICA mclus.mr2 OWNER TO group_no_one
 
-statement ok
-ALTER CLUSTER REPLICA default.mr2 OWNER TO group_materialize
+statement error altering the owner of a cluster replica is not supported
+ALTER CLUSTER REPLICA mclus.mr2 OWNER TO group_materialize
 
 query T
 SELECT mz_roles.name
@@ -934,13 +942,43 @@ SELECT mz_roles.name
   LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_cluster_replicas.name = 'mr2'
 ----
+materialize
+
+statement ok
+ALTER CLUSTER REPLICA mclus.mr2 RENAME TO mr3
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr3'
+----
+materialize
+
+statement ok
+ALTER CLUSTER mclus OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr3'
+----
 group_materialize
 
 statement ok
-DROP CLUSTER REPLICA default.mr2
+DROP CLUSTER REPLICA mclus.mr3
+
+statement ok
+DROP CLUSTER mclus
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA default.jr2 SIZE '1';
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER REPLICA jclus.jr2 SIZE '1';
 ----
 COMPLETE 0
 
@@ -952,35 +990,24 @@ SELECT mz_roles.name
 ----
 joe
 
-statement error must be owner of CLUSTER REPLICA default.jr2
-DROP CLUSTER REPLICA default.jr2
+statement error must be owner of CLUSTER REPLICA jclus.jr2
+DROP CLUSTER REPLICA jclus.jr2
 
-statement error must be owner of CLUSTER REPLICA default.jr2
-ALTER CLUSTER REPLICA default.jr2 OWNER TO group_materialize
+statement error must be owner of CLUSTER REPLICA jclus.jr2
+ALTER CLUSTER REPLICA jclus.jr2 RENAME TO jr3
 
-statement error db error: ERROR: must be owner of CLUSTER REPLICA default\.jr2
-ALTER CLUSTER REPLICA default.jr2 RENAME TO jr3
+statement error altering the owner of a cluster replica is not supported
+ALTER CLUSTER REPLICA jclus.jr2 OWNER TO group_materialize
 
 simple conn=joe,user=joe
-ALTER CLUSTER REPLICA default.jr2 RENAME TO jr3
+DROP CLUSTER REPLICA jclus.jr2;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER jclus TO materialize;
+simple conn=joe,user=joe
+DROP CLUSTER jclus;
 ----
 COMPLETE 0
-
-statement ok
-CREATE CLUSTER REPLICA jclus.mr_cross SIZE '1';
-
-query T
-SELECT mz_roles.name
-  FROM mz_cluster_replicas
-  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
-  WHERE mz_cluster_replicas.name = 'mr_cross'
-----
-materialize
 
 ## Clean up
 
@@ -1938,13 +1965,13 @@ GRANT CREATE ON SCHEMA materialize.public TO owner;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO owner;
+simple conn=owner12,user=owner
+CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
 ----
 COMPLETE 0
 
 simple conn=owner12,user=owner
-CREATE CLUSTER REPLICA default.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE '1';
 ----
 COMPLETE 0
 
@@ -1954,12 +1981,16 @@ DROP ROLE owner
 db error: ERROR: role "owner" cannot be dropped because some objects depend on it
 DETAIL: owner: privileges on DATABASE "materialize" granted by mz_system
 owner: privileges on SCHEMA "materialize.public" granted by mz_system
-owner: privileges on CLUSTER "default" granted by mz_system
+owner: owner of CLUSTER "clus"
+owner: privileges granted on CLUSTER "clus" to mz_introspection
+owner: privileges on CLUSTER "clus" granted by owner
+owner: privileges granted on CLUSTER "clus" to owner
+owner: owner of CLUSTER REPLICA "r1"
 owner: owner of CLUSTER REPLICA "r2"
 owner: privileges on SYSTEM granted by mz_system
 
 simple conn=owner12,user=owner
-DROP CLUSTER REPLICA default.r2;
+DROP CLUSTER REPLICA clus.r2;
 ----
 COMPLETE 0
 
@@ -1969,8 +2000,17 @@ DROP ROLE owner
 db error: ERROR: role "owner" cannot be dropped because some objects depend on it
 DETAIL: owner: privileges on DATABASE "materialize" granted by mz_system
 owner: privileges on SCHEMA "materialize.public" granted by mz_system
-owner: privileges on CLUSTER "default" granted by mz_system
+owner: owner of CLUSTER "clus"
+owner: privileges granted on CLUSTER "clus" to mz_introspection
+owner: privileges on CLUSTER "clus" granted by owner
+owner: privileges granted on CLUSTER "clus" to owner
+owner: owner of CLUSTER REPLICA "r1"
 owner: privileges on SYSTEM granted by mz_system
+
+simple conn=owner12,user=owner
+DROP CLUSTER clus;
+----
+COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON DATABASE materialize FROM owner;
@@ -2109,7 +2149,7 @@ db error: ERROR: system cluster 'mz_system' cannot be modified
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER REPLICA mz_system.r1 OWNER TO mz_system
 ----
-db error: ERROR: system cluster 'mz_system' cannot be modified
+db error: ERROR: altering the owner of a cluster replica is not supported
 
 simple conn=mz_system,user=mz_system
 ALTER SCHEMA mz_catalog OWNER TO mz_system
@@ -2265,8 +2305,8 @@ DROP TABLE t
 ----
 COMPLETE 0
 
-# Test that linked clusters, linked replicas, and subsources are consistent with their linked
-# object and primary source
+# Test that linked cluster, linked replica, and subsource owners are consistent with their linked
+# object and primary source owners.
 
 statement ok
 CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1')
@@ -2298,7 +2338,7 @@ query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
   FROM mz_cluster_replicas
   LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 linked  materialize
@@ -2306,7 +2346,7 @@ linked  materialize
 statement error cannot modify linked cluster "materialize_public_s"
 ALTER CLUSTER materialize_public_s OWNER TO joe
 
-statement error cannot modify linked cluster "materialize_public_s"
+statement error altering the owner of a cluster replica is not supported
 ALTER CLUSTER REPLICA materialize_public_s.linked OWNER TO joe
 
 statement error cannot ALTER this type of source
@@ -2342,7 +2382,7 @@ query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
   FROM mz_cluster_replicas
   LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 linked  materialize
@@ -2379,7 +2419,7 @@ query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
   FROM mz_cluster_replicas
   LEFT JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
 linked  joe
