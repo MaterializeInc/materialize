@@ -127,6 +127,12 @@ pub struct RocksDBTuningParameters {
 
     /// The maximum duration for the retries when performing rocksdb actions in case of retry-able errors.
     pub retry_max_duration: Duration,
+
+    /// The interval to dump stats in `LOG`.
+    pub stats_log_interval_seconds: u32,
+
+    /// The interval to persist stats into rocksdb.
+    pub stats_persist_interval_seconds: u32,
 }
 
 impl Default for RocksDBTuningParameters {
@@ -143,6 +149,8 @@ impl Default for RocksDBTuningParameters {
             bottommost_compression_type: defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
             batch_size: defaults::DEFAULT_BATCH_SIZE,
             retry_max_duration: defaults::DEFAULT_RETRY_DURATION,
+            stats_log_interval_seconds: defaults::DEFAULT_STATS_LOG_INTERVAL_S,
+            stats_persist_interval_seconds: defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
         }
     }
 }
@@ -159,6 +167,8 @@ impl RocksDBTuningParameters {
         bottommost_compression_type: CompressionType,
         batch_size: usize,
         retry_max_duration: Duration,
+        stats_log_interval_seconds: u32,
+        stats_persist_interval_seconds: u32,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -188,6 +198,8 @@ impl RocksDBTuningParameters {
             bottommost_compression_type,
             batch_size,
             retry_max_duration,
+            stats_log_interval_seconds,
+            stats_persist_interval_seconds,
         })
     }
 }
@@ -300,6 +312,8 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             )),
             batch_size: u64::cast_from(self.batch_size),
             retry_max_duration: Some(self.retry_max_duration.into_proto()),
+            stats_log_interval_seconds: self.stats_log_interval_seconds,
+            stats_persist_interval_seconds: self.stats_persist_interval_seconds,
         }
     }
 
@@ -364,6 +378,8 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             retry_max_duration: proto
                 .retry_max_duration
                 .into_rust_if_some("ProtoRocksDbTuningParameters::retry_max_duration")?,
+            stats_log_interval_seconds: proto.stats_log_interval_seconds,
+            stats_persist_interval_seconds: proto.stats_persist_interval_seconds,
         })
     }
 }
@@ -392,6 +408,8 @@ pub struct RocksDBConfig {
     pub compression_type: CompressionType,
     pub bottommost_compression_type: CompressionType,
     pub retry_max_duration: Duration,
+    pub stats_log_interval_seconds: u32,
+    pub stats_persist_interval_seconds: u32,
     pub dynamic: RocksDBDynamicConfig,
 }
 
@@ -413,6 +431,8 @@ impl RocksDBConfig {
             bottommost_compression_type,
             batch_size,
             retry_max_duration,
+            stats_log_interval_seconds,
+            stats_persist_interval_seconds,
         } = params;
 
         Self {
@@ -424,6 +444,8 @@ impl RocksDBConfig {
             compression_type,
             bottommost_compression_type,
             retry_max_duration,
+            stats_log_interval_seconds,
+            stats_persist_interval_seconds,
             dynamic: RocksDBDynamicConfig {
                 batch_size: Arc::new(AtomicUsize::new(batch_size)),
             },
@@ -443,6 +465,8 @@ impl RocksDBConfig {
             bottommost_compression_type,
             batch_size,
             retry_max_duration,
+            stats_log_interval_seconds,
+            stats_persist_interval_seconds,
         } = params;
 
         self.compaction_style = compaction_style;
@@ -453,6 +477,8 @@ impl RocksDBConfig {
         self.compression_type = compression_type;
         self.bottommost_compression_type = bottommost_compression_type;
         self.retry_max_duration = retry_max_duration;
+        self.stats_log_interval_seconds = stats_log_interval_seconds;
+        self.stats_persist_interval_seconds = stats_persist_interval_seconds;
 
         // SeqCst is probably not required here, but its the easiest to reason about
         self.dynamic.batch_size.store(batch_size, Ordering::SeqCst);
@@ -497,6 +523,12 @@ pub mod defaults {
     /// <https://github.com/facebook/rocksdb/blob/bc0db33483d5e79b281ba3137ebf286b2d1efd8d/options/options.cc#L632-L637>
     pub const DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD: usize =
         DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET / 4 * 2;
+
+    /// Default is 10 minutes, from <https://docs.rs/rocksdb/latest/rocksdb/struct.Options.html#method.set_stats_dump_period_sec>
+    pub const DEFAULT_STATS_LOG_INTERVAL_S: u32 = 600;
+
+    /// Default is 10 minutes, from <https://docs.rs/rocksdb/latest/rocksdb/struct.Options.html#method.set_stats_persist_period_sec>
+    pub const DEFAULT_STATS_PERSIST_INTERVAL_S: u32 = 600;
 }
 
 #[cfg(test)]
@@ -518,6 +550,8 @@ mod tests {
             defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
             defaults::DEFAULT_BATCH_SIZE,
             defaults::DEFAULT_RETRY_DURATION,
+            defaults::DEFAULT_STATS_LOG_INTERVAL_S,
+            defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
         )
         .unwrap();
 

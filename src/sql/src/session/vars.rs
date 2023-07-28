@@ -748,6 +748,23 @@ mod upsert_rocksdb {
             "The upsert in-memory state size threshold in bytes after which it will spill to disk",
         internal: true,
     };
+
+    pub static UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS: ServerVar<u32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_stats_log_interval_seconds"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_STATS_LOG_INTERVAL_S,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
+    pub static UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS: ServerVar<u32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_stats_persist_interval_seconds"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -1869,6 +1886,8 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2257,6 +2276,14 @@ impl SystemVars {
 
     pub fn upsert_rocksdb_retry_duration(&self) -> Duration {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
+    }
+
+    pub fn upsert_rocksdb_stats_log_interval_seconds(&self) -> u32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
+    }
+
+    pub fn upsert_rocksdb_stats_persist_interval_seconds(&self) -> u32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -3831,6 +3858,8 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
