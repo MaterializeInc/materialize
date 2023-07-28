@@ -91,6 +91,14 @@ impl std::str::FromStr for Interval {
     }
 }
 
+impl From<chrono::Duration> for Interval {
+    #[inline]
+    fn from(duration: chrono::Duration) -> Interval {
+        let micros = duration.num_microseconds().unwrap_or(0);
+        Interval::new(0, 0, micros)
+    }
+}
+
 static MONTH_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
     format!(
         "Overflows maximum months; cannot exceed {}/{} microseconds",

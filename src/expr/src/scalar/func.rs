@@ -871,11 +871,19 @@ fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErro
 }
 
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
+    let diff = a.unwrap_timestamp() - b.unwrap_timestamp();
+    Datum::from(
+        justify_hours(diff.into())
+            .expect("timestamps are not large enough to overflow an interval"),
+    )
 }
 
 fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
+    let diff = a.unwrap_timestamptz() - b.unwrap_timestamptz();
+    Datum::from(
+        justify_hours(diff.into())
+            .expect("timestamps are not large enough to overflow an interval"),
+    )
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

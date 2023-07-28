@@ -368,6 +368,18 @@ SELECT DATE '2001-01-01' + INTERVAL '3' YEAR
 ----
 2004-01-01 00:00:00
 
+# Date-time arithmetic with timestamps
+
+query T
+select '2023-07-27 14:00:00+00'::timestamp - '2023-07-23 09:00:00+00'::timestamp
+----
+4 days 05:00:00
+
+query T
+select '2023-07-27 14:00:00+00'::timestamptz - '2023-07-23 09:00:00+00'::timestamptz
+----
+4 days 05:00:00
+
 # Check Comparisons
 
 query T

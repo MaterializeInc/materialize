@@ -1145,8 +1145,7 @@ impl<'a> From<OrderedDecimal<Numeric>> for Datum<'a> {
 impl<'a> From<chrono::Duration> for Datum<'a> {
     #[inline]
     fn from(duration: chrono::Duration) -> Datum<'a> {
-        let micros = duration.num_microseconds().unwrap_or(0);
-        Datum::Interval(Interval::new(0, 0, micros))
+        Datum::Interval(duration.into())
     }
 }
 
