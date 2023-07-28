@@ -649,15 +649,15 @@ impl futures::Stream for RemapClock {
             let new_ts: mz_repr::Timestamp = new_ts.try_into().expect("must fit");
 
             if self.upper.less_equal(&new_ts) {
-                self.upper = Antichain::from_elem(
-                    new_ts
-                        .step_forward()
-                        .results_in(&mz_repr::Timestamp::new(1000))
-                        .unwrap(),
-                );
+                self.upper = Antichain::from_elem(new_ts.step_forward());
                 return Poll::Ready(Some((
                     new_ts.results_in(&mz_repr::Timestamp::new(1000)).unwrap(),
-                    self.upper.clone(),
+                    Antichain::from_elem(
+                        new_ts
+                            .step_forward()
+                            .results_in(&mz_repr::Timestamp::new(1000))
+                            .unwrap(),
+                    ),
                 )));
             } else {
                 let upper_ts = self.upper.as_option().expect("no more timestamps to mint");
