@@ -15,12 +15,14 @@ cd "$(dirname "$0")/../.."
 
 . misc/shlib/shlib.bash
 
-if ! kind get clusters | grep -q cloudtest; then
-    run kind create cluster --name=cloudtest --config=misc/kind/cluster.yaml --wait=60s
+CONTEXT="${CONTEXT:=kind-mzcloud}"
+
+if ! kind get clusters | grep -q mzcloud; then
+    run kind create cluster --name=mzcloud --config=misc/kind/cluster.yaml --wait=60s
 fi
 
 for f in misc/kind/configmaps/*; do
-    run kubectl --context=kind-cloudtest apply -f "$f"
+    run kubectl --context="$CONTEXT" apply -f "$f"
 done
 
-run kubectl --context=kind-cloudtest rollout restart -n kube-system deployment/coredns
+run kubectl --context="$CONTEXT" rollout restart -n kube-system deployment/coredns

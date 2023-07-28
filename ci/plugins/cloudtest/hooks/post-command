@@ -14,7 +14,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 kubectl() {
-    bin/ci-builder run stable kubectl --context=kind-cloudtest "$@"
+    bin/ci-builder run stable kubectl --context=kind-mzcloud "$@"
 }
 
 export_cov() {

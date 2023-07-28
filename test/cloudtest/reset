@@ -15,5 +15,7 @@ cd "$(dirname "$0")/../.."
 
 . misc/shlib/shlib.bash
 
-run kubectl --context=kind-cloudtest delete all --all
-run kubectl --context=kind-cloudtest delete pvc --all
+CONTEXT="${CONTEXT:=kind-mzcloud}"
+
+run kubectl --context="$CONTEXT" delete all --all
+run kubectl --context="$CONTEXT" delete pvc --all

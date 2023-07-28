@@ -54,4 +54,7 @@ class Application:
             raise e
 
     def context(self) -> str:
-        return "kind-cloudtest"
+        return f"kind-{self.cluster_name()}"
+
+    def cluster_name(self) -> str:
+        return "mzcloud"

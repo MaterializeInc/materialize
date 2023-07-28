@@ -15,4 +15,4 @@ cd "$(dirname "$0")/../.."
 
 . misc/shlib/shlib.bash
 
-run kind delete cluster --name=cloudtest
+run kind delete cluster --name=mzcloud

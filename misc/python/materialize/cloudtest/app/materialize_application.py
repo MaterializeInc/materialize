@@ -120,7 +120,7 @@ class MaterializeApplication(Application):
                         "kind",
                         "load",
                         "docker-image",
-                        "--name=cloudtest",
+                        f"--name={self.cluster_name()}",
                         dep.spec(),
                     ]
                 )

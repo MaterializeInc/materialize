@@ -13,7 +13,7 @@ from typing import Optional
 
 
 def print_pods(
-    context: str = "kind-cloudtest",
+    context: str = "kind-mzcloud",
     label: Optional[str] = None,
 ) -> None:
     cmd = [

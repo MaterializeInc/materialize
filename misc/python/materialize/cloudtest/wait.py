@@ -20,7 +20,7 @@ def wait(
     condition: str,
     resource: str,
     timeout_secs: int = 300,
-    context: str = "kind-cloudtest",
+    context: str = "kind-mzcloud",
     *,
     label: Optional[str] = None,
 ) -> None:
