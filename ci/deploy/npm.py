@@ -53,7 +53,7 @@ def generate_version(
     else:
         buildkite_tag = os.environ.get("BUILDKITE_TAG")
         assert (
-            buildkite_tag == node_version
+            buildkite_tag.lstrip('v') == node_version
         ), f"Buildkite tag ({buildkite_tag}) does not match environmentd version ({crate_version})"
     return Version(rust=crate_version, node=node_version, is_development=is_development)
 
