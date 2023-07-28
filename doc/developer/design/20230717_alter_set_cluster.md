@@ -31,19 +31,22 @@ Materialize:
 
 ```sql
 -- Move a source to cluster `clstr`:
-ALTER SOURCE src IN CLUSTER clstr;
+ALTER SOURCE src SET IN CLUSTER clstr;
 
 -- Move a sink to cluster `c2`:
-ALTER SINK snk IN CLUSTER c2;
+ALTER SINK snk SET IN CLUSTER c2;
 
 -- Move a materialized view to cluster `prod`:
-ALTER MATERIALIZED VIEW my_view IN CLUSTER prod;
+ALTER MATERIALIZED VIEW my_view SET IN CLUSTER prod;
 ```
+
+This corresponds to the `CREATE` syntax where the user specifies the cluster
+with an `IN CLUSTER` parameter.
 
 ## Detailed description
 
 The `ALTER SOURCE`, `ALTER SINK` and `ALTER MATERIALIZED VIEW` statements will
-learn a new option `IN CLUSTER clstr`:
+learn a new option `SET IN CLUSTER clstr`:
 * The cluster name `clstr` must match an existing cluster.
 * The usual constraints apply. For sources and sinks, the cluster must either be
   empty or only host sources and sinks. The replication factor must be 0 or 1.
@@ -68,7 +71,7 @@ Attempting to schedule incompatible objects will result in an error like the
 following:
 
 ```sql
-ALTER SOURCE src IN CLUSTER compute_cluster;
+ALTER SOURCE src SET IN CLUSTER compute_cluster;
 ERROR: cannot alter source cluster to cluster containing indexes or materialized views
 ```
 
@@ -77,7 +80,7 @@ replication factor. Attempting to do so will result in an error like the
 following:
 
 ```sql
-ALTER SOURCE src IN CLUSTER cluster;
+ALTER SOURCE src SET IN CLUSTER cluster;
 ERROR: cannot alter source cluster to cluster with more than one replica
 ```
 
@@ -109,7 +112,7 @@ ALTER SOURCE src SET CLUSTER clsname;
 ```
 
 Note that this is _intentionally_ lacking parens
-(`ALTER SOURCE src SET (CLUSTER = clstr)`;).
+(`ALTER SOURCE src SET (CLUSTER = clstr);`).
 This is for consistency with the analogous PostgreSQL command
 `ALTER TABLE ... SET {SCHEMA|TABLESPACE} {schema|tblspc}`.
 The rule is that only parameters configured in the `WITH` block go inside the
