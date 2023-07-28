@@ -94,8 +94,8 @@ use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{
-    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
-    StorageResponse,
+    ObjectStatusUpdate, RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate,
+    StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -224,6 +224,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             dropped_ids: BTreeSet::new(),
             source_statistics: BTreeMap::new(),
             sink_statistics: BTreeMap::new(),
+            object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
             dataflow_parameters: Default::default(),
@@ -298,6 +299,12 @@ pub struct StorageState {
     /// The same as `source_statistics`, but for sinks.
     pub sink_statistics:
         BTreeMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
+
+    /// Status updates reported by health operators.
+    ///
+    /// **NOTE**: Operators that append to this collection should take care to only add new
+    /// status updates if the status of the ingestion/export in question has _changed_.
+    pub object_status_updates: Rc<RefCell<Vec<ObjectStatusUpdate<mz_repr::Timestamp>>>>,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -531,6 +538,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             self.report_frontier_progress(&response_tx);
+
+            // Report status updates if any are present
+            if self.storage_state.object_status_updates.borrow().len() > 0 {
+                self.send_storage_response(
+                    &response_tx,
+                    StorageResponse::StatusUpdates(self.storage_state.object_status_updates.take()),
+                );
+            }
 
             // Note: this interval configures the level of granularity we expect statistics
             // (at least with this implementation) to have. We expect a statistic in the

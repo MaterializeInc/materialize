@@ -49,11 +49,9 @@ use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
-use mz_storage_client::client::SourceStatisticsUpdate;
+use mz_storage_client::client::{SourceStatisticsUpdate, SourceStatusUpdate};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
@@ -79,7 +77,6 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace, warn};
 
-use crate::healthcheck::write_to_persist;
 use crate::internal_control::InternalStorageCommand;
 use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
@@ -352,34 +349,21 @@ where
     )
 }
 
-struct HealthState<'a> {
+struct HealthState<T> {
     source_id: GlobalId,
-    persist_details: Option<(ShardId, &'a PersistClient)>,
     healths: Vec<Option<HealthStatus>>,
     last_reported_status: Option<HealthStatus>,
+    last_status_occurred_at: Option<T>,
     halt_with: Option<HealthStatus>,
 }
 
-impl<'a> HealthState<'a> {
-    fn new(
-        source_id: GlobalId,
-        metadata: CollectionMetadata,
-        persist_clients: &'a BTreeMap<PersistLocation, PersistClient>,
-        worker_count: usize,
-    ) -> HealthState<'a> {
-        let persist_details = match (
-            metadata.status_shard,
-            persist_clients.get(&metadata.persist_location),
-        ) {
-            (Some(shard), Some(persist_client)) => Some((shard, persist_client)),
-            _ => None,
-        };
-
+impl<T> HealthState<T> {
+    fn new(source_id: GlobalId, worker_count: usize) -> HealthState<T> {
         HealthState {
             source_id,
-            persist_details,
             healths: vec![None; worker_count],
             last_reported_status: None,
+            last_status_occurred_at: None,
             halt_with: None,
         }
     }
@@ -395,7 +379,6 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     primary_source_id: GlobalId,
     health_stream: &Stream<G, (OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
@@ -404,8 +387,8 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     let healthcheck_worker_id = scope.index();
     let worker_count = scope.peers();
     let now = storage_state.now.clone();
-    let persist_clients = Arc::clone(&storage_state.persist_clients);
     let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
+    let object_status_updates = Rc::clone(&storage_state.object_status_updates);
 
     // Inject the originating worker id to each item before exchanging to the chosen worker
     let health_stream = health_stream.map(move |status| (healthcheck_worker_id, status));
@@ -425,69 +408,40 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
-    // Construct a minimal number of persist clients
-    let persist_locations: BTreeSet<_> = configs
-        .values()
-        .filter_map(|(source_id, metadata)| {
-            if is_active_worker {
-                match &metadata.status_shard {
-                    Some(status_shard) => {
-                        info!("Health for source {source_id} being written to {status_shard}");
-                        Some(metadata.persist_location.clone())
-                    }
-                    None => {
-                        trace!("Health for source {source_id} not being written to status shard");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    for (source_id, _) in configs.values() {
+        if is_active_worker {
+            info!("Generating status updates for source {source_id}");
+        } else {
+            info!("Skipping generation of status updates for source {source_id}");
+        }
+    }
 
     let button = health_op.build(move |mut _capabilities| async move {
-        // Convert the persist locations into persist clients
-        let mut persist_clients_per_location = BTreeMap::new();
-        for persist_location in persist_locations {
-            persist_clients_per_location.insert(
-                persist_location.clone(),
-                persist_clients
-                    .open(persist_location)
-                    .await
-                    .expect("error creating persist client for Healthchecker"),
-            );
-        }
-
-        let mut health_states: BTreeMap<_, _> = configs
+        let mut health_states: BTreeMap<usize, HealthState<mz_repr::Timestamp>> = configs
             .into_iter()
-            .map(|(output_idx, (id, metadata))| {
+            .map(|(output_idx, (id, _))| {
                 (
                     output_idx,
-                    HealthState::new(id, metadata, &persist_clients_per_location, worker_count),
+                    HealthState::new(id, worker_count),
                 )
             })
             .collect();
 
         // Write the initial starting state to the status shard for all managed sources
         if is_active_worker {
-            for state in health_states.values() {
-                if !resume_uppers[&state.source_id].is_empty() {
-                    if let Some((status_shard, persist_client)) = state.persist_details {
-                        let status = HealthStatus::Starting;
-                        write_to_persist(
-                            state.source_id,
-                            status.name(),
-                            status.error(),
-                            now.clone(),
-                            persist_client,
-                            status_shard,
-                            &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                            status.hint(),
-                        )
-                        .await;
-                    }
-                }
+            for state in health_states.values_mut() {
+                let status = HealthStatus::Starting;
+                let timestamp: mz_repr::Timestamp = now().into();
+                object_status_updates.borrow_mut().push(mz_storage_client::client::ObjectStatusUpdate::Source(SourceStatusUpdate {
+                    id: state.source_id,
+                    status: status.name().to_string(),
+                    error: status.error().map(|e| e.to_string()),
+                    hint: status.hint().map(|e| e.to_string()),
+                    timestamp,
+                }));
+
+                state.last_reported_status = Some(status);
+                state.last_status_occurred_at = Some(timestamp);
             }
         }
 
@@ -540,9 +494,9 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                     let HealthState {
                         source_id,
                         healths,
-                        persist_details,
                         last_reported_status,
                         halt_with,
+                        last_status_occurred_at,
                     } = health_states
                         .get_mut(&output_index)
                         .expect("known to exist");
@@ -555,21 +509,25 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                                 "Health transition for source {source_id}: \
                                   {last_reported_status:?} -> {new_status:?}"
                             );
-                            if let Some((status_shard, persist_client)) = persist_details {
-                                write_to_persist(
-                                    *source_id,
-                                    new_status.name(),
-                                    new_status.error(),
-                                    now.clone(),
-                                    persist_client,
-                                    *status_shard,
-                                    &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                                    new_status.hint(),
-                                )
-                                .await;
+                            let mut timestamp: mz_repr::Timestamp = now().into();
+
+                            // Ensure that timestamps for updates are monotonically increasing
+                            if let Some(last_ts) = last_status_occurred_at {
+                                if *last_ts == timestamp {
+                                    timestamp = timestamp.step_forward();
+                                }
                             }
 
+                            object_status_updates.borrow_mut().push(mz_storage_client::client::ObjectStatusUpdate::Source(SourceStatusUpdate {
+                                id: *source_id,
+                                status: new_status.name().to_string(),
+                                error: new_status.error().map(|e| e.to_string()),
+                                hint: new_status.hint().map(|e| e.to_string()),
+                                timestamp,
+                            }));
+
                             *last_reported_status = Some(new_status.clone());
+                            *last_status_occurred_at = Some(timestamp);
                         }
                     }
 
