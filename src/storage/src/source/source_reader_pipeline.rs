@@ -74,7 +74,7 @@ use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Enter, Leave
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, PathSummary, Timestamp};
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace, warn};
