@@ -71,6 +71,8 @@ pub fn storage_config(
                 config.upsert_rocksdb_bottommost_compression_type(),
                 config.upsert_rocksdb_batch_size(),
                 config.upsert_rocksdb_retry_duration(),
+                config.upsert_rocksdb_stats_log_interval_seconds(),
+                config.upsert_rocksdb_stats_persist_interval_seconds(),
             ) {
                 Ok(u) => u,
                 Err(e) => {
