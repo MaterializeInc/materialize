@@ -25,6 +25,13 @@ use bytes::Bytes;
 use http::StatusCode;
 use thiserror::Error;
 
+/// The number of concurrent requests we allow at once for webhook sources.
+///
+/// TODO(parkmycar): Make this configurable via LaunchDarkly and/or as a setting on each webhook
+/// source. The blocker for doing this today is an `axum` layer that allows us to __reduce__ the
+/// concurrency limit, the current one only allows you to increase it.
+pub const CONCURRENCY_LIMIT: usize = 100;
+
 pub async fn handle_webhook(
     State(client): State<mz_adapter::Client>,
     Path((database, schema, name)): Path<(String, String, String)>,

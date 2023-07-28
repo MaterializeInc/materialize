@@ -2190,3 +2190,74 @@ fn webhook_concurrent_actions() {
     }
     assert!(saw_atleast_one_success_after_close);
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_concurrency_limit() {
+    let concurrency_limit = 15;
+    let config = util::Config::default().with_concurrent_webhook_req_count(concurrency_limit);
+    let server = util::start_server(config).unwrap();
+    // Note: we need enable_unstable_dependencies to use mz_sleep.
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_unstable_dependencies"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK \
+             BODY FORMAT TEXT \
+             CHECK ( WITH(BODY) body IS NOT NULL AND mz_internal.mz_sleep(5) IS NULL )",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr().clone(),
+    );
+    let mut handles = Vec::with_capacity(concurrency_limit + 5);
+
+    for _ in 0..concurrency_limit + 5 {
+        let http_client_ = http_client.clone();
+        let webhook_url_ = webhook_url.clone();
+
+        let handle = server.runtime.spawn(async move {
+            let resp = http_client_
+                .post(webhook_url_)
+                .body("a")
+                .send()
+                .await
+                .expect("response to succeed");
+            resp.status()
+        });
+        handles.push(handle);
+    }
+    let results = server
+        .runtime
+        .block_on(futures::future::try_join_all(handles))
+        .expect("failed to wait for requests");
+
+    let successes = results
+        .iter()
+        .filter(|status_code| status_code.is_success())
+        .count();
+    // Note: if this status code changes, we need to update our docs.
+    let rate_limited = results
+        .iter()
+        .filter(|status_code| **status_code == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+
+    // We expect at least the number of requests we allow concurrently to succeed.
+    assert!(successes >= concurrency_limit);
+    // We send 5 more requests than our limit, but we assert only at least 3 get
+    // rate limited to reduce test flakiness.
+    assert!(rate_limited >= 3);
+}

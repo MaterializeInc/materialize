@@ -16,12 +16,14 @@
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
@@ -49,6 +51,7 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_openssl::SslStream;
+use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
@@ -76,6 +79,7 @@ pub struct HttpConfig {
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub concurrent_webhook_req_count: Option<usize>,
     pub metrics: Metrics,
 }
 
@@ -112,6 +116,7 @@ impl HttpServer {
             adapter_client,
             allowed_origin,
             active_connection_count,
+            concurrent_webhook_req_count,
             metrics,
         }: HttpConfig,
     ) -> HttpServer {
@@ -152,12 +157,19 @@ impl HttpServer {
                 active_connection_count,
             });
 
+        let concurrency_limit = concurrent_webhook_req_count.unwrap_or(webhook::CONCURRENCY_LIMIT);
         let webhook_router = Router::new()
             .route(
                 "/api/webhook/:database/:schema/:id",
                 routing::post(webhook::handle_webhook),
             )
-            .with_state(adapter_client);
+            .with_state(adapter_client)
+            .layer(
+                ServiceBuilder::new()
+                    .layer(HandleErrorLayer::new(handle_load_error))
+                    .load_shed()
+                    .concurrency_limit(concurrency_limit),
+            );
 
         let router = Router::new()
             .merge(base_router)
@@ -789,4 +801,24 @@ impl DefaultLayers for Router {
         self.layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(metrics::PrometheusLayer::new(metrics))
     }
+}
+
+/// Glue code to make [`tower`] work with [`axum`].
+///
+/// `axum` requires `Layer`s not return Errors, i.e. they must be `Result<_, Infallible>`,
+/// instead you must return a type that can be converted into a response. `tower` on the other
+/// hand does return Errors, so to make the two work together we need to convert our `tower` errors
+/// into responses.
+async fn handle_load_error(error: tower::BoxError) -> impl IntoResponse {
+    if error.is::<tower::load_shed::error::Overloaded>() {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Cow::from("too many requests, try again later"),
+        );
+    }
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Cow::from(format!("Unhandled internal error: {}", error)),
+    )
 }
