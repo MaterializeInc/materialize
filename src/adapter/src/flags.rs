@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
@@ -148,5 +149,20 @@ fn grpc_client_config(config: &SystemVars) -> GrpcClientParameters {
         connect_timeout: Some(config.grpc_connect_timeout()),
         http2_keep_alive_interval: Some(config.grpc_client_http2_keep_alive_interval()),
         http2_keep_alive_timeout: Some(config.grpc_client_http2_keep_alive_timeout()),
+    }
+}
+
+pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingConfig {
+    ServiceSchedulingConfig {
+        multi_pod_az_affinity_weight: config.cluster_multi_process_replica_az_affinity_weight(),
+        soften_replication_anti_affinity: config.cluster_soften_replication_anti_affinity(),
+        soft_replication_anti_affinity_weight: config
+            .cluster_soften_replication_anti_affinity_weight(),
+        topology_spread: ServiceTopologySpreadConfig {
+            enabled: config.cluster_enable_topology_spread(),
+            ignore_non_singular_scale: config.cluster_topology_spread_ignore_non_singular_scale(),
+            max_skew: config.cluster_topology_spread_max_skew(),
+            soft: config.cluster_topology_spread_soft(),
+        },
     }
 }

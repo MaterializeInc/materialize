@@ -4923,6 +4923,7 @@ dependencies = [
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
+ "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",
  "mz-pgcopy",

@@ -249,6 +249,12 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    pub fn update_orchestrator_scheduling_config(
+        &mut self,
+        config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+    ) {
+        self.orchestrator.update_scheduling_config(config);
+    }
     /// Marks the end of any initialization commands.
     ///
     /// The implementor may wait for this method to be called before implementing prior commands,

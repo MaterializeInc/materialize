@@ -472,6 +472,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             }
         })
     }
+
+    fn update_scheduling_config(
+        &self,
+        _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+    ) {
+        // This orchestrator ignores scheduling constraints.
+    }
 }
 
 impl NamespacedProcessOrchestrator {

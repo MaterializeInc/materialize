@@ -148,6 +148,8 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
         &self,
         id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
+
+    fn update_scheduling_config(&self, config: scheduling_config::ServiceSchedulingConfig);
 }
 
 /// An event describing a status change of an orchestrated service.
@@ -453,5 +455,80 @@ impl Serialize for DiskLimit {
         S: serde::Serializer,
     {
         <String as Serialize>::serialize(&self.0.to_string(), serializer)
+    }
+}
+
+/// Configuration for how services are scheduled. These may be ignored by orchestrator
+/// implementations.
+pub mod scheduling_config {
+    #[derive(Debug, Clone)]
+    pub struct ServiceTopologySpreadConfig {
+        /// If `true`, enable spread for replicated services.
+        ///
+        /// Defaults to `true`.
+        pub enabled: bool,
+        /// If `true`, ignore services with `scale` > 1 when expressing
+        /// spread constraints.
+        ///
+        /// Default to `true`.
+        pub ignore_non_singular_scale: bool,
+        /// The `maxSkew` for spread constraints.
+        /// See
+        /// <https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/>
+        /// for more details.
+        ///
+        /// Defaults to `1`.
+        pub max_skew: i32,
+        /// If `true`, make the spread constraints into a preference.
+        ///
+        /// Defaults to `false`.
+        pub soft: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ServiceSchedulingConfig {
+        /// If `Some`, add a affinity preference with the given
+        /// weight for services that horizontally scale.
+        ///
+        /// Defaults to `Some(100)`.
+        pub multi_pod_az_affinity_weight: Option<i32>,
+        // TODO(guswynn): soften az node selector config
+        /// If `true`, make the node-level anti-affinity between
+        /// replicated services a preference over a constraint.
+        ///
+        /// Defaults to `false`.
+        pub soften_replication_anti_affinity: bool,
+        /// The weight for `soften_replication_anti_affinity.
+        ///
+        /// Defaults to `100`.
+        pub soft_replication_anti_affinity_weight: i32,
+        /// Configuration for `TopologySpreadConstraint`'s
+        pub topology_spread: ServiceTopologySpreadConfig,
+    }
+
+    pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
+    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY: bool = false;
+    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: i32 = 100;
+
+    pub const DEFAULT_TOPOLOGY_SPREAD_ENABLED: bool = true;
+    pub const DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: bool = true;
+    pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
+    pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
+
+    impl Default for ServiceSchedulingConfig {
+        fn default() -> Self {
+            ServiceSchedulingConfig {
+                multi_pod_az_affinity_weight: DEFAULT_POD_AZ_AFFINITY_WEIGHT,
+                soften_replication_anti_affinity: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
+                soft_replication_anti_affinity_weight:
+                    DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+                topology_spread: ServiceTopologySpreadConfig {
+                    enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
+                    ignore_non_singular_scale: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+                    max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+                    soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
+                },
+            }
+        }
     }
 }
