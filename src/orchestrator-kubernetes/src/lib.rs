@@ -89,9 +89,9 @@ use k8s_openapi::api::core::v1::{
     EphemeralVolumeSource, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
     ObjectFieldSelector, ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
-    PodSecurityContext, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint, Volume,
-    VolumeMount, WeightedPodAffinityTerm,
+    PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
+    Secret, Service as K8sService, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint,
+    Volume, VolumeMount, WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -868,7 +868,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 PodAntiAffinity {
                     preferred_during_scheduling_ignored_during_execution: Some(vec![
                         WeightedPodAffinityTerm {
-                            weight: scheduling_config.soft_replication_anti_affinity_weight,
+                            weight: scheduling_config.soften_replication_anti_affinity_weight,
                             pod_affinity_term: pat,
                         },
                     ]),
@@ -958,19 +958,33 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .collect();
 
         let node_affinity = if let Some(availability_zones) = availability_zones {
-            Some(NodeAffinity {
-                preferred_during_scheduling_ignored_during_execution: None,
-                required_during_scheduling_ignored_during_execution: Some(NodeSelector {
-                    node_selector_terms: vec![NodeSelectorTerm {
-                        match_expressions: Some(vec![NodeSelectorRequirement {
-                            key: "materialize.cloud/availability-zone".to_string(),
-                            operator: "In".to_string(),
-                            values: Some(availability_zones),
-                        }]),
-                        match_fields: None,
-                    }],
-                }),
-            })
+            let selector = NodeSelectorTerm {
+                match_expressions: Some(vec![NodeSelectorRequirement {
+                    key: "materialize.cloud/availability-zone".to_string(),
+                    operator: "In".to_string(),
+                    values: Some(availability_zones),
+                }]),
+                match_fields: None,
+            };
+
+            if scheduling_config.soften_az_affinity {
+                Some(NodeAffinity {
+                    preferred_during_scheduling_ignored_during_execution: Some(vec![
+                        PreferredSchedulingTerm {
+                            preference: selector,
+                            weight: scheduling_config.soften_az_affinity_weight,
+                        },
+                    ]),
+                    required_during_scheduling_ignored_during_execution: None,
+                })
+            } else {
+                Some(NodeAffinity {
+                    preferred_during_scheduling_ignored_during_execution: None,
+                    required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                        node_selector_terms: vec![selector],
+                    }),
+                })
+            }
         } else {
             None
         };
