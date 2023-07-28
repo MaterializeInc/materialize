@@ -82,6 +82,7 @@ The pgwire, http, and ws handlers enforce these requirements and state changes.
 
 This design adds a new operation to the inner transaction: `SingleStatement`.
 This operation records a single statement.
+If a second statement is added to the transaction with this operation, the transaction fails.
 The post processing for this operation enqueues to the Coordinator a message containing the statement and session, which is processed by a new `sequence_execute_single_statement_transaction` method.
 This method:
 1. Asserts the session's transaction is in `Default`, which should be a side effect of running it through `sequence_end_transaction` from the `COMMIT`.

@@ -875,9 +875,9 @@
         the `current_role` is assumed.
     - signature: 'has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
       description: >-
-        Reports whether the `user` has the privilege for `role`. `privilege` can either be 'MEMBER'
-        or 'USAGE', however currently this value is ignored. The PUBLIC psuedo-role cannot be used
-        for the `user` nor the `role`. If the `user`` is omitted then the `current_role` is assumed.
+        Reports whether the `user` has the privilege for `role`. `privilege` can either be `MEMBER`
+        or `USAGE`, however currently this value is ignored. The `PUBLIC` pseudo-role cannot be used
+        for the `user` nor the `role`. If the `user` is omitted then the `current_role` is assumed.
     - signature: 'has_secret_privilege([role: text or oid,] secret: text or oid, privilege: text) -> bool'
       description: >-
         Reports whether the role with the specified role name or OID has the privilege on

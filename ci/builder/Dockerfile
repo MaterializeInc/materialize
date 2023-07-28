@@ -97,6 +97,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     lld \
     llvm \
     make \
+    npm \
     openssh-client \
     pkg-config \
     postgresql-client-14 \
@@ -164,7 +165,11 @@ RUN mkdir rust \
         PATH=$PATH:/root/.cargo/bin cargo miri setup \
         ;; \
     esac \
-    && rm -rf rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
+    && rm -rf rust.asc rust.tar.gz rust \
     && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
@@ -174,7 +179,8 @@ RUN mkdir rust \
     && `: Until https://github.com/est31/cargo-udeps/pull/147 is released in cargo-udeps` \
     && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked cargo-udeps --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
-    && cargo install --root /usr/local --version "=0.3.6" cargo-binutils
+    && cargo install --root /usr/local --version "=0.3.6" cargo-binutils \
+    && cargo install --root /usr/local --version "=0.12.1" wasm-pack
 
 # Link the system lld into the cross-compiling sysroot.
 

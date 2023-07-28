@@ -85,6 +85,22 @@ Confluent Platform, as it is a rather heavy dependency. Most Materialize
 employees, or other major contributors, will probably need to run the full test
 suite and should therefore install the Confluent Platform.
 
+
+### WebAssembly / WASM
+
+Some crates are compiled to WebAssembly and published to npm. This is
+accomplished through `wasm-pack`. Install it by running:
+
+```shell
+cargo install wasm-pack
+```
+
+WASM builds can then be initiated through
+
+```shell
+./bin/wasm-build <path/to/crate>
+```
+
 #### All platforms
 
 First, install the CLI. As of early July 2022 you can run this command on

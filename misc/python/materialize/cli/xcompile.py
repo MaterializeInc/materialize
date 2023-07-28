@@ -57,6 +57,12 @@ def main() -> int:
     tool_parser = subparsers.add_parser(
         "tool", help="run a cross-compiling binutils tool"
     )
+    tool_parser.add_argument(
+        "--name-target-prefix",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="whether the tool name should be prefixed with the target name",
+    )
     tool_parser.add_argument("tool", metavar="TOOL", help="the binutils tool to invoke")
     tool_parser.add_argument(
         "subargs", nargs=argparse.REMAINDER, help="the arguments to pass to the tool"
@@ -78,7 +84,9 @@ def main() -> int:
     elif args.command == "tool":
         spawn.runv(
             [
-                *xcompile.tool(args.arch, args.tool),
+                *xcompile.tool(
+                    args.arch, args.tool, prefix_name=args.name_target_prefix
+                ),
                 *args.subargs,
             ]
         )

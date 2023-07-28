@@ -32,6 +32,8 @@
 //! ["Lexical Structure"]: https://www.postgresql.org/docs/current/sql-syntax-lexical.html
 //! [backend/parser/scan.l]: https://github.com/postgres/postgres/blob/90851d1d26f54ccb4d7b1bc49449138113d6ec83/src/backend/parser/scan.l
 
+extern crate alloc;
+
 use std::error::Error;
 use std::{char, fmt};
 
@@ -40,6 +42,21 @@ use mz_ore::str::StrExt;
 use serde::{Deserialize, Serialize};
 
 use crate::keywords::Keyword;
+
+#[cfg(target_arch = "wasm32")]
+use lol_alloc::{FreeListAllocator, LockedAllocator};
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOCATOR: LockedAllocator<FreeListAllocator> =
+    LockedAllocator::new(FreeListAllocator::new());
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(typescript_custom_section)]
+const LEX_TS_DEF: &'static str = r#"export function lex(query: string): PosToken[];"#;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LexerError {
@@ -117,6 +134,11 @@ impl fmt::Display for Token {
     }
 }
 
+pub struct PosToken {
+    pub kind: Token,
+    pub offset: usize,
+}
+
 macro_rules! bail {
     ($pos:expr, $($fmt:expr),*) => {
         return Err(LexerError::new($pos, format!($($fmt),*)))
@@ -130,7 +152,47 @@ macro_rules! bail {
 ///
 /// See the module documentation for more information about the lexical
 /// structure of SQL.
-pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, LexerError> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn lex(query: &str) -> Result<Vec<PosToken>, LexerError> {
+    lex_inner(query)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = PosToken, getter_with_clone, inspectable)]
+#[derive(Debug)]
+pub struct JsToken {
+    pub kind: String,
+    pub offset: usize,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<PosToken> for JsToken {
+    fn from(value: PosToken) -> Self {
+        JsToken {
+            kind: value.kind.to_string(),
+            offset: value.offset,
+        }
+    }
+}
+
+/// Lexes a SQL query.
+///
+/// Returns a list of tokens alongside their corresponding byte offset in the
+/// input string. Returns an error if the SQL query is lexically invalid.
+///
+/// See the module documentation for more information about the lexical
+/// structure of SQL.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(skip_typescript)]
+pub fn lex(query: &str) -> Result<Vec<JsValue>, JsError> {
+    let lexed = lex_inner(query).map_err(|e| JsError::new(&e.message))?;
+    Ok(lexed
+        .into_iter()
+        .map(|token| JsValue::from(JsToken::from(token)))
+        .collect())
+}
+
+fn lex_inner(query: &str) -> Result<Vec<PosToken>, LexerError> {
     let buf = &mut LexBuf::new(query);
     let mut tokens = vec![];
     while let Some(ch) = buf.next() {
@@ -167,12 +229,15 @@ pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, LexerError> {
             '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => lex_op(buf)?,
             _ => bail!(pos, "unexpected character in input: {}", ch),
         };
-        tokens.push((token, pos))
+        tokens.push(PosToken {
+            kind: token,
+            offset: pos,
+        })
     }
 
     #[cfg(debug_assertions)]
-    for (_token, pos) in &tokens {
-        assert!(query.is_char_boundary(*pos));
+    for token in &tokens {
+        assert!(query.is_char_boundary(token.offset));
     }
 
     Ok(tokens)
