@@ -1106,22 +1106,23 @@ const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
 mod grpc_client {
     use super::*;
 
+    pub const CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_connect_timeout"),
+        value: &Duration::from_secs(5),
+        description: "Timeout to apply to initial gRPC client connection establishment.",
+        internal: true,
+    };
     pub const HTTP2_KEEP_ALIVE_INTERVAL: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("grpc_client_http2_keep_alive_interval"),
         value: &Duration::from_secs(3),
-        description: "WIP",
+        description: "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
         internal: true,
     };
     pub const HTTP2_KEEP_ALIVE_TIMEOUT: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("grpc_client_http2_keep_alive_timeout"),
-        value: &Duration::from_secs(3),
-        description: "WIP",
-        internal: true,
-    };
-    pub const CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
-        name: UncasedStr::new("grpc_client_connect_timeout"),
-        value: &Duration::from_secs(10),
-        description: "WIP",
+        value: &Duration::from_secs(5),
+        description:
+            "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
         internal: true,
     };
 }
@@ -1932,7 +1933,10 @@ impl SystemVars {
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
-            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS);
+            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+            .with_var(&grpc_client::CONNECT_TIMEOUT)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT);
         vars.refresh_internal_state();
         vars
     }
