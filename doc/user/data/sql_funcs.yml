@@ -812,6 +812,8 @@
     description: Returns the underlying SELECT command for the given view.
   - signature: 'pg_get_viewdef(view_oid: oid[, wrap_column: integer]) -> text'
     description: Returns the underlying SELECT command for the given view.
+  - signature: 'pg_has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
+    description: Alias for `has_role` for PostgreSQL compatibility.
   - signature: 'pg_is_in_recovery() -> bool'
     description: Returns if the a recovery is still in progress.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
@@ -897,5 +899,3 @@
         Reports whether the role with the specified role name or OID has the privilege on
         the type with the specified type name or OID. If the role is omitted then
         the `current_role` is assumed.
-    - signature: 'pg_has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
-      description: Alias for `has_role` for PostgreSQL compatibility.
