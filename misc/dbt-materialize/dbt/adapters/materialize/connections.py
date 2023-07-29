@@ -82,6 +82,32 @@ class MaterializeConnectionManager(PostgresConnectionManager):
 
         return connection
 
+    def cancel(self, connection):
+        # The PostgreSQL implementation calls `pg_terminate_backend` from a new
+        # connection to terminate `connection`. At the time of writing,
+        # Materialize doesn't support `pg_terminate_backend`, so we implement
+        # cancellation by calling `close` on the connection.
+        #
+        # NOTE(benesch): I'm not entirely sure why the PostgreSQL implementation
+        # uses `pg_terminate_backend`. I suspect that disconnecting the network
+        # connection by calling `connection.handle.close()` is not immediately
+        # noticed by the PostgreSQL server, and so the queries running on that
+        # connection may continue executing to completion. Materialize, however,
+        # will quickly notice if the network socket disconnects and cancel any
+        # queries that were initiated by that connection.
+
+        connection_name = connection.name
+        try:
+            logger.debug("Closing connection '{}' to force cancellation")
+            connection.handle.close()
+        except psycopg2.InterfaceError as exc:
+            # if the connection is already closed, not much to cancel!
+            if "already closed" in str(exc):
+                logger.debug(f"Connection {connection_name} was already closed")
+                return
+            # probably bad, re-raise it
+            raise
+
     # Disable transactions. Materialize transactions do not support arbitrary
     # queries in transactions and therefore many of dbt's internal macros
     # produce invalid transactions.

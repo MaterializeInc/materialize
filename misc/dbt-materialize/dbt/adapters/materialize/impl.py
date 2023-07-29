@@ -77,9 +77,7 @@ class MaterializeAdapter(PostgresAdapter):
 
     @classmethod
     def is_cancelable(cls) -> bool:
-        # TODO: we can support cancellation if Materialize gets support for
-        # pg_terminate_backend.
-        return False
+        return True
 
     def _link_cached_relations(self, manifest):
         # NOTE(benesch): this *should* reimplement the parent class's method
