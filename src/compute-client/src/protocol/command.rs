@@ -17,7 +17,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::client::ProtoAllowCompaction;
+use mz_storage_client::client::ProtoCompaction;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};
@@ -171,7 +171,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     ///
     /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+    AllowCompaction {
+        id: GlobalId,
+        frontier: Antichain<T>,
+    },
 
     /// `Peek` instructs the replica to perform a peek at an index.
     ///
@@ -244,9 +247,10 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         dataflows: dataflows.into_proto(),
                     })
                 }
-                ComputeCommand::AllowCompaction(collections) => {
-                    AllowCompaction(ProtoAllowCompaction {
-                        collections: collections.into_proto(),
+                ComputeCommand::AllowCompaction { id, frontier } => {
+                    AllowCompaction(ProtoCompaction {
+                        id: Some(id.into_proto()),
+                        frontier: Some(frontier.into_proto()),
                     })
                 }
                 ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
@@ -277,8 +281,11 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }
-            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(ComputeCommand::AllowCompaction(collections.into_rust()?))
+            Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
+                Ok(ComputeCommand::AllowCompaction {
+                    id: id.into_rust_if_some("ProtoAllowCompaction::id")?,
+                    frontier: frontier.into_rust_if_some("ProtoAllowCompaction::frontier")?,
+                })
             }
             Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
@@ -315,20 +322,12 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 )
                 .prop_map(ComputeCommand::CreateDataflows)
                 .boxed(),
-                proptest::collection::vec(
-                    (
-                        any::<GlobalId>(),
-                        proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
-                    ),
-                    1..4,
+                (
+                    any::<GlobalId>(),
+                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
                 )
-                .prop_map(|collections| {
-                    ComputeCommand::AllowCompaction(
-                        collections
-                            .into_iter()
-                            .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
-                            .collect(),
-                    )
+                .prop_map(|(id, times)| {
+                    ComputeCommand::AllowCompaction { id, frontier: Antichain::from(times) }
                 })
                 .boxed(),
                 any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),

@@ -172,7 +172,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(params),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
-            AllowCompaction(list) => self.handle_allow_compaction(list),
+            AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
                 peek.otel_ctx.attach_as_parent();
                 self.handle_peek(peek)
@@ -277,16 +277,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
-        for (id, frontier) in list {
-            if frontier.is_empty() {
-                // Indicates that we may drop `id`, as there are no more valid times to read.
-                self.drop_collection(id);
-            } else {
-                self.compute_state
-                    .traces
-                    .allow_compaction(id, frontier.borrow());
-            }
+    fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
+        if frontier.is_empty() {
+            // Indicates that we may drop `id`, as there are no more valid times to read.
+            self.drop_collection(id);
+        } else {
+            self.compute_state
+                .traces
+                .allow_compaction(id, frontier.borrow());
         }
     }
 

@@ -502,10 +502,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             old_dataflows.insert(export_ids, dataflow);
                         }
                     }
-                    ComputeCommand::AllowCompaction(frontiers) => {
-                        for (id, frontier) in frontiers.iter() {
-                            old_frontiers.insert(id, frontier);
-                        }
+                    ComputeCommand::AllowCompaction { id, frontier } => {
+                        old_frontiers.insert(id, frontier);
                     }
                     _ => {
                         // Nothing to do in these cases.
@@ -600,12 +598,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
             }
-            if !old_compaction.is_empty() {
-                let compactions = old_compaction
-                    .iter()
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect();
-                todo_commands.insert(0, ComputeCommand::AllowCompaction(compactions));
+            for (&id, frontier) in &old_compaction {
+                let frontier = frontier.clone();
+                todo_commands.insert(0, ComputeCommand::AllowCompaction { id, frontier });
             }
 
             // Clean up worker-local state.

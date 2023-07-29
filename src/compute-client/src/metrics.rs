@@ -366,7 +366,7 @@ impl<M> CommandMetrics<M> {
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
             CreateDataflows(_) => &self.create_dataflows,
-            AllowCompaction(_) => &self.allow_compaction,
+            AllowCompaction { .. } => &self.allow_compaction,
             Peek(_) => &self.peek,
             CancelPeeks { .. } => &self.cancel_peeks,
         }

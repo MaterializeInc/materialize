@@ -44,7 +44,7 @@ message ProtoComputeCommand {
         ProtoCreateTimely create_timely = 1;
         logging.ProtoLoggingConfig create_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
-        mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
+        mz_storage_client.client.ProtoCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;

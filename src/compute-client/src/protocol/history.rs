@@ -123,10 +123,8 @@ where
                 ComputeCommand::CreateDataflows(dataflows) => {
                     live_dataflows.extend(dataflows);
                 }
-                ComputeCommand::AllowCompaction(frontiers) => {
-                    for (id, frontier) in frontiers {
-                        final_frontiers.insert(id, frontier.clone());
-                    }
+                ComputeCommand::AllowCompaction { id, frontier } => {
+                    final_frontiers.insert(id, frontier.clone());
                 }
                 ComputeCommand::Peek(peek) => {
                     live_peeks.push(peek);
@@ -213,10 +211,8 @@ where
             });
         }
         // Allow compaction only after emmitting peek commands.
-        if !final_frontiers.is_empty() {
-            self.push_inner(ComputeCommand::AllowCompaction(
-                final_frontiers.into_iter().collect(),
-            ));
+        for (id, frontier) in final_frontiers {
+            self.push_inner(ComputeCommand::AllowCompaction { id, frontier });
         }
         if initialization_complete {
             self.push_inner(ComputeCommand::InitializationComplete);

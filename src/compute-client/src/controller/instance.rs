@@ -1013,7 +1013,6 @@ where
 
         // Translate our net compute actions into `AllowCompaction` commands
         // and a list of collections that are potentially ready to be dropped
-        let mut compaction_commands = Vec::new();
         let mut dropped_collection_ids = Vec::new();
         for (id, change) in compute_net.iter_mut() {
             let frontier = self
@@ -1026,12 +1025,9 @@ where
             }
             if !change.is_empty() {
                 let frontier = frontier.to_owned();
-                compaction_commands.push((*id, frontier));
+                self.compute
+                    .send(ComputeCommand::AllowCompaction { id: *id, frontier });
             }
-        }
-        if !compaction_commands.is_empty() {
-            self.compute
-                .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
         if !dropped_collection_ids.is_empty() {
             self.update_dropped_collections(dropped_collection_ids);
