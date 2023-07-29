@@ -461,6 +461,10 @@ mz_postgres_sources
 BASE TABLE
 materialize
 mz_internal
+mz_prepared_statement_history
+BASE TABLE
+materialize
+mz_internal
 mz_records_per_dataflow
 VIEW
 materialize
@@ -499,6 +503,10 @@ materialize
 mz_internal
 mz_scheduling_parks_histogram_raw
 SOURCE
+materialize
+mz_internal
+mz_session_history
+BASE TABLE
 materialize
 mz_internal
 mz_sessions
@@ -603,6 +611,10 @@ materialize
 mz_internal
 mz_source_statuses
 VIEW
+materialize
+mz_internal
+mz_statement_execution_history
+BASE TABLE
 materialize
 mz_internal
 mz_storage_shards

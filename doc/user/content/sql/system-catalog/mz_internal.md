@@ -198,6 +198,39 @@ system.
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 
+<!--
+### `mz_prepared_statement_history`
+
+The `mz_prepared_statement_history` table contains a subset of all
+statements that have been prepared. It only contains statements that
+have one or more corresponding executions in
+[`mz_statement_execution_history`](#mz_statement_execution_history).
+
+| Field         | Type                         | Meaning                                                                                                                           |
+|---------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `id`          | [`uuid`]                     | The globally unique ID of the prepared statement.                                                                                        |
+| `session_id`  | [`uuid`]                     | The globally unique ID of the session that prepared the statement. Corresponds to [`mz_session_history.id`](#mz_session_history). |
+| `name`        | [`text`]                     | The name of the prepared statement (the default prepared statement's name is the empty string).                                   |
+| `sql`         | [`text`]                     | The SQL text of the prepared statement.                                                                                           |
+| `prepared_at` | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                     |
+-->
+
+<!--
+### `mz_session_history`
+
+The `mz_session_history` table contains all the sessions that have
+been established in the last 30 days, or (even if older) that are
+referenced from
+[`mz_prepared_statement_history`](#mz_prepared_statement_history).
+
+| Field                | Type                         | Meaning                                                                                                                           |
+|----------------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
+| `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
+| `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
+| `authenticated_user` | [`text`]                     | The name of the user for wish the session was established.                                                                        |
+-->
+
 ### `mz_sessions`
 
 The `mz_sessions` table contains a row for each active session in the system.
@@ -543,6 +576,36 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
+
+<!--
+### `mz_statement_execution_history`
+
+The `mz_statement_execution_history` table contains a row for each
+statement executed, that the system decided to log. Entries older than
+thirty days may be removed.
+
+The system chooses to log statements randomly; the probability of
+logging an execution is controlled by the
+`statement_logging_sample_rate` session variable. A value of 0 means
+to log nothing; a value of 0.8 means to log approximately 80% of
+statement executions. If `statement_logging_sample_rate` is higher
+than `statement_logging_max_sample_rate` (which is set by Materialize
+and cannot be changed by users), the latter is used instead.
+
+| Field                   | Type                         | Meaning                                                                                                                                                                                                                                                                                                    |
+|-------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`                    | [`uuid`]                     | The ID of the execution event.                                                                                                                                                                                                                                                                             |
+| `prepared_statement_id` | [`uuid`]                     | The ID of the prepared statement being executed. Corresponds to [`mz_prepared_statement_history.id`](#mz_prepared_statement_history).                                                                                                                                                                      |
+| `sample_rate`           | [`double precision`]         | The sampling rate at the time the execution began.                                                                                                                                                                                                                                                         |
+| `params`                | [`text list`]                | The values of the prepared statement's parameters.                                                                                                                                                                                                                                                         |
+| `began_at`              | [`timestamp with time zone`] | The time at which execution began.                                                                                                                                                                                                                                                                         |
+| `finished_at`           | [`timestamp with time zone`] | The time at which execution ended.                                                                                                                                                                                                                                                                         |
+| `finished_status`       | [`text`]                     | `'success'`, `'error'`, `'canceled'`, or `'aborted'`. `'aborted'` means that the database restarted (e.g., due to a crash or planned maintenance) before the query finished.                                                                                                                               |
+| `error_message`         | [`text`]                     | The error returned when executing the statement, or `NULL` if it was successful, canceled or aborted.                                                                                                                                                                                                      |
+| `rows_returned`         | [`int8`]                     | The number of rows returned by the statement, if it finished successfully and was of a kind of statement that can return rows, or `NULL` otherwise.                                                                                                                                                        |
+| `execution_strategy`    | [`text`]                     | `'standard'`, `'fast-path'` `'constant'`, or `NULL`. `'standard'` means a dataflow was built on a cluster to compute the result. `'fast-path'` means a cluster read the result from an existing arrangement. `'constant'` means the result was computed in the serving layer, without involving a cluster. |
+-->
+
 
 ### `mz_subscriptions`
 
@@ -900,9 +963,12 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_foreign_keys -->
