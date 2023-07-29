@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Support cancelling outstanding queries when pressing Ctrl+C.
+
 ## 1.5.1 - 2023-07-24
 
 * Enable the `indexes` config for `table` materializations.
