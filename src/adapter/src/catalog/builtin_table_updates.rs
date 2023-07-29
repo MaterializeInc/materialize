@@ -25,7 +25,6 @@ use mz_ore::now::to_datetime;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-
 use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::{
     StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
@@ -55,6 +54,9 @@ use crate::catalog::builtin::{
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
+use crate::catalog::builtin::{
+    MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
+};
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
     Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -62,10 +64,6 @@ use crate::catalog::{
 };
 use crate::session::Session;
 use crate::subscribe::ActiveSubscribe;
-
-use super::builtin::{
-    MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
-};
 
 /// An update to a built-in table.
 #[derive(Debug)]
