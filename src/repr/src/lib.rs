@@ -143,11 +143,33 @@ pub mod statement_logging {
         pub began_at: EpochMillis,
     }
 
+    #[derive(Clone, Copy, Debug)]
+    pub enum StatementExecutionStrategy {
+        /// The statement was executed by spinning up a dataflow.
+        Standard,
+        /// The statement was executed by reading from an existing
+        /// arrangement.
+        FastPath,
+        /// The statement was determined to be constant by
+        /// environmentd, and not sent to a cluster.
+        Constant,
+    }
+
+    impl StatementExecutionStrategy {
+        pub fn name(&self) -> &'static str {
+            match self {
+                Self::Standard => "standard",
+                Self::FastPath => "fast-path",
+                Self::Constant => "constant",
+            }
+        }
+    }
+    
     #[derive(Clone, Debug)]
     pub enum StatementEndedExecutionReason {
         Success {
             rows_returned: Option<u64>,
-            was_fast_path: Option<bool>,
+            execution_strategy: StatementExecutionStrategy,
         },
         Canceled,
         Errored {

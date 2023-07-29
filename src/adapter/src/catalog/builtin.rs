@@ -2028,13 +2028,10 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| Bui
         )
         .with_column("began_at", ScalarType::TimestampTz.nullable(false))
         .with_column("finished_at", ScalarType::TimestampTz.nullable(true))
-        .with_column("was_successful", ScalarType::Bool.nullable(true))
-        .with_column("was_canceled", ScalarType::Bool.nullable(true))
-        // "aborted" means that envd crashed before the query finished
-        .with_column("was_aborted", ScalarType::Bool.nullable(true))
+        .with_column("finished_status", ScalarType::String.nullable(true))
         .with_column("error_message", ScalarType::String.nullable(true))
-        .with_column("rows_returned", ScalarType::UInt64.nullable(true))
-        .with_column("was_fast_path", ScalarType::Bool.nullable(true)),
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
 });
 
@@ -2044,8 +2041,8 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("connected_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("application", ScalarType::String.nullable(false))
-        .with_column("session_user", ScalarType::String.nullable(false)),
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("authenticated_user", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
 

@@ -1299,14 +1299,14 @@ impl CatalogState {
     pub fn pack_session_history_update(&self, session: &Session) -> BuiltinTableUpdate {
         let connect_dt = mz_ore::now::to_datetime(session.connect_time());
         let session_role = session.session_role_id();
-        let session_user = &self.get_role(session_role).name;
+        let authenticated_user = &self.get_role(session_role).name;
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSION_HISTORY),
             row: Row::pack_slice(&[
                 Datum::Uuid(session.uuid()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
                 Datum::String(session.application_name()),
-                Datum::String(session_user),
+                Datum::String(authenticated_user),
             ]),
             diff: 1,
         }
@@ -1467,24 +1467,22 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         self.pack_statement_execution_inner(began_record, &mut packer);
-        let (successful, aborted, canceled, error_message, rows_returned, was_fast_path) =
+        let (status, error_message, rows_returned, execution_strategy) =
             match &ended_record.reason {
                 StatementEndedExecutionReason::Success {
                     rows_returned,
-                    was_fast_path,
+                    execution_strategy,
                 } => (
-                    true,
-                    false,
-                    false,
+"success",
                     None,
-                    *rows_returned,
-                    Some(*was_fast_path),
+                    rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                    Some(execution_strategy.name()),
                 ),
-                StatementEndedExecutionReason::Canceled => (false, false, true, None, None, None),
+                StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
                 StatementEndedExecutionReason::Errored { error } => {
-                    (false, false, false, Some(error.as_str()), None, None)
+                    ("error", Some(error.as_str()), None, None)
                 }
-                StatementEndedExecutionReason::Aborted => (false, true, false, None, None, None),
+                StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
             };
         packer.extend([
             Datum::TimestampTz(
@@ -1492,12 +1490,10 @@ impl CatalogState {
                     .try_into()
                     .expect("Sane system time"),
             ),
-            successful.into(),
-            canceled.into(),
-            aborted.into(),
+            status.into(),
             error_message.into(),
             rows_returned.into(),
-            was_fast_path.into(),
+            execution_strategy.into(),
         ]);
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
