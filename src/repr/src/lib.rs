@@ -164,7 +164,7 @@ pub mod statement_logging {
             }
         }
     }
-    
+
     #[derive(Clone, Debug)]
     pub enum StatementEndedExecutionReason {
         Success {

@@ -1467,23 +1467,23 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         self.pack_statement_execution_inner(began_record, &mut packer);
-        let (status, error_message, rows_returned, execution_strategy) =
-            match &ended_record.reason {
-                StatementEndedExecutionReason::Success {
-                    rows_returned,
-                    execution_strategy,
-                } => (
-"success",
-                    None,
-                    rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                    Some(execution_strategy.name()),
-                ),
-                StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
-                StatementEndedExecutionReason::Errored { error } => {
-                    ("error", Some(error.as_str()), None, None)
-                }
-                StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
-            };
+        let (status, error_message, rows_returned, execution_strategy) = match &ended_record.reason
+        {
+            StatementEndedExecutionReason::Success {
+                rows_returned,
+                execution_strategy,
+            } => (
+                "success",
+                None,
+                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                Some(execution_strategy.name()),
+            ),
+            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
+            StatementEndedExecutionReason::Errored { error } => {
+                ("error", Some(error.as_str()), None, None)
+            }
+            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
+        };
         packer.extend([
             Datum::TimestampTz(
                 to_datetime(ended_record.ended_at)
