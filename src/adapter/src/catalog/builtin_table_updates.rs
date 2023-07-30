@@ -27,8 +27,8 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::{
-    StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementEndedExecutionRecord,
-    StatementPreparedRecord,
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementPreparedRecord,
 };
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
@@ -1294,17 +1294,24 @@ impl CatalogState {
         }
     }
 
-    pub fn pack_session_history_update(&self, session: &Session) -> BuiltinTableUpdate {
-        let connect_dt = mz_ore::now::to_datetime(session.connect_time());
-        let session_role = session.session_role_id();
-        let authenticated_user = &self.get_role(session_role).name;
+    pub fn pack_session_history_update(&self, event: &SessionHistoryEvent) -> BuiltinTableUpdate {
+        let SessionHistoryEvent {
+            id,
+            connected_at,
+            application_name,
+            authenticated_user,
+        } = event;
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSION_HISTORY),
             row: Row::pack_slice(&[
-                Datum::Uuid(session.uuid()),
-                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
-                Datum::String(session.application_name()),
-                Datum::String(authenticated_user),
+                Datum::Uuid(*id),
+                Datum::TimestampTz(
+                    mz_ore::now::to_datetime(*connected_at)
+                        .try_into()
+                        .expect("must fit"),
+                ),
+                Datum::String(&*application_name),
+                Datum::String(&*authenticated_user),
             ]),
             diff: 1,
         }
@@ -1416,11 +1423,17 @@ impl CatalogState {
             Datum::Uuid(*prepared_statement_id),
             Datum::Float64((*sample_rate).into()),
         ]);
-        packer.push_list_with(|packer| {
-            for s in params {
-                packer.push::<Datum>(s.as_ref().map(String::as_str).into());
-            }
-        });
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: params.len(),
+                }],
+                params
+                    .iter()
+                    .map(|p| Datum::from(p.as_ref().map(String::as_str))),
+            )
+            .expect("correct array dimensions");
         packer.push(Datum::TimestampTz(
             to_datetime(*began_at).try_into().expect("Sane system time"),
         ));
@@ -1474,7 +1487,7 @@ impl CatalogState {
                 "success",
                 None,
                 rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                Some(execution_strategy.name()),
+                execution_strategy.map(|es| es.name()),
             ),
             StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
             StatementEndedExecutionReason::Errored { error } => {
