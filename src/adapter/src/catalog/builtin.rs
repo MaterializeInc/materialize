@@ -2020,11 +2020,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| Bui
         .with_column("sample_rate", ScalarType::Float64.nullable(false))
         .with_column(
             "params",
-            ScalarType::List {
-                element_type: Box::new(ScalarType::String),
-                custom_id: None,
-            }
-            .nullable(false),
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
         .with_column("began_at", ScalarType::TimestampTz.nullable(false))
         .with_column("finished_at", ScalarType::TimestampTz.nullable(true))
