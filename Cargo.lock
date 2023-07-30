@@ -3441,6 +3441,7 @@ dependencies = [
  "prost",
  "qcell",
  "rand",
+ "rand_chacha",
  "rdkafka",
  "regex",
  "reqwest",

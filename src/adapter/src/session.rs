@@ -491,7 +491,6 @@ impl<T: TimestampManipulation> Session<T> {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        // TODO[btv] - This will be used by statement logging
         sql: String,
         desc: StatementDesc,
         catalog_revision: u64,

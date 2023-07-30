@@ -95,10 +95,14 @@ use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{stack, task};
+use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
+use mz_repr::statement_logging::{
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementExecutionStrategy, StatementLoggingEvent,
+};
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
@@ -115,6 +119,7 @@ use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
+use rand::SeedableRng;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -144,6 +149,8 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::{flags, AdapterNotice, TimestampProvider};
 
 pub(crate) mod dataflows;
+use self::statement_logging::StatementLoggingId;
+
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
@@ -212,16 +219,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-    // Like Command::Execute, but its context has already been allocated.
-    Execute {
-        portal_name: String,
-        ctx: ExecuteContext,
-        span: tracing::Span,
-    },
+
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
     },
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
@@ -647,10 +650,42 @@ impl PendingRead {
 /// to produce a value that will cause the coordinator to do nothing, and
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
-// Currently nothing; planned to be data related to statement logging
-// at some point in the future.
+///
+/// This struct must not be dropped if it contains non-trivial
+/// state. The only valid way to get rid of it is to pass it to the
+/// coordinator for retirement. To enforce this, we assert in the
+/// `Drop` implementation.
 #[derive(Debug, Default)]
-pub struct ExecuteContextExtra;
+pub struct ExecuteContextExtra {
+    statement_uuid: Option<StatementLoggingId>,
+}
+
+impl ExecuteContextExtra {
+    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
+        Self { statement_uuid }
+    }
+    pub fn is_trivial(&self) -> bool {
+        let Self { statement_uuid } = self;
+        statement_uuid.is_none()
+    }
+    /// Take responsibility for the contents.  This should only be
+    /// called from code that knows what to do to finish up logging
+    /// based on the inner value.
+    fn retire(mut self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = &mut self;
+        statement_uuid.take()
+    }
+}
+
+impl Drop for ExecuteContextExtra {
+    fn drop(&mut self) {
+        let Self { statement_uuid } = &*self;
+        soft_assert_or_log!(
+            statement_uuid.is_none(),
+            "execute context dropped without being properly retired."
+        )
+    }
+}
 
 /// Bundle of state related to statement execution.
 ///
@@ -736,10 +771,121 @@ impl ExecuteContext {
             session,
             extra,
         } = self;
+        let reason = if extra.is_trivial() {
+            None
+        } else {
+            Some(match &result {
+                Ok(ok) => match ok {
+                    ExecuteResponse::CopyTo { resp, .. } => match resp.as_ref() {
+                        // NB [btv]: It's not clear that this combination
+                        // can ever actually happen.
+                        ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: Some(u64::cast_from(rows.len())),
+                                execution_strategy: Some(StatementExecutionStrategy::Constant),
+                            }
+                        }
+                        ExecuteResponse::SendingRows { .. } => {
+                            panic!("SELECTs terminate on peek finalization, not here.")
+                        }
+                        ExecuteResponse::Subscribing { .. } => {
+                            panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                        }
+                        _ => panic!("Invalid COPY response type"),
+                    },
+                    ExecuteResponse::CopyFrom { .. } => {
+                        panic!("COPY FROMs terminate in the protocol layer, not here.")
+                    }
+                    ExecuteResponse::Fetch { .. } => {
+                        panic!("FETCHes terminate after a follow-up message is sent.")
+                    }
+                    ExecuteResponse::SendingRows { .. } => {
+                        panic!("SELECTs terminate on peek finalization, not here.")
+                    }
+                    ExecuteResponse::Subscribing { .. } => {
+                        panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                    }
+
+                    ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: Some(u64::cast_from(rows.len())),
+                            execution_strategy: Some(StatementExecutionStrategy::Constant),
+                        }
+                    }
+                    ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
+
+                    ExecuteResponse::AlteredDefaultPrivileges
+                    | ExecuteResponse::AlteredObject(_)
+                    | ExecuteResponse::AlteredIndexLogicalCompaction
+                    | ExecuteResponse::AlteredRole
+                    | ExecuteResponse::AlteredSystemConfiguration
+                    | ExecuteResponse::ClosedCursor
+                    | ExecuteResponse::CreatedConnection
+                    | ExecuteResponse::CreatedDatabase
+                    | ExecuteResponse::CreatedSchema
+                    | ExecuteResponse::CreatedRole
+                    | ExecuteResponse::CreatedCluster
+                    | ExecuteResponse::CreatedClusterReplica
+                    | ExecuteResponse::CreatedIndex
+                    | ExecuteResponse::CreatedSecret
+                    | ExecuteResponse::CreatedSink
+                    | ExecuteResponse::CreatedSource
+                    | ExecuteResponse::CreatedTable
+                    | ExecuteResponse::CreatedView
+                    | ExecuteResponse::CreatedViews
+                    | ExecuteResponse::CreatedWebhookSource { .. }
+                    | ExecuteResponse::CreatedMaterializedView
+                    | ExecuteResponse::CreatedType
+                    | ExecuteResponse::Deallocate { .. }
+                    | ExecuteResponse::DeclaredCursor
+                    | ExecuteResponse::Deleted(_)
+                    | ExecuteResponse::DiscardedTemp
+                    | ExecuteResponse::DiscardedAll
+                    | ExecuteResponse::DroppedObject(_)
+                    | ExecuteResponse::DroppedOwned
+                    | ExecuteResponse::EmptyQuery
+                    | ExecuteResponse::GrantedPrivilege
+                    | ExecuteResponse::GrantedRole
+                    | ExecuteResponse::Inserted(_)
+                    | ExecuteResponse::Prepare
+                    | ExecuteResponse::Raised
+                    | ExecuteResponse::ReassignOwned
+                    | ExecuteResponse::RevokedPrivilege
+                    | ExecuteResponse::RevokedRole
+                    | ExecuteResponse::SetVariable { .. }
+                    | ExecuteResponse::StartedTransaction
+                    | ExecuteResponse::TransactionCommitted { .. }
+                    | ExecuteResponse::TransactionRolledBack { .. }
+                    | ExecuteResponse::Updated(_)
+                    | ExecuteResponse::ValidatedConnection { .. } => {
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: None,
+                            execution_strategy: None,
+                        }
+                    }
+                },
+                Err(e) => StatementEndedExecutionReason::Errored {
+                    error: e.to_string(),
+                },
+            })
+        };
         tx.send(result, session);
-        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
-            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        if let Some(reason) = reason {
+            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                data: extra,
+                reason,
+            }) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         }
+    }
+
+    pub fn extra(&self) -> &ExecuteContextExtra {
+        &self.extra
+    }
+
+    pub fn extra_mut(&mut self) -> &mut ExecuteContextExtra {
+        &mut self.extra
     }
 }
 
@@ -866,6 +1012,29 @@ pub struct Coordinator {
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
+
+    /// Information about statement executions that have been logged
+    /// but not finished.
+    ///
+    /// This map needs to have enough state left over to later retract
+    /// the system table entries (so that we can update them when the
+    /// execution finished.)
+    statement_logging_executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
+
+    /// Information about sessions that have been started, but which
+    /// have not yet been logged in `mz_session_history`.
+    /// They may be logged as part of a statement being executed (and chosen for logging).
+    statement_logging_unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
+
+    /// A reproducible RNG for deciding whether to sample statement executions.
+    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
+    /// Controlled by the system var `statement_logging_use_reproducible_rng`.
+    statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng,
+
+    /// Statement logging events that have been recorded in `mz_prepared_statement_history`
+    /// or `mz_statement_execution_history` but not
+    /// durably in the stash.
+    statement_logging_pending_events: Vec<StatementLoggingEvent>,
 }
 
 impl Coordinator {
@@ -1679,6 +1848,17 @@ impl Coordinator {
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
         &self.active_conns
     }
+
+    // XXX rename this?
+    pub(crate) fn retire_peek(
+        &mut self,
+        reason: StatementEndedExecutionReason,
+        ctx_extra: ExecuteContextExtra,
+    ) {
+        if let Some(uuid) = ctx_extra.retire() {
+            self.end_statement_execution(uuid, reason);
+        }
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -1841,6 +2021,10 @@ pub async fn serve(
                 segment_client,
                 metrics,
                 tracing_handle,
+                statement_logging_executions_begun: BTreeMap::new(),
+                statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
+                statement_logging_pending_events: Vec::new(),
+                statement_logging_unlogged_sessions: BTreeMap::new(),
             };
             let bootstrap = handle.block_on(async {
                 coord

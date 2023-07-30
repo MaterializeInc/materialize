@@ -198,6 +198,297 @@ fn test_persistence() {
 }
 
 #[mz_ore::test]
+// Test that we log various kinds of statement whose execution terminates in the coordinator.
+fn test_statement_logging_immediate() {
+    let (_server, mut client) = setup_statement_logging(util::Config::default());
+    let successful_immediates: &[&str] = &[
+        "CREATE VIEW v AS SELECT 1;",
+        "CREATE DEFAULT INDEX i ON v;",
+        "CREATE TABLE t (x int);",
+        "INSERT INTO t VALUES (1), (2), (3)",
+        "UPDATE t SET x=x+1",
+        "DELETE FROM t;",
+        "CREATE SECRET s AS 'hunter2';",
+        "DROP SECRET s;",
+        "",
+        "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (size='2')",
+        "PREPARE foo AS SELECT * FROM t",
+        "EXECUTE foo",
+        "BEGIN",
+        "DECLARE c CURSOR FOR SELECT * FROM t",
+        "FETCH FORWARD ALL FROM c",
+        "COMMIT",
+        "BEGIN",
+        "ROLLBACK",
+        "SET application_name='my_application'",
+        "SHOW ALL",
+        "SHOW application_name",
+    ];
+
+    client
+        .execute("SET statement_logging_sample_rate=1.0", &[])
+        .unwrap();
+
+    for &statement in successful_immediates {
+        client.execute(statement, &[]).unwrap();
+    }
+
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+
+    let sl = client
+        .query(
+            "
+SELECT
+    mseh.sample_rate,
+    mseh.began_at,
+    mseh.finished_at,
+    mseh.was_successful,
+    mpsh.sql,
+    mpsh.prepared_at
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+ORDER BY mseh.began_at;",
+            &[],
+        )
+        .unwrap();
+    #[derive(Debug)]
+    struct Record {
+        sample_rate: f64,
+        began_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        was_successful: bool,
+        sql: String,
+        prepared_at: DateTime<Utc>,
+    }
+    assert_eq!(sl.len(), successful_immediates.len());
+    for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
+        let r = Record {
+            sample_rate: r.get(0),
+            began_at: r.get(1),
+            finished_at: r.get(2),
+            was_successful: r.get(3),
+            sql: r.get(4),
+            prepared_at: r.get(5),
+        };
+        assert_eq!(r.sample_rate, 1.0);
+        assert_eq!(
+            r.sql,
+            stmt.chars().filter(|&ch| ch != ';').collect::<String>()
+        );
+        assert!(r.was_successful);
+        assert!(r.prepared_at <= r.began_at);
+        assert!(r.began_at <= r.finished_at);
+        // NB[btv] -- It would be a bit nicer if we could separately mock
+        // both the start and end time, but the `NowFn` mechanism doesn't
+        // appear to give us any way to do that. Instead, let's just check
+        // that none of these statements took longer than 5s wall-clock time.
+        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5))
+    }
+}
+
+fn setup_statement_logging(cfg: util::Config) -> (util::Server, postgres::Client) {
+    let server = util::start_server(cfg.with_system_parameter_default(
+        "statement_logging_max_sample_rate".to_string(),
+        "1.0".to_string(),
+    ))
+    .unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .execute("SET statement_logging_sample_rate=1.0", &[])
+        .unwrap();
+    (server, client)
+}
+
+#[mz_ore::test]
+fn test_statement_logging_selects() {
+    let (_server, mut client) = setup_statement_logging(util::Config::default());
+    client.execute("SELECT 1", &[]).unwrap();
+    // We test that queries of this view execute on a cluster.
+    // If we ever change the threshold for constant folding such that
+    // this gets to run on environmentd, change this query.
+    client
+        .execute(
+            "CREATE VIEW v AS SELECT count(*) FROM generate_series(1, 10001)",
+            &[],
+        )
+        .unwrap();
+    client.execute("SELECT count(*) FROM v", &[]).unwrap();
+    client.execute("CREATE DEFAULT INDEX i ON v", &[]).unwrap();
+    client.execute("SELECT count(*) FROM v", &[]).unwrap();
+
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+
+    #[derive(Debug)]
+    struct Record {
+        sample_rate: f64,
+        began_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        was_successful: bool,
+        prepared_at: DateTime<Utc>,
+        was_fast_path: bool,
+        // rows_returned: u64,
+    }
+
+    let sl_selects = client
+        .query(
+            "SELECT
+    mseh.sample_rate,
+    mseh.began_at,
+    mseh.finished_at,
+    mseh.was_successful,
+    mpsh.prepared_at,
+    mseh.was_fast_path
+--    , mseh.rows_returned
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+WHERE mpsh.sql ~~ 'SELECT%'
+ORDER BY mseh.began_at",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| Record {
+            sample_rate: r.get(0),
+            began_at: r.get(1),
+            finished_at: r.get(2),
+            was_successful: r.get(3),
+            prepared_at: r.get(4),
+            was_fast_path: r.get(5),
+            // rows_returned: r.get(6),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sl_selects.len(), 3);
+    for r in &sl_selects {
+        assert_eq!(r.sample_rate, 1.0);
+        assert!(r.prepared_at <= r.began_at);
+        assert!(r.began_at <= r.finished_at);
+        assert!(r.was_successful);
+    }
+    assert!(sl_selects[0].was_fast_path);
+    // assert_eq!(sl_selects[0].rows_returned, 1);
+    assert!(sl_selects[1].was_fast_path);
+    // assert_eq!(sl_selects[1].rows_returned, 10002);
+    assert!(!sl_selects[2].was_fast_path);
+    // assert_eq!(sl_selects[2].rows_returned, 10002);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_subscribes() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let config = util::Config::default().data_directory(data_dir.path());
+
+    let (server, mut client) = setup_statement_logging(config.clone());
+    let cancel_token = client.cancel_token();
+
+    // This should finish
+    client
+        .execute(
+            "SUBSCRIBE TO (SELECT * FROM generate_series(1, 10001))",
+            &[],
+        )
+        .unwrap();
+
+    let handle = thread::spawn(move || {
+        client.execute("CREATE TABLE t (x int)", &[]).unwrap();
+        // This should not finish until it's canceled.
+        let _ = client.execute("SUBSCRIBE TO (SELECT * FROM t)", &[]);
+    });
+
+    while !handle.is_finished() {
+        thread::sleep(Duration::from_secs(1));
+        cancel_token.cancel_query(postgres::NoTls).unwrap();
+    }
+    handle.join().unwrap();
+
+    // let mut client = server.connect(postgres::NoTls).unwrap();
+    // client.execute("SET statement_logging_sample_rate=1.0", &[]).unwrap();
+    // let handle = thread::spawn(move || {
+    //     // This should be aborted.
+    //     let _ = client.execute("SUBSCRIBE TO (SELECT * FROM t)", &[]);
+    // });
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+    // // Drop the old server, to make the running subscribe abort.
+
+    // // Restart the server. We should pick up the aborted query on restart.
+    // let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    struct Record {
+        sample_rate: f64,
+        began_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        was_successful: bool,
+        was_canceled: bool,
+        was_aborted: bool,
+        prepared_at: DateTime<Utc>,
+        was_fast_path: Option<bool>,
+    }
+    let sl_subscribes = client
+        .query(
+            "SELECT
+    mseh.sample_rate,
+    mseh.began_at,
+    mseh.finished_at,
+    mseh.was_successful,
+    mseh.was_canceled,
+    mseh.was_aborted,
+    mpsh.prepared_at,
+    mseh.was_fast_path
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+WHERE mpsh.sql ~~ 'SUBSCRIBE%'
+ORDER BY mseh.began_at",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| Record {
+            sample_rate: r.get(0),
+            began_at: r.get(1),
+            finished_at: r.get(2),
+            was_successful: r.get(3),
+            was_canceled: r.get(4),
+            was_aborted: r.get(5),
+            prepared_at: r.get(6),
+            was_fast_path: r.get(7),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sl_subscribes.len(), // 3
+        2
+    );
+    for r in &sl_subscribes {
+        assert_eq!(r.sample_rate, 1.0);
+        assert!(r.prepared_at <= r.began_at);
+        assert!(r.began_at <= r.finished_at);
+    }
+    assert!(sl_subscribes[0].was_successful);
+    assert!(!sl_subscribes[0].was_canceled);
+    assert!(!sl_subscribes[0].was_aborted);
+    assert_eq!(sl_subscribes[0].was_fast_path, Some(false));
+    assert!(!sl_subscribes[1].was_successful);
+    assert!(sl_subscribes[1].was_canceled);
+    assert!(!sl_subscribes[1].was_aborted);
+    assert_eq!(sl_subscribes[1].was_fast_path, None);
+    // assert!(!sl_subscribes[2].was_successful);
+    // assert!(!sl_subscribes[2].was_canceled);
+    // assert!(sl_subscribes[2].was_aborted);
+    // assert_eq!(sl_subscribes[2].was_fast_path, None);
+}
+
+#[mz_ore::test]
 fn test_statement_logging_unsampled_metrics() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
