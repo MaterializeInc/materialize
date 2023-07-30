@@ -47,7 +47,7 @@ impl StatementExecutionStrategy {
 pub enum StatementEndedExecutionReason {
     Success {
         rows_returned: Option<u64>,
-        execution_strategy: StatementExecutionStrategy,
+        execution_strategy: Option<StatementExecutionStrategy>,
     },
     Canceled,
     Errored {
@@ -79,4 +79,13 @@ pub enum StatementLoggingEvent {
     Prepared(StatementPreparedRecord),
     BeganExecution(StatementBeganExecutionRecord),
     EndedExecution(StatementEndedExecutionRecord),
+    BeganSession(SessionHistoryEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionHistoryEvent {
+    pub id: Uuid,
+    pub connected_at: EpochMillis,
+    pub application_name: String,
+    pub authenticated_user: String,
 }

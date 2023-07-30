@@ -1225,7 +1225,7 @@ impl QueryWhen {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum MutationKind {
     Insert,
     Update,

@@ -161,7 +161,8 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }
         | Command::AppendWebhook { .. }
-        | Command::Terminate { .. } => Ok(()),
+        | Command::Terminate { .. }
+        | Command::RetireExecute { .. } => Ok(()),
     }
 }
 

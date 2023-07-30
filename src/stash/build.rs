@@ -213,6 +213,9 @@ fn main() -> anyhow::Result<()> {
         // We derive Arbitrary for all protobuf types for wire compatibility testing.
         .message_attribute(".", ARBITRARY_ATTR)
         .enum_attribute(".", ARBITRARY_ATTR)
+        .enum_attribute("StatementLoggingEvent.value", ATTR)
+        .enum_attribute("StatementEndedExecution.reason", ATTR)
+        .enum_attribute("Param.param", ATTR)
         .compile_protos(
             &paths,
             &[ /*

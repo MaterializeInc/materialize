@@ -32,6 +32,7 @@ use crate::catalog::storage::{
     STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
+use crate::coord::statement_logging::STATEMENT_LOGGING_EVENTS_COLLECTION;
 use crate::rbac;
 
 /// The key used within the "config" collection where we store the deploy generation.
@@ -808,6 +809,9 @@ pub async fn initialize(
         .initialize(tx, vec![])
         .await?;
     STORAGE_USAGE_COLLECTION.initialize(tx, vec![]).await?;
+    STATEMENT_LOGGING_EVENTS_COLLECTION
+        .initialize(tx, vec![])
+        .await?;
 
     // Set our initial version.
     CONFIG_COLLECTION

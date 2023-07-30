@@ -10,3 +10,4 @@ rustflags = ["-C", "link-arg=-Wl,--compress-debug-sections=zlib-gabi", "-Csymbol
 [build]
 # Always reserve at least one core so Cargo doesn't pin our CPU
 jobs = -1
+

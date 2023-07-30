@@ -30,6 +30,7 @@ pub struct Metrics {
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
+    pub statement_logging_actual_bytes: IntCounterVec,
 }
 
 impl Metrics {
@@ -101,6 +102,10 @@ impl Metrics {
                 name: "mz_statement_logging_unsampled_bytes",
                 help: "The total amount of SQL text that would have been logged if statement logging were unsampled.",
             )),
+            statement_logging_actual_bytes: registry.register(metric!(
+                name: "mz_statement_logging_actual_bytes",
+                help: "The total amount of SQL text that was logged by statement logging.",
+            ))
         }
     }
 }

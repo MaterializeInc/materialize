@@ -33,7 +33,7 @@ use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionStatus};
-use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::util::ClientTransmitter;
 use crate::{rbac, ExecuteContext};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
@@ -268,7 +268,7 @@ impl Coordinator {
             }
             Plan::Subscribe(plan) => {
                 let result = self
-                    .sequence_subscribe(ctx.session_mut(), plan, target_cluster)
+                    .sequence_subscribe(&mut ctx, plan, target_cluster)
                     .await;
                 ctx.retire(result);
             }
@@ -276,7 +276,7 @@ impl Coordinator {
                 ctx.retire(self.sequence_side_effecting_func(plan));
             }
             Plan::ShowCreate(plan) => {
-                ctx.retire(Ok(send_immediate_rows(vec![plan.row])));
+                ctx.retire(Ok(Self::send_immediate_rows(vec![plan.row])));
             }
             Plan::CopyFrom(plan) => {
                 let (tx, _, session, ctx_extra) = ctx.into_parts();
@@ -405,10 +405,12 @@ impl Coordinator {
                 count,
                 timeout,
             }) => {
+                let ctx_extra = std::mem::take(ctx.extra_mut());
                 ctx.retire(Ok(ExecuteResponse::Fetch {
                     name,
                     count,
                     timeout,
+                    ctx_extra,
                 }));
             }
             Plan::Close(plan) => {
@@ -440,12 +442,15 @@ impl Coordinator {
             Plan::Execute(plan) => {
                 match self.sequence_execute(ctx.session_mut(), plan) {
                     Ok(portal_name) => {
+                        let (tx, _, session, extra) = ctx.into_parts();
                         self.internal_cmd_tx
-                            .send(Message::Execute {
+                            .send(Message::Command(Command::Execute {
                                 portal_name,
-                                ctx,
+                                session,
+                                tx: tx.take(),
+                                outer_ctx_extra: Some(extra),
                                 span: tracing::Span::none(),
-                            })
+                            }))
                             .expect("sending to self.internal_cmd_tx cannot fail");
                     }
                     Err(err) => ctx.retire(Err(err)),
@@ -593,7 +598,7 @@ impl Coordinator {
 
     pub(crate) fn sequence_explain_timestamp_finish(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
@@ -601,7 +606,7 @@ impl Coordinator {
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.sequence_explain_timestamp_finish_inner(
-            session,
+            ctx.session_mut(),
             format,
             cluster_id,
             optimized_plan,

@@ -56,6 +56,7 @@ proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 qcell = "0.5"
 rand = "0.8.5"
+rand_chacha = "0.3"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.7.0"
 reqwest = "0.11.13"
