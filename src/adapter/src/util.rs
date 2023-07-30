@@ -14,7 +14,7 @@ use mz_compute_client::controller::error::{
 };
 use mz_controller::clusters::ClusterId;
 use mz_ore::{halt, soft_assert};
-use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::vars::Var;
@@ -33,7 +33,7 @@ use crate::command::{Command, Response};
 use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::{ExecuteContext, ExecuteResponse, PeekResponseUnary};
+use crate::{ExecuteContext, ExecuteResponse};
 
 /// Handles responding to clients.
 #[derive(Debug)]
@@ -45,7 +45,7 @@ pub struct ClientTransmitter<T: Transmittable> {
     allowed: Option<Vec<T::Allowed>>,
 }
 
-impl<T: Transmittable> ClientTransmitter<T> {
+impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// Creates a new client transmitter.
     pub fn new(
         tx: oneshot::Sender<Response<T>>,
@@ -71,7 +71,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
                 (Ok(ref t), Some(allowed)) => allowed.contains(&t.to_allowed()),
                 _ => true,
             },
-            "tried to send disallowed value through ClientTransmitter; \
+            "tried to send disallowed value {result:?} through ClientTransmitter; \
             see ClientTransmitter::set_allowed"
         );
 
@@ -175,16 +175,6 @@ impl<T: Transmittable> Drop for ClientTransmitter<T> {
         if self.tx.is_some() {
             panic!("client transmitter dropped without send")
         }
-    }
-}
-
-/// Constructs an [`ExecuteResponse`] that that will send some rows to the
-/// client immediately, as opposed to asking the dataflow layer to send along
-/// the rows after some computation.
-pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows {
-        future: Box::pin(async { PeekResponseUnary::Rows(rows) }),
-        span: tracing::Span::none(),
     }
 }
 

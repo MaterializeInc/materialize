@@ -58,6 +58,8 @@ server_version                      9.5.0                   "Shows the PostgreSQ
 server_version_num                  90500                   "Shows the PostgreSQL compatible server version as an integer (PostgreSQL)."
 sql_safe_updates                    off                     "Prohibits SQL statements that may be overly destructive (CockroachDB)."
 standard_conforming_strings         on                      "Causes '...' strings to treat backslashes literally (PostgreSQL)."
+statement_logging_max_sample_rate   0                       "The maximum rate at which statements may be logged. If this value is less than that of `statement_logging_sample_rate`, the latter is ignored (Materialize)."
+statement_logging_sample_rate       0                       "User-facing session variable indicating how many statement executions should be logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize)."
 statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
