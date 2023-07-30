@@ -188,7 +188,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON TABLES TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -198,7 +198,7 @@ materialize  NULL  NULL  table  r1      r
 materialize  NULL  NULL  table  r2      r
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TABLES TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL PRIVILEGES ON TABLES TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -209,7 +209,7 @@ materialize  NULL  NULL  table  r2      r
 materialize  NULL  NULL  table  r3      arwd
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT INSERT ON TABLES TO r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 GRANT INSERT ON TABLES TO r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -222,7 +222,7 @@ materialize  d1    NULL  table  r4      a
 materialize  d2    NULL  table  r4      a
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT DELETE ON TABLES TO r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 GRANT DELETE ON TABLES TO r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -294,7 +294,7 @@ materialize  d1    s1    table  r5      d
 materialize  d2    s2    table  r5      d
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT UPDATE ON TABLES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT UPDATE ON TABLES TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -316,7 +316,7 @@ materialize  d1    s1    table  r5      d
 materialize  d2    s2    table  r5      d
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT INSERT ON TABLES TO r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1123,7 +1123,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE SELECT ON TABLES FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1144,7 +1144,7 @@ materialize  d1    s1    table  r5      d
 materialize  d2    s2    table  r5      d
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON TABLES FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL PRIVILEGES ON TABLES FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1164,7 +1164,7 @@ materialize  d1    s1    table  r5      d
 materialize  d2    s2    table  r5      d
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE INSERT ON TABLES FROM r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 REVOKE INSERT ON TABLES FROM r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1182,7 +1182,7 @@ materialize  d1    s1    table  r5      d
 materialize  d2    s2    table  r5      d
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE DELETE ON TABLES FROM r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 REVOKE DELETE ON TABLES FROM r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1234,7 +1234,7 @@ materialize  NULL  NULL  table  r1      a
 materialize  NULL  NULL  table  PUBLIC  w
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE UPDATE ON TABLES FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE UPDATE ON TABLES FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1243,7 +1243,7 @@ PUBLIC       NULL  NULL  type   PUBLIC  U
 materialize  NULL  NULL  table  r1      a
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE INSERT ON TABLES FROM r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE INSERT ON TABLES FROM r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1955,7 +1955,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON TYPES TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON TYPES TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1965,7 +1965,7 @@ materialize  NULL  NULL  type  r1      U
 materialize  NULL  NULL  type  r2      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TYPES TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL PRIVILEGES ON TYPES TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1976,7 +1976,7 @@ materialize  NULL  NULL  type  r2      U
 materialize  NULL  NULL  type  r3      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT USAGE ON TYPES TO r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 GRANT USAGE ON TYPES TO r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -1989,7 +1989,7 @@ materialize  d1    NULL  type  r4      U
 materialize  d2    NULL  type  r4      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON TYPES TO r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON TYPES TO r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2061,7 +2061,7 @@ materialize  d1    s1    type  r5      U
 materialize  d2    s2    type  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON TYPES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON TYPES TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2300,7 +2300,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON TYPES FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2320,7 +2320,7 @@ materialize  d1    s1    type  r5      U
 materialize  d2    s2    type  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON TYPES FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL PRIVILEGES ON TYPES FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2339,7 +2339,7 @@ materialize  d1    s1    type  r5      U
 materialize  d2    s2    type  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE USAGE ON TYPES FROM r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 REVOKE USAGE ON TYPES FROM r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2356,7 +2356,7 @@ materialize  d1    s1    type  r5      U
 materialize  d2    s2    type  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON TYPES FROM r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON TYPES FROM r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2404,7 +2404,7 @@ PUBLIC       NULL  NULL  type  PUBLIC  U
 materialize  NULL  NULL  type  PUBLIC  U
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON TYPES FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2604,7 +2604,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON SECRETS TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON SECRETS TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2614,7 +2614,7 @@ materialize  NULL  NULL  secret  r1      U
 materialize  NULL  NULL  secret  r2      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SECRETS TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL PRIVILEGES ON SECRETS TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2625,7 +2625,7 @@ materialize  NULL  NULL  secret  r2      U
 materialize  NULL  NULL  secret  r3      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT USAGE ON SECRETS TO r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 GRANT USAGE ON SECRETS TO r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2638,7 +2638,7 @@ materialize  d1    NULL  secret  r4      U
 materialize  d2    NULL  secret  r4      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON SECRETS TO r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON SECRETS TO r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2710,7 +2710,7 @@ materialize  d1    s1    secret  r5      U
 materialize  d2    s2    secret  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON SECRETS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON SECRETS TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2941,7 +2941,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SECRETS FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON SECRETS FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2961,7 +2961,7 @@ materialize  d1    s1    secret  r5      U
 materialize  d2    s2    secret  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON SECRETS FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL PRIVILEGES ON SECRETS FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2980,7 +2980,7 @@ materialize  d1    s1    secret  r5      U
 materialize  d2    s2    secret  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE USAGE ON SECRETS FROM r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 REVOKE USAGE ON SECRETS FROM r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -2997,7 +2997,7 @@ materialize  d1    s1    secret  r5      U
 materialize  d2    s2    secret  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON SECRETS FROM r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON SECRETS FROM r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3045,7 +3045,7 @@ PUBLIC       NULL  NULL  type    PUBLIC  U
 materialize  NULL  NULL  secret  PUBLIC  U
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SECRETS FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON SECRETS FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3232,7 +3232,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON CONNECTIONS TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON CONNECTIONS TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3242,7 +3242,7 @@ materialize  NULL  NULL  connection  r1      U
 materialize  NULL  NULL  connection  r2      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON CONNECTIONS TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL PRIVILEGES ON CONNECTIONS TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3253,7 +3253,7 @@ materialize  NULL  NULL  connection  r2      U
 materialize  NULL  NULL  connection  r3      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT USAGE ON CONNECTIONS TO r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 GRANT USAGE ON CONNECTIONS TO r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3266,7 +3266,7 @@ materialize  d1    NULL  connection  r4      U
 materialize  d2    NULL  connection  r4      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON CONNECTIONS TO r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 GRANT USAGE ON CONNECTIONS TO r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3338,7 +3338,7 @@ materialize  d1    s1    connection  r5      U
 materialize  d2    s2    connection  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON CONNECTIONS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON CONNECTIONS TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3569,7 +3569,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CONNECTIONS FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3589,7 +3589,7 @@ materialize  d1    s1    connection  r5      U
 materialize  d2    s2    connection  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL PRIVILEGES ON CONNECTIONS FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL PRIVILEGES ON CONNECTIONS FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3608,7 +3608,7 @@ materialize  d1    s1    connection  r5      U
 materialize  d2    s2    connection  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE USAGE ON CONNECTIONS FROM r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 REVOKE USAGE ON CONNECTIONS FROM r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3625,7 +3625,7 @@ materialize  d1    s1    connection  r5      U
 materialize  d2    s2    connection  r5      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON CONNECTIONS FROM r5
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA d1.s1, d2.s2 REVOKE USAGE ON CONNECTIONS FROM r5
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3673,7 +3673,7 @@ PUBLIC       NULL  NULL  type        PUBLIC  U
 materialize  NULL  NULL  connection  PUBLIC  U
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CONNECTIONS FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3860,7 +3860,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON SCHEMAS TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3870,7 +3870,7 @@ materialize  NULL  NULL  schema  r1      U
 materialize  NULL  NULL  schema  r2      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL ON SCHEMAS TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3881,7 +3881,7 @@ materialize  NULL  NULL  schema  r2      U
 materialize  NULL  NULL  schema  r3      UC
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 GRANT CREATE ON SCHEMAS TO r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 GRANT CREATE ON SCHEMAS TO r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3926,7 +3926,7 @@ materialize  d1    NULL  schema  r4      C
 materialize  d2    NULL  schema  r4      C
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON SCHEMAS TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -3944,7 +3944,7 @@ materialize  d2    NULL  schema  r4      C
 materialize  NULL  NULL  schema  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON SCHEMAS TO r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4082,7 +4082,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SCHEMAS FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON SCHEMAS FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4099,7 +4099,7 @@ materialize  d2    NULL  schema  r4      C
 materialize  NULL  NULL  schema  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON SCHEMAS FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4115,7 +4115,7 @@ materialize  d2    NULL  schema  r4      C
 materialize  NULL  NULL  schema  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d1, d2 REVOKE CREATE ON SCHEMAS FROM r4
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 REVOKE CREATE ON SCHEMAS FROM r4
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4151,7 +4151,7 @@ materialize  NULL  NULL  schema  r1      C
 materialize  NULL  NULL  schema  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON SCHEMAS FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4160,7 +4160,7 @@ PUBLIC       NULL  NULL  type    PUBLIC  U
 materialize  NULL  NULL  schema  r1      C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON SCHEMAS FROM r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4272,7 +4272,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON DATABASES TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON DATABASES TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4282,7 +4282,7 @@ materialize  NULL  NULL  database  r1      U
 materialize  NULL  NULL  database  r2      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL ON DATABASES TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL ON DATABASES TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4306,7 +4306,7 @@ materialize  NULL  NULL  database  r2      U
 materialize  NULL  NULL  database  r3      UC
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT CREATE ON DATABASES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON DATABASES TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4320,7 +4320,7 @@ materialize  NULL  NULL  database  r3      UC
 materialize  NULL  NULL  database  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT CREATE ON DATABASES TO r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON DATABASES TO r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4402,7 +4402,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON DATABASES FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON DATABASES FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4415,7 +4415,7 @@ materialize  NULL  NULL  database  r3      UC
 materialize  NULL  NULL  database  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL ON DATABASES FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON DATABASES FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4437,7 +4437,7 @@ materialize  NULL  NULL  database  r1      C
 materialize  NULL  NULL  database  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE CREATE ON DATABASES FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON DATABASES FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4446,7 +4446,7 @@ PUBLIC       NULL  NULL  type      PUBLIC  U
 materialize  NULL  NULL  database  r1      C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE CREATE ON DATABASES FROM r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON DATABASES FROM r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4518,7 +4518,7 @@ COMPLETE 0
 ### Grants
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON CLUSTERS TO r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON CLUSTERS TO r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4528,7 +4528,7 @@ materialize  NULL  NULL  cluster  r1      U
 materialize  NULL  NULL  cluster  r2      U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT ALL ON CLUSTERS TO r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL ON CLUSTERS TO r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4552,7 +4552,7 @@ materialize  NULL  NULL  cluster  r2      U
 materialize  NULL  NULL  cluster  r3      UC
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT CREATE ON CLUSTERS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON CLUSTERS TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4566,7 +4566,7 @@ materialize  NULL  NULL  cluster  r3      UC
 materialize  NULL  NULL  cluster  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT CREATE ON CLUSTERS TO r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON CLUSTERS TO r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4648,7 +4648,7 @@ COMPLETE 0
 ### Revokes
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CLUSTERS FROM r1, r2
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CLUSTERS FROM r1, r2
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4661,7 +4661,7 @@ materialize  NULL  NULL  cluster  r3      UC
 materialize  NULL  NULL  cluster  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE ALL ON CLUSTERS FROM r3
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON CLUSTERS FROM r3
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4683,7 +4683,7 @@ materialize  NULL  NULL  cluster  r1      C
 materialize  NULL  NULL  cluster  PUBLIC  C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE CREATE ON CLUSTERS FROM PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON CLUSTERS FROM PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4692,7 +4692,7 @@ PUBLIC       NULL  NULL  type     PUBLIC  U
 materialize  NULL  NULL  cluster  r1      C
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE CREATE ON CLUSTERS FROM r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON CLUSTERS FROM r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -4867,7 +4867,7 @@ statement ok
 CREATE ROLE r1
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON CONNECTIONS TO r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON CONNECTIONS TO r1
 
 simple conn=materialize,user=materialize
 DROP ROLE r1
@@ -4876,7 +4876,7 @@ db error: ERROR: role "r1" cannot be dropped because some objects depend on it
 DETAIL: r1: default privileges on CONNECTIONS granted to r1
 
 statement ok
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CONNECTIONS FROM r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CONNECTIONS FROM r1
 
 statement ok
 DROP ROLE r1
@@ -5035,7 +5035,7 @@ SELECT * FROM default_privileges
 PUBLIC  NULL  NULL  type   PUBLIC  U
 
 statement ok
-ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO r1
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON TABLES TO r1
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -5057,49 +5057,49 @@ DROP ROLE r1
 # Test error scenarios
 
 statement error For object type VIEW, you must specify 'TABLE' or omit the object type
-ALTER DEFAULT PRIVILEGES GRANT SELECT ON VIEWS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON VIEWS TO PUBLIC
 
 statement error For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
-ALTER DEFAULT PRIVILEGES GRANT SELECT ON MATERIALIZED VIEWS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON MATERIALIZED VIEWS TO PUBLIC
 
 statement error For object type SOURCE, you must specify 'TABLE' or omit the object type
-ALTER DEFAULT PRIVILEGES GRANT SELECT ON SOURCES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON SOURCES TO PUBLIC
 
 statement error Unsupported GRANT on SINK
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON SINKS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON SINKS TO PUBLIC
 
 statement error Unsupported GRANT on CLUSTER REPLICA
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON CLUSTER REPLICAS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON CLUSTER REPLICAS TO PUBLIC
 
 statement error Unsupported GRANT on ROLE
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON ROLES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON ROLES TO PUBLIC
 
 statement error Unsupported GRANT on INDEX
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON INDEXES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON INDEXES TO PUBLIC
 
 statement error Expected one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON FUNCTIONS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON FUNCTIONS TO PUBLIC
 
 statement error cannot specify CLUSTERS and IN DATABASE
-ALTER DEFAULT PRIVILEGES IN DATABASE materialize GRANT USAGE ON CLUSTERS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE materialize GRANT USAGE ON CLUSTERS TO PUBLIC
 
 statement error cannot specify DATABASES and IN DATABASE
-ALTER DEFAULT PRIVILEGES IN DATABASE materialize GRANT USAGE ON DATABASES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE materialize GRANT USAGE ON DATABASES TO PUBLIC
 
 statement error cannot specify CLUSTERS and IN SCHEMA
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON CLUSTERS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA public GRANT USAGE ON CLUSTERS TO PUBLIC
 
 statement error cannot specify DATABASES and IN SCHEMA
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON DATABASES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA public GRANT USAGE ON DATABASES TO PUBLIC
 
 statement error cannot specify SCHEMAS and IN SCHEMA
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SCHEMAS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA public GRANT USAGE ON SCHEMAS TO PUBLIC
 
 statement error invalid privilege types INSERT for TYPE
-ALTER DEFAULT PRIVILEGES GRANT INSERT ON TYPES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT INSERT ON TYPES TO PUBLIC
 
 statement error invalid privilege types DELETE for CLUSTER
-ALTER DEFAULT PRIVILEGES GRANT DELETE ON CLUSTERS TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT DELETE ON CLUSTERS TO PUBLIC
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE mz_introspection GRANT SELECT ON TABLES TO PUBLIC
@@ -5108,13 +5108,13 @@ db error: ERROR: role name "mz_introspection" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
 
 statement error system schema 'mz_catalog' cannot be modified
-ALTER DEFAULT PRIVILEGES IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
 
 statement error role name "mz_system" is reserved
-ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT INSERT ON TABLES TO mz_system
 
 statement error role name "mz_introspection" is reserved
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON CLUSTERS FROM mz_introspection
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CLUSTERS FROM mz_introspection
 
 # Test that we don't retain dangling pointers in default privileges
 
@@ -5122,7 +5122,7 @@ statement ok
 CREATE DATABASE d
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN DATABASE d GRANT SELECT ON TABLES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d GRANT SELECT ON TABLES TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges
@@ -5142,7 +5142,7 @@ statement ok
 CREATE SCHEMA s
 
 statement ok
-ALTER DEFAULT PRIVILEGES IN SCHEMA s GRANT SELECT ON TABLES TO PUBLIC
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA s GRANT SELECT ON TABLES TO PUBLIC
 
 query TTTTTT
 SELECT * FROM default_privileges

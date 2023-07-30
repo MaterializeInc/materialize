@@ -44,7 +44,7 @@ class DefaultPrivileges(Check):
                 """
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
-                > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role1;
+                > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role1;
                 > CREATE ROLE defpriv_role2
                 >[version<5900] ALTER ROLE defpriv_role2 CREATEDB CREATECLUSTER
 
@@ -56,7 +56,7 @@ class DefaultPrivileges(Check):
                 """
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
-                > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role2;
+                > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role2;
                 > CREATE ROLE defpriv_role3
                 >[version<5900] ALTER ROLE defpriv_role3 CREATEDB CREATECLUSTER
 
@@ -74,7 +74,7 @@ class DefaultPrivileges(Check):
                 """
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
-                > ALTER DEFAULT PRIVILEGES IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role3;
+                > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role3;
                 > SELECT
                     (CASE defaults.role_id WHEN 'p' THEN 'PUBLIC' ELSE roles.name END) AS role_name,
                     databases.name AS database_name,
