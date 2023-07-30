@@ -11,12 +11,13 @@ import os
 import subprocess
 import time
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
+from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
@@ -50,35 +51,20 @@ class MaterializeApplication(Application):
         self.aws_region = aws_region
 
         # Register the VpcEndpoint CRD.
-        self.kubectl(
-            "apply",
-            "-f",
-            os.path.join(
-                os.path.abspath(ROOT),
-                "src/cloud-resources/src/crd/gen/vpcendpoints.json",
-            ),
-        )
+        self.register_vpc_endpoint()
 
-        # Start metrics-server.
-        self.kubectl(
-            "apply",
-            "-f",
-            "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
-        )
+        self.start_metrics_server()
 
-        self.kubectl(
-            "patch",
-            "deployment",
-            "metrics-server",
-            "--namespace",
-            "kube-system",
-            "--type",
-            "json",
-            "-p",
-            '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
-        )
+        self.resources = self.collect_resources(release_mode, log_filter, tag)
+        self.images = self.collect_images()
 
-        self.resources = [
+        super().__init__()
+        super().create()
+
+    def collect_resources(
+        self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
+    ) -> List[K8sResource]:
+        return [
             *COCKROACH_RESOURCES,
             *POSTGRES_RESOURCES,
             *REDPANDA_RESOURCES,
@@ -99,13 +85,42 @@ class MaterializeApplication(Application):
             self.testdrive,
         ]
 
-        self.images = ["environmentd", "clusterd", "testdrive", "postgres"]
+    def collect_images(self) -> List[str]:
+        return ["environmentd", "clusterd", "testdrive", "postgres"]
 
-        super().__init__()
-        super().create()
+    def register_vpc_endpoint(self) -> None:
+        self.kubectl(
+            "apply",
+            "-f",
+            os.path.join(
+                os.path.abspath(ROOT),
+                "src/cloud-resources/src/crd/gen/vpcendpoints.json",
+            ),
+        )
+
+    def start_metrics_server(self) -> None:
+        self.kubectl(
+            "apply",
+            "-f",
+            "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
+        )
+        self.kubectl(
+            "patch",
+            "deployment",
+            "metrics-server",
+            "--namespace",
+            "kube-system",
+            "--type",
+            "json",
+            "-p",
+            '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
+        )
 
     def create(self) -> None:
         super().create()
+        self.wait_create_completed()
+
+    def wait_create_completed(self) -> None:
         wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
     def acquire_images(self) -> None:
@@ -113,18 +128,21 @@ class MaterializeApplication(Application):
             ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
         )
         for image in self.images:
-            deps = repo.resolve_dependencies([repo.images[image]])
-            deps.acquire()
-            for dep in deps:
-                subprocess.check_call(
-                    [
-                        "kind",
-                        "load",
-                        "docker-image",
-                        f"--name={self.cluster_name()}",
-                        dep.spec(),
-                    ]
-                )
+            self._acquire_image(repo, image)
+
+    def _acquire_image(self, repo: mzbuild.Repository, image: str) -> None:
+        deps = repo.resolve_dependencies([repo.images[image]])
+        deps.acquire()
+        for dep in deps:
+            subprocess.check_call(
+                [
+                    "kind",
+                    "load",
+                    "docker-image",
+                    f"--name={self.cluster_name()}",
+                    dep.spec(),
+                ]
+            )
 
     def wait_replicas(self) -> None:
         # NOTE[btv] - This will need to change if the order of
