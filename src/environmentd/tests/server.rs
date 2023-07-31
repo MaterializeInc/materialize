@@ -197,15 +197,28 @@ fn test_persistence() {
     );
 }
 
-fn setup_statement_logging() -> (util::Server, postgres::Client) {
-    let server = util::start_server(util::Config::default().with_system_parameter_default(
-        "statement_logging_max_sample_rate".to_string(),
-        "1.0".to_string(),
-    ))
+fn setup_statement_logging(
+    max_sample_rate: f64,
+    sample_rate: f64,
+) -> (util::Server, postgres::Client) {
+    let server = util::start_server(
+        util::Config::default()
+            .with_system_parameter_default(
+                "statement_logging_max_sample_rate".to_string(),
+                max_sample_rate.to_string(),
+            )
+            .with_system_parameter_default(
+                "statement_logging_use_reproducible_rng".to_string(),
+                "true".to_string(),
+            ),
+    )
     .unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .execute("SET statement_logging_sample_rate=1.0", &[])
+        .execute(
+            &format!("SET statement_logging_sample_rate={sample_rate}"),
+            &[],
+        )
         .unwrap();
     (server, client)
 }
@@ -213,7 +226,7 @@ fn setup_statement_logging() -> (util::Server, postgres::Client) {
 #[mz_ore::test]
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 fn test_statement_logging_immediate() {
-    let (_server, mut client) = setup_statement_logging();
+    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
@@ -301,7 +314,7 @@ ORDER BY mseh.began_at;",
 
 #[mz_ore::test]
 fn test_statement_logging_selects() {
-    let (_server, mut client) = setup_statement_logging();
+    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
     client.execute("SELECT 1", &[]).unwrap();
     // We test that queries of this view execute on a cluster.
     // If we ever change the threshold for constant folding such that
@@ -400,7 +413,7 @@ ORDER BY mseh.began_at",
 
 #[mz_ore::test]
 fn test_statement_logging_subscribes() {
-    let (server, mut client) = setup_statement_logging();
+    let (server, mut client) = setup_statement_logging(1.0, 1.0);
     let cancel_token = client.cancel_token();
 
     // This should finish
@@ -476,6 +489,59 @@ ORDER BY mseh.began_at",
     }
     assert_eq!(sl_subscribes[0].finished_status, "success");
     assert_eq!(sl_subscribes[1].finished_status, "canceled");
+}
+
+/// Test that we are sampling approximately 50% of statements.
+/// Relies on two assumptions:
+/// (1) that the effective sampling rate for the session is 50%,
+/// (2) that we are using the deterministic testing RNG.
+fn test_statement_logging_sampling_inner(mut client: postgres::Client) {
+    for i in 0..50 {
+        client.execute(&format!("SELECT {i}"), &[]).unwrap();
+    }
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+    client
+        .execute("SET statement_logging_sample_rate=0", &[])
+        .unwrap();
+    let sqls: Vec<String> = client
+        .query(
+            "SELECT mpsh.sql
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+WHERE mpsh.sql ~~ 'SELECT%'
+ORDER BY mseh.began_at ASC;",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| r.get(0))
+        .collect();
+    // 22 randomly sampled out of 50 with 50% sampling. Seems legit!
+    let expected_sqls = [
+        1, 3, 4, 5, 8, 14, 16, 17, 18, 19, 20, 22, 23, 24, 30, 31, 32, 35, 36, 41, 45, 49,
+    ]
+    .into_iter()
+    .map(|i| format!("SELECT {i}"))
+    .collect::<Vec<_>>();
+    assert_eq!(sqls, expected_sqls);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_sampling() {
+    let (_server, client) = setup_statement_logging(1.0, 0.5);
+    test_statement_logging_sampling_inner(client);
+}
+
+/// Test that we are not allowed to set `statement_logging_sample_rate`
+/// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
+#[mz_ore::test]
+fn test_statement_logging_sampling_constrained() {
+    let (_server, client) = setup_statement_logging(0.5, 1.0);
+    test_statement_logging_sampling_inner(client);
 }
 
 #[mz_ore::test]
