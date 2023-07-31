@@ -10,15 +10,14 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_webhook_sources = true
 
-> CREATE SECRET IF NOT EXISTS webhook_shared_secret AS 'shared_key'
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
 > CREATE SOURCE my_webhook_source IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADERS
   CHECK (
-    WITH(HEADERS, BODY, SECRET webhook_shared_secret)
-    decode(headers->'x-signature', 'base64') = hmac(body, webhook_secret, 'sha256')
+    WITH(HEADERS, BODY, SECRET secret1)
+    decode(headers->'x-signature', 'base64') = hmac(body, secret1, 'sha256')
   )
 
 $ webhook-append name=my_webhook_source x-signature=VNCe6bTKrlFO46GfiUYR/xFpeZ2H/KbLfR9oJKYAwkc=
