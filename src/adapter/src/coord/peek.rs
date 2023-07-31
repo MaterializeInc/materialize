@@ -359,7 +359,7 @@ impl crate::coord::Coordinator {
                     StatementEndedExecutionReason::Errored { error },
                 ),
             };
-            self.retire_peek(reason, std::mem::take(ctx_extra));
+            self.retire_execution(reason, std::mem::take(ctx_extra));
             return ret;
         }
 
@@ -536,7 +536,7 @@ impl crate::coord::Coordinator {
                 .collect::<Vec<_>>();
             for peek in &mut ret {
                 let ctx_extra = std::mem::take(&mut peek.ctx_extra);
-                self.retire_peek(StatementEndedExecutionReason::Canceled, ctx_extra);
+                self.retire_execution(StatementEndedExecutionReason::Canceled, ctx_extra);
             }
             ret
         } else {
@@ -569,7 +569,7 @@ impl crate::coord::Coordinator {
                         execution_strategy: Some(if is_fast_path {
                             StatementExecutionStrategy::FastPath
                         } else {
-                            StatementExecutionStrategy::Constant
+                            StatementExecutionStrategy::Standard
                         }),
                     }
                 }
@@ -578,7 +578,7 @@ impl crate::coord::Coordinator {
                 }
                 PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
             };
-            self.retire_peek(reason, ctx_extra);
+            self.retire_execution(reason, ctx_extra);
             otel_ctx.attach_as_parent();
             // Peek cancellations are best effort, so we might still
             // receive a response, even though the recipient is gone.
