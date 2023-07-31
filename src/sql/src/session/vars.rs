@@ -891,7 +891,7 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Option<usize>> =
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Option<Numeric>> =
     ServerVar {
         name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_percent"),
         value: &None,
@@ -2381,7 +2381,7 @@ impl SystemVars {
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_percent` configuration parameter.
-    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<usize> {
+    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<Numeric> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
     }
 

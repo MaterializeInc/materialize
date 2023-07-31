@@ -218,7 +218,7 @@ try_cast_from!(u64, f64);
 
 /// A trait for potentially-lossy casts. Typically useful when converting from integers
 /// to floating point, and you want the nearest floating-point number to your integer
-/// when your integer is large.
+/// when your integer is large, or vice versa.
 pub trait CastLossy<T> {
     /// Perform the lossy cast.
     fn cast_lossy(from: T) -> Self;
@@ -231,10 +231,24 @@ impl CastLossy<usize> for f64 {
     }
 }
 
+impl CastLossy<f64> for usize {
+    #[allow(clippy::as_conversions)]
+    fn cast_lossy(from: f64) -> Self {
+        from as usize
+    }
+}
+
 impl CastLossy<u64> for f64 {
     #[allow(clippy::as_conversions)]
     fn cast_lossy(from: u64) -> Self {
         from as f64
+    }
+}
+
+impl CastLossy<f64> for u64 {
+    #[allow(clippy::as_conversions)]
+    fn cast_lossy(from: f64) -> Self {
+        from as u64
     }
 }
 
