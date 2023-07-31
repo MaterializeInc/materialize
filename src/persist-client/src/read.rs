@@ -1193,14 +1193,18 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn streaming_consolidate() {
         let data = &[
+            // Identical records should sum together...
             (("k".to_owned(), "v".to_owned()), 0, 1),
             (("k".to_owned(), "v".to_owned()), 1, 1),
             (("k".to_owned(), "v".to_owned()), 2, 1),
+            // ...and when they cancel out entirely they should be omitted.
+            (("k2".to_owned(), "v".to_owned()), 0, 1),
+            (("k2".to_owned(), "v".to_owned()), 1, -1),
         ];
 
         let (mut write, read) = {
             let client = new_test_client().await;
-            client.cfg.dynamic.set_blob_target_size(100); // So our batch stays together!
+            client.cfg.dynamic.set_blob_target_size(1000); // So our batch stays together!
             client
                 .expect_open::<String, String, u64, i64>(crate::ShardId::new())
                 .await
@@ -1231,7 +1235,6 @@ mod tests {
         assert_eq!(
             updates,
             &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
-            "Batch should consolidate down!"
         )
     }
 
