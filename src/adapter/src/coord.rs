@@ -1850,8 +1850,7 @@ impl Coordinator {
         &self.active_conns
     }
 
-    // XXX rename this?
-    pub(crate) fn retire_peek(
+    pub(crate) fn retire_execution(
         &mut self,
         reason: StatementEndedExecutionReason,
         ctx_extra: ExecuteContextExtra,
