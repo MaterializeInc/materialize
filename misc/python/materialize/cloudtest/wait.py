@@ -12,6 +12,7 @@ import subprocess
 from typing import Optional
 
 from materialize import ui
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 from materialize.cloudtest.util.print_pods import print_pods
 from materialize.ui import UIError
 
@@ -20,7 +21,7 @@ def wait(
     condition: str,
     resource: str,
     timeout_secs: int = 300,
-    context: str = "kind-mzcloud",
+    context: str = DEFAULT_K8S_CONTEXT_NAME,
     *,
     label: Optional[str] = None,
 ) -> None:

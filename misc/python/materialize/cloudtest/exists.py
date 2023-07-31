@@ -11,14 +11,15 @@
 import subprocess
 
 from materialize import ui
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 from materialize.ui import UIError
 
 
-def exists(resource: str, context: str = "kind-mzcloud") -> None:
+def exists(resource: str, context: str = DEFAULT_K8S_CONTEXT_NAME) -> None:
     _exists(resource, True, context)
 
 
-def not_exists(resource: str, context: str = "kind-mzcloud") -> None:
+def not_exists(resource: str, context: str = DEFAULT_K8S_CONTEXT_NAME) -> None:
     _exists(resource, False, context)
 
 
