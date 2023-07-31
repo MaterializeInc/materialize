@@ -422,9 +422,8 @@ where
 
         let flush = |data: &mut Vec<_>, session: &mut Session<_, _, _>| {
             let old_len = data.len();
-            // TODO: This consolidation is optional, and it may not be very
-            //       helpful. We might try harder to understand whether we
-            //       should do this work here, or downstream at consumers.
+            // Consolidating here is important when the join closure produces data that
+            // consolidates well, for example when projecting columns.
             consolidate_updates(data);
             let recovered = old_len - data.len();
             session.give_iterator(data.drain(..));
