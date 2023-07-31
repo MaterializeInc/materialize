@@ -498,9 +498,30 @@ where
                 continue;
             }
 
+            let mut d = D::decode(d);
+
+            // If `filter_ts` advances our timestamp, we may end up with the same K, V, T in successive
+            // records. If so, opportunistically consolidate those out.
+            while let Some((k_next, v_next, mut t_next, d_next)) = self.part_cursor.peek(&self.part)
+            {
+                if (k, v) != (k_next, v_next) {
+                    break;
+                }
+
+                if !self.ts_filter.filter_ts(&mut t_next) {
+                    break;
+                }
+                if t != t_next {
+                    break;
+                }
+
+                // All equal... consolidate!
+                self.part_cursor.idx += 1;
+                d.plus_equals(&D::decode(d_next));
+            }
+
             let k = self.metrics.codecs.key.decode(|| K::decode(k));
             let v = self.metrics.codecs.val.decode(|| V::decode(v));
-            let d = D::decode(d);
             return Some(((k, v), t, d));
         }
         None
