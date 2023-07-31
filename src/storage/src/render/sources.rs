@@ -387,52 +387,65 @@ where
                                         if let Some(storage_dataflow_max_inflight_bytes) =
                                             backpressure_max_inflight_bytes
                                         {
-                                            let (feedback_handle, feedback_data) =
-                                                scope.feedback(Default::default());
+                                            if !storage_state
+                                                .dataflow_parameters
+                                                .storage_dataflow_max_inflight_bytes_config
+                                                .disk_only
+                                                || storage_state
+                                                    .instance_context
+                                                    .scratch_directory
+                                                    .is_some()
+                                            {
+                                                let (feedback_handle, feedback_data) =
+                                                    scope.feedback(Default::default());
 
-                                            let backpressure_metrics = Some(BackpressureMetrics {
-                                                emitted_bytes: Arc::new(
-                                                    base_source_config
-                                                        .base_metrics
-                                                        .upsert_backpressure_specific
-                                                        .emitted_bytes
-                                                        .get_delete_on_drop_counter(vec![
-                                                            id.to_string(),
-                                                            scope.index().to_string(),
-                                                        ]),
-                                                ),
-                                                last_backpressured_bytes: Arc::new(
-                                                    base_source_config
-                                                        .base_metrics
-                                                        .upsert_backpressure_specific
-                                                        .last_backpressured_bytes
-                                                        .get_delete_on_drop_gauge(vec![
-                                                            id.to_string(),
-                                                            scope.index().to_string(),
-                                                        ]),
-                                                ),
-                                                retired_bytes: Arc::new(
-                                                    base_source_config
-                                                        .base_metrics
-                                                        .upsert_backpressure_specific
-                                                        .retired_bytes
-                                                        .get_delete_on_drop_counter(vec![
-                                                            id.to_string(),
-                                                            scope.index().to_string(),
-                                                        ]),
-                                                ),
-                                            });
-                                            (
-                                                Some(feedback_handle),
-                                                Some(persist_source::FlowControl {
-                                                    progress_stream: feedback_data,
-                                                    max_inflight_bytes:
-                                                        storage_dataflow_max_inflight_bytes,
-                                                    summary: (Default::default(), 1),
-                                                    metrics: backpressure_metrics.clone(),
-                                                }),
-                                                backpressure_metrics,
-                                            )
+                                                let backpressure_metrics =
+                                                    Some(BackpressureMetrics {
+                                                        emitted_bytes: Arc::new(
+                                                            base_source_config
+                                                                .base_metrics
+                                                                .upsert_backpressure_specific
+                                                                .emitted_bytes
+                                                                .get_delete_on_drop_counter(vec![
+                                                                    id.to_string(),
+                                                                    scope.index().to_string(),
+                                                                ]),
+                                                        ),
+                                                        last_backpressured_bytes: Arc::new(
+                                                            base_source_config
+                                                                .base_metrics
+                                                                .upsert_backpressure_specific
+                                                                .last_backpressured_bytes
+                                                                .get_delete_on_drop_gauge(vec![
+                                                                    id.to_string(),
+                                                                    scope.index().to_string(),
+                                                                ]),
+                                                        ),
+                                                        retired_bytes: Arc::new(
+                                                            base_source_config
+                                                                .base_metrics
+                                                                .upsert_backpressure_specific
+                                                                .retired_bytes
+                                                                .get_delete_on_drop_counter(vec![
+                                                                    id.to_string(),
+                                                                    scope.index().to_string(),
+                                                                ]),
+                                                        ),
+                                                    });
+                                                (
+                                                    Some(feedback_handle),
+                                                    Some(persist_source::FlowControl {
+                                                        progress_stream: feedback_data,
+                                                        max_inflight_bytes:
+                                                            storage_dataflow_max_inflight_bytes,
+                                                        summary: (Default::default(), 1),
+                                                        metrics: backpressure_metrics.clone(),
+                                                    }),
+                                                    backpressure_metrics,
+                                                )
+                                            } else {
+                                                (None, None, None)
+                                            }
                                         } else {
                                             (None, None, None)
                                         };
@@ -550,6 +563,7 @@ fn get_backpressure_max_inflight_bytes(
     let StorageMaxInflightBytesConfig {
         max_inflight_bytes_default,
         max_inflight_bytes_cluster_size_percent,
+        disk_only: _,
     } = inflight_bytes_config;
 
     // Will use backpressure only if the default inflight value is provided
@@ -748,6 +762,7 @@ mod test {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: None,
             max_inflight_bytes_cluster_size_percent: Some(50),
+            disk_only: false,
         };
         let memory_limit = Some(1000);
 
@@ -762,6 +777,7 @@ mod test {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: Some(10000),
             max_inflight_bytes_cluster_size_percent: Some(50),
+            disk_only: false,
         };
 
         let backpressure_inflight_bytes_limit = get_backpressure_max_inflight_bytes(&config, &None);
@@ -777,6 +793,7 @@ mod test {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: Some(10000),
             max_inflight_bytes_cluster_size_percent: Some(50),
+            disk_only: false,
         };
         let memory_limit = Some(2000);
 

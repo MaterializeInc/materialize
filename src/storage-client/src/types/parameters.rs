@@ -45,13 +45,25 @@ pub struct StorageParameters {
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct StorageMaxInflightBytesConfig {
     /// The default value for the max in-flight bytes
     pub max_inflight_bytes_default: Option<usize>,
     /// Specified percentage which will be used to calculate the max in-flight from the
     /// memory limit of the cluster in use.
     pub max_inflight_bytes_cluster_size_percent: Option<usize>,
+    /// Whether or not the above configs only apply to disk-using dataflows.
+    pub disk_only: bool,
+}
+
+impl Default for StorageMaxInflightBytesConfig {
+    fn default() -> Self {
+        Self {
+            max_inflight_bytes_default: Default::default(),
+            max_inflight_bytes_cluster_size_percent: Default::default(),
+            disk_only: true,
+        }
+    }
 }
 
 impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesConfig {
@@ -61,6 +73,7 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
             max_in_flight_bytes_cluster_size_percent: self
                 .max_inflight_bytes_cluster_size_percent
                 .map(u64::cast_from),
+            disk_only: self.disk_only,
         }
     }
     fn from_proto(proto: ProtoStorageMaxInflightBytesConfig) -> Result<Self, TryFromProtoError> {
@@ -69,6 +82,7 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
             max_inflight_bytes_cluster_size_percent: proto
                 .max_in_flight_bytes_cluster_size_percent
                 .map(usize::cast_from),
+            disk_only: proto.disk_only,
         })
     }
 }

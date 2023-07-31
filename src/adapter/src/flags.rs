@@ -79,6 +79,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
             max_inflight_bytes_cluster_size_percent: config
                 .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
+            disk_only: config.storage_dataflow_max_inflight_bytes_disk_only(),
         },
     }
 }
