@@ -35,7 +35,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
 use crate::cfg::MB;
-use crate::fetch::{fetch_batch_part, EncodedPart};
+use crate::fetch::{fetch_batch_part, Cursor, EncodedPart};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
@@ -720,7 +720,7 @@ where
         for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.pop_front() {
                 let start = Instant::now();
-                let mut part = part
+                let part = part
                     .join(shard_id, blob.as_ref(), &metrics, &shard_metrics, part_desc)
                     .await?;
                 // Ideally we'd hook into start_prefetches here, too, but runs
@@ -729,7 +729,8 @@ where
                 timings.part_fetching += start.elapsed();
                 let start = Instant::now();
                 let mut updates_decoded = 0;
-                while let Some((k, v, mut t, d)) = part.next() {
+                let mut cursor = Cursor::default();
+                while let Some((k, v, mut t, d)) = cursor.pop(&part) {
                     t.advance_by(desc.since().borrow());
                     let d = D::decode(d);
                     let k = k.to_vec();
@@ -767,7 +768,7 @@ where
                 let (part_desc, parts) = &mut runs[index];
                 if let Some(part) = parts.pop_front() {
                     let start = Instant::now();
-                    let mut part = part
+                    let part = part
                         .join(shard_id, blob.as_ref(), &metrics, &shard_metrics, part_desc)
                         .await?;
                     // start_prefetches is O(n) so calling it here is O(n^2). N
@@ -787,7 +788,8 @@ where
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
                     let mut updates_decoded = 0;
-                    while let Some((k, v, mut t, d)) = part.next() {
+                    let mut cursor = Cursor::default();
+                    while let Some((k, v, mut t, d)) = cursor.pop(&part) {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);
                         let k = k.to_vec();

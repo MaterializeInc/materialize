@@ -34,7 +34,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
-use crate::fetch::EncodedPart;
+use crate::fetch::{Cursor, EncodedPart};
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
@@ -384,12 +384,13 @@ pub async fn blob_batch_part(
     let part = BlobTraceBatchPart::<u64>::decode(&part).expect("decodable");
     let desc = part.desc.clone();
 
-    let mut encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
+    let encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
     let mut out = BatchPartOutput {
         desc,
         updates: Vec::new(),
     };
-    while let Some((k, v, t, d)) = encoded_part.next() {
+    let mut cursor = Cursor::default();
+    while let Some((k, v, t, d)) = cursor.pop(&encoded_part) {
         if out.updates.len() > limit {
             break;
         }
@@ -398,7 +399,7 @@ pub async fn blob_batch_part(
             v: format!("{:?}", PrettyBytes(v)),
             t,
             d: i64::from_le_bytes(d),
-        })
+        });
     }
 
     Ok(out)
