@@ -639,6 +639,11 @@ impl<T> ComputeInstanceRef<'_, T> {
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.instance.collection(id)
     }
+
+    /// Return an iterator over the installed collections.
+    pub fn collections(&self) -> impl Iterator<Item = (&GlobalId, &CollectionState<T>)> {
+        self.instance.collections_iter()
+    }
 }
 
 /// State maintained about individual compute collections.

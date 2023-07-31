@@ -18,13 +18,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
-use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
+use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection,
 };
+use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -51,14 +53,44 @@ use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
 use crate::{rbac, AdapterError};
 
+/// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
+/// to exist after this has been made.
+#[derive(Debug, Clone)]
+pub struct ComputeInstanceSnapshot {
+    instance_id: ComputeInstanceId,
+    collections: BTreeSet<GlobalId>,
+}
+
+impl ComputeInstanceSnapshot {
+    pub fn new(controller: &Controller, id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
+        controller
+            .compute
+            .instance_ref(id)
+            .map(|instance| ComputeInstanceSnapshot {
+                instance_id: id,
+                collections: BTreeSet::from_iter(instance.collections().map(|(id, _state)| *id)),
+            })
+    }
+
+    /// Return the ID of this compute instance.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance_id
+    }
+
+    /// Reports whether the instance contains the indicated collection.
+    pub fn contains_collection(&self, id: &GlobalId) -> bool {
+        self.collections.contains(id)
+    }
+}
+
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
-pub struct DataflowBuilder<'a, T> {
+pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeInstanceRef<'a, T>,
+    pub compute: ComputeInstanceSnapshot,
     recursion_guard: RecursionGuard,
 }
 
@@ -88,20 +120,19 @@ pub enum EvalTime {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
-            .controller
-            .compute
-            .instance_ref(instance)
+            .instance_snapshot(instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog().state(),
-            compute,
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-        }
+        DataflowBuilder::new(self.catalog().state(), compute)
+    }
+
+    /// Return a reference-less snapshot to the indicated compute instance.
+    pub fn instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        ComputeInstanceSnapshot::new(&self.controller, id)
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
@@ -288,24 +319,22 @@ pub fn dataflow_import_id_bundle(
 
 impl CatalogTxn<'_, mz_repr::Timestamp> {
     /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self
-            .dataflow_client
-            .compute
-            .instance_ref(instance)
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        let snapshot = ComputeInstanceSnapshot::new(self.dataflow_client, instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog,
+        DataflowBuilder::new(self.catalog, snapshot)
+    }
+}
+
+impl<'a> DataflowBuilder<'a> {
+    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+        Self {
+            catalog,
             compute,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
-}
 
-impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(
@@ -626,7 +655,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 }
 
-impl<'a, T> CheckedRecursion for DataflowBuilder<'a, T> {
+impl<'a> CheckedRecursion for DataflowBuilder<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
