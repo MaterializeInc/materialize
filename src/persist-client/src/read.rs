@@ -1188,6 +1188,53 @@ mod tests {
         drop(subscribe);
     }
 
+    // Verifies that we streaming-consolidate away identical key-values in the same batch.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn streaming_consolidate() {
+        let data = &[
+            (("k".to_owned(), "v".to_owned()), 0, 1),
+            (("k".to_owned(), "v".to_owned()), 1, 1),
+            (("k".to_owned(), "v".to_owned()), 2, 1),
+        ];
+
+        let (mut write, read) = {
+            let client = new_test_client().await;
+            client.cfg.dynamic.set_blob_target_size(100); // So our batch stays together!
+            client
+                .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+                .await
+        };
+
+        write.expect_compare_and_append(data, 0, 5).await;
+
+        let mut snapshot = read
+            .subscribe(timely::progress::Antichain::from_elem(4))
+            .await
+            .unwrap();
+
+        let mut updates = vec![];
+        'outer: loop {
+            for event in snapshot.fetch_next().await {
+                match event {
+                    ListenEvent::Progress(t) => {
+                        if !t.less_than(&4) {
+                            break 'outer;
+                        }
+                    }
+                    ListenEvent::Updates(data) => {
+                        updates.extend(data);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            updates,
+            &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
+            "Batch should consolidate down!"
+        )
+    }
+
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
