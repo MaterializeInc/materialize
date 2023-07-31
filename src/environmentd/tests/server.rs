@@ -238,10 +238,6 @@ fn test_statement_logging_immediate() {
         "SHOW application_name",
     ];
 
-    client
-        .execute("SET statement_logging_sample_rate=1.0", &[])
-        .unwrap();
-
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
     }
