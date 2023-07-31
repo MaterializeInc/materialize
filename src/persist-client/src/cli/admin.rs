@@ -394,7 +394,7 @@ async fn make_machine(
     loop {
         let state_res = state_versions
             .fetch_current_state::<u64>(&shard_id, versions.0.clone())
-            .await
+            .await?
             .check_codecs::<crate::cli::inspect::K, crate::cli::inspect::V, i64>(&shard_id);
         let state = match state_res {
             Ok(state) => state,
@@ -451,7 +451,7 @@ async fn force_gc(
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),
     };
-    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await?;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }

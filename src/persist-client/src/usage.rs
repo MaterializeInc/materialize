@@ -183,7 +183,8 @@ impl StorageUsageClient {
         let states_iter = self
             .state_versions
             .fetch_all_live_states::<u64>(shard_id)
-            .await;
+            .await
+            .expect("consistent state");
         let states_iter = match states_iter {
             Some(x) => x,
             None => {
@@ -405,7 +406,8 @@ impl StorageUsageClient {
         let states_iter = self
             .state_versions
             .fetch_all_live_states::<u64>(shard_id)
-            .await;
+            .await
+            .expect("consistent state");
         let states_iter = match states_iter {
             Some(x) => x,
             None => {

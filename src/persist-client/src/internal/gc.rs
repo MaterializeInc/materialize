@@ -164,7 +164,8 @@ where
                                 .await
                         })
                         .await
-                        .expect("gc_and_truncate failed")
+                        .expect("gc_and_truncate task failed")
+                        .expect("gc_and_truncate logic failed")
                 };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();
@@ -218,7 +219,7 @@ where
     pub(crate) async fn gc_and_truncate(
         machine: &mut Machine<K, V, T, D>,
         req: GcReq,
-    ) -> (RoutineMaintenance, GcResults) {
+    ) -> anyhow::Result<(RoutineMaintenance, GcResults)> {
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {
             let now = Instant::now();
@@ -258,7 +259,7 @@ where
             // been done, or the there aren't enough rollups <= seqno_since to have any
             // to delete), we can safely exit.
             machine.applier.metrics.gc.noop.inc();
-            return (RoutineMaintenance::default(), gc_results);
+            return Ok((RoutineMaintenance::default(), gc_results));
         }
 
         debug!(
@@ -272,7 +273,7 @@ where
             .applier
             .state_versions
             .fetch_all_live_states(req.shard_id)
-            .await
+            .await?
             .expect("state is initialized")
             .check_ts_codec()
             .expect("ts codec has not changed");
@@ -386,7 +387,7 @@ where
                 .post_gc_calculations_seconds,
         );
 
-        (maintenance, gc_results)
+        Ok((maintenance, gc_results))
     }
 
     /// Physically deletes all blobs from Blob and live diffs from Consensus that

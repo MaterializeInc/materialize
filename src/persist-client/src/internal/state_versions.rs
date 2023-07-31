@@ -9,6 +9,7 @@
 
 //! A durable, truncatable log of versions of [State].
 
+use anyhow::anyhow;
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -155,6 +156,7 @@ impl StateVersions {
             return self
                 .fetch_current_state(&shard_id, recent_live_diffs.0)
                 .await
+                .expect("initialized state")
                 .check_codecs(&shard_id);
         }
 
@@ -180,6 +182,7 @@ impl StateVersions {
                 let state = self
                     .fetch_current_state(&shard_id, recent_live_diffs.0)
                     .await
+                    .expect("fetching newly-discovered initial state")
                     .check_codecs(&shard_id);
 
                 // Clean up the rollup blob that we were trying to reference.
@@ -337,7 +340,7 @@ impl StateVersions {
         &self,
         shard_id: &ShardId,
         mut live_diffs: Vec<VersionedData>,
-    ) -> UntypedState<T>
+    ) -> anyhow::Result<UntypedState<T>>
     where
         T: Timestamp + Lattice + Codec64,
     {
@@ -369,7 +372,9 @@ impl StateVersions {
                     retry.retries.inc();
                     let earliest_before_refetch = live_diffs
                         .first()
-                        .expect("initialized shard should have at least one diff")
+                        .ok_or_else(|| {
+                            anyhow!("initialized shard {shard_id} should have at least one diff")
+                        })?
                         .seqno;
                     live_diffs = self.fetch_recent_live_diffs::<T>(shard_id).await.0;
 
@@ -391,7 +396,7 @@ impl StateVersions {
             };
 
             state.apply_encoded_diffs(&self.cfg, &self.metrics, &live_diffs);
-            return state;
+            return Ok(state);
         }
     }
 
@@ -401,7 +406,7 @@ impl StateVersions {
     pub async fn fetch_all_live_states<T>(
         &self,
         shard_id: ShardId,
-    ) -> Option<UntypedStateVersionsIter<T>>
+    ) -> anyhow::Result<Option<UntypedStateVersionsIter<T>>>
     where
         T: Timestamp + Lattice + Codec64,
     {
@@ -414,7 +419,7 @@ impl StateVersions {
         loop {
             let earliest_live_diff = match all_live_diffs.0.first() {
                 Some(x) => x,
-                None => return None,
+                None => return Ok(None),
             };
             let state = match self
                 .fetch_rollup_at_seqno(
@@ -422,7 +427,7 @@ impl StateVersions {
                     all_live_diffs.0.clone(),
                     earliest_live_diff.seqno,
                 )
-                .await
+                .await?
             {
                 Some(x) => x,
                 None => {
@@ -454,13 +459,13 @@ impl StateVersions {
                 }
             };
             assert_eq!(earliest_live_diff.seqno, state.seqno());
-            return Some(UntypedStateVersionsIter {
+            return Ok(Some(UntypedStateVersionsIter {
                 shard_id,
                 cfg: self.cfg.clone(),
                 metrics: Arc::clone(&self.metrics),
                 state,
                 diffs: all_live_diffs.0,
-            });
+            }));
         }
     }
 
@@ -684,7 +689,7 @@ impl StateVersions {
         shard_id: &ShardId,
         live_diffs: Vec<VersionedData>,
         seqno: SeqNo,
-    ) -> Option<UntypedState<T>>
+    ) -> anyhow::Result<Option<UntypedState<T>>>
     where
         T: Timestamp + Lattice + Codec64,
     {
@@ -705,9 +710,9 @@ impl StateVersions {
                 })
         });
 
-        let state = self.fetch_current_state::<T>(shard_id, live_diffs).await;
+        let state = self.fetch_current_state::<T>(shard_id, live_diffs).await?;
         if let Some(rollup) = state.rollups().get(&seqno) {
-            return self.fetch_rollup_at_key(shard_id, &rollup.key).await;
+            return Ok(self.fetch_rollup_at_key(shard_id, &rollup.key).await);
         }
 
         // MIGRATION: We maintain an invariant that the _current state_ contains
@@ -745,7 +750,7 @@ impl StateVersions {
         let rollup = rollup_key_for_migration.expect("someone should have a key for this rollup");
         tracing::info!("only found rollup for {} {} via migration", shard_id, seqno);
         self.metrics.state.rollup_at_seqno_migration.inc();
-        self.fetch_rollup_at_key(shard_id, &rollup.key).await
+        Ok(self.fetch_rollup_at_key(shard_id, &rollup.key).await)
     }
 
     /// Fetches the rollup at the given key, if it exists.
@@ -1034,6 +1039,7 @@ mod tests {
         assert!(state_versions
             .fetch_all_live_states::<u64>(ShardId::new())
             .await
+            .unwrap()
             .is_none());
     }
 }

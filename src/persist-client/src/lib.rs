@@ -673,7 +673,7 @@ impl PersistClient {
         }
         let state = state_versions
             .fetch_current_state::<T>(shard_id, versions.0)
-            .await;
+            .await?;
         let state = state.check_ts_codec(shard_id)?;
         Ok(state)
     }

@@ -1111,7 +1111,7 @@ pub mod datadriven {
         let mut states = datadriven
             .state_versions
             .fetch_all_live_states::<u64>(datadriven.shard_id)
-            .await
+            .await?
             .expect("should only be called on an initialized shard")
             .check_ts_codec()
             .expect("shard codecs should not change");
@@ -1254,7 +1254,7 @@ pub mod datadriven {
             .applier
             .state_versions
             .fetch_all_live_states::<u64>(datadriven.shard_id)
-            .await
+            .await?
             .expect("shard initialized")
             .check_ts_codec()
             .expect("codec matches");
@@ -1520,7 +1520,7 @@ pub mod datadriven {
             new_seqno_since,
         };
         let (maintenance, stats) =
-            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await?;
         datadriven.routine.push(maintenance);
 
         Ok(format!(

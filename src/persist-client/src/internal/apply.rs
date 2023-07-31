@@ -562,6 +562,7 @@ where
             .state_versions
             .fetch_current_state(&self.shard_id, diffs_to_current)
             .await
+            .expect("live state")
             .check_codecs::<K, V, D>(&self.shard_id)
             .expect("shard codecs should not change");
 
