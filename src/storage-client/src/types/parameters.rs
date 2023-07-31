@@ -24,7 +24,7 @@ include!(concat!(
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct StorageParameters {
     /// Persist client configuration.
     pub persist: PersistParameters,
@@ -45,13 +45,13 @@ pub struct StorageParameters {
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageMaxInflightBytesConfig {
     /// The default value for the max in-flight bytes
     pub max_inflight_bytes_default: Option<usize>,
     /// Specified percentage which will be used to calculate the max in-flight from the
     /// memory limit of the cluster in use.
-    pub max_inflight_bytes_cluster_size_percent: Option<usize>,
+    pub max_inflight_bytes_cluster_size_percent: Option<f64>,
     /// Whether or not the above configs only apply to disk-using dataflows.
     pub disk_only: bool,
 }
@@ -70,18 +70,14 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
     fn into_proto(&self) -> ProtoStorageMaxInflightBytesConfig {
         ProtoStorageMaxInflightBytesConfig {
             max_in_flight_bytes_default: self.max_inflight_bytes_default.map(u64::cast_from),
-            max_in_flight_bytes_cluster_size_percent: self
-                .max_inflight_bytes_cluster_size_percent
-                .map(u64::cast_from),
+            max_in_flight_bytes_cluster_size_percent: self.max_inflight_bytes_cluster_size_percent,
             disk_only: self.disk_only,
         }
     }
     fn from_proto(proto: ProtoStorageMaxInflightBytesConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_inflight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
-            max_inflight_bytes_cluster_size_percent: proto
-                .max_in_flight_bytes_cluster_size_percent
-                .map(usize::cast_from),
+            max_inflight_bytes_cluster_size_percent: proto.max_in_flight_bytes_cluster_size_percent,
             disk_only: proto.disk_only,
         })
     }

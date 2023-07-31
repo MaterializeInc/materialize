@@ -77,8 +77,20 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
+            // Interpret the `Numeric` as a float here, we don't need perfect
+            // precision for a percentage. Unfortunately `Decimal` makes us handle errors.
             max_inflight_bytes_cluster_size_percent: config
-                .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
+                .storage_dataflow_max_inflight_bytes_to_cluster_size_percent()
+                .and_then(|d| match d.try_into() {
+                    Err(e) => {
+                        tracing::error!(
+                            "Couldn't convert {:?} to f64, so defaulting to `None`: {e:?}",
+                            config.storage_dataflow_max_inflight_bytes_to_cluster_size_percent()
+                        );
+                        None
+                    }
+                    Ok(o) => Some(o),
+                }),
             disk_only: config.storage_dataflow_max_inflight_bytes_disk_only(),
         },
     }
