@@ -1033,8 +1033,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .await
             .expect("could not connect to postgres storage stash");
 
-        // Ensure all collections are initialized, otherwise they panic if
-        // they're read before being written to.
+        // Ensure all collections are initialized, otherwise they cannot
+        // be read.
         async fn maybe_get_init_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             typed: &TypedCollection<K, V>,

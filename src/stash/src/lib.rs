@@ -334,8 +334,8 @@ pub struct AppendBatch {
 }
 
 impl<K, V> StashCollection<K, V> {
-    /// Returns whether the collection is initialized. Collections that haven't been written to at
-    /// least once will panic if they're read from.
+    /// Returns whether the collection is initialized, i.e. has been written to at least once.
+    /// Collections that haven't been written to at least once cannot be read.
     pub async fn is_initialized(&self, tx: &Transaction<'_>) -> Result<bool, StashError> {
         let upper = tx.upper(self.id).await?;
         Ok(upper.elements() != [Timestamp::MIN])
