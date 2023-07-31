@@ -178,6 +178,10 @@ struct Args {
     /// A scratch directory that can be used for ephemeral storage.
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
+
+    /// Optional memory limit (bytes) of the cluster replica
+    #[clap(long)]
+    announce_memory_limit: Option<usize>,
 }
 
 #[tokio::main]
@@ -325,7 +329,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.aws_external_id,
             secrets_reader,
         ),
-        StorageInstanceContext::new(args.scratch_directory)?,
+        StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit)?,
     )?;
     info!(
         "listening for storage controller connections on {}",

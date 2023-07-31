@@ -105,7 +105,6 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
         )>,
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
-        cluster_size: Option<String>,
     ) {
         Worker::new(
             timely_worker,
@@ -118,7 +117,6 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.instance_context,
             persist_clients,
             tracing_handle,
-            cluster_size,
         )
         .run();
     }

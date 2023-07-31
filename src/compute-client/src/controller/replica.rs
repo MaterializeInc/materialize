@@ -166,7 +166,6 @@ where
             process: 0,
             addresses: config.location.dataflow_addrs,
             idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
-            cluster_size: None,
         };
         let cmd_spec = CommandSpecialization {
             logging_config: config.logging,

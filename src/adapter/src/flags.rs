@@ -19,8 +19,6 @@ use mz_storage_client::types::parameters::{
 };
 use mz_tracing::params::TracingParameters;
 
-use crate::catalog::ClusterReplicaSizeMap;
-
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
@@ -33,22 +31,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 }
 
 /// Return the current storage configuration, derived from the system configuration.
-pub fn storage_config(
-    config: &SystemVars,
-    cluster_replica_sizes: &ClusterReplicaSizeMap,
-) -> StorageParameters {
-    // populating map of cluster size and corresponding memory limits in bytes where the
-    // value is given
-    let cluster_size_memory_map = cluster_replica_sizes
-        .0
-        .iter()
-        .filter_map(|(cluster_size, replica_allocation)| {
-            replica_allocation
-                .memory_limit
-                .map(|memory| (cluster_size.to_owned(), usize::cast_from(memory.0.as_u64())))
-        })
-        .collect();
-
+pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
         persist: persist_config(config),
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
@@ -96,7 +79,6 @@ pub fn storage_config(
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
             max_inflight_bytes_cluster_size_percent: config
                 .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
-            cluster_size_memory_map,
         },
     }
 }

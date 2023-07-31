@@ -9,8 +9,6 @@
 
 //! Configuration parameter types.
 
-use std::collections::BTreeMap;
-
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -54,9 +52,6 @@ pub struct StorageMaxInflightBytesConfig {
     /// Specified percentage which will be used to calculate the max in-flight from the
     /// memory limit of the cluster in use.
     pub max_inflight_bytes_cluster_size_percent: Option<usize>,
-    /// A map of different cluster sizes and their corresponding memory limits in bytes
-    /// This will be used to find out the memory limit of the cluster in use.
-    pub cluster_size_memory_map: BTreeMap<String, usize>,
 }
 
 impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesConfig {
@@ -66,26 +61,14 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
             max_in_flight_bytes_cluster_size_percent: self
                 .max_inflight_bytes_cluster_size_percent
                 .map(u64::cast_from),
-            cluster_size_memory_map: self
-                .cluster_size_memory_map
-                .iter()
-                .map(|(cluster_size, memory_limit)| {
-                    (cluster_size.into_proto(), u64::cast_from(*memory_limit))
-                })
-                .collect(),
         }
     }
     fn from_proto(proto: ProtoStorageMaxInflightBytesConfig) -> Result<Self, TryFromProtoError> {
-        let mut cluster_size_memory_map = BTreeMap::new();
-        for (cluster_size, memory_limit) in proto.cluster_size_memory_map {
-            cluster_size_memory_map.insert(cluster_size, usize::cast_from(memory_limit));
-        }
         Ok(Self {
             max_inflight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
             max_inflight_bytes_cluster_size_percent: proto
                 .max_in_flight_bytes_cluster_size_percent
                 .map(usize::cast_from),
-            cluster_size_memory_map,
         })
     }
 }

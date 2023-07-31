@@ -691,10 +691,7 @@ impl Coordinator {
     }
 
     fn update_storage_config(&mut self) {
-        let config_params = flags::storage_config(
-            self.catalog().system_config(),
-            self.catalog().cluster_replica_sizes(),
-        );
+        let config_params = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(config_params);
     }
 

@@ -176,12 +176,9 @@ where
             },
         );
 
-        let cluster_size = config.cluster_size.clone();
-
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
             let _tokio_guard = tokio_executor.enter();
-            let cluster_size = cluster_size.clone();
             let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
                 .take()
                 .unwrap();
@@ -194,7 +191,6 @@ where
                 client_rx,
                 persist_clients,
                 tracing_handle,
-                cluster_size,
             )
         })
         .map_err(|e| anyhow!("{e}"))?;
