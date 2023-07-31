@@ -34,7 +34,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
-use crate::cfg::MB;
+use crate::cfg::MiB;
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
@@ -294,12 +294,12 @@ where
             // either our minimum timeout
             cfg.dynamic.compaction_minimum_timeout(),
             // or 1s per MB of input data
-            Duration::from_secs(u64::cast_from(total_input_bytes / MB)),
+            Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
 
         trace!(
             "compaction request for {}MBs ({} bytes), with timeout of {}s.",
-            total_input_bytes / MB,
+            total_input_bytes / MiB,
             total_input_bytes,
             timeout.as_secs_f64()
         );
