@@ -902,6 +902,14 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Opt
         internal: true,
     };
 
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_max_inflight_bytes_disk_only"),
+    value: &true,
+    description: "Whether or not `storage_dataflow_max_inflight_bytes` applies only to \
+        upsert dataflows using disks. Defaults to true (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
@@ -1898,6 +1906,7 @@ impl SystemVars {
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2374,6 +2383,11 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_percent` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<usize> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
+    pub fn storage_dataflow_max_inflight_bytes_disk_only(&self) -> bool {
+        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
@@ -3839,6 +3853,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT.name()
+        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
