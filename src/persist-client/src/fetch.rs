@@ -520,6 +520,11 @@ where
                 d.plus_equals(&D::decode(d_next));
             }
 
+            // If multiple updates consolidate out entirely, drop the record.
+            if d.is_zero() {
+                continue;
+            }
+
             let k = self.metrics.codecs.key.decode(|| K::decode(k));
             let v = self.metrics.codecs.val.decode(|| V::decode(v));
             return Some(((k, v), t, d));
