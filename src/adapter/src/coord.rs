@@ -656,6 +656,7 @@ impl PendingRead {
 /// coordinator for retirement. To enforce this, we assert in the
 /// `Drop` implementation.
 #[derive(Debug, Default)]
+#[must_use]
 pub struct ExecuteContextExtra {
     statement_uuid: Option<StatementLoggingId>,
 }
@@ -671,6 +672,7 @@ impl ExecuteContextExtra {
     /// Take responsibility for the contents.  This should only be
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
+    #[must_use]
     fn retire(mut self) -> Option<StatementLoggingId> {
         let Self { statement_uuid } = &mut self;
         statement_uuid.take()
