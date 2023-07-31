@@ -101,7 +101,7 @@ use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementExecutionStrategy, StatementLoggingEvent,
+    StatementExecutionStrategy,
 };
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -1034,11 +1034,6 @@ pub struct Coordinator {
     /// Only used by tests; otherwise, `rand::thread_rng()` is used.
     /// Controlled by the system var `statement_logging_use_reproducible_rng`.
     statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng,
-
-    /// Statement logging events that have been recorded in `mz_prepared_statement_history`
-    /// or `mz_statement_execution_history` but not
-    /// durably in the stash.
-    statement_logging_pending_events: Vec<StatementLoggingEvent>,
 }
 
 impl Coordinator {
@@ -2029,7 +2024,6 @@ pub async fn serve(
                 tracing_handle,
                 statement_logging_executions_begun: BTreeMap::new(),
                 statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
-                statement_logging_pending_events: Vec::new(),
                 statement_logging_unlogged_sessions: BTreeMap::new(),
             };
             let bootstrap = handle.block_on(async {
