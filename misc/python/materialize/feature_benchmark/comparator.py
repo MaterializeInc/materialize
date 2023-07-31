@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, List, Protocol, TypeVar
+from typing import Generic, List, Optional, Protocol, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
 
@@ -27,13 +27,25 @@ class Comparator(Generic[T]):
     def this(self) -> T:
         return self._points[0]
 
+    def this_as_str(self) -> str:
+        if self.this() is None:
+            return "           None"
+        else:
+            return f"{self.this():>11.3f}"
+
     def other(self) -> T:
         return self._points[1]
+
+    def other_as_str(self) -> str:
+        if self.other() is None:
+            return "           None"
+        else:
+            return f"{self.other():>11.3f}"
 
     def is_regression(self) -> bool:
         assert False
 
-    def ratio(self) -> float:
+    def ratio(self) -> Optional[float]:
         assert False
 
     def human_readable(self) -> str:
@@ -45,12 +57,18 @@ class SuccessComparator(Comparator[float]):
         return False
 
 
-class RelativeThresholdComparator(Comparator[float]):
-    def ratio(self) -> float:
-        return self._points[0] / self._points[1]
+class RelativeThresholdComparator(Comparator[Optional[float]]):
+    def ratio(self) -> Optional[float]:
+        if self._points[0] is None or self._points[1] is None:
+            return None
+        else:
+            return self._points[0] / self._points[1]
 
     def is_regression(self) -> bool:
         ratio = self.ratio()
+
+        if ratio is None:
+            return False
         if ratio > 1:
             return ratio - 1 > self.threshold
         else:
@@ -58,6 +76,8 @@ class RelativeThresholdComparator(Comparator[float]):
 
     def human_readable(self) -> str:
         ratio = self.ratio()
+        if ratio is None:
+            return "N/A"
         if ratio >= 2:
             return f"{ratio:3.1f} TIMES more/slower"
         elif ratio > 1:

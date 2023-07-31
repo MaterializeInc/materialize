@@ -13,6 +13,7 @@ from enum import Enum, auto
 class MeasurementType(Enum):
     WALLCLOCK = auto()
     MEMORY = auto()
+    MESSAGES = auto()
 
     def __str__(self) -> str:
         return self.name.lower()

@@ -24,6 +24,7 @@ from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_customer import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
 from scenarios_scale import *  # noqa: F401 F403
+from scenarios_skew import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
@@ -110,9 +111,10 @@ def run_one_scenario(
     name = scenario.__name__
     print(f"--- Now benchmarking {name} ...")
 
-    measurement_types = [MeasurementType.WALLCLOCK]
+    measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY)
+
     comparators = [make_comparator(name=name, type=t) for t in measurement_types]
 
     common_seed = round(time.time())
