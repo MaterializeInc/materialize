@@ -11,10 +11,5 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."
-
-. misc/shlib/shlib.bash
-. test/cloudtest/config.bash
-
-run kubectl --context="$K8S_CONTEXT" delete all --all
-run kubectl --context="$K8S_CONTEXT" delete pvc --all
+K8S_CLUSTER_NAME="${K8S_CLUSTER_NAME:=mzcloud}"
+K8S_CONTEXT="${K8S_CONTEXT:=kind-"$K8S_CLUSTER_NAME"}"
