@@ -1031,7 +1031,7 @@ pub mod datadriven {
     use crate::batch::{
         validate_truncate_batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
-    use crate::fetch::fetch_batch_part;
+    use crate::fetch::{fetch_batch_part, Cursor};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
@@ -1379,7 +1379,7 @@ pub mod datadriven {
                     continue;
                 }
             };
-            let mut part = fetch_batch_part(
+            let part = fetch_batch_part(
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
@@ -1390,7 +1390,8 @@ pub mod datadriven {
             )
             .await
             .expect("invalid batch part");
-            while let Some((k, _v, t, d)) = part.next() {
+            let mut cursor = Cursor::default();
+            while let Some((k, _v, t, d)) = cursor.pop(&part) {
                 let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
                 write!(s, "{k} {t} {d}\n");
             }
@@ -1556,7 +1557,7 @@ pub mod datadriven {
         let mut updates = Vec::new();
         for batch in snapshot {
             for part in batch.parts {
-                let mut part = fetch_batch_part(
+                let part = fetch_batch_part(
                     &datadriven.shard_id,
                     datadriven.client.blob.as_ref(),
                     datadriven.client.metrics.as_ref(),
@@ -1567,7 +1568,8 @@ pub mod datadriven {
                 )
                 .await
                 .expect("invalid batch part");
-                while let Some((k, _v, mut t, d)) = part.next() {
+                let mut cursor = Cursor::default();
+                while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
                     t.advance_by(as_of.borrow());
                     updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
                 }

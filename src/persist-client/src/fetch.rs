@@ -229,6 +229,7 @@ where
         } else {
             None
         },
+        part_cursor: Cursor::default(),
         _phantom: PhantomData,
     };
 
@@ -443,6 +444,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     part: EncodedPart<T>,
     schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
+    part_cursor: Cursor,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
@@ -455,6 +457,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             part: self.part.clone(),
             schemas: self.schemas.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            part_cursor: self.part_cursor.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -477,10 +480,7 @@ impl<K: Codec, V: Codec, T, D> FetchedPart<K, V, T, D> {
 pub(crate) struct EncodedPart<T> {
     registered_desc: Description<T>,
     part: Arc<BlobTraceBatchPart<T>>,
-
     needs_truncation: bool,
-    part_idx: usize,
-    idx: usize,
 }
 
 impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
@@ -493,7 +493,7 @@ where
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some((k, v, mut t, d)) = self.part.next() {
+        while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
             }
@@ -574,19 +574,34 @@ where
         EncodedPart {
             registered_desc,
             part: Arc::new(part),
-            part_idx: 0,
-            idx: 0,
             needs_truncation,
         }
     }
+}
 
-    pub fn next<'a>(&'a mut self) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        while let Some(part) = self.part.updates.get(self.part_idx) {
+/// A pointer into a particular encoded part, with methods for fetching an update and
+/// scanning forward to the next. It is an error to use the same cursor for distinct
+/// parts.
+///
+/// We avoid implementing copy to make it hard to accidentally duplicate a cursor. However,
+/// clone is very cheap.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Cursor {
+    part_idx: usize,
+    idx: usize,
+}
+
+impl Cursor {
+    /// A cursor points to a particular update in the backing part data.
+    /// If the update it points to is not valid, advance it to the next valid update
+    /// if there is one, and return the pointed-to data.
+    pub fn peek<'a, T: Timestamp + Codec64>(
+        &mut self,
+        encoded: &'a EncodedPart<T>,
+    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+        while let Some(part) = encoded.part.updates.get(self.part_idx) {
             let ((k, v), t, d) = match part.get(self.idx) {
-                Some(x) => {
-                    self.idx += 1;
-                    x
-                }
+                Some(x) => x,
                 None => {
                     self.part_idx += 1;
                     self.idx = 0;
@@ -598,17 +613,29 @@ where
 
             // This filtering is really subtle, see the comment above for
             // what's going on here.
-            if self.needs_truncation {
-                if !self.registered_desc.lower().less_equal(&t) {
-                    continue;
-                }
-                if self.registered_desc.upper().less_equal(&t) {
-                    continue;
-                }
+            let truncated_t = encoded.needs_truncation && {
+                !encoded.registered_desc.lower().less_equal(&t)
+                    || encoded.registered_desc.upper().less_equal(&t)
+            };
+            if truncated_t {
+                self.idx += 1;
+                continue;
             }
             return Some((k, v, t, d));
         }
         None
+    }
+
+    /// Similar to peek, but advance the cursor just past the end of the most recent update.
+    pub fn pop<'a, T: Timestamp + Codec64>(
+        &mut self,
+        part: &'a EncodedPart<T>,
+    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+        let update = self.peek(part);
+        if update.is_some() {
+            self.idx += 1;
+        }
+        update
     }
 }
 
