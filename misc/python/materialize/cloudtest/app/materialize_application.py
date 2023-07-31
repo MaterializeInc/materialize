@@ -60,7 +60,7 @@ class MaterializeApplication(Application):
         self.images = self.get_images()
 
         super().__init__()
-        super().create()
+        self.create()
 
     def get_resources(
         self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
