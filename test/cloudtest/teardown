@@ -14,5 +14,6 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 . misc/shlib/shlib.bash
+. test/cloudtest/config.bash
 
-run kind delete cluster --name=cloudtest
+run kind delete cluster --name="$K8S_CLUSTER_NAME"

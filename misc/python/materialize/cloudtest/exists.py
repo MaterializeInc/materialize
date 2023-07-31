@@ -11,18 +11,19 @@
 import subprocess
 
 from materialize import ui
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 from materialize.ui import UIError
 
 
-def exists(resource: str, context: str = "kind-cloudtest") -> None:
+def exists(resource: str, context: str = DEFAULT_K8S_CONTEXT_NAME) -> None:
     _exists(resource, True, context)
 
 
-def not_exists(resource: str, context: str = "kind-cloudtest") -> None:
+def not_exists(resource: str, context: str = DEFAULT_K8S_CONTEXT_NAME) -> None:
     _exists(resource, False, context)
 
 
-def _exists(resource: str, should_exist: bool, context: str = "kind-cloudtest") -> None:
+def _exists(resource: str, should_exist: bool, context: str) -> None:
     cmd = ["kubectl", "get", "--output", "name", resource, "--context", context]
     ui.progress(f'running {" ".join(cmd)} ... ')
 
