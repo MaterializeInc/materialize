@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_sql::session::vars::SystemVars;
