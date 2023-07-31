@@ -659,6 +659,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn client_cache() {
         let cache = PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
@@ -726,6 +727,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn state_cache() {
         mz_ore::test::init_logging();
         fn new_state<K, V, T, D>(shard_id: ShardId) -> TypedState<K, V, T, D>

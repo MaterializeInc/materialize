@@ -528,6 +528,7 @@ impl StorageUsageClient {
     ///
     /// Can be safely called within retry_external to ensure it succeeds
     #[cfg(test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn size(
         &self,
         prefix: BlobKeyPrefix<'_>,
@@ -741,6 +742,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn size() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -911,6 +913,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn usage_referenced() {
         mz_ore::test::init_logging();
 
@@ -1228,6 +1231,7 @@ mod tests {
     /// initial rollup is written for a shard, but the initial CaS hasn't yet
     /// succeeded.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn usage_regression_shard_in_blob_not_consensus() {
         let client = new_test_client().await;
         let shard_id = ShardId::new();

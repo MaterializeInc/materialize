@@ -377,6 +377,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn rate_limit() {
         let client = crate::tests::new_test_client().await;
 
@@ -408,6 +409,7 @@ mod tests {
 
     // Verifies that the handle updates its view of the opaque token correctly
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn handle_opaque_token() {
         let client = new_test_client().await;
         let shard_id = ShardId::new();

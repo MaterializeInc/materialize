@@ -274,6 +274,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn state_watch_listen_snapshot() {
         mz_ore::test::init_logging();
         let waker = noop_waker();
