@@ -30,7 +30,11 @@ from kubernetes.client import (
     V1StatefulSetSpec,
     V1VolumeMount,
 )
-from semver import Version
+
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version
 
 from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
 
