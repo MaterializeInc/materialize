@@ -1540,13 +1540,17 @@ impl Coordinator {
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let mut rows = viewable_variables(self.catalog().state(), session)
+            .map(|v| (v.name(), v.value(), v.description()))
+            .collect::<Vec<_>>();
+        rows.sort_by_cached_key(|(name, _, _)| name.to_lowercase());
         Ok(send_immediate_rows(
-            viewable_variables(self.catalog().state(), session)
-                .map(|v| {
+            rows.into_iter()
+                .map(|(name, val, desc)| {
                     Row::pack_slice(&[
-                        Datum::String(v.name()),
-                        Datum::String(&v.value()),
-                        Datum::String(v.description()),
+                        Datum::String(name),
+                        Datum::String(&val),
+                        Datum::String(desc),
                     ])
                 })
                 .collect(),
