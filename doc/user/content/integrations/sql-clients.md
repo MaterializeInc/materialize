@@ -54,7 +54,6 @@ Start by double-checking whether you already have `psql` installed:
 psql --version
 ```
 
-
 ```bash
 sudo apt-get update
 sudo apt-get install postgresql-client
@@ -80,32 +79,44 @@ Download and install the [PostgreSQL installer](https://www.postgresql.org/downl
 
 ## DBeaver
 
-To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/), follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/) and use the **Materialize database driver** with the credentials provided in the Materialize UI.
+**Minimum requirements:** DBeaver 23.1.3
+
+To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/),
+follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/)
+and use the **Materialize database driver** with the credentials provided in the
+Materialize console.
+
+<img width="1314" alt="Connect using the credentials provided in the Materialize console" src="https://github.com/MaterializeInc/materialize/assets/23521087/ae98dc45-2e1a-4e78-8ca0-e8d53beed30f">
+
+The Materialize database driver depends on the [PostgreSQL JDBC driver](https://jdbc.postgresql.org/download.html).
+If you don't have the driver installed locally, DBeaver will prompt you to
+automatically download and install the most recent version.
+
+#### Connect to a specific cluster
+
+By default, Materialize connects to the [pre-installed `default` cluster](/sql/show-clusters/#pre-installed-clusters).
+To connect to a specific [cluster](/get-started/key-concepts/#clusters), you must
+define a bootstrap query in the connection initialization settings.
 
 <br>
 
-<img width="1314" alt="DBeaver Materialize Connection Details" src="https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/256839946-f13c941d-4857-4c87-b3d3-56ca29a525a2.png">
+1. Click on **Connection details**.
 
-The Materialize database driver is available in DBeaver 23.1.3 and later and requires the PostgreSQL driver to be installed.
+1. Click on **Connection initialization settings**.
 
-You can download the recent version of PostgreSQL JDBC Driver from PostgreSQL's [official website](https://jdbc.postgresql.org/download.html).
+1. Under **Bootstrap queries**, click **Configure** and add a new SQL query that
+sets the active cluster for the connection:
 
-### Connect to a specific cluster
-
-To connect to a specific [cluster](/get-started/key-concepts/#clusters) in Materialize, define a bootstrap query in the connection settings.
-
-For example, to connect to the `materialize` cluster, go to the **Connection Settings**, click on **Initialization**, click on **Bootstrap Query** and enter the following query:
-
-```sql
-SET cluster = 'materialize';
-```
-
-<img width="1314" alt="DBeaver Materialize Specify Cluster" src="https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/256840992-13a1556f-94b0-4f7f-88b5-72700cc2a0e5.png">
-
+    ```sql
+    SET cluster = other_cluster;
+    ```
 
 ## DataGrip
 
-To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html), follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html) and use the **PostgreSQL database driver** with the credentials provided in the Materialize UI.
+To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
+follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html)
+and use the **PostgreSQL database driver** with the credentials provided in the
+Materialize UI.
 
 {{< note >}}
 As we work on extending the coverage of `pg_catalog` in Materialize {{% gh 9720 %}}, you must [turn off automatic database introspection](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760/comments/360003100820) in DataGrip to connect.
