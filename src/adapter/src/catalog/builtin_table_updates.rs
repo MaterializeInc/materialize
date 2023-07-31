@@ -1425,17 +1425,13 @@ impl CatalogState {
         packer.extend([
             // finished_at
             Datum::Null,
-            // was_successful
-            Datum::Null,
-            // was_canceled
-            Datum::Null,
-            // was_aborted
+            // finished_status
             Datum::Null,
             // error_message
             Datum::Null,
             // rows_returned
             Datum::Null,
-            // was_fast_path
+            // execution_status
             Datum::Null,
         ]);
         BuiltinTableUpdate {
