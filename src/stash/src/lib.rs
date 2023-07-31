@@ -95,6 +95,9 @@ mod transaction;
 // TODO(parkmycar): This shouldn't be public, but it is for now to prevent dead code warnings.
 pub mod upgrade;
 
+#[cfg(test)]
+mod tests;
+
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 
@@ -146,11 +149,8 @@ impl<T: prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Dese
 /// diff types are fixed to `i64`.
 ///
 /// A `StashCollection` maintains a since frontier and an upper frontier, as
-/// described in the [correctness vocabulary document]. To advance the since
-/// frontier, call [`compact`]. To advance the upper frontier, call [`seal`].
+/// described in the [correctness vocabulary document].
 ///
-/// [`compact`]: Transaction::compact
-/// [`seal`]: Transaction::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
 #[derive(Debug)]
@@ -325,7 +325,7 @@ pub struct AppendBatch {
     /// Current upper of the collection. The collection will also be compacted to `lower`.
     pub(crate) lower: Antichain<Timestamp>,
     /// The collection will be sealed to `upper`.
-    pub upper: Antichain<Timestamp>,
+    pub(crate) upper: Antichain<Timestamp>,
     /// The timestamp of all entries in `entries`.
     pub(crate) timestamp: Timestamp,
     /// Entries to append to a collection. Each entry is of the form
@@ -391,6 +391,7 @@ pub struct TypedCollection<K, V> {
 }
 
 impl<K, V> TypedCollection<K, V> {
+    /// Creates a new [`TypedCollection`] with `name`.
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -398,6 +399,7 @@ impl<K, V> TypedCollection<K, V> {
         }
     }
 
+    /// Returns the name of this [`TypedCollection`].
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -408,10 +410,12 @@ where
     K: Data,
     V: Data,
 {
+    /// Returns a [`StashCollection`] corresponding to this [`TypedCollection`].
     pub async fn from_tx(&self, tx: &Transaction<'_>) -> Result<StashCollection<K, V>, StashError> {
         tx.collection(self.name).await
     }
 
+    /// Returns all ((key, value), timestamp, diff) tuples in this [`TypedCollection`].
     pub async fn iter(
         &self,
         stash: &mut Stash,
@@ -427,6 +431,7 @@ where
             .await
     }
 
+    /// Returns all key, value pairs in this [`TypedCollection`].
     pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError> {
         let name = self.name;
         stash
@@ -439,6 +444,7 @@ where
             .await
     }
 
+    /// Returns the value of `key` in this [`TypedCollection`].
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn peek_key_one(&self, stash: &mut Stash, key: K) -> Result<Option<V>, StashError>
     where
@@ -559,7 +565,8 @@ where
             .await
     }
 
-    /// Sets a value for a key. `f` is passed the previous value, if any.
+    /// Sets a value for a key to the result of `f`. `f` is passed the
+    /// previous value, if any.
     ///
     /// Returns the previous value if one existed and the value returned from
     /// `f`.
@@ -805,7 +812,7 @@ where
     }
 
     /// Iterates over the items viewable in the current transaction in arbitrary
-    /// order.
+    /// order and applies `f` on all key, value pairs.
     pub fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
         let mut seen = BTreeSet::new();
         for (k, v) in self.pending.iter() {
@@ -845,8 +852,8 @@ where
     }
 
     /// Iterates over the items viewable in the current transaction, and provides a
-    /// Vec where additional pending items can be inserted, which will be appended
-    /// to current pending items. Does not verify unqiueness.
+    /// map where additional pending items can be inserted, which will be appended
+    /// to current pending items. Does not verify uniqueness.
     fn for_values_mut<F: FnMut(&mut BTreeMap<K, Option<V>>, &K, &V)>(&mut self, mut f: F) {
         let mut pending = BTreeMap::new();
         self.for_values(|k, v| f(&mut pending, k, v));
