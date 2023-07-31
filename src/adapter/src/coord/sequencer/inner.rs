@@ -49,6 +49,7 @@ use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+// Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan;
 use mz_sql::plan::{
     AlterOptionParameter, IndexOption, MaterializedView, MutationKind, OptimizerConfig, Params,
