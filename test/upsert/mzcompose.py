@@ -178,6 +178,7 @@ def workflow_rehydration(c: Composition) -> None:
                 name="clusterd1",
                 options=[
                     "--scratch-directory=/scratch",
+                    "--announce-memory-limit=1048376000",  # 1GiB
                 ],
             ),
         ),
