@@ -15,7 +15,10 @@ import random
 import subprocess
 from pathlib import Path
 
-from semver import Version
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version
 
 from materialize.mzcompose import Composition
 
