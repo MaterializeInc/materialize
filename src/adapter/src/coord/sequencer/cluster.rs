@@ -847,7 +847,8 @@ impl Coordinator {
                     if let Some(az) = &location.availability_zone {
                         if !new_availability_zones.contains(az) {
                             coord_bail!(
-                                "unmanaged replica has az {az} which is not in managed {new_availability_zones:?}"
+                                "unmanaged replica has availability zone {az} which is not \
+                                in managed {new_availability_zones:?}"
                             )
                         }
                     }

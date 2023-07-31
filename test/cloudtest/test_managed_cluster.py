@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from textwrap import dedent
+
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
@@ -35,12 +37,15 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     assert check is not None
     assert check == True
 
-    try:
-        mz.environmentd.sql("ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('4'))")
-    except:
-        pass
-    else:
-        assert False, "We shouldn't be able to set az's to an unknown az"
+    mz.testdrive.run(
+        input=dedent(
+            """
+            ! ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('4'))
+            exact:unknown cluster replica availability zone 4
+            """
+        ),
+        no_reset=True,
+    )
 
     replicas = mz.environmentd.sql_query(
         "SELECT mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'sized1' ORDER BY 1"
