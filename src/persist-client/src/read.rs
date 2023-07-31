@@ -1023,9 +1023,6 @@ where
     ///   like an MFP you might be pushing down. Reason being that if you are
     ///   projecting or transforming in a way that allows further consolidation,
     ///   amazing.
-    /// - The parts are already sorted by `(K, V, T)`, which means we could do a
-    ///   streaming consolidate within a part by walking through each `(K, V)`
-    ///   pair. (This would be pushed up into FetchedPart.)
     /// - Reuse any code we write to streaming-merge consolidate in
     ///   persist_source here.
     pub async fn snapshot_and_fetch(
@@ -1050,17 +1047,12 @@ where
             .await;
             self.process_returned_leased_part(part);
             contents.extend(fetched_part);
-            // NB: If FetchedPart learns to streaming consolidate its output,
-            // this can stay true for the first part (and more generally as long
-            // as contents was empty before we added it to contents).
+            // NB: FetchedPart streaming consolidates its output, but it's possible
+            // that decoding introduces duplicates again.
             is_consolidated = false;
 
             // If the size of contents has doubled since the last consolidated
             // size, try consolidating it again.
-            //
-            // Note that parts are internally consolidated, but we advance the
-            // timestamp to the as_of, so even the first part might benefit from
-            // consolidation.
             if contents.len() >= last_consolidate_len * 2 {
                 consolidate_updates(&mut contents);
                 last_consolidate_len = contents.len();
