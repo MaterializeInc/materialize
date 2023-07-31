@@ -334,6 +334,13 @@ pub struct AppendBatch {
 }
 
 impl<K, V> StashCollection<K, V> {
+    /// Returns whether the collection is initialized. Collections that haven't been written to at
+    /// least once will panic if they're read from.
+    pub async fn is_initialized(&self, tx: &Transaction<'_>) -> Result<bool, StashError> {
+        let upper = tx.upper(self.id).await?;
+        Ok(upper.elements() != [Timestamp::MIN])
+    }
+
     /// Create a new AppendBatch for this collection from its current upper.
     pub async fn make_batch_tx(&self, tx: &Transaction<'_>) -> Result<AppendBatch, StashError> {
         let id = self.id;
@@ -342,7 +349,10 @@ impl<K, V> StashCollection<K, V> {
     }
 
     /// Create a new AppendBatch for this collection from its current upper.
-    pub fn make_batch_lower(&self, lower: Antichain<Timestamp>) -> Result<AppendBatch, StashError> {
+    pub(crate) fn make_batch_lower(
+        &self,
+        lower: Antichain<Timestamp>,
+    ) -> Result<AppendBatch, StashError> {
         let timestamp: Timestamp = match lower.elements() {
             [ts] => *ts,
             _ => return Err("cannot determine batch timestamp".into()),

@@ -1047,14 +1047,15 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
                 .collection::<K, V>(typed.name())
                 .await
                 .expect("named collection must exist");
-            let upper = tx
-                .upper(collection.id)
+            if !collection
+                .is_initialized(tx)
                 .await
-                .expect("collection known to exist");
-            if upper.elements() == [mz_stash::Timestamp::MIN] {
+                .expect("collection known to exist")
+            {
                 Some(
                     collection
-                        .make_batch_lower(upper)
+                        .make_batch_tx(tx)
+                        .await
                         .expect("stash operation must succeed"),
                 )
             } else {
