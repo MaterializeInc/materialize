@@ -59,7 +59,7 @@ pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Configures a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ReplicaConfig {
     /// The location of the replica.
     pub location: ReplicaLocation,
@@ -104,7 +104,7 @@ fn test_replica_allocation_deserialization() {
 }
 
 /// Configures the location of a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum ReplicaLocation {
     /// An unmanaged replica.
     Unmanaged(UnmanagedReplicaLocation),
@@ -161,7 +161,7 @@ pub struct UnmanagedReplicaLocation {
 }
 
 /// The location of a managed replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagedReplicaLocation {
     /// The resource allocation for the replica.
     pub allocation: ReplicaAllocation,
@@ -174,6 +174,7 @@ pub struct ManagedReplicaLocation {
     ///
     /// This is placed here during replica concretization for convenience.
     /// It is never serialized anywhere.
+    #[serde(skip)]
     pub allowed_availability_zones: Option<Vec<String>>,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
