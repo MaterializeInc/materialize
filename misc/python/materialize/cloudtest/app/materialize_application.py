@@ -56,13 +56,13 @@ class MaterializeApplication(Application):
 
         self.start_metrics_server()
 
-        self.resources = self.collect_resources(release_mode, log_filter, tag)
-        self.images = self.collect_images()
+        self.resources = self.get_resources(release_mode, log_filter, tag)
+        self.images = self.get_images()
 
         super().__init__()
         super().create()
 
-    def collect_resources(
+    def get_resources(
         self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
     ) -> List[K8sResource]:
         return [
@@ -86,7 +86,7 @@ class MaterializeApplication(Application):
             self.testdrive,
         ]
 
-    def collect_images(self) -> List[str]:
+    def get_images(self) -> List[str]:
         return ["environmentd", "clusterd", "testdrive", "postgres"]
 
     def register_vpc_endpoint(self) -> None:
