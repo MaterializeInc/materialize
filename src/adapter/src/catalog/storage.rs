@@ -1791,8 +1791,7 @@ impl<'a> Transaction<'a> {
                 return Ok(());
             }
             let collection = typed.from_tx(tx).await?;
-            let upper = tx.upper(collection.id).await?;
-            let mut batch = collection.make_batch_lower(upper)?;
+            let mut batch = collection.make_batch_tx(tx).await?;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, k, v, *diff);
             }

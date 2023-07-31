@@ -225,7 +225,10 @@ impl<'a> Transaction<'a> {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn upper(&self, collection_id: Id) -> Result<Antichain<Timestamp>, StashError> {
+    pub(crate) async fn upper(
+        &self,
+        collection_id: Id,
+    ) -> Result<Antichain<Timestamp>, StashError> {
         // We can't use .entry here because that would require holding the
         // MutexGuard across the .await.
         if let Some(entry) = self.uppers.lock().unwrap().get(&collection_id) {
