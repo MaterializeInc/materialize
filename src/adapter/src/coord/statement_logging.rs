@@ -13,7 +13,7 @@ use bytes::BytesMut;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementLoggingEvent, StatementPreparedRecord,
+    StatementEndedExecutionRecord, StatementPreparedRecord,
 };
 use mz_sql::plan::Params;
 use qcell::QCell;
@@ -125,8 +125,7 @@ impl Coordinator {
             reason,
             ended_at: now_millis,
         };
-        self.statement_logging_pending_events
-            .push(StatementLoggingEvent::EndedExecution(ended_record.clone()));
+
         let began_record = self.statement_logging_executions_begun.remove(&id).expect(
             "matched `begin_statement_execution` and `end_statement_execution` invocations",
         );
@@ -201,8 +200,6 @@ impl Coordinator {
             params,
             began_at: self.now(),
         };
-        self.statement_logging_pending_events
-            .push(StatementLoggingEvent::BeganExecution(record.clone()));
         let ev = self
             .catalog
             .state()
@@ -210,8 +207,6 @@ impl Coordinator {
         self.statement_logging_executions_begun
             .insert(ev_id, record);
         let updates = if let Some(ps_record) = ps_record {
-            self.statement_logging_pending_events
-                .push(StatementLoggingEvent::Prepared(ps_record.clone()));
             let ps_ev = self
                 .catalog
                 .state()
@@ -221,8 +216,6 @@ impl Coordinator {
                 .remove(&ps_record.session_id)
             {
                 let sh_ev = self.catalog.state().pack_session_history_update(&sh);
-                self.statement_logging_pending_events
-                    .push(StatementLoggingEvent::BeganSession(sh));
                 vec![sh_ev, ps_ev, ev]
             } else {
                 vec![ps_ev, ev]
