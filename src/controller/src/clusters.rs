@@ -486,6 +486,7 @@ where
             ClusterRole::User => "user",
         };
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let secrets_args = self.secrets_args.to_flags();
         let service = self
             .orchestrator
             .ensure_service(
@@ -494,7 +495,7 @@ where
                     image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
-                        vec![
+                        let mut args = vec![
                             format!(
                                 "--storage-controller-listen-addr={}",
                                 assigned["storagectl"]
@@ -507,7 +508,11 @@ where
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
-                        ]
+                        ];
+
+                        args.extend(secrets_args.clone());
+
+                        args
                     },
                     ports: vec![
                         ServicePort {

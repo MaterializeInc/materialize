@@ -20,6 +20,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
 mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 once_cell = "1.16.0"

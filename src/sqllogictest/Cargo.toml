@@ -27,6 +27,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }

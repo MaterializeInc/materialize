@@ -248,7 +248,6 @@ impl Orchestrator for ProcessOrchestrator {
                 namespace: namespace.into(),
                 image_dir: self.image_dir.clone(),
                 suppress_output: self.suppress_output,
-                secrets_dir: self.secrets_dir.clone(),
                 metadata_dir: self.metadata_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
                 services: Arc::new(Mutex::new(BTreeMap::new())),
@@ -267,7 +266,6 @@ struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
     suppress_output: bool,
-    secrets_dir: PathBuf,
     metadata_dir: PathBuf,
     command_wrapper: Vec<String>,
     services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
@@ -508,11 +506,6 @@ impl NamespacedProcessOrchestrator {
             .collect();
         let mut args = args(&listen_addrs);
         args.push(format!("--pid-file-location={}", pid_file.display()));
-        args.push("--secrets-reader=process".into());
-        args.push(format!(
-            "--secrets-reader-process-dir={}",
-            self.secrets_dir.display()
-        ));
 
         let scratch_directory = if disk {
             if let Some(scratch) = &scratch_dir {

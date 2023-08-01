@@ -112,6 +112,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
+use mz_service::secrets::SecretsReaderCliArgs;
 use mz_stash::StashFactory;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
@@ -153,6 +154,8 @@ pub struct ControllerConfig {
     pub metrics_registry: MetricsRegistry,
     /// The URL for Persist PubSub.
     pub persist_pubsub_url: String,
+    /// Arguments for secrets readers.
+    pub secrets_args: SecretsReaderCliArgs,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -233,6 +236,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
+
+    /// Arguments for secrets readers.
+    pub secrets_args: SecretsReaderCliArgs,
 }
 
 impl<T> Controller<T> {
@@ -370,6 +376,7 @@ where
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             persist_pubsub_url: config.persist_pubsub_url,
+            secrets_args: config.secrets_args,
         }
     }
 }
