@@ -112,6 +112,10 @@ pub struct BuiltinTable {
     /// Whether the table's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
+    /// Whether to retract the entire contents of the table
+    /// during startup. Currently used for most system tables,
+    /// because their source of truth lives in the stash.
+    pub delete_all_on_bootstrap: bool,
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
@@ -1373,6 +1377,7 @@ pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("column", ScalarType::UInt64.nullable(false))
         .with_column("key_group", ScalarType::UInt64.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
@@ -1386,6 +1391,7 @@ pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
             .with_column("key_group", ScalarType::UInt64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
         is_retained_metrics_object: false,
+        delete_all_on_bootstrap: true,
     }
 });
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1396,6 +1402,7 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("topic", ScalarType::String.nullable(false))
         .with_key(vec![0]),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_connections",
@@ -1408,6 +1415,7 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         )
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sources",
@@ -1417,6 +1425,7 @@ pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("group_id_base", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_postgres_sources",
@@ -1425,6 +1434,7 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("replication_slot", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_object_dependencies",
@@ -1433,6 +1443,7 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -1447,6 +1458,7 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
@@ -1462,6 +1474,7 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_columns",
@@ -1476,6 +1489,7 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("type_oid", ScalarType::Oid.nullable(false))
         .with_column("type_mod", ScalarType::Int32.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_indexes",
@@ -1488,6 +1502,7 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
@@ -1499,6 +1514,7 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("on_expression", ScalarType::String.nullable(true))
         .with_column("nullable", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_tables",
@@ -1514,6 +1530,7 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_connections",
@@ -1530,6 +1547,7 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
@@ -1539,6 +1557,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         .with_column("public_key_1", ScalarType::String.nullable(false))
         .with_column("public_key_2", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
@@ -1559,6 +1578,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: true,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1575,6 +1595,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: true,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
@@ -1591,6 +1612,7 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_materialized_views",
@@ -1608,6 +1630,7 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
@@ -1624,6 +1647,7 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
@@ -1632,12 +1656,14 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
@@ -1646,6 +1672,7 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
@@ -1655,6 +1682,7 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("key_id", ScalarType::String.nullable(false))
         .with_column("value_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
@@ -1665,6 +1693,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("inherit", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_role_members",
@@ -1674,12 +1703,14 @@ pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("member", ScalarType::String.nullable(false))
         .with_column("grantor", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
@@ -1701,6 +1732,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("returns_set", ScalarType::Bool.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_operators",
@@ -1714,6 +1746,7 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("return_type_id", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_aggregates",
@@ -1723,6 +1756,7 @@ pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("agg_kind", ScalarType::String.nullable(false))
         .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1741,6 +1775,7 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("replication_factor", ScalarType::UInt32.nullable(true))
         .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1750,6 +1785,7 @@ pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("object_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1766,6 +1802,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas",
@@ -1779,6 +1816,7 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1791,6 +1829,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("reason", ScalarType::String.nullable(true))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: true,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1808,6 +1847,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
             ScalarType::Numeric { max_scale: None }.nullable(false),
         ),
     is_retained_metrics_object: true,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1817,6 +1857,7 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| Buil
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1830,6 +1871,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("user", ScalarType::String.nullable(true))
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1908,6 +1950,7 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
             ScalarType::TimestampTz.nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1915,6 +1958,7 @@ pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1924,6 +1968,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("principal", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1938,6 +1983,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
         .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1948,6 +1994,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| Built
         .with_column("export_id", ScalarType::String.nullable(false))
         .with_column("time", ScalarType::MzTimestamp.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1967,6 +2014,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             .nullable(false),
         ),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1977,6 +2025,7 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column("connected_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1990,6 +2039,7 @@ pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column("grantee", ScalarType::String.nullable(false))
         .with_column("privileges", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1997,6 +2047,7 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: true,
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2009,6 +2060,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| Buil
         .with_column("sql", ScalarType::String.nullable(false))
         .with_column("prepared_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: false,
 });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2029,6 +2081,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| Bui
         .with_column("rows_returned", ScalarType::Int64.nullable(true))
         .with_column("execution_strategy", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: false,
 });
 
 pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2040,6 +2093,7 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("application_name", ScalarType::String.nullable(false))
         .with_column("authenticated_user", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
+    delete_all_on_bootstrap: false,
 });
 
 // These will be replaced with per-replica tables once source/sink multiplexing on

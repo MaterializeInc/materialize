@@ -879,6 +879,7 @@ impl Coordinator {
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
+        info!("[btv] BTUs: {builtin_table_updates:#?}");
         info!("coordinator init: beginning bootstrap");
 
         // Inform the controllers about their initial configuration.
@@ -1424,7 +1425,7 @@ impl Coordinator {
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
-            .filter(|entry| entry.is_table() && entry.id().is_system())
+            .filter(|entry| entry.is_delete_all_on_bootstrap_table())
         {
             info!(
                 "coordinator init: resetting system table {} ({})",
