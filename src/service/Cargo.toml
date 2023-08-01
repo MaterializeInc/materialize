@@ -15,8 +15,10 @@ crossbeam-channel = "0.5.8"
 futures = "0.3.25"
 http = "0.2.8"
 itertools = "0.10.5"
+mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
 mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }

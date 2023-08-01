@@ -478,6 +478,7 @@ where
             ClusterRole::User => "user",
         };
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let secrets_args = self.secrets_args.to_flags();
         let service = self
             .orchestrator
             .ensure_service(
@@ -506,6 +507,9 @@ where
                                 memory_limit.0.as_u64()
                             ));
                         }
+
+                        args.extend(secrets_args.clone());
+
                         args
                     },
                     ports: vec![
