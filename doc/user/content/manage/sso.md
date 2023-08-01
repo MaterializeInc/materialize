@@ -1,14 +1,13 @@
 ---
-title: "Single Sign-On"
-description: "Configure single sign-on using SAML or Open Id Connect"
+title: "Single sign-on"
+description: "Configure single sign-on (SSO) using SAML or Open ID Connect as an additional layer of account security."
 menu:
   main:
     parent: manage
     weight: 10
 ---
 
-Materialize allows for single sign-on (SSO) using your existing [SAML](https://auth0.com/blog/how-saml-authentication-works/) or [Open Id Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc) based identity provider.
-With SSO, users can log in to the Materialize console using the same ID and password as they do for other systems. 
+You can configure single sign-on (SSO) as an additional layer of account security using your existing [SAML](https://auth0.com/blog/how-saml-authentication-works/)- or [OpenID Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based identity provider. This ensures that all users can securely log in to the Materialize console using the same authentication scheme and credentials across all systems in your organization.
 
 {{< note >}}
 Single sign-on in Materialize only supports authentication into the Materialize console. Permissions within the database are handled separately using [role-based access control](/manage/access-control/).
@@ -16,7 +15,7 @@ Single sign-on in Materialize only supports authentication into the Materialize 
 
 ## Prerequisites
 
-* You must have an existing SAML or Open Id Connect based identity provider.
+* You must have an existing SAML- or OpenID Connect-based identity provider.
 * Only users assigned the `OrganizationAdmin` role can view and modify SSO settings.
 
 ## SAML
