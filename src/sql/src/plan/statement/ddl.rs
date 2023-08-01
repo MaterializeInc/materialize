@@ -2831,8 +2831,6 @@ pub fn plan_create_cluster(
     let managed = managed.unwrap_or_else(|| replicas.is_none());
 
     if managed {
-        scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
-
         if replicas.is_some() {
             sql_bail!("REPLICAS not supported for managed clusters");
         }
@@ -4306,8 +4304,6 @@ pub fn plan_alter_cluster(
         if_exists,
     }: AlterClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
-
     let cluster = match resolve_cluster(scx, &name, if_exists)? {
         Some(entry) => entry,
         None => {
