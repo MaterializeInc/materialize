@@ -530,7 +530,7 @@ impl Coordinator {
             resolved_ids,
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
-            delete_all_on_bootstrap: true,
+            delete_all_on_bootstrap: false,
         };
         let table_oid = self.catalog_mut().allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {

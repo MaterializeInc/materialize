@@ -7369,7 +7369,7 @@ impl Catalog {
                 resolved_ids,
                 custom_logical_compaction_window,
                 is_retained_metrics_object,
-                delete_all_on_bootstrap: true,
+                delete_all_on_bootstrap: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
