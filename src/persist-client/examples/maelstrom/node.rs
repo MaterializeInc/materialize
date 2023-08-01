@@ -26,7 +26,7 @@ use mz_persist::location::ExternalError;
 use mz_persist_client::ShardId;
 use serde_json::Value;
 use tokio::sync::oneshot;
-use tracing::{info, trace};
+use tracing::{debug_span, info, trace, Instrument};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, Msg, MsgId, NodeId};
 use crate::maelstrom::Args;
@@ -124,10 +124,14 @@ where
             };
 
             let service = Arc::clone(&self.service);
-            mz_ore::task::spawn(|| "maelstrom::handle".to_string(), async move {
-                let service = service.get().await;
-                let () = service.eval(handle, msg.src, body).await;
-            });
+            mz_ore::task::spawn(
+                || "maelstrom::handle".to_string(),
+                async move {
+                    let service = service.get().await;
+                    let () = service.eval(handle, msg.src, body).await;
+                }
+                .instrument(debug_span!("maelstrom::handle")),
+            );
             return;
         }
 
@@ -163,18 +167,22 @@ where
                 // the AsyncInitOnceWaitable nonsense.
                 let args = self.args.clone();
                 let service_init = Arc::clone(&self.service);
-                mz_ore::task::spawn(|| "maelstrom::init".to_string(), async move {
-                    let service = match S::init(&args, &handle).await {
-                        Ok(x) => x,
-                        Err(err) => {
-                            // If service initialization fails, there's nothing
-                            // to do but panic. Any retries should be pushed
-                            // into the impl of `init`.
-                            panic!("service initialization failed: {}", err);
-                        }
-                    };
-                    service_init.init_once(Arc::new(service)).await;
-                });
+                mz_ore::task::spawn(
+                    || "maelstrom::init".to_string(),
+                    async move {
+                        let service = match S::init(&args, &handle).await {
+                            Ok(x) => x,
+                            Err(err) => {
+                                // If service initialization fails, there's nothing
+                                // to do but panic. Any retries should be pushed
+                                // into the impl of `init`.
+                                panic!("service initialization failed: {}", err);
+                            }
+                        };
+                        service_init.init_once(Arc::new(service)).await;
+                    }
+                    .instrument(debug_span!("maelstrom::init")),
+                );
             }
             // All other reqs are a no-op. We can't even error without a NodeId.
             _ => {}

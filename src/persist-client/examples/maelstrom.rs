@@ -17,6 +17,7 @@ use crate::maelstrom::node::Service;
 pub mod api;
 pub mod node;
 pub mod services;
+pub mod txn_list_append_multi;
 pub mod txn_list_append_single;
 
 /// An adaptor to Jepsen Maelstrom's txn-list-append workload

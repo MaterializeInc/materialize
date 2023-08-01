@@ -4421,6 +4421,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist",
+ "mz-persist-txn",
  "mz-persist-types",
  "mz-proto",
  "mz-timely-util",

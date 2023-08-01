@@ -107,6 +107,7 @@ struct Args {
 #[derive(Debug, clap::Subcommand)]
 enum Command {
     Maelstrom(crate::maelstrom::Args),
+    MaelstromTxn(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
@@ -124,10 +125,10 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
-    let _ = runtime
+    let (_, _tracing_guard) = runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
-                service_name: "persist-open-loop",
+                service_name: "persistcli",
                 build_info: BUILD_INFO,
             },
             MetricsRegistry::new(),
@@ -138,6 +139,12 @@ fn main() {
     let res = match args.command {
         Command::Maelstrom(args) => runtime.block_on(
             crate::maelstrom::run::<crate::maelstrom::txn_list_append_single::TransactorService>(
+                args,
+            )
+            .instrument(root_span),
+        ),
+        Command::MaelstromTxn(args) => runtime.block_on(
+            crate::maelstrom::run::<crate::maelstrom::txn_list_append_multi::TransactorService>(
                 args,
             )
             .instrument(root_span),
@@ -158,4 +165,5 @@ fn main() {
         eprintln!("persistcli: fatal: {}", err.display_with_causes());
         std::process::exit(1);
     }
+    drop(_tracing_guard);
 }
