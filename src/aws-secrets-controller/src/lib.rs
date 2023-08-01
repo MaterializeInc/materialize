@@ -88,13 +88,11 @@ use aws_sdk_secretsmanager::Client;
 use futures::stream::StreamExt;
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsController, SecretsReader};
-use mz_sql::catalog::EnvironmentId;
 
 #[derive(Clone, Debug)]
 pub struct AwsSecretsController {
-    pub client: Client,
-    pub secret_name_prefix: String,
-    pub environment_id: EnvironmentId,
+    pub client: AwsSecretsClient,
+    pub kms_key_alias: String,
     pub default_tags: BTreeMap<String, String>,
 }
 
@@ -115,16 +113,14 @@ async fn load_secrets_manager_client(region: String) -> Client {
 
 impl AwsSecretsController {
     pub async fn new(
-        environment_id: EnvironmentId,
+        region: &str,
+        prefix: &str,
+        key_alias: &str,
         default_tags: BTreeMap<String, String>,
     ) -> Self {
         AwsSecretsController {
-            client: load_secrets_manager_client(environment_id.cloud_provider_region().to_owned())
-                .await,
-            // TODO [Alex Hunt] move this to a shared function that can be imported by the
-            // region-controller.
-            secret_name_prefix: format!("/user-managed/{}/", environment_id),
-            environment_id,
+            client: AwsSecretsClient::new(region, prefix).await,
+            kms_key_alias: key_alias.to_string(),
             default_tags,
         }
     }
@@ -134,22 +130,6 @@ impl AwsSecretsController {
             .iter()
             .map(|(key, value)| Tag::builder().key(key).value(value).build())
             .collect()
-    }
-
-    fn kms_key_alias(&self) -> String {
-        // Do not change this, as it must match the code in the region-controller.
-        // TODO [Alex Hunt] move this to a shared function that can be imported by the
-        // region-controller.
-        format!("alias/customer_key_{}", &self.environment_id)
-    }
-
-    fn secret_name(&self, id: GlobalId) -> String {
-        format!("{}{}", self.secret_name_prefix, id)
-    }
-
-    fn id_from_secret_name(&self, name: &str) -> Option<GlobalId> {
-        name.strip_prefix(&self.secret_name_prefix)
-            .and_then(|id| id.parse().ok())
     }
 
     // TODO [Alex Hunt] Remove after all customers have been migrated.
@@ -185,9 +165,10 @@ impl SecretsController for AwsSecretsController {
     async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error> {
         match self
             .client
+            .client
             .create_secret()
-            .name(self.secret_name(id))
-            .kms_key_id(self.kms_key_alias())
+            .name(self.client.secret_name(id))
+            .kms_key_id(self.kms_key_alias.clone())
             .secret_binary(Blob::new(contents))
             .set_tags(Some(self.tags()))
             .send()
@@ -196,8 +177,9 @@ impl SecretsController for AwsSecretsController {
             Ok(_) => {}
             Err(SdkError::ServiceError(e)) if e.err().is_resource_exists_exception() => {
                 self.client
+                    .client
                     .put_secret_value()
-                    .secret_id(self.secret_name(id))
+                    .secret_id(self.client.secret_name(id))
                     .secret_binary(Blob::new(contents))
                     .send()
                     .await?;
@@ -210,8 +192,9 @@ impl SecretsController for AwsSecretsController {
     async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         match self
             .client
+            .client
             .delete_secret()
-            .secret_id(self.secret_name(id))
+            .secret_id(self.client.secret_name(id))
             .force_delete_without_recovery(true)
             .send()
             .await
@@ -248,10 +231,11 @@ impl SecretsController for AwsSecretsController {
         filters.push(
             Filter::builder()
                 .key(FilterNameStringType::Name)
-                .values(&self.secret_name_prefix)
+                .values(&self.client.secret_name_prefix)
                 .build(),
         );
         let mut secrets_paginator = self
+            .client
             .client
             .list_secrets()
             .set_filters(Some(filters))
@@ -280,7 +264,7 @@ impl SecretsController for AwsSecretsController {
                     continue;
                 }
                 // Ignore invalidly named objects.
-                let Some(id) = self.id_from_secret_name(secret.name().unwrap()) else {
+                let Some(id) = self.client.id_from_secret_name(secret.name().unwrap()) else {
                     continue;
                 };
                 ids.push(id);
@@ -290,12 +274,38 @@ impl SecretsController for AwsSecretsController {
     }
 
     fn reader(&self) -> Arc<dyn SecretsReader> {
-        Arc::new((*self).clone())
+        Arc::new(self.client.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AwsSecretsClient {
+    pub(crate) client: Client,
+    pub(crate) secret_name_prefix: String,
+}
+
+impl AwsSecretsClient {
+    pub async fn new(region: &str, prefix: &str) -> Self {
+        Self {
+            client: load_secrets_manager_client(region.to_owned()).await,
+            // TODO [Alex Hunt] move this to a shared function that can be imported by the
+            // region-controller.
+            secret_name_prefix: prefix.to_owned(),
+        }
+    }
+
+    fn secret_name(&self, id: GlobalId) -> String {
+        format!("{}{}", self.secret_name_prefix, id)
+    }
+
+    fn id_from_secret_name(&self, name: &str) -> Option<GlobalId> {
+        name.strip_prefix(&self.secret_name_prefix)
+            .and_then(|id| id.parse().ok())
     }
 }
 
 #[async_trait]
-impl SecretsReader for AwsSecretsController {
+impl SecretsReader for AwsSecretsClient {
     async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         Ok(self
             .client

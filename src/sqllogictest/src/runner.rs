@@ -933,12 +933,13 @@ impl<'a> RunnerInner<'a> {
             )
         };
 
+        let secrets_dir = temp_dir.path().join("secrets");
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
-                secrets_dir: temp_dir.path().join("secrets"),
+                secrets_dir: secrets_dir.clone(),
                 command_wrapper: config
                     .orchestrator_process_wrapper
                     .as_ref()
@@ -978,6 +979,13 @@ impl<'a> RunnerInner<'a> {
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
+                secrets_args: mz_service::secrets::SecretsReaderCliArgs {
+                    secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_reader_local_file_dir: Some(secrets_dir),
+                    secrets_reader_kubernetes_context: None,
+                    secrets_reader_aws_region: None,
+                    secrets_reader_aws_prefix: None,
+                },
             },
             secrets_controller,
             cloud_resource_controller: None,

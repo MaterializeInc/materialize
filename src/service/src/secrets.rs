@@ -11,23 +11,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::ArgEnum;
+use mz_aws_secrets_controller::AwsSecretsClient;
 use mz_orchestrator_kubernetes::secrets::KubernetesSecretsReader;
 use mz_orchestrator_process::secrets::ProcessSecretsReader;
 use mz_secrets::SecretsReader;
 
-#[derive(clap::Parser)]
+#[derive(clap::Parser, Clone, Debug)]
 pub struct SecretsReaderCliArgs {
     /// The secrets reader implementation to use.
     #[structopt(long, arg_enum, env = "SECRETS_READER")]
-    secrets_reader: SecretsReaderKind,
+    pub secrets_reader: SecretsControllerKind,
     /// When using the process secrets reader, the directory on the filesystem
     /// where secrets are stored.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "process"),
-        env = "SECRETS_READER_PROCESS_DIR"
+        required_if_eq("secrets-reader", "local-file"),
+        env = "SECRETS_READER_LOCAL_FILE_DIR"
     )]
-    secrets_reader_process_dir: Option<PathBuf>,
+    pub secrets_reader_local_file_dir: Option<PathBuf>,
     /// When using the Kubernetes secrets reader, the Kubernetes context to
     /// load.
     #[structopt(
@@ -35,28 +36,95 @@ pub struct SecretsReaderCliArgs {
         required_if_eq("secrets-reader", "kubernetes"),
         env = "SECRETS_READER_KUBERNETES_CONTEXT"
     )]
-    secrets_reader_kubernetes_context: Option<String>,
+    pub secrets_reader_kubernetes_context: Option<String>,
+    /// When using the AWS secrets reader, we need both of the following.
+    #[structopt(
+        long,
+        required_if_eq("secrets-reader", "aws-secrets-manager"),
+        env = "SECRETS_READER_AWS_REGION"
+    )]
+    pub secrets_reader_aws_region: Option<String>,
+    #[structopt(
+        long,
+        required_if_eq("secrets-reader", "aws-secrets-manager"),
+        env = "SECRETS_READER_AWS_PREFIX"
+    )]
+    pub secrets_reader_aws_prefix: Option<String>,
 }
 
-#[derive(ArgEnum, Debug, Clone)]
-enum SecretsReaderKind {
-    Process,
+#[derive(ArgEnum, Debug, Clone, Copy)]
+pub enum SecretsControllerKind {
+    LocalFile,
     Kubernetes,
+    AwsSecretsManager,
 }
 
 impl SecretsReaderCliArgs {
     /// Loads the secrets reader specified by the command-line arguments.
     pub async fn load(self) -> Result<Arc<dyn SecretsReader>, anyhow::Error> {
         match self.secrets_reader {
-            SecretsReaderKind::Process => {
-                let dir = self.secrets_reader_process_dir.expect("clap enforced");
+            SecretsControllerKind::LocalFile => {
+                let dir = self.secrets_reader_local_file_dir.expect("clap enforced");
                 Ok(Arc::new(ProcessSecretsReader::new(dir)))
             }
-            SecretsReaderKind::Kubernetes => {
+            SecretsControllerKind::Kubernetes => {
                 let context = self
                     .secrets_reader_kubernetes_context
                     .expect("clap enforced");
                 Ok(Arc::new(KubernetesSecretsReader::new(context).await?))
+            }
+            SecretsControllerKind::AwsSecretsManager => {
+                let region = self.secrets_reader_aws_region.expect("clap enforced");
+                let prefix = self.secrets_reader_aws_prefix.expect("clap enforced");
+                Ok(Arc::new(AwsSecretsClient::new(&region, &prefix).await))
+            }
+        }
+    }
+
+    /// Turn this struct back into arguments. Useful for passing through to other services.
+    ///
+    /// Expects the correct arguments to be filled in, based on the `clap` requirements.
+    pub fn to_flags(&self) -> Vec<String> {
+        match self.secrets_reader {
+            SecretsControllerKind::LocalFile => {
+                vec![
+                    "--secrets-reader=local-file".to_string(),
+                    format!(
+                        "--secrets-reader-local-file-dir={}",
+                        self.secrets_reader_local_file_dir
+                            .as_ref()
+                            .expect("initialized correctly")
+                            .display()
+                    ),
+                ]
+            }
+            SecretsControllerKind::Kubernetes => {
+                vec![
+                    "--secrets-reader=kubernetes".to_string(),
+                    format!(
+                        "--secrets-reader-kubernetes-context={}",
+                        self.secrets_reader_kubernetes_context
+                            .as_ref()
+                            .expect("initialized correctly")
+                    ),
+                ]
+            }
+            SecretsControllerKind::AwsSecretsManager => {
+                vec![
+                    "--secrets-reader=aws-secrets-manager".to_string(),
+                    format!(
+                        "--secrets-reader-aws-region={}",
+                        self.secrets_reader_aws_region
+                            .as_ref()
+                            .expect("initialized correctly")
+                    ),
+                    format!(
+                        "--secrets-reader-aws-prefix={}",
+                        self.secrets_reader_aws_prefix
+                            .as_ref()
+                            .expect("initialized correctly")
+                    ),
+                ]
             }
         }
     }

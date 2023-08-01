@@ -420,6 +420,13 @@ impl Listeners {
                             "http://localhost:{}",
                             persist_pubsub_server_port
                         ),
+                        secrets_args: mz_service::secrets::SecretsReaderCliArgs {
+                            secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                            secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
+                            secrets_reader_kubernetes_context: None,
+                            secrets_reader_aws_region: None,
+                            secrets_reader_aws_prefix: None,
+                        },
                     },
                     secrets_controller,
                     cloud_resource_controller: None,
