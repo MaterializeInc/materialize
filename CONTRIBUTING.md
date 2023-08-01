@@ -16,7 +16,7 @@ our development process is available in the [doc/developer](doc/developer) folde
 Materialize is written entirely in Rust. Rust API documentation is hosted at
 <https://dev.materialize.com/api/rust/>.
 
-Prospective code contributors might find the [good first issue tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+first+issue%22) useful.
+Prospective code contributors might find the [good for external contributors tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+for+external+contributors%22+) useful.
 
 It's a good idea to comment on any GitHub issue you're planning to pick up to
 let folks know. That way, you can get proactive advice and speedier reviews.
