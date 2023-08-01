@@ -435,6 +435,7 @@ where
                 index_logs: Default::default(),
             },
             idle_arrangement_merge_effort,
+            grpc_client: self.compute.config.grpc_client.clone(),
         };
 
         self.instance(instance_id)?

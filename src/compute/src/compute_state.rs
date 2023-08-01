@@ -194,6 +194,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             enable_mz_join_core,
             persist,
             tracing,
+            grpc_client: _grpc_client,
         } = params;
 
         if let Some(v) = max_result_size {

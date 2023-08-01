@@ -17,6 +17,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoAllowCompaction;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_tracing::params::TracingParameters;
@@ -366,6 +367,8 @@ pub struct ComputeParameters {
     pub persist: PersistParameters,
     /// Tracing configuration.
     pub tracing: TracingParameters,
+    /// gRPC client configuration.
+    pub grpc_client: GrpcClientParameters,
 }
 
 impl ComputeParameters {
@@ -377,6 +380,7 @@ impl ComputeParameters {
             enable_mz_join_core,
             persist,
             tracing,
+            grpc_client,
         } = other;
 
         if max_result_size.is_some() {
@@ -391,11 +395,12 @@ impl ComputeParameters {
 
         self.persist.update(persist);
         self.tracing.update(tracing);
+        self.grpc_client.update(grpc_client);
     }
 
     /// Return whether all parameters are unset.
     pub fn all_unset(&self) -> bool {
-        self.max_result_size.is_none() && self.persist.all_unset()
+        self.max_result_size.is_none() && self.persist.all_unset() && self.grpc_client.all_unset()
     }
 }
 
@@ -407,6 +412,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
+            grpc_client: Some(self.grpc_client.into_proto()),
         }
     }
 
@@ -421,6 +427,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoComputeParameters::tracing")?,
+            grpc_client: proto
+                .grpc_client
+                .into_rust_if_some("ProtoComputeParameters::grpc_client")?,
         })
     }
 }

@@ -12,6 +12,7 @@
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_service::params::GrpcClientParameters;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +44,8 @@ pub struct StorageParameters {
     /// A set of parameters used to configure the maximum number of in-flight bytes
     /// emitted by persist_sources feeding storage dataflows
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
+    /// gRPC client parameters.
+    pub grpc_client: GrpcClientParameters,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -121,6 +124,7 @@ impl StorageParameters {
             tracing,
             upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
+            grpc_client,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -134,6 +138,7 @@ impl StorageParameters {
         self.upsert_auto_spill_config = upsert_auto_spill_config;
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
+        self.grpc_client.update(grpc_client);
     }
 }
 
@@ -155,6 +160,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             storage_dataflow_max_inflight_bytes_config: Some(
                 self.storage_dataflow_max_inflight_bytes_config.into_proto(),
             ),
+            grpc_client: Some(self.grpc_client.into_proto()),
         }
     }
 
@@ -187,6 +193,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .into_rust_if_some(
                     "ProtoStorageParameters::storage_dataflow_max_inflight_bytes_config",
                 )?,
+            grpc_client: proto
+                .grpc_client
+                .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
         })
     }
 }

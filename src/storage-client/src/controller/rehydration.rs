@@ -30,6 +30,7 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
+use mz_service::params::GrpcClientParameters;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
@@ -68,6 +69,7 @@ where
         build_info: &'static BuildInfo,
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
+        grpc_client_params: GrpcClientParameters,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -83,6 +85,7 @@ where
             current_epoch: ClusterStartupEpoch::new(envd_epoch, 0),
             config: Default::default(),
             metrics,
+            grpc_client_params,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -159,6 +162,8 @@ struct RehydrationTask<T> {
     config: StorageParameters,
     /// Prometheus metrics
     metrics: RehydratingStorageClientMetrics,
+    /// gRPC client parameters.
+    grpc_client_params: GrpcClientParameters,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -265,7 +270,9 @@ where
                 .map(|addr| (addr, self.metrics.clone()))
                 .collect();
             let version = self.build_info.semver_version();
-            let client = StorageGrpcClient::connect_partitioned(dests, version).await;
+            let client =
+                StorageGrpcClient::connect_partitioned(dests, version, &self.grpc_client_params)
+                    .await;
 
             let client = match client {
                 Ok(client) => client,

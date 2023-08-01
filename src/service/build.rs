@@ -73,18 +73,22 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Common code for services orchestrated by environmentd.
-//!
-//! This crate lacks focus. It is a hopefully short term home for code that was
-//! previously shared between storaged and computed. The code shared here is not
-//! obviously reusable by future services we may split out of environmentd.
+use std::env;
 
-pub mod boot;
-pub mod client;
-pub mod codec;
-pub mod grpc;
-pub mod local;
-pub mod params;
-pub mod retry;
-pub mod secrets;
-pub mod tracing;
+fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
+
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
+
+    tonic_build::configure()
+        // Enabling `emit_rerun_if_changed` will rerun the build script when
+        // anything in the include directory (..) changes. This causes quite a
+        // bit of spurious recompilation, so we disable it. The default behavior
+        // is to re-run if any file in the crate changes; that's still a bit too
+        // broad, but it's better.
+        .emit_rerun_if_changed(false)
+        .extern_path(".mz_proto", "::mz_proto")
+        .compile_with_config(config, &["service/src/params.proto"], &[".."])
+        .unwrap_or_else(|e| panic!("{e}"))
+}

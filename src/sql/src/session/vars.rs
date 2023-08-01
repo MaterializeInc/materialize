@@ -1127,6 +1127,31 @@ const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+/// Configuration for gRPC client connections.
+mod grpc_client {
+    use super::*;
+
+    pub const CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_connect_timeout"),
+        value: &Duration::from_secs(5),
+        description: "Timeout to apply to initial gRPC client connection establishment.",
+        internal: true,
+    };
+    pub const HTTP2_KEEP_ALIVE_INTERVAL: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_http2_keep_alive_interval"),
+        value: &Duration::from_secs(3),
+        description: "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
+        internal: true,
+    };
+    pub const HTTP2_KEEP_ALIVE_TIMEOUT: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_http2_keep_alive_timeout"),
+        value: &Duration::from_secs(5),
+        description:
+            "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
+        internal: true,
+    };
+}
+
 // Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 // availability of features.
 //
@@ -1935,7 +1960,10 @@ impl SystemVars {
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
-            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS);
+            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+            .with_var(&grpc_client::CONNECT_TIMEOUT)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT);
         vars.refresh_internal_state();
         vars
     }
@@ -2487,6 +2515,18 @@ impl SystemVars {
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+    }
+
+    pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
+        *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
+    }
+
+    pub fn grpc_client_http2_keep_alive_timeout(&self) -> Duration {
+        *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
+    }
+
+    pub fn grpc_connect_timeout(&self) -> Duration {
+        *self.expect_value(&grpc_client::CONNECT_TIMEOUT)
     }
 }
 

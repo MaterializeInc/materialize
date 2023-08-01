@@ -80,7 +80,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-mz-subscriptions",
         "test-mv-source-sink",
         "test-query-without-default-cluster",
-        # "test-clusterd-death-detection",  # Requires a fix for #20299
+        "test-clusterd-death-detection",
         "test-replica-dataflow-metrics",
     ]:
         with c.test_case(name):
