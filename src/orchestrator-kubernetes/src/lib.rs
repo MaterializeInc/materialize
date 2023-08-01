@@ -86,10 +86,10 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
-    EphemeralVolumeSource, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PersistentVolumeClaimTemplate, Pod, PodAffinityTerm, PodAntiAffinity, PodSecurityContext,
-    PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
-    ServiceSpec, Toleration, Volume, VolumeMount,
+    EphemeralVolumeSource, ObjectFieldSelector, ObjectReference, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodAffinityTerm,
+    PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
+    Service as K8sService, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -212,27 +212,36 @@ impl Orchestrator for KubernetesOrchestrator {
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
             Arc::new(NamespacedKubernetesOrchestrator {
                 metrics_api: Api::default_namespaced(self.client.clone()),
+                custom_metrics_api: Api::default_namespaced(self.client.clone()),
                 service_api: Api::default_namespaced(self.client.clone()),
                 stateful_set_api: Api::default_namespaced(self.client.clone()),
                 pod_api: Api::default_namespaced(self.client.clone()),
                 kubernetes_namespace: self.kubernetes_namespace.clone(),
                 namespace: namespace.into(),
                 config: self.config.clone(),
-                service_scales: std::sync::Mutex::new(BTreeMap::new()),
+                service_infos: std::sync::Mutex::new(BTreeMap::new()),
             })
         }))
     }
 }
 
+#[derive(Clone, Copy)]
+struct ServiceInfo {
+    scale: u16,
+    disk: bool,
+    disk_limit: Option<DiskLimit>,
+}
+
 struct NamespacedKubernetesOrchestrator {
     metrics_api: Api<PodMetrics>,
+    custom_metrics_api: Api<MetricValueList>,
     service_api: Api<K8sService>,
     stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
-    service_scales: std::sync::Mutex<BTreeMap<String, u16>>,
+    service_infos: std::sync::Mutex<BTreeMap<String, ServiceInfo>>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -276,6 +285,60 @@ impl k8s_openapi::Resource for PodMetrics {
 }
 
 impl k8s_openapi::Metadata for PodMetrics {
+    type Ty = ObjectMeta;
+
+    fn metadata(&self) -> &Self::Ty {
+        &self.metadata
+    }
+
+    fn metadata_mut(&mut self) -> &mut Self::Ty {
+        &mut self.metadata
+    }
+}
+
+// Note that these types are very weird. We are `get`-ing a
+// `List` object, and lying about it having an `ObjectMeta`
+// (it deserializes as empty, but we don't need it). The custom
+// metrics API is designed this way, which is very non-standard.
+// A discussion in the `kube` channel in the `tokio` discord
+// confirmed that this layout + using `get_subresource` is the
+// best way to handle this.
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct MetricIdentifier {
+    #[serde(rename = "metricName")]
+    pub name: String,
+    // We skip `selector` for now, as we don't use it
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct MetricValue {
+    #[serde(rename = "describedObject")]
+    pub described_object: ObjectReference,
+    #[serde(flatten)]
+    pub metric_identifier: MetricIdentifier,
+    pub timestamp: String,
+    pub value: Quantity,
+    // We skip `windowSeconds`, as we don't need it
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct MetricValueList {
+    pub metadata: ObjectMeta,
+    pub items: Vec<MetricValue>,
+}
+
+impl k8s_openapi::Resource for MetricValueList {
+    const GROUP: &'static str = "custom.metrics.k8s.io";
+    const KIND: &'static str = "MetricValueList";
+    const VERSION: &'static str = "v1beta1";
+    const API_VERSION: &'static str = "custom.metrics.k8s.io/v1beta1";
+    const URL_PATH_SEGMENT: &'static str = "persistentvolumeclaims";
+
+    type Scope = k8s_openapi::NamespaceResourceScope;
+}
+
+impl k8s_openapi::Metadata for MetricValueList {
     type Ty = ObjectMeta;
 
     fn metadata(&self) -> &Self::Ty {
@@ -439,10 +502,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         &self,
         id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error> {
-        let Some(&scale) = self.service_scales.lock().expect("poisoned lock").get(id) else {
+        let info = if let Some(info) = self.service_infos.lock().expect("poisoned lock").get(id) {
+            *info
+        } else {
             // This should have been set in `ensure_service`.
-            tracing::error!("Failed to get scale for {id}");
-            anyhow::bail!("Failed to get scale for {id}");
+            tracing::error!("Failed to get info for {id}");
+            anyhow::bail!("Failed to get info for {id}");
         };
         /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
         ///
@@ -453,11 +518,80 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             self_: &NamespacedKubernetesOrchestrator,
             id: &str,
             i: usize,
+            disk: bool,
+            disk_limit: Option<DiskLimit>,
         ) -> ServiceProcessMetrics {
             let name = format!("{}-{id}-{i}", self_.namespace);
-            let metrics = match self_.metrics_api.get(&name).await {
-                Ok(metrics) => metrics,
-                Err(e) => {
+
+            let disk_usage_fut = async {
+                if disk {
+                    Some(
+                        self_
+                            .custom_metrics_api
+                            .get_subresource(
+                                "kubelet_volume_stats_used_bytes",
+                                // The CSI provider we use sets up persistentvolumeclaim's
+                                // with `{pod name}-scratch` as the name. It also provides
+                                // the metrics, and does so under the `persistentvolumeclaims`
+                                // resource type, instead of `pods`.
+                                &format!("{name}-scratch"),
+                            )
+                            .await,
+                    )
+                } else {
+                    None
+                }
+            };
+            let disk_capacity_fut = async {
+                if disk {
+                    Some(
+                        self_
+                            .custom_metrics_api
+                            .get_subresource(
+                                "kubelet_volume_stats_capacity_bytes",
+                                &format!("{name}-scratch"),
+                            )
+                            .await,
+                    )
+                } else {
+                    None
+                }
+            };
+            let (metrics, disk_usage, disk_capacity) = match futures::future::join3(
+                self_.metrics_api.get(&name),
+                disk_usage_fut,
+                disk_capacity_fut,
+            )
+            .await
+            {
+                (Ok(metrics), disk_usage, disk_capacity) => {
+                    // TODO(guswynn): don't tolerate errors here, when we are more
+                    // comfortable with `prometheus-adapter` in production
+                    // (And we run it in ci).
+
+                    let disk_usage = match disk_usage {
+                        Some(Ok(disk_usage)) => Some(disk_usage),
+                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
+                            warn!(
+                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
+                            );
+                            None
+                        }
+                        _ => None,
+                    };
+
+                    let disk_capacity = match disk_capacity {
+                        Some(Ok(disk_capacity)) => Some(disk_capacity),
+                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
+                            warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
+                            None
+                        }
+                        _ => None,
+                    };
+
+                    (metrics, disk_usage, disk_capacity)
+                }
+                (Err(e), _, _) => {
                     warn!("Failed to get metrics for {name}: {e}");
                     return ServiceProcessMetrics::default();
                 }
@@ -494,12 +628,102 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             };
 
+            let disk_usage = match (disk_usage, disk_capacity) {
+                (Some(disk_usage_metrics), Some(disk_capacity_metrics)) => {
+                    if !disk_usage_metrics.items.is_empty()
+                        && !disk_capacity_metrics.items.is_empty()
+                    {
+                        let disk_usage_str = &*disk_usage_metrics.items[0].value.0;
+                        let disk_usage = match parse_k8s_quantity(disk_usage_str) {
+                            Ok(q) => match q.try_to_integer(0, true) {
+                                Some(i) => Some(i),
+                                None => {
+                                    tracing::error!("Disk usage value {q:?} out of range");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to parse disk usage value {disk_usage_str}: {e}"
+                                );
+                                None
+                            }
+                        };
+                        let disk_capacity_str = &*disk_capacity_metrics.items[0].value.0;
+                        let disk_capacity = match parse_k8s_quantity(disk_capacity_str) {
+                            Ok(q) => match q.try_to_integer(0, true) {
+                                Some(i) => Some(i),
+                                None => {
+                                    tracing::error!("Disk capacity value {q:?} out of range");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to parse disk capacity value {disk_capacity_str}: {e}"
+                                );
+                                None
+                            }
+                        };
+
+                        // We only populate a `disk_usage` if we have all 5 of of:
+                        // - a disk limit (so it must be an actual managed cluster with a real limit)
+                        // - a reported disk capacity
+                        // - a reported disk usage
+                        // - disk capacity is less than disk limit.
+                        // - There are no overflows
+                        //
+                        //
+                        // The `disk_usage` is augmented with the difference between
+                        // the limit and the `capacity`, so users don't erroneously think they
+                        // have more real usable capacity than they actually do. The difference
+                        // comes from LVM and filesystem overheads.
+                        match (disk_usage, disk_capacity, disk_limit) {
+                            (
+                                Some(disk_usage),
+                                Some(disk_capacity),
+                                Some(DiskLimit(disk_limit)),
+                            ) => {
+                                if disk_limit.0 >= disk_capacity {
+                                    if let Some(disk_usage) =
+                                        (disk_limit.0 - disk_capacity).checked_add(disk_usage)
+                                    {
+                                        Some(disk_usage)
+                                    } else {
+                                        tracing::error!(
+                                            "disk usage  {} + correction {} overflowed?",
+                                            disk_usage,
+                                            disk_limit.0 - disk_capacity
+                                        );
+                                        None
+                                    }
+                                } else {
+                                    tracing::error!(
+                                        "disk capacity {} is larger than the disk limit {} ?",
+                                        disk_capacity,
+                                        disk_limit.0
+                                    );
+                                    None
+                                }
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
             ServiceProcessMetrics {
                 cpu_nano_cores: cpu,
                 memory_bytes: memory,
+                disk_usage_bytes: disk_usage,
             }
         }
-        let ret = futures::future::join_all((0..scale).map(|i| get_metrics(self, id, i.into())));
+        let ret = futures::future::join_all(
+            (0..info.scale).map(|i| get_metrics(self, id, i.into(), info.disk, info.disk_limit)),
+        );
 
         Ok(ret.await)
     }
@@ -971,20 +1195,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             }
         }
-        self.service_scales
-            .lock()
-            .expect("poisoned lock")
-            .insert(id.to_string(), scale);
+        self.service_infos.lock().expect("poisoned lock").insert(
+            id.to_string(),
+            ServiceInfo {
+                scale,
+                disk,
+                disk_limit,
+            },
+        );
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
         fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
-        self.service_scales
-            .lock()
-            .expect("poisoned lock")
-            .remove(id);
+        self.service_infos.lock().expect("poisoned lock").remove(id);
         let name = format!("{}-{id}", self.namespace);
         let res = self
             .stateful_set_api
