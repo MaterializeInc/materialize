@@ -241,6 +241,19 @@ materialize space monkey
 > SELECT * FROM webhook_double_validation;
 "materialize space monkey"
 
+# Webhooks should support special characters like a /
+
+> CREATE SOURCE "webhook_with_/" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
+
+$ webhook-append name=webhook_with_/ status=404
+wont_work
+
+$ webhook-append name=webhook_with_%2F
+will_work
+
+> SELECT * FROM "webhook_with_/"
+"will_work"
+
 # Dropping a webhook source should drop the underlying persist shards.
 
 $ set-from-sql var=webhook-source-id
