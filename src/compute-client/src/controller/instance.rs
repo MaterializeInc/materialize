@@ -781,6 +781,19 @@ where
         self.set_read_policy(policies.collect())
     }
 
+    /// Drops the read capability for the given collections and allows their resources to be
+    /// reclaimed.
+    pub fn force_drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), CollectionMissing> {
+        self.drop_collections(ids.clone())?;
+
+        for id in &ids {
+            if self.compute.collections.contains_key(id) {
+                self.compute.remove_collection(*id);
+            }
+        }
+        Ok(())
+    }
+
     /// Initiate a peek request for the contents of `id` at `timestamp`.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn peek(

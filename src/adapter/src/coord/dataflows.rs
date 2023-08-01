@@ -275,6 +275,18 @@ impl Coordinator {
         )
         .map_err(AdapterError::Internal)
     }
+
+    /// Actively drop collections on a specific instance.
+    pub(crate) fn force_drop_collections(
+        &mut self,
+        collection_ids: Vec<GlobalId>,
+        instance: ComputeInstanceId,
+    ) {
+        self.controller
+            .active_compute()
+            .force_drop_collections(instance, collection_ids)
+            .unwrap_or_terminate("drop collections cannot fail");
+    }
 }
 
 /// Returns an ID bundle with the given dataflows imports.

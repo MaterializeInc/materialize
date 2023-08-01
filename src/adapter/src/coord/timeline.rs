@@ -17,6 +17,7 @@ use std::{cmp, fmt, thread};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -565,6 +566,21 @@ impl Coordinator {
             }
         }
         empty_timelines.into_iter().collect()
+    }
+
+    /// Update read holds in the timeline to `cluster`.
+    ///
+    /// Updates the read holds of collections on clusters to a new cluster. Specify the existing
+    /// read holds as an iterator of `(ComputeInstanceId, GlobalId)`.
+    pub(crate) fn migrate_compute_ids_in_timeline<I>(&mut self, ids: I, cluster: ClusterId)
+    where
+        I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
+    {
+        for (compute_instance, id) in ids {
+            for (_, TimelineState { read_holds, .. }) in &mut self.global_timelines {
+                read_holds.migrate_compute_id(compute_instance, id, cluster);
+            }
+        }
     }
 
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {

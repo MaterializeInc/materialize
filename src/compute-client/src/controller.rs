@@ -489,6 +489,18 @@ where
         Ok(())
     }
 
+    /// Drop the read capability for the given collections and allow their resources to be
+    /// reclaimed.
+    pub fn force_drop_collections(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_ids: Vec<GlobalId>,
+    ) -> Result<(), CollectionUpdateError> {
+        self.instance(instance_id)?
+            .force_drop_collections(collection_ids)?;
+        Ok(())
+    }
+
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
     pub fn peek(
         &mut self,

@@ -5510,7 +5510,7 @@ fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSink
 
 impl Coordinator {
     /// Forward notices that we got from the optimizer.
-    fn emit_optimizer_notices(
+    pub(crate) fn emit_optimizer_notices(
         &mut self,
         session: &Session,
         optimizer_notices: &Vec<OptimizerNotice>,

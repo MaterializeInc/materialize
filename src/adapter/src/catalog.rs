@@ -4359,7 +4359,7 @@ impl Catalog {
 
                     info!("update role {name} ({id})");
                 }
-                Op::AlterSetCluster { id, cluster } => Self::transact_alter_set_cluster(
+                Op::AlterSetCluster { id, item } => Self::transact_alter_set_cluster(
                     state,
                     tx,
                     builtin_table_updates,
@@ -4368,7 +4368,7 @@ impl Catalog {
                     audit_events,
                     session,
                     id,
-                    cluster,
+                    item,
                 )?,
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -6776,7 +6776,7 @@ impl From<UpdatePrivilegeVariant> for EventType {
 pub enum Op {
     AlterSetCluster {
         id: GlobalId,
-        cluster: ClusterId,
+        item: CatalogItem,
     },
     AlterSink {
         id: GlobalId,

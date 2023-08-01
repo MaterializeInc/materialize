@@ -13,17 +13,12 @@ use std::collections::BTreeSet;
 
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
 use mz_catalog::Transaction;
-use mz_controller_types::ClusterId;
-use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{Ident, RawClusterName, Statement};
-use mz_storage_types::sources::IngestionDescription;
 
 use crate::catalog::{
     catalog_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem,
-    CatalogState, DataSourceDesc, Error, ErrorKind, Index, MaterializedView, Sink, Source,
+    CatalogState, Error, ErrorKind,
 };
 use crate::coord::ConnMeta;
 use crate::AdapterError;
@@ -39,10 +34,14 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         session: Option<&ConnMeta>,
         id: GlobalId,
-        cluster_id: ClusterId,
+        item: CatalogItem,
     ) -> Result<(), AdapterError> {
         let entry = state.get_entry(&id);
         let name = entry.name().clone();
+
+        let cluster_id = item
+            .cluster_id()
+            .expect("SET CLUSTER called on incorrect item type");
 
         let cluster = state.get_cluster(cluster_id);
 
@@ -67,72 +66,6 @@ impl Catalog {
             )));
         }
 
-        // Since the catalog serializes the items using only their creation statement
-        // and context, we need to parse and rewrite the with options in that statement.
-        // (And then make any other changes to the object definition to match.)
-        let mut stmt = mz_sql::parse::parse(entry.create_sql())
-            // TODO: Should never happen
-            .expect("invalid create sql persisted to catalog")
-            .into_element()
-            .ast;
-
-        // Patch AST.
-        let stmt_in_cluster = match &mut stmt {
-            Statement::CreateIndex(s) => &mut s.in_cluster,
-            Statement::CreateMaterializedView(s) => &mut s.in_cluster,
-            Statement::CreateSink(s) => &mut s.in_cluster,
-            Statement::CreateSource(s) => &mut s.in_cluster,
-            // Planner produced wrong plan.
-            _ => coord_bail!("object {id} does not have an associated cluster"),
-        };
-        let old_cluster = entry.cluster_id();
-        *stmt_in_cluster = Some(RawClusterName::Unresolved(Ident::new(cluster.name.clone())));
-
-        // Update catalog item with new cluster.
-        let create_sql = stmt.to_ast_string_stable();
-        let item = match (&stmt, entry.item().clone()) {
-            (Statement::CreateIndex(_), CatalogItem::Index(old_index)) => {
-                CatalogItem::Index(Index {
-                    create_sql,
-                    cluster_id: cluster.id,
-                    ..old_index
-                })
-            }
-            (Statement::CreateMaterializedView(_), CatalogItem::MaterializedView(old_mv)) => {
-                CatalogItem::MaterializedView(MaterializedView {
-                    create_sql,
-                    cluster_id: cluster.id,
-                    ..old_mv
-                })
-            }
-            (Statement::CreateSink(_), CatalogItem::Sink(old_sink)) => CatalogItem::Sink(Sink {
-                create_sql,
-                cluster_id: cluster.id,
-                ..old_sink
-            }),
-            (Statement::CreateSource(_), CatalogItem::Source(old_source)) => {
-                match old_source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => CatalogItem::Source(Source {
-                        create_sql,
-                        data_source: DataSourceDesc::Ingestion(IngestionDescription {
-                            instance_id: cluster.id,
-                            ..ingestion
-                        }),
-                        ..old_source
-                    }),
-                    DataSourceDesc::Source
-                    | DataSourceDesc::Introspection(_)
-                    | DataSourceDesc::Progress
-                    | DataSourceDesc::Webhook { .. } => {
-                        // Planner produced wrong plan.
-                        coord_bail!("source {id} does not have an associated cluster");
-                    }
-                }
-            }
-            // Planner produced wrong plan.
-            _ => coord_bail!("object {id} does not have an associated cluster"),
-        };
-
         let new_entry = CatalogEntry {
             item: item.clone(),
             ..entry.clone()
@@ -153,7 +86,9 @@ impl Catalog {
                 name: Self::full_name_detail(
                     &state.resolve_full_name(&name, session.map(|session| session.conn_id())),
                 ),
-                old_cluster: old_cluster.map(|old_cluster| old_cluster.to_string()),
+                old_cluster: entry
+                    .cluster_id()
+                    .map(|old_cluster| old_cluster.to_string()),
                 new_cluster: Some(cluster_id.to_string()),
             }),
         )?;

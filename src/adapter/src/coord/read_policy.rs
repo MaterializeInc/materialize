@@ -177,6 +177,30 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
         }
         self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
     }
+
+    /// If the read hold contains a compute ID equal to `id` in `compute_instance`, update the read
+    /// hold to `new_compute_instance`.
+    pub fn migrate_compute_id(
+        &mut self,
+        compute_instance: ComputeInstanceId,
+        id: GlobalId,
+        new_compute_instance: ComputeInstanceId,
+    ) {
+        for (_, id_bundle) in &mut self.holds {
+            if let Some(true) = id_bundle
+                .compute_ids
+                .get_mut(&compute_instance)
+                .map(|compute_ids| compute_ids.remove(&id))
+            {
+                id_bundle
+                    .compute_ids
+                    .entry(new_compute_instance)
+                    .or_default()
+                    .insert(id);
+            }
+        }
+        self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
+    }
 }
 
 impl crate::coord::Coordinator {
