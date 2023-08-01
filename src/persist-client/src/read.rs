@@ -1072,6 +1072,47 @@ where
         }
         Ok(contents)
     }
+
+    /// Generates a [Self::snapshot], and streams out all of the updates
+    /// it contains in bounded memory.
+    ///
+    /// The output is not consolidated.
+    pub async fn snapshot_and_stream(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let snap = self.snapshot(as_of).await?;
+
+        let blob = Arc::clone(&self.blob);
+        let metrics = Arc::clone(&self.metrics);
+        let snapshot_metrics = self.metrics.read.snapshot.clone();
+        let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
+        let reader_id = self.reader_id.clone();
+        let schemas = self.schemas.clone();
+        let mut lease_returner = self.lease_returner.clone();
+        let stream = async_stream::stream! {
+            for part in snap {
+                let (part, mut fetched_part) = fetch_leased_part(
+                    part,
+                    blob.as_ref(),
+                    Arc::clone(&metrics),
+                    &snapshot_metrics,
+                    &shard_metrics,
+                    Some(&reader_id),
+                    schemas.clone(),
+                )
+                .await;
+
+                while let Some(next) = fetched_part.next() {
+                    yield next;
+                }
+
+                lease_returner.return_leased_part(part);
+            }
+        };
+
+        Ok(stream)
+    }
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
