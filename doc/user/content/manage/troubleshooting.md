@@ -213,66 +213,6 @@ WHERE
     AND mdo.id = dataflows.dataflow_operator;
 ```
 
-## How many `SUBSCRIBE` commands are running?
-
-Materialize creates a dataflow using the `Dataflow: subscribe` prefix with a unique identifier **for each subscription running**.
-Query the number of active `SUBSCRIBE` dataflows in Materialize by using the following statement:
-
-```sql
-SELECT count(1) FROM (
-    SELECT id
-    FROM mz_internal.mz_dataflows
-    WHERE substring(name, 0, 20) = 'Dataflow: subscribe'
-    GROUP BY id
-);
-```
-
-## Which objects is a `SUBSCRIBE` command reading?
-
-Each `SUBSCRIBE` command reads data from **objects** such as indexes, tables, sources, or materialized views.
-Query the **object name and type** by issuing the following statement:
-
-```sql
--- Subscriptions in execution:
-WITH subscriptions AS (
-    SELECT name, split_part(name, '-', 2) as dataflow
-    FROM mz_internal.mz_dataflows
-    WHERE substring(name, 0, 20) = 'Dataflow: subscribe'
-),
--- Object dependency:
-first_level_dependencies AS (
-	SELECT name, dataflow, export_id, import_id
-	FROM mz_internal.mz_compute_dependencies D
-	JOIN subscriptions S ON (D.export_id = S.dataflow)
-),
--- Second-level object dependency. In case the first dependency is an index:
-second_level_dependencies AS (
-	SELECT name, dataflow, D.export_id, D.import_id
-	FROM mz_internal.mz_compute_dependencies D
-	JOIN first_level_dependencies F ON (F.import_id = D.export_id)
-),
--- All dependencies together but prioritizing second-level dependencies:
-dependencies AS (
-	SELECT *
-	FROM first_level_dependencies
-	WHERE first_level_dependencies.name NOT IN (SELECT name FROM second_level_dependencies)
-	UNION ALL (
-        SELECT *
-        FROM
-        second_level_dependencies
-    )
-)
--- Join the dependency id with the object name.
-SELECT
-    D.export_id,
-    D.import_id,
-    D.name,
-    O.name as object_name,
-    O.type
-FROM dependencies D
-JOIN mz_objects O ON (D.import_id = O.id);
-```
-
 ## Why isn't my source ingesting data?
 
 First, look for errors in [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses):
