@@ -7077,9 +7077,37 @@ impl Catalog {
                 }
                 Op::UpdateItem { id, name, to_item } => {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    Self::update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        name.clone(),
+                        to_item.clone(),
+                        &drop_ids,
+                    )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry)?;
+
+                    if Self::should_audit_log_item(&to_item) {
+                        let name = Self::full_name_detail(
+                            &state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id())),
+                        );
+
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            catalog_type_to_audit_object_type(to_item.typ()),
+                            EventDetails::UpdateItemV1(mz_audit_log::UpdateItemV1 {
+                                id: id.to_string(),
+                                name,
+                            }),
+                        )?;
+                    }
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
