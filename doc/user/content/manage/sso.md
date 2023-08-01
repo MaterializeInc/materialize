@@ -20,7 +20,7 @@ Single sign-on in Materialize only supports authentication into the Materialize 
 
 ## Configure SAML authentication
 
-1. [Login to the Materialize console](https://console.materialize.com/).
+1. [Log in to the Materialize console](https://console.materialize.com/).
 
 1. Navigate to **Account** > **Account Settings** > **SSO**.
 
