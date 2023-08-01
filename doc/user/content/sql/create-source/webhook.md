@@ -13,7 +13,7 @@ menu:
 {{< private-preview />}}
 
 {{% create-source/intro %}}
-Webhook sources expose a URL that allow your other applications to push data into Materialize.
+Webhook sources expose a public URL that allow your other applications to push data into Materialize.
 {{% /create-source/intro %}}
 
 
@@ -60,7 +60,12 @@ Console](https://console.materialize.com/). Then `<database>` and `<schema>` are
 schema where you created your source, and `<src_name>` is the name you provided for your source at
 the time of creation.
 
+> **_Note_**: This is a public URL that is open to the internet and has no security. To validate that
+requests are legitimate see [Validating Requests](validating_requests). For limits imposed on this
+endpoint see [Request Limits](request_limits).
+
 ## Validating Requests
+[validating_requests]: #validating_requests
 
 It's common for applications using webhooks to provide a method for validating a request is
 legitimate. Using `CHECK` you can specify an expression to do this validation for your Webhook
@@ -89,7 +94,12 @@ validation expression has type `text`. Futher, the request headers are not persi
 `my_webhook_source` since `INCLUDE HEADERS` was not specified, but they are provided to the
 validation expression.
 
+> **_Note_**: Without a `CHECK` statement **all requests will be accepted**. To prevent bad actors from
+inserting data it is **strongly encouraged** that you define a `CHECK` statement with your webhook
+sources.
+
 ## Request Limits
+[request_limits]: #request_limits
 
 Webhook sources apply the following limits to received requests:
 
