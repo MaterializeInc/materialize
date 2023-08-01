@@ -28,6 +28,7 @@ Before you get started make sure you have the following:
 
 This integration quick start uses the Prometheus SQL exporter Docker image to
 pass data to and from your Materialize instance and to a Grafana instance.
+Clone the [example repository](https://github.com/MaterializeInc/demos/tree/main/integrations/prometheus-sql-exporter).
 
 Rename the `config.yml.example` file to `config.yml`. Open the `config.yml` file in your text editor and look for the `connections`
 settings.
@@ -99,6 +100,9 @@ queries:
 
 To add more complex queries, you can use the template above and edit the query
 and values you expect the query to return.
+
+
+Most monitoring queries reference the `mz_internal` schema. For more information, visit the [`mz_internal` reference documentation](https://materialize.com/docs/sql/system-catalog/mz_internal/).
 
 Monitor operator speed across workers:
 

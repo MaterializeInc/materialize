@@ -31,7 +31,7 @@ Before you get started make sure you have the following:
 This integration quick start uses the Prometheus SQL exporter Docker image to
 pass data to and from your Materialize instance and Datadog agent.
 
-Clone the example repository and navigate to the `integrations/datadog`
+Clone the [example repository](https://github.com/MaterializeInc/demos/tree/main/integrations/datadog) and navigate to the `integrations/datadog`
 directory.
 
 Open the `config.yaml` file in your text editor and look for the `connections`
@@ -49,8 +49,9 @@ connections:
 ```
 You can copy this string from the Connect page in your Materialize region.
 
-> You need to escape the special `@` character in your user email for a
-> successful connection. For example, `name@email.com`, use `name%40email.com`.
+{{< note >}}
+You need to escape the special `@` character in your user email for a successful connection. For example, `name@email.com`, use `name%40email.com`.
+{{</ note >}}
 
 Create a new app password on the **Connect** page and paste it into the
 `<PASSWORD>` section of the connection command.
@@ -126,6 +127,9 @@ queries:
 
 To add more complex queries, you can use the template above and edit the query
 and values you expect the query to return.
+
+
+Most queries reference the `mz_internal` schema. For more information, visit the [`mz_internal` reference documentation](https://materialize.com/docs/sql/system-catalog/mz_internal/).
 
 Monitor operator speed across workers:
 
