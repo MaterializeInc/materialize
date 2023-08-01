@@ -10,7 +10,9 @@
 //! Async runtime extensions.
 
 use std::future::Future;
+use std::thread;
 
+use mz_ore::task;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
@@ -64,9 +66,11 @@ impl Drop for IsolatedRuntime {
         // We don't need to worry about `shutdown_background` leaking
         // blocking tasks (i.e., tasks spawned with `spawn_blocking`) because
         // the `IsolatedRuntime` wrapper prevents access to `spawn_blocking`.
-        self.inner
-            .take()
-            .expect("cannot drop twice")
-            .shutdown_background()
+        // However, we would like the shutdown of the outer / main runtime to block
+        // on the isolated runtime shutting down, to avoid leaking tasks. Tokio makes
+        // this very annoying! Thankfully, it's only ever relevant in tests.
+        let inner_runtime = self.inner.take().expect("cannot drop twice");
+        let thread_handle = thread::spawn(move || drop(inner_runtime));
+        task::spawn_blocking(|| "drop_isolated", || async move { thread_handle.join() });
     }
 }
