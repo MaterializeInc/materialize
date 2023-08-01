@@ -196,7 +196,7 @@ Explained Query:
             raw=false
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
           ArrangeBy
-            raw=false
+            raw=true
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
             Constant
               - (2, "l2")

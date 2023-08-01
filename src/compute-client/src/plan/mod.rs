@@ -1084,9 +1084,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     .unwrap_or_else(AvailableCollections::new_raw);
 
                 // Seek out an arrangement key that might be constrained to a literal.
-                // TODO: Improve key selection heuristic.
-                // Note that most (actually all, as far as I know) of the cases that used to be
-                // handled by this code are instead handled by `CanonicalizeMfp`.
+                // Note: this code has very little use nowadays, as its job was mostly taken over
+                // by `LiteralConstraints` (see in the below longer comment).
                 let key_val = in_keys
                     .arranged
                     .iter()
@@ -1098,6 +1097,20 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Determine the plan of action for the `Get` stage.
                 let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
+                    // This code path used to handle looking up literals from indexes, but it's
+                    // mostly deprecated, as this is nowadays performed by the `LiteralConstraints`
+                    // MIR transform instead. However, it's still called in a couple of tricky
+                    // special cases:
+                    // - `LiteralConstraints` handles only Gets of global ids, so this code still
+                    //   gets to handle Filters on top of Gets of local ids.
+                    // - Lowering does a `MapFilterProject::extract_from_expression`, while
+                    //   `LiteralConstraints` does
+                    //   `MapFilterProject::extract_non_errors_from_expr_mut`.
+                    // - It might happen that new literal constraint optimization opportunities
+                    //   appear somewhere near the end of the MIR optimizer after
+                    //   `LiteralConstraints` has already run.
+                    // (Also note that a similar literal constraint handling machinery is also
+                    // present when handling the leftover MFP after this big match.)
                     mfp.permute(permutation.clone(), thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
                     GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
@@ -1302,9 +1315,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         let start: usize = 1;
                         let order = vec![(0usize, key.clone(), None)];
                         // All columns of the constant input will be part of the arrangement key.
-                        // Note that currently nothing else would make this arrangement exist, so
-                        // this will end up in `missing`, and thus we'll insert an LIR ArrangeBy
-                        // later.
                         let source_arrangement = (
                             (0..key.len())
                                 .map(MirScalarExpr::Column)
@@ -1367,15 +1377,28 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     if missing != Default::default() {
                         if is_delta {
                             // join_implementation.rs produced a sub-optimal plan here;
-                            // we shouldn't plan delta joins at all if not all of the required arrangements
-                            // are available. Print an error message, to increase the chances that
-                            // the user will tell us about this.
+                            // we shouldn't plan delta joins at all if not all of the required
+                            // arrangements are available. Soft panic in CI and log an error in
+                            // production to increase the chances that we will catch all situations
+                            // that violate this constraint.
                             soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
 Dataflow info: {}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
                         } else {
-                            // It's fine and expected that linear joins don't have all their arrangements available up front,
-                            // so no need to print an error here.
+                            soft_panic_or_log!("Arrangements depended on by a non-delta join are absent: {:?}
+Dataflow info: {}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
+                            // Nowadays MIR transforms take care to insert MIR ArrangeBys for each
+                            // Join input. (Earlier, they were missing in the following cases:
+                            //  - They were const-folded away for constant inputs. This is not
+                            //    happening since
+                            //    https://github.com/MaterializeInc/materialize/pull/16351
+                            //  - They were not being inserted for the constant input of
+                            //    `IndexedFilter`s. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/20920
+                            //  - They were not being inserted for the first input of Differential
+                            //    joins. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/16099)
                         }
                         let raw_plan = std::mem::replace(
                             input_plan,
