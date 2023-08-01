@@ -742,7 +742,7 @@ impl Codec for ShardId {
     }
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
-        Ok(shard_id.parse().expect("WIP"))
+        shard_id.parse()
     }
 }
 

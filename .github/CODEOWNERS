@@ -54,6 +54,7 @@
 /src/ore                            @benesch
 /src/persist                        @MaterializeInc/persist
 /src/persist-client                 @MaterializeInc/persist
+/src/persist-txn                    @MaterializeInc/persist
 /src/persist-types                  @MaterializeInc/persist
 /src/pgcopy                         @MaterializeInc/adapter
 /src/pgrepr                         @MaterializeInc/adapter

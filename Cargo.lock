@@ -4449,6 +4449,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-persist-txn"
+version = "0.0.0"
+dependencies = [
+ "differential-dataflow",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "serde_json",
+ "timely",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-persist-types"
 version = "0.0.0"
 dependencies = [
