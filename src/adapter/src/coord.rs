@@ -216,14 +216,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-
     // Like Command::Execute, but its context has already been allocated.
     Execute {
         portal_name: String,
         ctx: ExecuteContext,
         span: tracing::Span,
     },
-
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -233,6 +231,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stmt: Statement<Raw>,
         params: mz_sql::plan::Params,
+    },
+    PeekStageReady {
+        ctx: ExecuteContext,
+        stage: PeekStage,
     },
 }
 

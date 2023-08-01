@@ -14,41 +14,18 @@ use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
 
-use crate::catalog::{CatalogItem, CatalogState, Index, Log};
-use crate::coord::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::catalog::{CatalogItem, Index, Log};
+use crate::coord::dataflows::DataflowBuilder;
 use crate::coord::{CollectionIdBundle, Coordinator};
-
-/// Answers questions about the indexes available on a particular compute
-/// instance.
-#[derive(Debug)]
-pub struct ComputeInstanceIndexOracle<'a> {
-    catalog: &'a CatalogState,
-    compute: ComputeInstanceSnapshot,
-}
 
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
-    pub fn index_oracle(&self, instance: ComputeInstanceId) -> ComputeInstanceIndexOracle {
-        ComputeInstanceIndexOracle {
-            catalog: self.catalog().state(),
-            compute: ComputeInstanceSnapshot::new(&self.controller, instance)
-                .expect("compute instance does not exist"),
-        }
+    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        self.dataflow_builder(instance)
     }
 }
 
 impl DataflowBuilder<'_> {
-    /// Creates a new index oracle for the same compute instance as the dataflow
-    /// builder.
-    pub fn index_oracle(&self) -> ComputeInstanceIndexOracle {
-        ComputeInstanceIndexOracle {
-            catalog: self.catalog,
-            compute: self.compute.clone(),
-        }
-    }
-}
-
-impl ComputeInstanceIndexOracle<'_> {
     /// Identifies a bundle of storage and compute collection ids sufficient for
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
@@ -112,10 +89,10 @@ impl ComputeInstanceIndexOracle<'_> {
     }
 }
 
-impl IndexOracle for ComputeInstanceIndexOracle<'_> {
+impl IndexOracle for DataflowBuilder<'_> {
     fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
         Box::new(
-            ComputeInstanceIndexOracle::indexes_on(self, id)
+            self.indexes_on(id)
                 .map(|(_idx_id, idx)| idx.keys.as_slice()),
         )
     }

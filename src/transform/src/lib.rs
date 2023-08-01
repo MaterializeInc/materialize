@@ -261,7 +261,7 @@ impl IndexOracle for EmptyIndexOracle {
 }
 
 /// A trait for a type that can estimate statistics about a given `GlobalId`
-pub trait StatisticsOracle: fmt::Debug {
+pub trait StatisticsOracle: fmt::Debug + Send {
     /// Returns a cardinality estimate for the given identifier
     ///
     /// Returning `None` means "no estimate"; returning `Some(0)` means estimating that the shard backing `id` is empty

@@ -84,6 +84,7 @@ impl ComputeInstanceSnapshot {
 }
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
+#[derive(Debug)]
 pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     /// A handle to the compute abstraction, which describes indexes by identifier.
@@ -356,8 +357,7 @@ impl<'a> DataflowBuilder<'a> {
             // NOTE(benesch): is the above TODO still true? The dataflow layer
             // has gotten increasingly smart about index selection. Maybe it's
             // now fine to present all indexes?
-            let index_oracle = self.index_oracle();
-            let mut valid_indexes = index_oracle.indexes_on(*id).peekable();
+            let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
                 // Deduplicate indexes by keys, in case we have redundant indexes.
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
@@ -468,11 +468,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(
-            &mut dataflow,
-            &self.index_oracle(),
-            &mz_transform::EmptyStatisticsOracle,
-        )?;
+        mz_transform::optimize_dataflow(&mut dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(dataflow)
     }
@@ -508,11 +504,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(
-            dataflow,
-            &self.index_oracle(),
-            &mz_transform::EmptyStatisticsOracle,
-        )?;
+        mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(())
     }
