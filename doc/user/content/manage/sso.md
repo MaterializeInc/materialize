@@ -27,14 +27,14 @@ Single sign-on in Materialize only supports authentication into the Materialize 
 {{< tabs >}}
 {{< tab "OpenID Connect" >}}
 
-* Click **Add New** and choose the `OpenID Connect` connection type. 
+* Click **Add New** and choose the `OpenID Connect` connection type.
 
 * Add the issuer URL, client ID, and secret key provided by your identity provider.
 
 {{< /tab >}}
 {{< tab "SAML" >}}
 
-* Click **Add New** and choose the `SAML` connection type. 
+* Click **Add New** and choose the `SAML` connection type.
 
 * Add the SSO endpoint and public certificate provided by your identity provider.
 
