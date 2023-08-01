@@ -558,6 +558,7 @@ where
         }
 
         // Process pending replica metrics responses
+        // TODO(guswynn): remove the `replica_metrics`, field, its unused.
         if let Some((replica_id, metrics)) = self.compute.replica_metrics.pop_first() {
             return Some(ComputeControllerResponse::ReplicaMetrics(
                 replica_id, metrics,

@@ -1167,6 +1167,7 @@ impl CatalogState {
                 ServiceProcessMetrics {
                     cpu_nano_cores,
                     memory_bytes,
+                    disk_usage_bytes,
                 },
             )| {
                 Row::pack_slice(&[
@@ -1174,8 +1175,7 @@ impl CatalogState {
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
-                    // TODO(guswynn): disk usage will be filled in later.
-                    Datum::Null,
+                    (*disk_usage_bytes).into(),
                 ])
             },
         );
