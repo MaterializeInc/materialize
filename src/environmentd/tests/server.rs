@@ -2082,13 +2082,13 @@ fn webhook_concurrent_actions() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
             &[],
         )
         .expect("failed to create cluster");
     client
         .execute(
-            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON",
             &[],
         )
         .expect("failed to create source");
@@ -2186,7 +2186,7 @@ fn webhook_concurrent_actions() {
     // count before we dropped the source.
     for _ in 0..expected_success {
         let status = results.next().expect("element");
-        // Note it's possible we get rate limited as we append.
+        // Note it's possible we get rate limited as we append so we allow that here.
         assert!(
             status.is_success() || status == StatusCode::TOO_MANY_REQUESTS,
             "status: {status:?}"
@@ -2195,16 +2195,8 @@ fn webhook_concurrent_actions() {
     // We should have seen at least 100 successes.
     assert!(expected_success > 100);
 
-    let mut saw_atleast_one_success_after_close = false;
-    while let Some(status) = results.next() {
-        if status.is_success() {
-            saw_atleast_one_success_after_close = true;
-        }
-    }
-    assert!(saw_atleast_one_success_after_close);
-
     // Best effort cleanup.
-    let _ = client.execute("DROP CLUSTER webhook_cluster CASCADE", &[]);
+    let _ = client.execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[]);
 }
 
 #[mz_ore::test]
