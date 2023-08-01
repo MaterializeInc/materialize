@@ -2159,7 +2159,7 @@ fn webhook_concurrent_actions() {
     });
 
     // Let the posting threads run for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(4));
+    std::thread::sleep(std::time::Duration::from_secs(5));
 
     // We should see at least this many successes.
     let expected_success = expected_success.load(std::sync::atomic::Ordering::Relaxed);
@@ -2186,7 +2186,7 @@ fn webhook_concurrent_actions() {
     // count before we dropped the source.
     for _ in 0..expected_success {
         let status = results.next().expect("element");
-        assert!(status.is_success())
+        assert!(status.is_success(), "status: {status:?}")
     }
     // We should have seen at least 100 successes.
     assert!(expected_success > 100);
@@ -2198,6 +2198,9 @@ fn webhook_concurrent_actions() {
         }
     }
     assert!(saw_atleast_one_success_after_close);
+
+    // Best effort cleanup.
+    let _ = client.execute("DROP CLUSTER webhook_cluster CASCADE", &[]);
 }
 
 #[mz_ore::test]
