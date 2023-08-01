@@ -12,8 +12,7 @@ the future. It does not affect any existing objects.
 Default privileges are specified for a certain object type and can be applied to all objects of
 that type, all objects of that type created within a specific set of databases, or all objects of
 that type created within a specific set of schemas. Default privileges are also specified for
-objects created by a certain set of roles, if no roles are specified then it is assumed to be the
-current role.
+objects created by a certain set of roles or by all roles.
 
 `ALTER DEFAULT PRIVILEGES` cannot be used to revoke the default owner privileges on objects. Those
 privileges must be revoked manually after the object is created. Though owners can always re-grant
@@ -22,6 +21,8 @@ themselves any privilege on an object that they own.
 The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously created default
 privileges on objects created in the future. It will not revoke any privileges on objects that have
 already been created.
+
+{{< private-preview />}}
 
 ## Syntax
 
@@ -41,7 +42,7 @@ already been created.
 
 Field              | Use
 -------------------|--------------------------------------------------
-_target_role_      | The default privilege will apply to objects created by this role. If this is left blank, then the current role is assumed. Use the `PUBLIC` pseudo-role to target objects created by all roles.
+_target_role_      | The default privilege will apply to objects created by this role. Use the `PUBLIC` pseudo-role to target objects created by all roles.
 **ALL ROLES**      | The default privilege will apply to objects created by all roles. This is shorthand for specifying `PUBLIC` as the _target_role_.
 _schema_name_      | The default privilege will apply only to objects created in this schema, if specified.
 _database_name_    | The default privilege will apply only to objects created in this database, if specified.
@@ -63,7 +64,7 @@ type for sources, views, and materialized views.
 ## Examples
 
 ```sql
-ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO joe;
+ALTER DEFAULT PRIVILEGES FOR ROLE mike GRANT SELECT ON TABLES TO joe;
 ```
 
 ```sql

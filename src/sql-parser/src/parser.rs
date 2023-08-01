@@ -4717,19 +4717,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let target_roles = if self.parse_keyword(FOR) {
-            match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
-                ROLE | USER => TargetRoleSpecification::Roles(
-                    self.parse_comma_separated(Parser::parse_identifier)?,
-                ),
-                ALL => {
-                    self.expect_keyword(ROLES)?;
-                    TargetRoleSpecification::AllRoles
-                }
-                _ => unreachable!(),
+        self.expect_keyword(FOR)?;
+        let target_roles = match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
+            ROLE | USER => TargetRoleSpecification::Roles(
+                self.parse_comma_separated(Parser::parse_identifier)?,
+            ),
+            ALL => {
+                self.expect_keyword(ROLES)?;
+                TargetRoleSpecification::AllRoles
             }
-        } else {
-            TargetRoleSpecification::CurrentRole
+            _ => unreachable!(),
         };
         let target_objects = if self.parse_keyword(IN) {
             match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {
