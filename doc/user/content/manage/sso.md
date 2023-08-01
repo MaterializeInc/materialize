@@ -18,45 +18,32 @@ Single sign-on in Materialize only supports authentication into the Materialize 
 * You must have an existing SAML- or OpenID Connect-based identity provider.
 * Only users assigned the `OrganizationAdmin` role can view and modify SSO settings.
 
-## Configure SAML authentication
+## Configure Authentication
 
-1. [Log in to the Materialize console](https://console.materialize.com/).
+* [Log in to the Materialize console](https://console.materialize.com/).
 
-1. Navigate to **Account** > **Account Settings** > **SSO**.
+* Navigate to **Account** > **Account Settings** > **SSO**.
 
-1. Click **Add New** and choose the `SAML` connection type. 
+{{< tabs >}}
+{{< tab "OpenID Connect" >}}
 
-1. Add the SSO endpoint and public certificate provided by your identity provider.
+* Click **Add New** and choose the `OpenID Connect` connection type. 
 
-1. Optionally, add the SSO domain provided by your identity provider. Click **Proceed**.
+* Add the issuer URL, client ID, and secret key provided by your identity provider.
 
-1. Select *Organization Admin* or *Organization Member* depending on what level of console access the user needs:
+{{< /tab >}}
+{{< tab "SAML" >}}
 
-    - **Organization Admin**: Can invite new users, edit account information,
-    and edit account security information.
-    - **Organization Member**: Can log in to the console.
+* Click **Add New** and choose the `SAML` connection type. 
 
-    It's important to note that these roles determine which actions users can take
-    in the Materialize console, and do not translate to RBAC roles and privileges
-    in the database.
+* Add the SSO endpoint and public certificate provided by your identity provider.
 
-## Configure OpenID Connect authentication
+{{< /tab >}}
+{{< /tabs >}}
 
-1. [Log in to the Materialize console](https://console.materialize.com/).
+* Optionally, add the SSO domain provided by your identity provider. Click **Proceed**.
 
-1. Navigate to **Account** > **Account Settings** > **SSO**.
+* Select *Organization Admin* or *Organization Member* depending on what level of console access the user needs:
 
-1. Click **Add New** and choose the `OpenID Connect` connection type. 
-
-1. Add the issuer URL, client ID, and secret key provided by your identity provider.
-
-1. Optionally, add the SSO domain provided by your identity provider. Click **Proceed**.
-
-1. Select *Organization Admin* or *Organization Member* depending on what level of console access the user needs:
-
-    - **Organization Admin**: Can invite new users, edit account information,
-    and edit account security information.
-    - **Organization Member**: Can login to the console.
-
-    These roles do not refer to RBAC roles and privileges and refer to
-    actions users can take in the Materialize Console.
+    - **Organization Admin**: Can invite new users, edit account information, edit account security information, and are super users in the database.
+    - **Organization Member**: Can login to the console and have database permissions definied via r[role-based access control](/manage/access-control/).
