@@ -8,10 +8,16 @@
 // by the Apache License, Version 2.0.
 
 //! An adaptor to Jepsen Maelstrom's txn-list-append workload
+
+use mz_ore::task::RuntimeExt;
+use tokio::runtime::Handle;
+use tracing::Span;
+
+use crate::maelstrom::node::Service;
 pub mod api;
 pub mod node;
 pub mod services;
-pub mod txn;
+pub mod txn_list_append_single;
 
 /// An adaptor to Jepsen Maelstrom's txn-list-append workload
 ///
@@ -39,4 +45,30 @@ pub struct Args {
     /// unreliability.
     #[clap(long, default_value_t = 0.05)]
     unreliability: f64,
+}
+
+pub async fn run<S: Service + 'static>(args: Args) -> Result<(), anyhow::Error> {
+    // Persist internally has a bunch of sanity check assertions. If
+    // maelstrom tickles one of these, we very much want to bubble this
+    // up into a process exit with non-0 status. It's surprisingly
+    // tricky to be confident that we're not accidentally swallowing
+    // panics in async tasks (in fact there was a bug that did exactly
+    // this at one point), so abort on any panics to be extra sure.
+    mz_ore::panic::set_abort_on_panic();
+
+    // Run the maelstrom stuff in a spawn_blocking because it internally
+    // spawns tasks, so the runtime needs to be in the TLC.
+    Handle::current()
+        .spawn_blocking_named(
+            || "maelstrom::run",
+            move || {
+                Span::current().in_scope(|| {
+                    let read = std::io::stdin();
+                    let write = std::io::stdout();
+                    crate::maelstrom::node::run::<_, _, S>(args, read.lock(), write)
+                })
+            },
+        )
+        .await
+        .expect("task failed")
 }
