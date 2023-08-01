@@ -61,8 +61,8 @@ schema where you created your source, and `<src_name>` is the name you provided 
 the time of creation.
 
 > **_Note_**: This is a public URL that is open to the internet and has no security. To validate that
-requests are legitimate see [Validating Requests](validating_requests). For limits imposed on this
-endpoint see [Request Limits](request_limits).
+requests are legitimate see [Validating Requests](/sql/create-source/webhook/validating_requests). For 
+limits imposed on this endpoint see [Request Limits](/sql/create-source/webhook/request_limits).
 
 ## Validating Requests
 [validating_requests]: #validating_requests
