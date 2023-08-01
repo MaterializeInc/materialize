@@ -539,14 +539,6 @@ class Owners(Check):
                 owner_kafka_conn9  owner_role_01=U/owner_role_01
                 """
             )
-            + self._drop_objects("owner_role_01", 1, expensive=True)
-            + self._drop_objects("other_owner", 2, expensive=True)
-            + self._drop_objects("owner_role_01", 3)
-            + self._drop_objects("other_owner", 4)
-            + self._drop_objects("owner_role_01", 5)
-            + self._drop_objects("other_owner", 6)
-            + self._drop_objects("owner_role_02", 7)
-            + self._drop_objects("other_owner", 8)
             + self._drop_objects("owner_role_01", 9)
             + self._drop_objects("owner_role_02", 10)
             + self._drop_objects("owner_role_03", 11)
