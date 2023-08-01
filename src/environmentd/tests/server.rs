@@ -2186,7 +2186,11 @@ fn webhook_concurrent_actions() {
     // count before we dropped the source.
     for _ in 0..expected_success {
         let status = results.next().expect("element");
-        assert!(status.is_success(), "status: {status:?}")
+        // Note it's possible we get rate limited as we append.
+        assert!(
+            status.is_success() || status == StatusCode::TOO_MANY_REQUESTS,
+            "status: {status:?}"
+        )
     }
     // We should have seen at least 100 successes.
     assert!(expected_success > 100);
