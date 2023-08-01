@@ -164,7 +164,7 @@ function Views(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          id, name, records, size, capacity, allocations
+          id, name, batches, records, size, capacity, allocations
         FROM
           mz_internal.mz_records_per_dataflow
         ${whereFragment}
@@ -209,11 +209,12 @@ function Views(props) {
         <div>error: {error}</div>
       ) : (
         <div>
-          <table>
+          <table class="dataflows">
             <thead>
               <tr>
                 <th>dataflow id</th>
                 <th>index name</th>
+                <th>batches</th>
                 <th>records</th>
                 <th>size [KiB]</th>
                 <th>capacity [KiB]</th>
@@ -233,9 +234,10 @@ function Views(props) {
                     {v[1]}
                   </td>
                   <td>{v[2]}</td>
-                  <td>{Math.round(v[3]/1024)}</td>
+                  <td>{v[3]}</td>
                   <td>{Math.round(v[4]/1024)}</td>
-                  <td>{v[5]}</td>
+                  <td>{Math.round(v[5]/1024)}</td>
+                  <td>{v[6]}</td>
                 </tr>
               ))}
             </tbody>
@@ -277,7 +279,7 @@ function View(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          name, records, size
+          name, batches, records, size
         FROM
           mz_internal.mz_records_per_dataflow
         WHERE
@@ -353,8 +355,9 @@ function View(props) {
       const stats_row = stats_table.rows[0];
       const stats = {
         name: stats_row[0],
-        records: stats_row[1],
-        size: stats_row[2],
+        batches: stats_row[1],
+        records: stats_row[2],
+        size: stats_row[3],
       };
       setStats(stats);
 
@@ -464,7 +467,7 @@ function View(props) {
       }
       const notes = [`id: ${id}`];
       let style = '';
-      if (id in records) {
+      if (id in records && records[id][0] !== null) {
         const record_count = records[id][0];
         const size = Math.ceil(records[id][1]/1024);
         // Any operator that can have records will have a red border (even if it

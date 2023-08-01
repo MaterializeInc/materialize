@@ -7,16 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::rc::Rc;
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
+use differential_dataflow::trace::wrappers::rc::TraceBox;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 
 use crate::logging::compute::ComputeEvent;
 use crate::typedefs::{RowKeySpine, RowSpine};
@@ -197,12 +200,12 @@ where
     G::Timestamp: Timestamp + Lattice + Ord,
     Tr: TraceReader + 'static,
     Tr::Time: Timestamp + Lattice + Ord + Clone + 'static,
-    L: FnMut(&TraceAgent<Tr>) -> (usize, usize, usize) + 'static,
+    L: FnMut(&Tr) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
     let Some(logger) = scope.log_register().get::<ComputeEvent>("materialize/compute") else {return arranged};
-    let mut trace = arranged.trace.clone();
-    let operator = trace.operator().global_id;
+    let operator = arranged.trace.operator().global_id;
+    let trace = Rc::downgrade(&arranged.trace.trace_box_unstable());
 
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
 
@@ -217,14 +220,9 @@ where
                     data.swap(&mut buffer);
                     output.session(&time).give_container(&mut buffer);
                 }
+                let Some(trace) = trace.upgrade() else {return;};
 
-                // We don't want to block compaction.
-                let mut upper = Antichain::new();
-                trace.read_upper(&mut upper);
-                trace.set_logical_compaction(upper.borrow());
-                trace.set_physical_compaction(upper.borrow());
-
-                let (size, capacity, allocations) = logic(&trace);
+                let (size, capacity, allocations) = logic(&trace.borrow().trace);
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {

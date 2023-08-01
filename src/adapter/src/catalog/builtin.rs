@@ -2412,16 +2412,16 @@ SELECT
     dod.name,
     dod.worker_id,
     dod.dataflow_id,
-    ar_size.records,
-    ar_size.size,
-    ar_size.capacity,
-    ar_size.allocations
+    COALESCE(ar_size.records, 0) AS records,
+    COALESCE(ar_size.batches, 0) AS batches,
+    COALESCE(ar_size.size, 0) AS size,
+    COALESCE(ar_size.capacity, 0) AS capacity,
+    COALESCE(ar_size.allocations, 0) AS allocations
 FROM
-    mz_internal.mz_arrangement_sizes_per_worker ar_size,
     mz_internal.mz_dataflow_operator_dataflows_per_worker dod
-WHERE
-    dod.id = ar_size.operator_id AND
-    dod.worker_id = ar_size.worker_id",
+    LEFT OUTER JOIN mz_internal.mz_arrangement_sizes_per_worker ar_size ON
+        dod.id = ar_size.operator_id AND
+        dod.worker_id = ar_size.worker_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2433,6 +2433,7 @@ SELECT
     name,
     dataflow_id,
     pg_catalog.sum(records) AS records,
+    pg_catalog.sum(batches) AS batches,
     pg_catalog.sum(size) AS size,
     pg_catalog.sum(capacity) AS capacity,
     pg_catalog.sum(allocations) AS allocations
@@ -2449,6 +2450,7 @@ SELECT
     dfs.name,
     rdo.worker_id,
     pg_catalog.SUM(rdo.records) as records,
+    pg_catalog.SUM(rdo.batches) as batches,
     pg_catalog.SUM(rdo.size) as size,
     pg_catalog.SUM(rdo.capacity) as capacity,
     pg_catalog.SUM(rdo.allocations) as allocations
@@ -2472,6 +2474,7 @@ SELECT
     id,
     name,
     pg_catalog.SUM(records) as records,
+    pg_catalog.SUM(batches) as batches,
     pg_catalog.SUM(size) as size,
     pg_catalog.SUM(capacity) as capacity,
     pg_catalog.SUM(allocations) as allocations
@@ -3227,16 +3230,16 @@ heap_allocations_cte AS (
 SELECT
     batches_cte.operator_id,
     batches_cte.worker_id,
-    records_cte.records,
+    COALESCE(records_cte.records, 0) AS records,
     batches_cte.batches,
-    heap_size_cte.size,
-    heap_capacity_cte.capacity,
-    heap_allocations_cte.allocations
+    COALESCE(heap_size_cte.size, 0) AS size,
+    COALESCE(heap_capacity_cte.capacity, 0) AS capacity,
+    COALESCE(heap_allocations_cte.allocations, 0) AS allocations
 FROM batches_cte
-JOIN records_cte USING (operator_id, worker_id)
-JOIN heap_size_cte USING (operator_id, worker_id)
-JOIN heap_capacity_cte USING (operator_id, worker_id)
-JOIN heap_allocations_cte USING (operator_id, worker_id)",
+LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
