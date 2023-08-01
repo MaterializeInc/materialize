@@ -7,7 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Note: Also used for creating a webhook source.
-> CREATE SECRET secret1 AS 'shared_key';
-
-> CREATE SECRET secret2 AS 'secret';
+> SELECT body FROM my_webhook_source;
+"using an mz secret"
