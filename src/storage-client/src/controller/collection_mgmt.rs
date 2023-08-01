@@ -26,7 +26,7 @@ use tracing::debug;
 use crate::client::TimestamplessUpdate;
 use crate::controller::{persist_handles, StorageError};
 
-// Note(parkmycar): The capacity here was chosen randomly.
+// Note(parkmycar): The capacity here was chosen arbitrarily.
 const CHANNEL_CAPACITY: usize = 256;
 // We only append data once per-second.
 const DEFAULT_APPEND_CADANCE: Duration = Duration::from_secs(1);
