@@ -432,8 +432,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn report_compute_frontiers(&mut self) {
         let mut new_uppers = Vec::new();
 
+        // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
+        let mut new_frontier = Antichain::new();
+
         for (&id, collection) in self.compute_state.collections.iter_mut() {
-            let mut new_frontier = Antichain::new();
+            new_frontier.clear();
             if let Some(traces) = self.compute_state.traces.get_mut(&id) {
                 assert!(
                     collection.sink_write_frontier.is_none(),
@@ -478,7 +481,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             }
 
-            new_uppers.push((id, new_frontier));
+            new_uppers.push((id, new_frontier.clone()));
             collection.set_reported_frontier(new_reported_frontier);
         }
 
