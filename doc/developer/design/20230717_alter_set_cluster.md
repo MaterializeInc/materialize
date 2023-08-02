@@ -17,7 +17,7 @@ This is problematic:
 
 ## Goals
 
-* Users chan change the cluster on which a source, sink, or materialized view
+* Users can change the cluster on which a source, sink, or materialized view
   runs.
 
 ## Non-Goals
@@ -31,22 +31,30 @@ Materialize:
 
 ```sql
 -- Move a source to cluster `clstr`:
-ALTER SOURCE src SET IN CLUSTER clstr;
+ALTER SOURCE src SET CLUSTER clstr;
 
 -- Move a sink to cluster `c2`:
-ALTER SINK snk SET IN CLUSTER c2;
+ALTER SINK snk SET CLUSTER c2;
 
 -- Move a materialized view to cluster `prod`:
-ALTER MATERIALIZED VIEW my_view SET IN CLUSTER prod;
+ALTER MATERIALIZED VIEW my_view SET CLUSTER prod;
 ```
 
 This corresponds to the `CREATE` syntax where the user specifies the cluster
-with an `IN CLUSTER` parameter.
+with an `CLUSTER` parameter.
+
+Note that this is _intentionally_ lacking parens
+(`ALTER SOURCE src SET (CLUSTER = clstr);`).
+This is for consistency with the analogous PostgreSQL command
+`ALTER TABLE ... SET {SCHEMA|TABLESPACE} {schema|tblspc}`.
+The rule is that only parameters configured in the `WITH` block go inside the
+parens; parameters that have dedicated syntax, like schemas, tablespaces, and
+clusters, get dedicated `ALTER ... SET` syntax too.
 
 ## Detailed description
 
 The `ALTER SOURCE`, `ALTER SINK` and `ALTER MATERIALIZED VIEW` statements will
-learn a new option `SET IN CLUSTER clstr`:
+learn a new option `SET CLUSTER clstr`:
 * The cluster name `clstr` must match an existing cluster.
 * The usual constraints apply. For sources and sinks, the cluster must either be
   empty or only host sources and sinks. The replication factor must be 0 or 1.
@@ -71,7 +79,7 @@ Attempting to schedule incompatible objects will result in an error like the
 following:
 
 ```sql
-ALTER SOURCE src SET IN CLUSTER compute_cluster;
+ALTER SOURCE src SET CLUSTER compute_cluster;
 ERROR: cannot alter source cluster to cluster containing indexes or materialized views
 ```
 
@@ -80,7 +88,7 @@ replication factor. Attempting to do so will result in an error like the
 following:
 
 ```sql
-ALTER SOURCE src SET IN CLUSTER cluster;
+ALTER SOURCE src SET CLUSTER cluster;
 ERROR: cannot alter source cluster to cluster with more than one replica
 ```
 
@@ -93,7 +101,13 @@ Sources and sinks can have linked clusters, which are clusters owned by the
 source or sink. Altering clusters of sources and sinks will cause any previously
 linked cluster to be dropped.
 
-We do not support moving a source or sink back to a linked cluster.
+We do not support moving a source or sink back to a linked cluster. If there is
+the need to move sources or sinks back to a linked cluster, we could use the
+following syntax:
+
+```sql
+ALTER SOURCE src RESET CLUSTER
+```
 
 ## Alternatives
 
@@ -102,30 +116,12 @@ We do not support moving a source or sink back to a linked cluster.
 * We could support moving a source or sink to a linked cluster when either a size
   value was previously specified, or explicitly set on the `ALTER` command.
 
-### `SET CLUSTER`
+### `SET IN CLUSTER`
 
-We rejected the syntax to handle the cluster of an object as a `WITH` parameter
-that the user could set as follows:
-
-```sql
-ALTER SOURCE src SET CLUSTER clsname;
-```
-
-Note that this is _intentionally_ lacking parens
-(`ALTER SOURCE src SET (CLUSTER = clstr);`).
-This is for consistency with the analogous PostgreSQL command
-`ALTER TABLE ... SET {SCHEMA|TABLESPACE} {schema|tblspc}`.
-The rule is that only parameters configured in the `WITH` block go inside the
-parens; parameters that have dedicated syntax, like schemas, tablespaces, and
-clusters, get dedicated `ALTER ... SET` syntax too.
-
-We could offer an alternative syntax using `IN`:
+We rejected the following alternative syntax using `IN`:
 ```sql
 ALTER SOURCE src IN CLUSTER clstr;
 ```
-## Open questions
 
-* Is the syntax accepted?
-
-* Should we support `ALTER SOURCE src RESET CLUSTER`? I'm not sure what the
-  semantics should be.
+This is to avoid potential future conflict with setting parameters that
+explicitly require `IN`.
