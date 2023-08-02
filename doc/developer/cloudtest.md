@@ -182,7 +182,7 @@ wait(condition="delete", resource="secret/some_secret")
 
 ```python
 mz.testdrive.run(
-    dedent(
+    input=dedent(
         """
         > SELECT 1;
         1
