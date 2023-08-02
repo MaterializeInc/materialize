@@ -125,7 +125,23 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
 }
 
 /// An [Interpreter] context.
-pub type Context<Domain> = BTreeMap<LocalId, ContextEntry<Domain>>;
+#[derive(Debug)]
+pub struct InterpreterContext<Domain> {
+    /// The bindings currently in the context.
+    pub bindings: BTreeMap<LocalId, ContextEntry<Domain>>,
+    /// Is the context recursive (i.e., is one of our ancestors a `LetRec` binding) or not.
+    pub is_rec: bool,
+}
+pub type Context<Domain> = InterpreterContext<Domain>;
+
+impl<Domain> Default for InterpreterContext<Domain> {
+    fn default() -> Self {
+        InterpreterContext {
+            bindings: Default::default(),
+            is_rec: false,
+        }
+    }
+}
 
 /// An entry in an [Interpreter] context.
 ///
@@ -200,13 +216,13 @@ where
     /// manner, keeping the `ctx` field of the enclosing field up to date, and
     /// returns the final result for the entire `expr`.
     pub fn apply(&mut self, expr: &Plan<T>) -> Result<I::Domain, RecursionLimitError> {
-        self.apply_rec(expr, RecursionGuard::with_limit(RECURSION_LIMIT))
+        self.apply_rec(expr, &RecursionGuard::with_limit(RECURSION_LIMIT))
     }
 
     fn apply_rec(
         &mut self,
         expr: &Plan<T>,
-        rg: RecursionGuard,
+        rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
         use Plan::*;
         rg.checked_recur(|_| {
@@ -221,15 +237,18 @@ where
                 }
                 Let { id, value, body } => {
                     // Extend context with the `value` result.
-                    let res_value = self.apply(value)?;
-                    let old_entry = self.ctx.insert(*id, ContextEntry::of_let(res_value));
+                    let res_value = self.apply_rec(value, rg)?;
+                    let old_entry = self
+                        .ctx
+                        .bindings
+                        .insert(*id, ContextEntry::of_let(res_value));
                     assert!(old_entry.is_none(), "No shadowing");
 
                     // Descend into `body` with the extended context.
-                    let res_body = self.apply(body);
+                    let res_body = self.apply_rec(body, rg);
 
                     // Revert the context.
-                    self.ctx.remove(id);
+                    self.ctx.bindings.remove(id);
 
                     // Return result from `body`.
                     res_body
@@ -240,11 +259,13 @@ where
                     limits,
                     body,
                 } => {
-                    // Extend the context with `bottom` for each recursive binding.
-                    // This corresponds to starting with the most optimistic value.
+                    // Make context recursive and extend it with `bottom` for each recursive
+                    // binding. This corresponds to starting with the most optimistic value.
+                    let previous_is_rec = self.ctx.is_rec;
+                    self.ctx.is_rec = true;
                     for id in ids.iter() {
                         let new_entry = ContextEntry::of_let_rec(I::Domain::bottom());
-                        let old_entry = self.ctx.insert(*id, new_entry);
+                        let old_entry = self.ctx.bindings.insert(*id, new_entry);
                         assert!(old_entry.is_none());
                     }
 
@@ -267,7 +288,7 @@ where
                             // Reset all ids to `top` (a conservative value).
                             for id in ids.iter() {
                                 let new_entry = ContextEntry::of_let_rec(I::Domain::top());
-                                self.ctx.insert(*id, new_entry);
+                                self.ctx.bindings.insert(*id, new_entry);
                             }
 
                             break;
@@ -277,15 +298,15 @@ where
                         let mut change = false;
                         for (id, value) in zip_eq(ids.iter(), values.iter()) {
                             // Compute and join new with the current estimate.
-                            let mut res_value_new = self.apply(value)?;
-                            res_value_new.join_assign(&self.ctx.get(id).unwrap().value);
+                            let mut res_value_new = self.apply_rec(value, rg)?;
+                            res_value_new.join_assign(&self.ctx.bindings.get(id).unwrap().value);
                             // If the estimate has changed
-                            if res_value_new != self.ctx.get(id).unwrap().value {
+                            if res_value_new != self.ctx.bindings.get(id).unwrap().value {
                                 // Set the change flag.
                                 change = true;
                                 // Update the the context entry.
                                 let new_entry = ContextEntry::of_let_rec(res_value_new);
-                                self.ctx.insert(*id, new_entry);
+                                self.ctx.bindings.insert(*id, new_entry);
                             }
                         }
                         if !change {
@@ -296,11 +317,15 @@ where
                     }
 
                     // Descend into `body` with the extended context.
-                    let res_body = self.apply(body);
+                    // Note, however, that while the body uses bindings
+                    // that are recursive, its recursiveness is given
+                    // by the previous context.
+                    self.ctx.is_rec = previous_is_rec;
+                    let res_body = self.apply_rec(body, rg);
 
                     // Revert the context.
                     for id in ids.iter() {
-                        self.ctx.remove(id);
+                        self.ctx.bindings.remove(id);
                     }
 
                     // Return result from `body`.
@@ -312,7 +337,7 @@ where
                     input_key_val,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self.interpret.mfp(&self.ctx, input, mfp, input_key_val))
                 }
@@ -324,7 +349,7 @@ where
                     input_key,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self
                         .interpret
@@ -334,7 +359,7 @@ where
                     // Descend recursively into all children.
                     let inputs = inputs
                         .iter()
-                        .map(|input| self.apply(input))
+                        .map(|input| self.apply_rec(input, rg))
                         .collect::<Result<Vec<_>, _>>()?;
                     // Interpret the current node.
                     Ok(self.interpret.join(&self.ctx, inputs, plan))
@@ -346,7 +371,7 @@ where
                     input_key,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self
                         .interpret
@@ -354,13 +379,13 @@ where
                 }
                 TopK { input, top_k_plan } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self.interpret.top_k(&self.ctx, input, top_k_plan))
                 }
                 Negate { input } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self.interpret.negate(&self.ctx, input))
                 }
@@ -369,7 +394,7 @@ where
                     threshold_plan,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self.interpret.threshold(&self.ctx, input, threshold_plan))
                 }
@@ -377,7 +402,7 @@ where
                     // Descend recursively into all children.
                     let inputs = inputs
                         .iter()
-                        .map(|input| self.apply(input))
+                        .map(|input| self.apply_rec(input, rg))
                         .collect::<Result<Vec<_>, _>>()?;
                     // Interpret the current node.
                     Ok(self.interpret.union(&self.ctx, inputs))
@@ -389,7 +414,7 @@ where
                     input_mfp,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self
                         .interpret
@@ -436,13 +461,13 @@ where
     /// result of itself and its children to an `action` callback that can
     /// optionally mutate it.
     pub fn apply(&mut self, expr: &mut Plan<T>) -> Result<I::Domain, RecursionLimitError> {
-        self.apply_rec(expr, RecursionGuard::with_limit(RECURSION_LIMIT))
+        self.apply_rec(expr, &RecursionGuard::with_limit(RECURSION_LIMIT))
     }
 
     fn apply_rec(
         &mut self,
         expr: &mut Plan<T>,
-        rg: RecursionGuard,
+        rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
         use Plan::*;
         rg.checked_recur(|_| {
@@ -465,15 +490,18 @@ where
                 }
                 Let { id, value, body } => {
                     // Extend context with the `value` result.
-                    let res_value = self.apply(value)?;
-                    let old_entry = self.ctx.insert(*id, ContextEntry::of_let(res_value));
+                    let res_value = self.apply_rec(value, rg)?;
+                    let old_entry = self
+                        .ctx
+                        .bindings
+                        .insert(*id, ContextEntry::of_let(res_value));
                     assert!(old_entry.is_none(), "No shadowing");
 
                     // Descend into `body` with the extended context.
-                    let res_body = self.apply(body);
+                    let res_body = self.apply_rec(body, rg);
 
                     // Revert the context.
-                    self.ctx.remove(id);
+                    self.ctx.bindings.remove(id);
 
                     // Return result from `body`.
                     res_body
@@ -484,11 +512,13 @@ where
                     limits,
                     body,
                 } => {
-                    // Extend the context with `bottom` for each recursive binding.
-                    // This corresponds to starting with the most optimistic value.
+                    // Make context recursive and extend it with `bottom` for each recursive
+                    // binding. This corresponds to starting with the most optimistic value.
+                    let previous_is_rec = self.ctx.is_rec;
+                    self.ctx.is_rec = true;
                     for id in ids.iter() {
                         let new_entry = ContextEntry::of_let_rec(I::Domain::bottom());
-                        let old_entry = self.ctx.insert(*id, new_entry);
+                        let old_entry = self.ctx.bindings.insert(*id, new_entry);
                         assert!(old_entry.is_none());
                     }
 
@@ -511,7 +541,7 @@ where
                             // Reset all ids to `top` (a conservative value).
                             for id in ids.iter() {
                                 let new_entry = ContextEntry::of_let_rec(I::Domain::top());
-                                self.ctx.insert(*id, new_entry);
+                                self.ctx.bindings.insert(*id, new_entry);
                             }
 
                             break;
@@ -521,15 +551,15 @@ where
                         let mut change = false;
                         for (id, value) in zip_eq(ids.iter(), values.iter_mut()) {
                             // Compute and join new with the current estimate.
-                            let mut res_value_new = self.apply(value)?;
-                            res_value_new.join_assign(&self.ctx.get(id).unwrap().value);
+                            let mut res_value_new = self.apply_rec(value, rg)?;
+                            res_value_new.join_assign(&self.ctx.bindings.get(id).unwrap().value);
                             // If the estimate has changed
-                            if res_value_new != self.ctx.get(id).unwrap().value {
+                            if res_value_new != self.ctx.bindings.get(id).unwrap().value {
                                 // Set the change flag.
                                 change = true;
                                 // Update the the context entry.
                                 let new_entry = ContextEntry::of_let_rec(res_value_new);
-                                self.ctx.insert(*id, new_entry);
+                                self.ctx.bindings.insert(*id, new_entry);
                             }
                         }
                         if !change {
@@ -540,11 +570,15 @@ where
                     }
 
                     // Descend into `body` with the extended context.
-                    let res_body = self.apply(body);
+                    // Note, however, that while the body uses bindings
+                    // that are recursive, its recursiveness is given
+                    // by the previous context.
+                    self.ctx.is_rec = previous_is_rec;
+                    let res_body = self.apply_rec(body, rg);
 
                     // Revert the context.
                     for id in ids.iter() {
-                        self.ctx.remove(id);
+                        self.ctx.bindings.remove(id);
                     }
 
                     // Return result from `body`.
@@ -556,7 +590,7 @@ where
                     input_key_val,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self
                         .interpret
@@ -574,7 +608,7 @@ where
                     input_key,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self.interpret.flat_map(
                         &self.ctx,
@@ -593,7 +627,7 @@ where
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
                         .iter_mut()
-                        .map(|input| self.apply(input))
+                        .map(|input| self.apply_rec(input, rg))
                         .collect::<Result<Vec<_>, _>>()?;
                     // Interpret the current node.
                     let result = self.interpret.join(&self.ctx, inputs.clone(), plan);
@@ -609,7 +643,7 @@ where
                     input_key,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self.interpret.reduce(
                         &self.ctx,
@@ -625,7 +659,7 @@ where
                 }
                 TopK { input, top_k_plan } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self.interpret.top_k(&self.ctx, input.clone(), top_k_plan);
                     // Mutate the current node using the given `action`.
@@ -635,7 +669,7 @@ where
                 }
                 Negate { input } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self.interpret.negate(&self.ctx, input.clone());
                     // Mutate the current node using the given `action`.
@@ -648,7 +682,7 @@ where
                     threshold_plan,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self
                         .interpret
@@ -662,7 +696,7 @@ where
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
                         .iter_mut()
-                        .map(|input| self.apply(input))
+                        .map(|input| self.apply_rec(input, rg))
                         .collect::<Result<Vec<_>, _>>()?;
                     // Interpret the current node.
                     let result = self.interpret.union(&self.ctx, inputs.clone());
@@ -678,7 +712,7 @@ where
                     input_mfp,
                 } => {
                     // Descend recursively into all children.
-                    let input = self.apply(input)?;
+                    let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self.interpret.arrange_by(
                         &self.ctx,
