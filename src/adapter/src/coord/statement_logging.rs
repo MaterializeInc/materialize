@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::BytesMut;
@@ -17,6 +18,7 @@ use mz_repr::statement_logging::{
 };
 use mz_sql::plan::Params;
 use qcell::QCell;
+use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use uuid::Uuid;
 
@@ -48,6 +50,37 @@ pub enum PreparedStatementLoggingInfo {
 
 #[derive(Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct StatementLoggingId(Uuid);
+
+#[derive(Debug)]
+pub(crate) struct StatementLogging {
+    /// Information about statement executions that have been logged
+    /// but not finished.
+    ///
+    /// This map needs to have enough state left over to later retract
+    /// the system table entries (so that we can update them when the
+    /// execution finished.)
+    executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
+
+    /// Information about sessions that have been started, but which
+    /// have not yet been logged in `mz_session_history`.
+    /// They may be logged as part of a statement being executed (and chosen for logging).
+    unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
+
+    /// A reproducible RNG for deciding whether to sample statement executions.
+    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
+    /// Controlled by the system var `statement_logging_use_reproducible_rng`.
+    reproducible_rng: rand_chacha::ChaCha8Rng,
+}
+
+impl StatementLogging {
+    pub(crate) fn new() -> Self {
+        Self {
+            executions_begun: BTreeMap::new(),
+            unlogged_sessions: BTreeMap::new(),
+            reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
+        }
+    }
+}
 
 impl Coordinator {
     /// Returns any statement logging events needed for a particular
@@ -126,7 +159,7 @@ impl Coordinator {
             ended_at: now_millis,
         };
 
-        let began_record = self.statement_logging_executions_begun.remove(&id).expect(
+        let began_record = self.statement_logging.executions_begun.remove(&id).expect(
             "matched `begin_statement_execution` and `end_statement_execution` invocations",
         );
         let updates = self
@@ -152,7 +185,7 @@ impl Coordinator {
             .system_config()
             .statement_logging_use_reproducible_rng()
         {
-            distribution.sample(&mut self.statement_logging_reproducible_rng)
+            distribution.sample(&mut self.statement_logging.reproducible_rng)
         } else {
             distribution.sample(&mut thread_rng())
         };
@@ -204,7 +237,8 @@ impl Coordinator {
             .catalog
             .state()
             .pack_statement_began_execution_update(&record, 1);
-        self.statement_logging_executions_begun
+        self.statement_logging
+            .executions_begun
             .insert(ev_id, record);
         let updates = if let Some(ps_record) = ps_record {
             let ps_ev = self
@@ -212,7 +246,8 @@ impl Coordinator {
                 .state()
                 .pack_statement_prepared_update(&ps_record);
             if let Some(sh) = self
-                .statement_logging_unlogged_sessions
+                .statement_logging
+                .unlogged_sessions
                 .remove(&ps_record.session_id)
             {
                 let sh_ev = self.catalog.state().pack_session_history_update(&sh);
@@ -240,6 +275,6 @@ impl Coordinator {
             application_name,
             authenticated_user,
         };
-        self.statement_logging_unlogged_sessions.insert(id, event);
+        self.statement_logging.unlogged_sessions.insert(id, event);
     }
 }
