@@ -1028,10 +1028,7 @@ mod tests {
         let cache = new_test_client_cache();
         cache.cfg.dynamic.set_blob_target_size(100);
         let (mut write, _) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
             .expect_open::<String, String, u64, i64>(ShardId::new())
@@ -1102,10 +1099,7 @@ mod tests {
         let cache = new_test_client_cache();
         cache.cfg.dynamic.set_blob_target_size(100);
         let (mut write, _) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
             .expect_open::<String, String, CodecProduct, i64>(ShardId::new())
