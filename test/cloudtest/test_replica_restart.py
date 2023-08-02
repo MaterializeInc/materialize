@@ -12,6 +12,7 @@ import time
 from io import StringIO
 from textwrap import dedent
 
+import pytest
 from pg8000 import Connection
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
@@ -48,6 +49,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that an OOMing cluster replica generates expected entries in
 # `mz_cluster_replica_statuses`
+@pytest.mark.skip(reason="Now fails after a Buildkite upgrade #20948")
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
