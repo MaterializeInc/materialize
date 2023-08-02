@@ -38,7 +38,7 @@ Field                            | Use
 
 ### `BODY FORMAT` options
 
-Field    | Value    | Description
+Field    | Type     | Description
 ---------|----------|-------------------------
 `TEXT`   | `text`   | Parses the body of a request as UTF-8 text. If the body is not valid UTF-8, a response of `400` Bad Request will be returned.
 `JSON`   | `jsonb`  | Parses the body of a request as JSON. If the body is not valid JSON, a respose of `400` Bad Request will be returned.
@@ -46,11 +46,21 @@ Field    | Value    | Description
 
 ### `CHECK WITH` options
 
-Field                  | Value               | Description
+Field                  | Type                | Description
 -----------------------|---------------------|--------------
 `BODY`                 | `text` or `bytea`   | Provide a column `'body'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the type can be changed to `bytea` with the optional **BYTES** keyword.
 `HEADERS`              | `map[text=>text]` or `map[text=>bytea]` | Provide a column `'headers'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
 `SECRET` _secret_name_ | `text` or `bytea`    | Provide a column _secret_name_ to the check expression, with the value of the [`SECRET`](/sql/create-secret) _secret_name_. The column can be renamed with the optional **AS** _alias_ statement, and the type can be changed to `bytea` with the optional **BYTES** keyword.
+
+## Source Format
+
+If creation is successful you'll have a new source object with name _src_name_ and, based on what
+you defined with `BODY FORMAT` and `INCLUDE HEADERS`, the following columns.
+
+Column     | Type                        | Optional?                                      |
+-----------|-----------------------------|------------------------------------------------|
+ body      | `bytea`, `jsonb`, or `text` | No                                             |
+ headers   | `map[text => text]`         | Yes, present if `INCLUDE HEADERS` is specified |
 
 ## Webhook URL
 
@@ -60,9 +70,13 @@ Console](https://console.materialize.com/). Then `<database>` and `<schema>` are
 schema where you created your source, and `<src_name>` is the name you provided for your source at
 the time of creation.
 
+{{< callout primary_text="Security" >}}
 
-> **_Note:_** This is a public URL that is open to the internet and has no security. To validate that
-requests are legitimate see Validating Requests. For limits imposed on this endpoint see Request Limits.
+This is a public URL that is open to the internet and has no security. To validate that requests
+are legitimate see [Validating Requests](#validating-requests). For limits imposed on this endpoint
+see [Request Limits](#request-limits).
+
+{{< /callout >}}
 
 ## Validating Requests
 
@@ -93,10 +107,13 @@ validation expression has type `text`. Futher, the request headers are not persi
 `my_webhook_source` since `INCLUDE HEADERS` was not specified, but they are provided to the
 validation expression.
 
+{{< callout primary_text="Security" >}}
 
-> **_Note:_** Without a `CHECK` statement **all requests will be accepted**. To prevent bad actors from
+Without a `CHECK` statement **all requests will be accepted**. To prevent bad actors from
 inserting data it is **strongly encouraged** that you define a `CHECK` statement with your webhook
 sources.
+
+{{< /callout >}}
 
 ## Request Limits
 
@@ -105,4 +122,4 @@ Webhook sources apply the following limits to received requests:
 * Maximum size of the request body is `2MB`. Requests larger than this will fail with 413 Payload Too Large.
 * Maximum number of concurrent connections is 100, across all webhook sources. Trying to connect
 when the server is at the maximum will return 429 Too Many Requests.
-* Requests that contain a header name specified more than one, will be rejected with 401 Unauthorized.
+* Requests that contain a header name specified more than once will be rejected with 401 Unauthorized.
