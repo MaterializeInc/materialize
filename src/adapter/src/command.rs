@@ -771,6 +771,7 @@ impl ExecuteResponse {
                 vec![AlteredObject]
             }
             AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
+            AlterSetCluster => vec![AlteredObject],
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }

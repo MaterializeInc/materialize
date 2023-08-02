@@ -341,6 +341,7 @@ pub fn generate_required_role_membership(
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterNoop(_)
+        | Plan::AlterSetCluster(_)
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
         | Plan::AlterSink(_)
@@ -442,6 +443,9 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterSink(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSource(alter_source) | Plan::PurifiedAlterSource { alter_source, .. } => {
             vec![ObjectId::Item(alter_source.id)]
+        }
+        Plan::AlterSetCluster(plan) => {
+            vec![ObjectId::Item(plan.id)]
         }
         Plan::AlterItemRename(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
@@ -986,6 +990,13 @@ fn generate_required_privileges(
             }
             ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
+        Plan::AlterSetCluster(plan::AlterSetClusterPlan { id: _, set_cluster }) => {
+            vec![(
+                SystemObjectId::Object(set_cluster.into()),
+                AclMode::CREATE,
+                role_id,
+            )]
+        }
         Plan::GrantRole(plan::GrantRolePlan {
             role_ids: _,
             member_ids: _,

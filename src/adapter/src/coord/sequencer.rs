@@ -51,6 +51,7 @@ use crate::{rbac, ExecuteContext};
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
+mod alter_set_cluster;
 mod cluster;
 mod inner;
 mod linked_cluster;
@@ -319,6 +320,10 @@ impl Coordinator {
                 let result = self
                     .sequence_alter_cluster_replica_rename(ctx.session(), plan)
                     .await;
+                ctx.retire(result);
+            }
+            Plan::AlterSetCluster(plan) => {
+                let result = self.sequence_alter_set_cluster(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::AlterItemRename(plan) => {

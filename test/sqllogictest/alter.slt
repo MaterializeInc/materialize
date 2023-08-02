@@ -43,3 +43,44 @@ query TT
 SHOW CONNECTIONS
 ----
 d   kafka
+
+statement ok
+CREATE CLUSTER other_cluster SIZE '1', REPLICATION FACTOR 0
+
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+ALTER MATERIALIZED VIEW does_not_exist SET CLUSTER default
+
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+ALTER SOURCE does_not_exist SET CLUSTER default
+
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+ALTER SINK does_not_exist SET CLUSTER default
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_set_cluster = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE VIEW v AS SELECT 1
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+statement ok
+ALTER MATERIALIZED VIEW mv SET CLUSTER default
+
+query error db error: ERROR: unknown cluster 'does_not_exist'
+ALTER MATERIALIZED VIEW mv SET CLUSTER does_not_exist
+
+query error db error: ERROR: ALTER SET CLUSTER are not supported
+ALTER MATERIALIZED VIEW mv SET CLUSTER other_cluster
+
+query error db error: ERROR: ALTER VIEW SET CLUSTER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/alter\-set\-cluster/
+ALTER VIEW mv SET CLUSTER default
+
+query error db error: ERROR: Cannot modify view as MATERIALIZED VIEW
+ALTER MATERIALIZED VIEW v SET CLUSTER default
+
+query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/issues/20841 for more details
+ALTER SINK v SET CLUSTER default

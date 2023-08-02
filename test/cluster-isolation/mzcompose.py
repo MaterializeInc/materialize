@@ -19,6 +19,7 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.ui import UIError
 
 SERVICES = [
     Zookeeper(),
@@ -279,7 +280,15 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             "testdrive",
             *[n.name for n in nodes],
         ]
-        c.kill(*cleanup_list)
+        try:
+            c.kill(*cleanup_list)
+        except UIError as e:
+            print(e)
+            # Killing multiple clusterds from the same cluster may fail
+            # as the second clusterd may have alredy exited after the first
+            # one was killed, due to the 'shared-fate' mechanism.
+            pass
+
         c.rm(*cleanup_list, destroy_volumes=True)
 
     c.rm_volumes("mzdata")

@@ -67,6 +67,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterSetCluster(AlterSetClusterStatement<T>),
     AlterSink(AlterSinkStatement<T>),
     AlterSource(AlterSourceStatement<T>),
     AlterSystemSet(AlterSystemSetStatement),
@@ -130,6 +131,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
+            Statement::AlterSetCluster(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
             Statement::AlterSink(stmt) => f.write_node(stmt),
             Statement::AlterSource(stmt) => f.write_node(stmt),
@@ -198,6 +200,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
+        StatementKind::AlterSetCluster => "alter_set_cluster",
         StatementKind::AlterSink => "alter_sink",
         StatementKind::AlterSource => "alter_source",
         StatementKind::AlterSystemSet => "alter_system_set",
@@ -1190,6 +1193,33 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// `ALTER SET CLUSTER`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSetClusterStatement<T: AstInfo> {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub object_type: ObjectType,
+    pub set_cluster: T::ClusterName,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSetClusterStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+
+        if self.if_exists {
+            f.write_str(" IF EXISTS");
+        }
+
+        f.write_str(" ");
+        f.write_node(&self.name);
+
+        f.write_str(" SET CLUSTER ");
+        f.write_node(&self.set_cluster);
+    }
+}
+impl_display_t!(AlterSetClusterStatement);
 
 /// `CREATE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
