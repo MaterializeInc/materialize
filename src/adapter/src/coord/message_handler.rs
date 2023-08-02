@@ -110,6 +110,9 @@ impl Coordinator {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
                     .await;
             }
+            Message::PeekStageReady { ctx, stage } => {
+                self.sequence_peek_stage(ctx, stage).await;
+            }
         }
     }
 

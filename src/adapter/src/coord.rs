@@ -216,14 +216,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-
     // Like Command::Execute, but its context has already been allocated.
     Execute {
         portal_name: String,
         ctx: ExecuteContext,
         span: tracing::Span,
     },
-
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -233,6 +231,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stmt: Statement<Raw>,
         params: mz_sql::plan::Params,
+    },
+    PeekStageReady {
+        ctx: ExecuteContext,
+        stage: PeekStage,
     },
 }
 
@@ -332,7 +334,7 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    pub plan: mz_sql::plan::SelectPlan,
+    plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
 }
 
@@ -374,20 +376,20 @@ pub struct PeekStageTimestamp {
 #[derive(Debug)]
 pub struct PeekStageFinish {
     validity: PlanValidity,
-    pub finishing: RowSetFinishing,
-    pub copy_to: Option<CopyFormat>,
-    pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-    pub cluster_id: ClusterId,
-    pub id_bundle: Option<CollectionIdBundle>,
-    pub when: QueryWhen,
-    pub target_replica: Option<ReplicaId>,
-    pub view_id: GlobalId,
-    pub index_id: GlobalId,
-    pub timeline_context: TimelineContext,
-    pub source_ids: BTreeSet<GlobalId>,
-    pub real_time_recency_ts: Option<mz_repr::Timestamp>,
-    pub key: Vec<MirScalarExpr>,
-    pub typ: RelationType,
+    finishing: RowSetFinishing,
+    copy_to: Option<CopyFormat>,
+    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+    cluster_id: ClusterId,
+    id_bundle: Option<CollectionIdBundle>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    view_id: GlobalId,
+    index_id: GlobalId,
+    timeline_context: TimelineContext,
+    source_ids: BTreeSet<GlobalId>,
+    real_time_recency_ts: Option<mz_repr::Timestamp>,
+    key: Vec<MirScalarExpr>,
+    typ: RelationType,
 }
 
 /// An enum describing which cluster to run a statement on.
