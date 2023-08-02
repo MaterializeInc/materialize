@@ -53,3 +53,4 @@ Some areas that are well suited for external contributions are:
 Areas that are not well suited for external contributions:
 - The [coordinator](https://github.com/MaterializeInc/materialize/tree/main/src/adapter/src/coord)
 - [Persist](https://github.com/MaterializeInc/materialize/tree/main/src/persist)
+- [Compute](https://github.com/MaterializeInc/materialize/tree/main/src/compute)
