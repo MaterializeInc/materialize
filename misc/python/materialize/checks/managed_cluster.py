@@ -18,6 +18,16 @@ class CreateManagedCluster(Check):
     def _can_run(self) -> bool:
         return self.base_version >= MzVersion.parse("0.58.0-dev")
 
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                $[version<=6300] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_managed_clusters = true
+                """
+            )
+        )
+
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -69,6 +79,16 @@ class CreateManagedCluster(Check):
 class DropManagedCluster(Check):
     def _can_run(self) -> bool:
         return self.base_version >= MzVersion.parse("0.58.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                $[version<=6300] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_managed_clusters = true
+                """
+            )
+        )
 
     def manipulate(self) -> List[Testdrive]:
         return [

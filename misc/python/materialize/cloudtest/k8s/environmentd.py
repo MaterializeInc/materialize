@@ -211,6 +211,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ]
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
+        if self._meets_maximum_version("0.63.99"):
+            args += ["--system-parameter-default=enable_managed_clusters=true"]
+
         container = V1Container(
             name="environmentd",
             image=self.image(
@@ -281,3 +284,18 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         minimum_version = Version.parse(minimum)
         return tag_version >= minimum_version
+
+    def _meets_maximum_version(self, maximum: str) -> bool:
+        """Determine whether environmentd is at most the `maximum` version."""
+
+        # Assume that unstable and development versions, as indicated by a
+        # missing or unparseable tag, are always above the maximum
+        if self.tag is None:
+            return False
+        try:
+            tag_version = Version.parse(self.tag.removeprefix("v"))
+        except ValueError:
+            return False
+
+        maximum_version = Version.parse(maximum)
+        return tag_version >= maximum_version
