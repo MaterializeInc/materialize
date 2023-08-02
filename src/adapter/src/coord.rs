@@ -99,10 +99,7 @@ use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::statement_logging::{
-    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementExecutionStrategy,
-};
+use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
@@ -119,7 +116,6 @@ use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
-use rand::SeedableRng;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -149,7 +145,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::{flags, AdapterNotice, TimestampProvider};
 
 pub(crate) mod dataflows;
-use self::statement_logging::StatementLoggingId;
+use self::statement_logging::{StatementLogging, StatementLoggingId};
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -1019,23 +1015,8 @@ pub struct Coordinator {
     /// Tracing handle.
     tracing_handle: TracingHandle,
 
-    /// Information about statement executions that have been logged
-    /// but not finished.
-    ///
-    /// This map needs to have enough state left over to later retract
-    /// the system table entries (so that we can update them when the
-    /// execution finished.)
-    statement_logging_executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
-
-    /// Information about sessions that have been started, but which
-    /// have not yet been logged in `mz_session_history`.
-    /// They may be logged as part of a statement being executed (and chosen for logging).
-    statement_logging_unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
-
-    /// A reproducible RNG for deciding whether to sample statement executions.
-    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
-    /// Controlled by the system var `statement_logging_use_reproducible_rng`.
-    statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng,
+    /// Data used by the statement logging feature.
+    statement_logging: StatementLogging,
 }
 
 impl Coordinator {
@@ -2024,9 +2005,7 @@ pub async fn serve(
                 segment_client,
                 metrics,
                 tracing_handle,
-                statement_logging_executions_begun: BTreeMap::new(),
-                statement_logging_reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
-                statement_logging_unlogged_sessions: BTreeMap::new(),
+                statement_logging: StatementLogging::new(),
             };
             let bootstrap = handle.block_on(async {
                 coord
