@@ -369,7 +369,7 @@ impl Coordinator {
             },
         );
         let update = self.catalog().state().pack_session_update(&session, 1);
-        self.begin_session(&session);
+        self.begin_session_for_statement_logging(&session);
         self.send_builtin_table_updates(vec![update]).await;
 
         ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
@@ -866,6 +866,7 @@ impl Coordinator {
             .dec();
         self.active_conns.remove(session.conn_id());
         self.cancel_pending_peeks(session.conn_id());
+        self.end_session_for_statement_logging(session.uuid());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }
