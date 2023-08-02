@@ -1465,10 +1465,6 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     """
     Test that compute reconciliation reuses existing dataflows.
-
-    Note that this is currently not working, due to #17594. This test
-    tests the current, undesired behavior and must be adjusted once
-    #17594 is fixed.
     """
 
     c.down(destroy_volumes=True)
@@ -1545,9 +1541,8 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
     reused, replaced = fetch_reconciliation_metrics()
 
-    # TODO(#17594): Flip these once the bug is fixed.
-    assert reused == 0
-    assert replaced == 4
+    assert reused == 4
+    assert replaced == 0
 
 
 def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:

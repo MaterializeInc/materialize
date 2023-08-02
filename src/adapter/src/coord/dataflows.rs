@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
-use maplit::btreeset;
+use maplit::{btreemap, btreeset};
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
@@ -238,22 +238,8 @@ impl Coordinator {
         mut dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
     ) -> Result<DataflowDescription<mz_compute_client::plan::Plan>, AdapterError> {
-        let storage_ids = dataflow
-            .source_imports
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let compute_ids = dataflow
-            .index_imports
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>();
-
-        let compute_ids = vec![(compute_instance, compute_ids)].into_iter().collect();
-        let since = self.least_valid_read(&CollectionIdBundle {
-            storage_ids,
-            compute_ids,
-        });
+        let id_bundle = dataflow_import_id_bundle(&dataflow, compute_instance);
+        let since = self.least_valid_read(&id_bundle);
 
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
@@ -284,6 +270,19 @@ impl Coordinator {
                 .enable_monotonic_oneshot_selects(),
         )
         .map_err(AdapterError::Internal)
+    }
+}
+
+/// Returns an ID bundle with the given dataflows imports.
+pub fn dataflow_import_id_bundle(
+    dataflow: &DataflowDesc,
+    compute_instance: ComputeInstanceId,
+) -> CollectionIdBundle {
+    let storage_ids = dataflow.source_imports.keys().copied().collect();
+    let compute_ids = dataflow.index_imports.keys().copied().collect();
+    CollectionIdBundle {
+        storage_ids,
+        compute_ids: btreemap! {compute_instance => compute_ids},
     }
 }
 

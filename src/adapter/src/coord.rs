@@ -75,6 +75,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
@@ -113,6 +114,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
+use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -128,6 +130,7 @@ use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterSyncConfig;
 use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
@@ -138,7 +141,7 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::{flags, AdapterNotice};
+use crate::{flags, AdapterNotice, TimestampProvider};
 
 pub(crate) mod dataflows;
 pub(crate) mod id_bundle;
@@ -1193,9 +1196,12 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        let dataflow = self
+                        let mut dataflow = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
+                        let as_of = self.bootstrap_index_as_of(&dataflow, idx.cluster_id);
+                        dataflow.set_as_of(as_of);
+
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
                         policy_entry
@@ -1229,9 +1235,11 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let internal_view_id = self.allocate_transient_id()?;
-                    let df = self
+                    let mut df = self
                         .dataflow_builder(mview.cluster_id)
                         .build_materialized_view_dataflow(entry.id(), internal_view_id)?;
+                    let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
+                    df.set_as_of(as_of);
                     self.must_ship_dataflow(df, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
@@ -1482,6 +1490,62 @@ impl Coordinator {
 
         info!("coordinator init: bootstrap complete");
         Ok(())
+    }
+
+    /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
+    fn bootstrap_index_as_of(
+        &self,
+        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ComputeInstanceId,
+    ) -> Antichain<Timestamp> {
+        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
+        // the `since`s of all dependencies.
+        let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
+        let mut as_of = self.least_valid_read(&id_bundle);
+
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
+        // might still be installed on replicas, but ideally not much farther as that would just
+        // increase the wait time until the index becomes readable. We advance the `as_of` to the
+        // meet of the `upper`s of all dependencies, as we know that no replica can have produced
+        // output for that time, so we can assume that no replica `as_of` has been adanced beyond
+        // this time either.
+        let write_frontier = self.least_valid_write(&id_bundle);
+        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
+        if !write_frontier.is_empty() {
+            as_of.join_assign(&write_frontier);
+        }
+
+        as_of
+    }
+
+    /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
+    fn bootstrap_materialized_view_as_of(
+        &self,
+        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ComputeInstanceId,
+    ) -> Antichain<Timestamp> {
+        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
+        // the `since`s of all dependencies.
+        let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
+        let mut as_of = self.least_valid_read(&id_bundle);
+
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` as far as possible. If a storage collection for the MV already
+        // exists, we can advance to that collection's upper. This is the most we can advance the
+        // `as_of` without skipping times in the MV output.
+        let sink_id = dataflow
+            .sink_exports
+            .keys()
+            .exactly_one()
+            .expect("MV dataflow must export a sink");
+        let write_frontier = self.storage_write_frontier(*sink_id);
+        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
+        if !write_frontier.is_empty() {
+            as_of.join_assign(write_frontier);
+        }
+
+        as_of
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
