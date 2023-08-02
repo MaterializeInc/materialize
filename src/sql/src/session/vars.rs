@@ -2038,6 +2038,7 @@ impl SystemVars {
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter()
             .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
+            .filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
