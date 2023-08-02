@@ -130,6 +130,10 @@ queries:
 To add more complex queries, you can use the template above and edit the query
 and values you expect the query to return.
 
+{{< warning >}}
+Large queries can potentially overload the cluster and can lead to slow performance or memory errors. 
+{{</ warning >}}
+
 
 Most queries reference the `mz_internal` schema. For more information, visit the [`mz_internal` reference documentation](https://materialize.com/docs/sql/system-catalog/mz_internal/).
 
