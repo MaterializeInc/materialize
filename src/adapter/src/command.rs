@@ -893,7 +893,7 @@ impl ExecuteResponse {
             GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
             CopyRows => vec![Inserted],
-            Insert => vec![Inserted, SendingRows, SendingRowsImmediate],
+            Insert => vec![Inserted, SendingRowsImmediate],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
             PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
@@ -904,7 +904,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
-            SideEffectingFunc => vec![SendingRows, SendingRowsImmediate],
+            SideEffectingFunc => vec![SendingRowsImmediate],
             ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
