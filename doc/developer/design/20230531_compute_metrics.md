@@ -289,7 +289,7 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Labels**: `worker_id`
     * **Description**: The size of all arrangements in all dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_arrangement_sizes` introspection source
-  * [ ] `mz_arrangement_maintenance_seconds_total`
+  * [x] `mz_arrangement_maintenance_seconds_total`
     * **Type**: counter
     * **Labels**: `worker_id`
     * **Description**: The total time maintaining arrangements.

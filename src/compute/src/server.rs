@@ -39,17 +39,14 @@ use tokio::sync::mpsc;
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
-use crate::{TraceManager, TraceMetrics};
 
 /// Configures the server with compute-specific metrics.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Metrics about traces.
-    pub trace_metrics: TraceMetrics,
-    /// Metrics about command histories and dataflows.
+    /// Metrics exposed by compute replicas.
     // TODO(guswynn): cluster-unification: ensure these stats
     // also work for storage when merging.
-    pub compute_metrics: ComputeMetrics,
+    pub metrics: ComputeMetrics,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
@@ -62,14 +59,8 @@ pub fn serve(
     ),
     Error,
 > {
-    // Various metrics related things.
-    let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
-    let compute_metrics = ComputeMetrics::register_with(&config.metrics_registry);
-
-    let compute_config = Config {
-        trace_metrics,
-        compute_metrics,
-    };
+    let metrics = ComputeMetrics::register_with(&config.metrics_registry);
+    let compute_config = Config { metrics };
 
     let (timely_container, client_builder) = mz_cluster::server::serve::<
         Config,
@@ -138,10 +129,8 @@ struct Worker<'w, A: Allocate> {
     /// are delivered.
     client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender, ActivatorSender)>,
     compute_state: Option<ComputeState>,
-    /// Trace metrics.
-    trace_metrics: TraceMetrics,
     /// Compute metrics.
-    compute_metrics: ComputeMetrics,
+    metrics: ComputeMetrics,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
@@ -165,8 +154,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
         Worker {
             timely_worker,
             client_rx,
-            trace_metrics: config.trace_metrics,
-            compute_metrics: config.compute_metrics,
+            metrics: config.metrics,
             persist_clients,
             compute_state: None,
             tracing_handle,
@@ -391,12 +379,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
-                let traces =
-                    TraceManager::new(self.trace_metrics.clone(), self.timely_worker.index());
                 self.compute_state = Some(ComputeState::new(
-                    traces,
+                    self.timely_worker.index(),
                     Arc::clone(&self.persist_clients),
-                    self.compute_metrics.clone(),
+                    self.metrics.clone(),
                     Arc::clone(&self.tracing_handle),
                 ));
             }
@@ -692,8 +678,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history =
-                ComputeCommandHistory::new(self.compute_metrics.for_history());
+            let mut command_history = ComputeCommandHistory::new(self.metrics.for_history());
             for command in new_commands.iter() {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }

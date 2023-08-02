@@ -90,11 +90,12 @@ pub struct ComputeState {
 impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
-        traces: TraceManager,
+        worker_id: usize,
         persist_clients: Arc<PersistClientCache>,
         metrics: ComputeMetrics,
         tracing_handle: Arc<TracingHandle>,
     ) -> Self {
+        let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history());
 
         Self {
