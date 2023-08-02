@@ -16,7 +16,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{
     BrokerRewrite, BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
@@ -123,6 +123,8 @@ pub struct ConnectionContext {
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// A secrets reader.
     pub secrets_reader: Arc<dyn SecretsReader>,
+    /// A cloud resource reader, if supported in this configuration.
+    pub cloud_resource_reader: Option<Arc<dyn CloudResourceReader>>,
     /// A manager for SSH tunnels.
     pub ssh_tunnel_manager: SshTunnelManager,
 }
@@ -139,6 +141,7 @@ impl ConnectionContext {
         startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
+        cloud_resource_reader: Option<Arc<dyn CloudResourceReader>>,
     ) -> ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::crate_level(
@@ -147,6 +150,7 @@ impl ConnectionContext {
             ),
             aws_external_id_prefix,
             secrets_reader,
+            cloud_resource_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
         }
     }
@@ -157,6 +161,7 @@ impl ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
             secrets_reader,
+            cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),
         }
     }
