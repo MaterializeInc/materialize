@@ -249,13 +249,13 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Labels**: `worker_id`
     * **Description**: A histogram of dataflow shutdown durations since restart.
     * **Export Type**: prometheus-exporter, through the `mz_dataflow_shutdown_durations_histogram` introspection source
-  * [ ] `mz_dataflow_frontiers`
+  * [x] `mz_dataflow_frontiers`
     * **Type**: gauge
     * **Labels**: `worker_id`, `collection_id`
     * **Description**: The frontiers of dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_compute_frontiers` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
-  * [ ] `mz_dataflow_import_frontiers`
+  * [x] `mz_dataflow_import_frontiers`
     * **Type**: gauge
     * **Labels**: `worker_id`, `collection_id`
     * **Description**: The import frontiers of dataflows.
@@ -297,16 +297,16 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Notes**: This metric exists already, with an extra label `arrangement_id`.
                  Proposing to remove the `arrangement_id` label, because it blows up the cardinality of this metric.
 * Reconciliation
-  * [ ] `mz_compute_reconciliation_reused_dataflows_count_total`
+  * [x] `mz_compute_reconciliation_reused_dataflows_count_total`
     * **Type**: counter
     * **Labels**: `worker_id`
     * **Description**: The total number of dataflows that were reused during compute reconciliation.
     * **Export Type**: direct
     * **Notes**: This metric exists already as `mz_compute_reconciliation_reused_dataflows`.
                  Proposing to rename to follow the Prometheus naming conventions, and adding a worker label.
-  * [ ] `mz_compute_reconciliation_replaced_dataflows_count_total`
+  * [x] `mz_compute_reconciliation_replaced_dataflows_count_total`
     * **Type**: counter
-    * **Labels**: `worker_id`
+    * **Labels**: `worker_id`, `reason`
     * **Description**: The total number of dataflows that were replaced during compute reconciliation.
     * **Export Type**: direct
     * **Notes**: This metric exists already as `mz_compute_reconciliation_replaced_dataflows`.

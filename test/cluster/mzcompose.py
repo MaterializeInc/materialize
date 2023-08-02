@@ -1607,9 +1607,13 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         reused = 0
         replaced = 0
         for metric in metrics.splitlines():
-            if metric.startswith("mz_compute_reconciliation_reused_dataflows"):
+            if metric.startswith(
+                "mz_compute_reconciliation_reused_dataflows_count_total"
+            ):
                 reused += int(metric.split()[1])
-            elif metric.startswith("mz_compute_reconciliation_replaced_dataflows"):
+            elif metric.startswith(
+                "mz_compute_reconciliation_replaced_dataflows_count_total"
+            ):
                 replaced += int(metric.split()[1])
 
         return reused, replaced
