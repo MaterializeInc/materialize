@@ -43,7 +43,7 @@ connections:
 - "postgres://<USER>:<PASSWORD>@<HOST>:<PORT>/materialize?sslmode=require"
 ...
 ```
-You can copy this string from the Connect page in your Materialize region.
+You can copy this string from the [Connect page](https://console.materialize.com) in your Materialize region.
 
 > You need to escape the special `@` character in your user email for a
 > successful connection. For example, `name@email.com`, use `name%40email.com`.

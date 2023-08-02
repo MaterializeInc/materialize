@@ -5,6 +5,8 @@ menu:
   main:
     parent: ""
     name: 
+aliases:
+  /monitoring/datadog
 ---
 
 Materialize exposes a system catalog that contains metadata about your running
@@ -47,7 +49,7 @@ connections:
 - "postgres://<USER>:<PASSWORD>@<HOST>:<PORT>/materialize?sslmode=require"
 ...
 ```
-You can copy this string from the Connect page in your Materialize region.
+You can copy this string from the [Connect page](https://console.materialize.com) in your Materialize region.
 
 {{< note >}}
 You need to escape the special `@` character in your user email for a successful connection. For example, `name@email.com`, use `name%40email.com`.
@@ -81,7 +83,7 @@ $ docker compose up -d
 ```
 
 The Prometheus SQL exporter container runs a service that executes queries against your
-database and then exports the metrics in a format that most monitoring services
+database and then exports the metrics using the OpenMetrics standard.
 can consume.
 
 The Datadog container runs an agent with account information to communicate
