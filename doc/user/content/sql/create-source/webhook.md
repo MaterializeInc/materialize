@@ -70,13 +70,13 @@ Console](https://console.materialize.com/). Then `<database>` and `<schema>` are
 schema where you created your source, and `<src_name>` is the name you provided for your source at
 the time of creation.
 
-{{< callout primary_text="Security" >}}
+{{< note >}}
 
 This is a public URL that is open to the internet and has no security. To validate that requests
 are legitimate see [Validating Requests](#validating-requests). For limits imposed on this endpoint
 see [Request Limits](#request-limits).
 
-{{< /callout >}}
+{{< /note >}}
 
 ## Validating Requests
 
@@ -107,13 +107,13 @@ validation expression has type `text`. Futher, the request headers are not persi
 `my_webhook_source` since `INCLUDE HEADERS` was not specified, but they are provided to the
 validation expression.
 
-{{< callout primary_text="Security" >}}
+{{< note >}}
 
 Without a `CHECK` statement **all requests will be accepted**. To prevent bad actors from
 inserting data it is **strongly encouraged** that you define a `CHECK` statement with your webhook
 sources.
 
-{{< /callout >}}
+{{< /note >}}
 
 ## Request Limits
 
