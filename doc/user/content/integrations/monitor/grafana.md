@@ -128,10 +128,6 @@ Monitor active `SUBSCRIBE` dataflows:
 
 
 ```sql
-SELECT count(1) FROM (
-    SELECT id
-    FROM mz_internal.mz_dataflows
-    WHERE substring(name, 0, 20) = 'Dataflow: subscribe'
-    GROUP BY id
-);
+SELECT count(1)
+FROM  mz_internal.mz_subscriptions; 
 ```
