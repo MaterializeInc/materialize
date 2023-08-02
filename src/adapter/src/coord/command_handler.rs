@@ -119,7 +119,8 @@ impl Coordinator {
                     ExecuteContextExtra,
                 );
 
-                let span = tracing::debug_span!(parent: &span, "message_command (execute)");
+                let span = span
+                    .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
                 self.handle_execute(portal_name, ctx).instrument(span).await;
             }
 
@@ -250,7 +251,6 @@ impl Coordinator {
                 tx,
                 otel_ctx,
             } => {
-                otel_ctx.attach_as_parent();
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 // We reach here not through a statement execution, but from the
                 // "commit" pgwire command. Thus, we just generate a default statement
@@ -274,8 +274,14 @@ impl Coordinator {
                         })
                     }
                 };
+                // TODO: We need a Span that is not none for the otel_ctx to
+                // attach the parent relationship to. If we do the TODO to swap
+                // otel_ctx in `Command::Commit` for a Span, we can downgrade
+                // this to a debug_span.
+                let span = tracing::info_span!("message_command (commit)");
+                span.in_scope(|| otel_ctx.attach_as_parent());
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                    .instrument(tracing::debug_span!("message_command (commit)"))
+                    .instrument(span)
                     .await;
             }
 

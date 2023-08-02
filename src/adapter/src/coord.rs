@@ -118,7 +118,7 @@ use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{debug_span, info, span, warn, Instrument, Level, Span};
+use tracing::{info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -1617,7 +1617,7 @@ impl Coordinator {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = self.advance_timelines_interval.tick() => {
-                    let span = debug_span!(parent: None, "advance_timelines_interval");
+                    let span = info_span!(parent: None, "advance_timelines_interval");
                     span.follows_from(Span::current());
                     Message::GroupCommitInitiate(span)
                 },
