@@ -336,7 +336,7 @@ steps:
     inputs: [doc/user/content/releases]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: upgrade
+          composition: legacy-upgrade
     agents:
       queue: linux-x86_64
 
