@@ -886,7 +886,7 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            // Timeline::EpochMilliseconds is advanced in group commits and we don't need to be
+            // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
             // manually advanced here.
             if timeline != Timeline::EpochMilliseconds {
                 // For non realtime sources, we define now as the largest timestamp, not in
