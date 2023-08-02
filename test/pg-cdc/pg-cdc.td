@@ -218,6 +218,16 @@ regex: the following columns contain unsupported types:\npostgres.public.enum_ta
   );
 regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
 
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    DETAILS 'abc'
+  )
+  FOR TABLES (
+    pk_table
+  );
+contains: must not specify DETAILS option in CREATE SOURCE
+
 #
 # Establish direct replication
 #
