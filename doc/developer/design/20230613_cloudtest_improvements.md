@@ -90,6 +90,28 @@ version, to work around a breaking name change
 ([Migrating from semver2 to semver3](https://python-semver.readthedocs.io/en/latest/migration/migratetosemver3.html)).
 This seems to allow running the code with an older version of semver.
 
+### Not blocking cloud work on shared test code changes
+
+#### Problem
+
+In our current workflow, we use a submodule to keep the Materialize repo within the cloud repo, and update the submodule on every release to ensure that all included commits have been approved (for SOC2 compliance). This means that any updates necessary to shared test code (e.g. fixing a shared function or updating a shared service) would be waiting on a release cycle for the cloud code to be releasable as well.
+
+#### Possible Solutions
+
+* Update our process to bump the shared code in the submodule as necessary, rather than just once a release. This will require clearly declaring (perhaps with an extra checkbox in the PR template for clarity) that all unreviewed commits in a submodule bump have been reviewed and approved. 
+
+* Split `cloudtest` out into its own repository so that it can evolve independently of the database releases.
+
+* Define a module / interface boundary where the cloud repository can wrap & arbitrarily modify the submodule test framework. This is open for discussion but will need to be documented clearly if we choose this path.
+
+#### Fix
+
+Recommend updating our process to enable us to bump the submodule at will.
+
+1. We can do this through a policy change in this repository, to require reviews before merging PRs
+1. Or through scripting in the cloud repository
+
+
 ## Unresolved questions
 
 Currently none.
