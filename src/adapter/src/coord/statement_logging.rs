@@ -263,7 +263,7 @@ impl Coordinator {
     }
 
     /// Record a new connection event
-    pub fn begin_session(&mut self, session: &Session) {
+    pub fn begin_session_for_statement_logging(&mut self, session: &Session) {
         let id = session.uuid();
         let connected_at = session.connect_time();
         let application_name = session.application_name().to_owned();
@@ -276,5 +276,9 @@ impl Coordinator {
             authenticated_user,
         };
         self.statement_logging.unlogged_sessions.insert(id, event);
+    }
+
+    pub fn end_session_for_statement_logging(&mut self, uuid: Uuid) {
+        self.statement_logging.unlogged_sessions.remove(&uuid);
     }
 }
