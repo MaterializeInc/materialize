@@ -189,3 +189,6 @@ contains:invalid value for parameter "IntervalStyle": "postgres-legacy"
 
 ! SET cluster_replica = 1, 2
 contains:parameter "cluster_replica" cannot have value "1","2": expects a single value
+
+! SET statement_logging_sample_rate = 1.1
+contains:parameter "statement_logging_sample_rate" cannot have value "1.1": only supports values in range 0.0..=1.0
