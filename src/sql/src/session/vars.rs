@@ -1412,7 +1412,7 @@ feature_flags!(
         "executing potentially dangerous functions"
     ),
     (
-        enable_managed_availability_zones,
+        enable_managed_cluster_availability_zones,
         "MANAGED, AVAILABILITY ZONES syntax"
     )
 );

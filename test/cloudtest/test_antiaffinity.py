@@ -17,7 +17,9 @@ from materialize.cloudtest.util.wait import wait
 
 
 def zones_used(
-    mz: MaterializeApplication, replica_names: Optional[list[str]] = None
+    mz: MaterializeApplication,
+    replica_names: Optional[list[str]] = None,
+    cluster_name: str = "antiaffinity_cluster1",
 ) -> int:
     if replica_names is None:
         replica_names = [
@@ -28,9 +30,16 @@ def zones_used(
     nodes = {}
 
     for replica_name in replica_names:
-        cluster_id, replica_id = mz.environmentd.sql_query(
-            f"SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = '{replica_name}'"
-        )[0]
+
+        cluster_id = mz.environmentd.sql_query(
+            f"SELECT id FROM mz_clusters WHERE name = '{cluster_name}'"
+        )[0][0]
+        assert cluster_id is not None
+
+        replica_id = mz.environmentd.sql_query(
+            "SELECT id FROM mz_cluster_replicas "
+            f"WHERE cluster_id = '{cluster_id}' AND name = '{replica_name}'"
+        )[0][0]
         assert replica_id is not None
 
         cluster_pod = cluster_pod_name(cluster_id, replica_id)
@@ -124,12 +133,7 @@ def test_managed_set_azs(mz: MaterializeApplication) -> None:
     """Test that the AVAILABILITY ZONE argument to CREATE CLUSTER REPLICA is observed."""
 
     mz.environmentd.sql(
-        "ALTER SYSTEM SET enable_managed_clusters = true",
-        port="internal",
-        user="mz_system",
-    )
-    mz.environmentd.sql(
-        "ALTER SYSTEM SET enable_managed_availability_zones = true",
+        "ALTER SYSTEM SET enable_managed_cluster_availability_zones = true",
         port="internal",
         user="mz_system",
     )

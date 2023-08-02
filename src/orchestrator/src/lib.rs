@@ -286,17 +286,6 @@ pub struct ServiceConfig<'a> {
     ///
     /// The orchestrator backend may or may not actually implement placement spread functionality.
     pub replicas_selector: Vec<LabelSelector>,
-    /// Similar to `replicas_selector`, but skipping services that have `scale`
-    /// greater than 1. This may be used to weaken spread constraints, increasing
-    /// availability.
-    pub replicas_selector_ignoring_scale: Vec<LabelSelector>,
-    /// A set of label selectors selecting all services that are horizontally scaled
-    /// parts of this service.
-    ///
-    /// This may be used to co-locate these services in the same zone.
-    ///
-    /// The orchestrator backend may or may not actually implement collocation functionality.
-    pub horizontal_scale_selector: Vec<LabelSelector>,
 
     /// Whether scratch disk space should be allocated for the service.
     pub disk: bool,
