@@ -116,6 +116,7 @@ mod error;
 mod migrate;
 
 pub mod builtin;
+mod inner;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
@@ -898,6 +899,36 @@ impl CatalogState {
                 );
             }
         }
+    }
+
+    /// Move item `id` into the bound objects of cluster `in_cluster`, removes it from the old
+    /// cluster.
+    ///
+    /// Panics if
+    /// * the item doesn't exist,
+    /// * the item is not bound to the old cluster,
+    /// * the new cluster doesn't exist,
+    /// * the item is already bound to the new cluster.
+    pub(super) fn move_item(&mut self, id: GlobalId, in_cluster: ClusterId) {
+        let metadata = self.entry_by_id.get_mut(&id).expect("catalog out of sync");
+        if let Some(cluster_id) = metadata.item.cluster_id() {
+            assert!(
+                self.clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .remove(&id),
+                "catalog out of sync"
+            );
+        }
+        assert!(
+            self.clusters_by_id
+                .get_mut(&in_cluster)
+                .expect("catalog out of sync")
+                .bound_objects
+                .insert(id),
+            "catalog out of sync"
+        );
     }
 
     fn get_database(&self, database_id: &DatabaseId) -> &Database {
@@ -5437,6 +5468,17 @@ impl Catalog {
 
                     info!("update role {name} ({id})");
                 }
+                Op::AlterSetCluster { id, cluster } => Self::transact_alter_set_cluster(
+                    state,
+                    tx,
+                    builtin_table_updates,
+                    oracle_write_ts,
+                    &drop_ids,
+                    audit_events,
+                    session,
+                    id,
+                    cluster,
+                )?,
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
@@ -5526,7 +5568,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(
+                    Self::update_item(
                         state,
                         builtin_table_updates,
                         id,
@@ -5626,7 +5668,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(
+                    Self::update_item(
                         state,
                         builtin_table_updates,
                         id,
@@ -5741,7 +5783,7 @@ impl Catalog {
                             database_name: Some(name),
                         }),
                     )?;
-                    create_schema(
+                    Self::create_schema(
                         state,
                         builtin_table_updates,
                         schema_id,
@@ -5807,7 +5849,7 @@ impl Catalog {
                             database_name: Some(state.database_by_id[&database_id].name.clone()),
                         }),
                     )?;
-                    create_schema(
+                    Self::create_schema(
                         state,
                         builtin_table_updates,
                         schema_id,
@@ -6848,7 +6890,7 @@ impl Catalog {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, new_entry.item));
                     for (id, to_name, to_item) in updates {
-                        update_item(
+                        Self::update_item(
                             state,
                             builtin_table_updates,
                             id,
@@ -7035,7 +7077,7 @@ impl Catalog {
                 }
                 Op::UpdateItem { id, name, to_item } => {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
+                    Self::update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry)?;
                 }
@@ -7105,102 +7147,102 @@ impl Catalog {
                 }
             };
         }
+        Ok(())
+    }
 
-        fn update_item(
-            state: &mut CatalogState,
-            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-            id: GlobalId,
-            to_name: QualifiedItemName,
-            to_item: CatalogItem,
-            // This lets us understand which items are dropped in this transaction so we can account
-            // for changes in dependencies.
-            drop_ids: &BTreeSet<GlobalId>,
-        ) -> Result<(), AdapterError> {
-            let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
-            info!(
-                "update {} {} ({})",
-                old_entry.item_type(),
-                state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
-                id
-            );
+    pub(crate) fn update_item(
+        state: &mut CatalogState,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        id: GlobalId,
+        to_name: QualifiedItemName,
+        to_item: CatalogItem,
+        // This lets us understand which items are dropped in this transaction so we can account
+        // for changes in dependencies.
+        drop_ids: &BTreeSet<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
+        info!(
+            "update {} {} ({})",
+            old_entry.item_type(),
+            state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
+            id
+        );
 
-            // Ensure any removal from the uses is accompanied by a drop.
-            let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
-                drop_ids.iter().chain(&to_item.uses().0).collect();
+        // Ensure any removal from the uses is accompanied by a drop.
+        let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
+            drop_ids.iter().chain(&to_item.uses().0).collect();
 
-            assert!(
-                old_entry
-                    .uses()
-                    .0
-                    .iter()
-                    .all(|id| to_item_uses_and_dropped_ids.contains(id)),
-                "all of the old entries used items must be accompanied by a drop \
+        assert!(
+            old_entry
+                .uses()
+                .0
+                .iter()
+                .all(|id| to_item_uses_and_dropped_ids.contains(id)),
+            "all of the old entries used items must be accompanied by a drop \
                 old_entry.uses: {:?}\
                 to_item.uses: {:?}\
                 drop_ids {:?}",
-                old_entry.uses(),
-                to_item.uses(),
-                drop_ids,
-            );
+            old_entry.uses(),
+            to_item.uses(),
+            drop_ids,
+        );
 
-            let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-            let schema = &mut state.get_schema_mut(
-                &old_entry.name().qualifiers.database_spec,
-                &old_entry.name().qualifiers.schema_spec,
-                conn_id,
-            );
-            schema.items.remove(&old_entry.name().item);
-            let mut new_entry = old_entry.clone();
-            new_entry.name = to_name;
-            new_entry.item = to_item;
-            schema.items.insert(new_entry.name().item.clone(), id);
-            state.entry_by_id.insert(id, new_entry);
-            builtin_table_updates.extend(state.pack_item_update(id, 1));
-            Ok(())
-        }
+        let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let schema = &mut state.get_schema_mut(
+            &old_entry.name().qualifiers.database_spec,
+            &old_entry.name().qualifiers.schema_spec,
+            conn_id,
+        );
+        schema.items.remove(&old_entry.name().item);
+        let mut new_entry = old_entry.clone();
+        new_entry.name = to_name;
+        new_entry.item = to_item;
+        schema.items.insert(new_entry.name().item.clone(), id);
+        state.entry_by_id.insert(id, new_entry);
+        builtin_table_updates.extend(state.pack_item_update(id, 1));
+        Ok(())
+    }
 
-        fn create_schema(
-            state: &mut CatalogState,
-            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-            id: SchemaId,
-            oid: u32,
-            database_id: DatabaseId,
-            schema_name: String,
-            owner_id: RoleId,
-            privileges: PrivilegeMap,
-        ) -> Result<(), AdapterError> {
-            info!(
-                "create schema {}.{}",
-                state.get_database(&database_id).name,
-                schema_name
-            );
-            let db = state
-                .database_by_id
-                .get_mut(&database_id)
-                .expect("catalog out of sync");
-            db.schemas_by_id.insert(
-                id.clone(),
-                Schema {
-                    name: QualifiedSchemaName {
-                        database: ResolvedDatabaseSpecifier::Id(database_id.clone()),
-                        schema: schema_name.clone(),
-                    },
-                    id: SchemaSpecifier::Id(id.clone()),
-                    oid,
-                    items: BTreeMap::new(),
-                    functions: BTreeMap::new(),
-                    owner_id,
-                    privileges,
+    fn create_schema(
+        state: &mut CatalogState,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        id: SchemaId,
+        oid: u32,
+        database_id: DatabaseId,
+        schema_name: String,
+        owner_id: RoleId,
+        privileges: PrivilegeMap,
+    ) -> Result<(), AdapterError> {
+        info!(
+            "create schema {}.{}",
+            state.get_database(&database_id).name,
+            schema_name
+        );
+        let db = state
+            .database_by_id
+            .get_mut(&database_id)
+            .expect("catalog out of sync");
+        db.schemas_by_id.insert(
+            id.clone(),
+            Schema {
+                name: QualifiedSchemaName {
+                    database: ResolvedDatabaseSpecifier::Id(database_id.clone()),
+                    schema: schema_name.clone(),
                 },
-            );
-            db.schemas_by_name.insert(schema_name, id.clone());
-            builtin_table_updates.push(state.pack_schema_update(
-                &ResolvedDatabaseSpecifier::Id(database_id.clone()),
-                &id,
-                1,
-            ));
-            Ok(())
-        }
+                id: SchemaSpecifier::Id(id.clone()),
+                oid,
+                items: BTreeMap::new(),
+                functions: BTreeMap::new(),
+                owner_id,
+                privileges,
+            },
+        );
+        db.schemas_by_name.insert(schema_name, id.clone());
+        builtin_table_updates.push(state.pack_schema_update(
+            &ResolvedDatabaseSpecifier::Id(database_id.clone()),
+            &id,
+            1,
+        ));
         Ok(())
     }
 
@@ -7745,6 +7787,10 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterSetCluster {
+        id: GlobalId,
+        cluster: ClusterId,
+    },
     AlterSink {
         id: GlobalId,
         cluster_config: plan::SourceSinkClusterConfig,
@@ -8764,6 +8810,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
+    }
+
+    fn cluster_id(&self) -> Option<ClusterId> {
+        self.item().cluster_id()
     }
 }
 

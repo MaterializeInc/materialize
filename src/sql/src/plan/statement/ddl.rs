@@ -30,8 +30,8 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
-    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
@@ -106,16 +106,16 @@ use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
-    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View, WebhookValidation,
+    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
+    Source, SourceSinkClusterConfig, Table, Type, View, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -4439,6 +4439,81 @@ pub fn plan_alter_cluster(
         name: cluster.name().to_string(),
         options,
     }))
+}
+
+pub fn describe_alter_set_cluster(
+    _: &StatementContext,
+    _: AlterSetClusterStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_item_set_cluster(
+    scx: &StatementContext,
+    AlterSetClusterStatement {
+        if_exists,
+        set_cluster: in_cluster_name,
+        name,
+        object_type,
+    }: AlterSetClusterStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_ALTER_SET_CLUSTER)?;
+
+    let object_type = object_type.into();
+
+    // Prevent access to `SET CLUSTER` for unsupported objects.
+    match object_type {
+        ObjectType::MaterializedView => {}
+        ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
+            bail_unsupported!(20841, format!("ALTER {object_type} SET CLUSTER"))
+        }
+        _ => {
+            bail_never_supported!(
+                format!("ALTER {object_type} SET CLUSTER"),
+                "sql/alter-set-cluster/",
+                format!("{object_type} has no associated cluster")
+            )
+        }
+    }
+
+    let in_cluster = scx.catalog.get_cluster(in_cluster_name.id);
+
+    match resolve_item(scx, name.clone(), if_exists)? {
+        Some(entry) => {
+            let catalog_object_type: ObjectType = entry.item_type().into();
+            if catalog_object_type != object_type {
+                sql_bail!("Cannot modify {} as {object_type}", entry.item_type());
+            }
+            let current_cluster = entry.cluster_id();
+            let Some(current_cluster) = current_cluster else {
+                sql_bail!("No cluster associated with {name}");
+            };
+
+            if !scx
+                .catalog
+                .is_system_schema_specifier(&entry.name().qualifiers.schema_spec)
+            {
+                ensure_cluster_is_not_linked(scx, in_cluster.id())?;
+            }
+
+            if current_cluster == in_cluster.id() {
+                Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+            } else {
+                Ok(Plan::AlterSetCluster(AlterSetClusterPlan {
+                    id: entry.id(),
+                    set_cluster: in_cluster.id(),
+                }))
+            }
+        }
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
 }
 
 pub fn describe_alter_object_rename(

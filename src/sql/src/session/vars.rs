@@ -1306,6 +1306,7 @@ feature_flags!(
         enable_try_parse_monotonic_iso8601_timestamp,
         "the try_parse_monotonic_iso8601_timestamp function"
     ),
+    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax")
 );
 
 /// Represents the input to a variable.

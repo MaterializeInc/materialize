@@ -1014,6 +1014,7 @@ impl Coordinator {
                 Op::AlterRole { .. }
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
+                | Op::AlterSetCluster { .. }
                 | Op::DropTimeline(_)
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }

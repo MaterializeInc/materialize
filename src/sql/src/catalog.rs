@@ -616,6 +616,9 @@ pub trait CatalogItem {
 
     /// Returns the privileges associated with the item.
     fn privileges(&self) -> &PrivilegeMap;
+
+    /// Returns the cluster the item belongs to.
+    fn cluster_id(&self) -> Option<ClusterId>;
 }
 
 /// The type of a [`CatalogItem`].
