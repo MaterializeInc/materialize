@@ -344,8 +344,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             availability_zones: _,
             other_replicas_selector: _,
             replicas_selector: _,
-            replicas_selector_ignoring_scale: _,
-            horizontal_scale_selector: _,
             disk,
             disk_limit: _,
         }: ServiceConfig<'_>,

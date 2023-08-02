@@ -748,8 +748,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             availability_zones,
             other_replicas_selector,
             replicas_selector,
-            replicas_selector_ignoring_scale,
-            horizontal_scale_selector,
             disk,
             disk_limit,
         }: ServiceConfig<'_>,
@@ -772,6 +770,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
         }
+
+        labels.insert(self.make_label_key("scale"), scale.to_string());
+
         for port in &ports_in {
             labels.insert(
                 format!("environmentd.materialize.cloud/port-{}", port.name),
@@ -878,12 +879,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         });
 
         let pod_affinity = if let Some(weight) = scheduling_config.multi_pod_az_affinity_weight {
-            let label_selector_requirements = horizontal_scale_selector
-                .into_iter()
-                .map(|ls| self.label_selector_to_k8s(ls))
-                .collect::<Result<Vec<_>, _>>()?;
+            // `match_labels` sufficiently selects pods in the same replica.
             let ls = LabelSelector {
-                match_expressions: Some(label_selector_requirements),
+                match_labels: Some(match_labels.clone()),
                 ..Default::default()
             };
             let pat = PodAffinityTerm {
@@ -910,6 +908,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
             if !config.ignore_non_singular_scale || scale <= 1 {
                 let label_selector_requirements = (if config.ignore_non_singular_scale {
+                    let mut replicas_selector_ignoring_scale = replicas_selector.clone();
+
+                    replicas_selector_ignoring_scale.push(mz_orchestrator::LabelSelector {
+                        label_name: "scale".into(),
+                        logic: mz_orchestrator::LabelSelectionLogic::Eq {
+                            value: "1".to_string(),
+                        },
+                    });
+
                     replicas_selector_ignoring_scale
                 } else {
                     replicas_selector

@@ -542,7 +542,6 @@ where
                         ("cluster-id".into(), cluster_id.to_string()),
                         ("type".into(), "cluster".into()),
                         ("replica-role".into(), role_label.into()),
-                        ("scale".into(), location.allocation.scale.to_string()),
                         ("workers".into(), location.allocation.workers.to_string()),
                         ("size".into(), location.size.to_string()),
                     ]),
@@ -574,36 +573,6 @@ where
                             value: cluster_id.to_string(),
                         },
                     }],
-                    replicas_selector_ignoring_scale: vec![
-                        LabelSelector {
-                            label_name: "cluster-id".to_string(),
-                            logic: LabelSelectionLogic::Eq {
-                                value: cluster_id.to_string(),
-                            },
-                        },
-                        // Ignoring replicas with more than 1 pod.
-                        LabelSelector {
-                            label_name: "scale".into(),
-                            logic: LabelSelectionLogic::Eq {
-                                value: "1".to_string(),
-                            },
-                        },
-                    ],
-                    horizontal_scale_selector: vec![
-                        LabelSelector {
-                            label_name: "cluster-id".to_string(),
-                            logic: LabelSelectionLogic::Eq {
-                                value: cluster_id.to_string(),
-                            },
-                        },
-                        // Select specifically pods in the same replica.
-                        LabelSelector {
-                            label_name: "replica-id".into(),
-                            logic: LabelSelectionLogic::Eq {
-                                value: replica_id.to_string(),
-                            },
-                        },
-                    ],
                     disk_limit: location.allocation.disk_limit,
                     disk: location.disk,
                 },
