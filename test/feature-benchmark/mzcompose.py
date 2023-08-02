@@ -71,8 +71,8 @@ def make_filter(args: argparse.Namespace) -> Filter:
 
 def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCondition]:
     return [
-        NormalDistributionOverlap(threshold=0.99),
-        ProbForMin(threshold=0.95),
+        NormalDistributionOverlap(threshold=0.95),
+        ProbForMin(threshold=0.90),
         RunAtMost(threshold=args.max_measurements),
     ]
 

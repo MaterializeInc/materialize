@@ -66,6 +66,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-17510",
         "test-github-17509",
         "test-github-19610",
+        "test-single-time-monotonicity-enforcers",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
@@ -1120,6 +1121,125 @@ def workflow_test_github_19610(c: Composition) -> None:
             > DECLARE cur CURSOR FOR SELECT min(data), max(data) FROM data;
             > FETCH ALL cur;
             1 2
+            > COMMIT;
+            """
+            )
+        )
+
+
+def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
+    """
+    Test that a monotonic one-shot SELECT where a single-time monotonicity enforcer is present
+    can process a subsequent computation where consolidation can be turned off without error.
+    We introduce data that results in a multiset, process these data with an enforcer, and then
+    compute min/max subsequently. In a monotonic one-shot evaluation strategy, we can toggle the
+    must_consolidate flag off for min/max due to the enforcer, but still use internally an
+    ensure_monotonic operator to subsequently assert monotonicity. Note that Constant is already
+    checked as an enforcer in test/transform/relax_must_consolidate.slt, so we focus on TopK,
+    Reduce, Get, and Threshold here. This test conservatively employs cursors to avoid testdrive's
+    behavior of performing repetitions to see if the output matches.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_PERSIST_COMPACTION_DISABLED=true",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 4
+                )
+            );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 6);
+            INSERT INTO base VALUES (1, -3), (1, -2);
+            INSERT INTO base VALUES (2, 3), (2, 2);
+            INSERT INTO base VALUES (2, -1), (2, -1);
+            INSERT INTO base VALUES (3, 3), (3, 2);
+            INSERT INTO base VALUES (3, -3), (3, -2);
+            INSERT INTO base VALUES (4, 1), (4, 2);
+            INSERT INTO base VALUES (4, -1), (4, -2);
+            INSERT INTO base VALUES (5, 5), (5, 6);
+            INSERT INTO base VALUES (5, -5), (5, -6);
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            # Check TopK as an enforcer
+            > BEGIN
+            > DECLARE cur CURSOR FOR
+                SELECT MIN(data), MAX(data)
+                FROM (SELECT data FROM data ORDER BY data LIMIT 5);
+            > FETCH ALL cur;
+            1 2
+            > COMMIT;
+
+            # Check Get and Reduce as enforcers
+            > CREATE VIEW reduced_data AS
+                SELECT data % 2 AS evenodd, SUM(data) AS data
+                FROM data GROUP BY data % 2;
+
+            > BEGIN
+            > DECLARE cur CURSOR FOR
+                SELECT MIN(data), MAX(data)
+                FROM (
+                    SELECT * FROM reduced_data WHERE evenodd + 1 = 1
+                    UNION ALL
+                    SELECT * FROM reduced_data WHERE data + 1 = 2);
+            > FETCH ALL cur;
+            1 6
+            > COMMIT;
+
+            # Check Threshold as enforcer
+            > BEGIN
+            > DECLARE cur CURSOR FOR
+                SELECT MIN(data), MAX(data)
+                FROM (
+                    SELECT * FROM data WHERE data % 2 = 0
+                    EXCEPT ALL
+                    SELECT * FROM data WHERE data + 1 = 2);
+            > FETCH ALL cur;
+            2 2
             > COMMIT;
             """
             )
