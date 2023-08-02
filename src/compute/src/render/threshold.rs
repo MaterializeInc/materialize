@@ -29,6 +29,7 @@ use crate::typedefs::RowSpine;
 fn threshold_arrangement<G, T, R, L>(
     arrangement: &R,
     name: &str,
+    enable_arrangement_size_logging: bool,
     logic: L,
 ) -> Arranged<G, TraceAgent<RowSpine<Row, Row, G::Timestamp, Diff>>>
 where
@@ -38,7 +39,7 @@ where
     R: MzReduce<G, Row, Row, Diff>,
     L: Fn(&Diff) -> bool + 'static,
 {
-    arrangement.mz_reduce_abelian(name, move |_key, s, t| {
+    arrangement.mz_reduce_abelian(name, enable_arrangement_size_logging, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
                 t.push(((*record).clone(), *count));
@@ -54,6 +55,7 @@ where
 pub fn build_threshold_basic<G, T>(
     input: CollectionBundle<G, Row, T>,
     key: Vec<MirScalarExpr>,
+    enable_arrangement_size_logging: bool,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
@@ -65,13 +67,26 @@ where
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks = threshold_arrangement(&oks, "Threshold local", |count| *count > 0);
+            let oks = threshold_arrangement(
+                &oks,
+                "Threshold local",
+                enable_arrangement_size_logging,
+                |count| *count > 0,
+            );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
+            let oks = threshold_arrangement(
+                &oks,
+                "Threshold trace",
+                enable_arrangement_size_logging,
+                |count| *count > 0,
+            );
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
-            let errs = errs.mz_arrange("Arrange threshold basic err");
+            let errs = errs.mz_arrange(
+                "Arrange threshold basic err",
+                enable_arrangement_size_logging,
+            );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }
@@ -95,7 +110,7 @@ where
                 // We do not need to apply the permutation here,
                 // since threshold doesn't inspect the values, but only
                 // their counts.
-                build_threshold_basic(input, key)
+                build_threshold_basic(input, key, self.enable_arrangement_size_logging)
             }
         }
     }

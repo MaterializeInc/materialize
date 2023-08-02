@@ -21,6 +21,7 @@ use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
@@ -32,6 +33,7 @@ use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 /// retrieving logged records.
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
+    compute_state: &ComputeState,
     config: &LoggingConfig,
 ) -> (super::compute::Logger, BTreeMap<LogVariant, TraceBundle>) {
     let interval_ms = std::cmp::max(1, config.interval.as_millis())
@@ -49,6 +51,7 @@ pub fn initialize<A: Allocate + 'static>(
     let mut context = LoggingContext {
         worker,
         config,
+        compute_state,
         interval_ms,
         now,
         start_offset,
@@ -77,6 +80,7 @@ pub fn initialize<A: Allocate + 'static>(
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
     config: &'a LoggingConfig,
+    compute_state: &'a ComputeState,
     interval_ms: u64,
     now: Instant,
     start_offset: Duration,
@@ -95,23 +99,27 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             self.config,
             self.t_event_queue.clone(),
             Rc::clone(&self.shared_state),
+            self.compute_state,
         ));
         traces.extend(super::reachability::construct(
             self.worker,
             self.config,
             self.r_event_queue.clone(),
+            self.compute_state,
         ));
         traces.extend(super::differential::construct(
             self.worker,
             self.config,
             self.d_event_queue.clone(),
             Rc::clone(&self.shared_state),
+            self.compute_state,
         ));
         traces.extend(super::compute::construct(
             self.worker,
             self.config,
             self.c_event_queue.clone(),
             Rc::clone(&self.shared_state),
+            self.compute_state,
         ));
 
         let errs = self
@@ -119,7 +127,12 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             .dataflow_named("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
-                collection.mz_arrange("Arrange logging err").trace
+                collection
+                    .mz_arrange(
+                        "Arrange logging err",
+                        self.compute_state.enable_arrangement_size_logging,
+                    )
+                    .trace
             });
 
         traces

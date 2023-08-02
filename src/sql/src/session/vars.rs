@@ -1442,6 +1442,11 @@ feature_flags!(
     (
         enable_managed_cluster_availability_zones,
         "MANAGED, AVAILABILITY ZONES syntax"
+    ),
+    (
+        enable_arrangement_size_logging,
+        "arrangement size logging",
+        true
     )
 );
 
@@ -4083,6 +4088,7 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)

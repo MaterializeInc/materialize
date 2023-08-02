@@ -280,6 +280,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_arrangement_size_logging =
+                    compute_state.enable_arrangement_size_logging;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -334,6 +336,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().region_named(&build_name, |region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_arrangement_size_logging =
+                    compute_state.enable_arrangement_size_logging;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -567,12 +571,18 @@ where
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .mz_arrange("Arrange export iterative");
+                    .mz_arrange(
+                        "Arrange export iterative",
+                        self.enable_arrangement_size_logging,
+                    );
                 oks.stream.probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .mz_arrange("Arrange export iterative err");
+                    .mz_arrange(
+                        "Arrange export iterative err",
+                        self.enable_arrangement_size_logging,
+                    );
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -691,9 +701,13 @@ where
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .mz_arrange::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                    .mz_arrange::<ErrSpine<DataflowError, _, _>>(
+                        "Arrange recursive err",
+                        self.enable_arrangement_size_logging,
+                    )
                     .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
                         "Distinct recursive err",
+                        self.enable_arrangement_size_logging,
                         move |_k, _s, t| t.push(((), 1)),
                     )
                     .as_collection(|k, _| k.clone());
@@ -913,7 +927,13 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.until.clone(),
+                    self.enable_arrangement_size_logging,
+                )
             }
         }
     }

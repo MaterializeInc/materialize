@@ -36,6 +36,7 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant, SharedLoggingState};
 use crate::typedefs::{KeysValsHandle, RowSpine};
@@ -151,6 +152,7 @@ pub(super) fn construct<A: Allocate + 'static>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<ComputeEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    compute_state: &ComputeState,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
@@ -358,7 +360,10 @@ pub(super) fn construct<A: Allocate + 'static>(
                             (row_key, row_val)
                         }
                     })
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(
+                        &format!("ArrangeByKey {:?}", variant),
+                        compute_state.enable_arrangement_size_logging,
+                    )
                     .trace;
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }

@@ -30,6 +30,7 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
 
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{DifferentialLog, EventQueue, LogVariant, SharedLoggingState};
@@ -48,6 +49,7 @@ pub(super) fn construct<A: Allocate>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<DifferentialEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    compute_state: &ComputeState,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
@@ -131,6 +133,7 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Differential sharing",
+                compute_state.enable_arrangement_size_logging,
             );
 
         let sharing = sharing.as_collection(move |op, ()| {
@@ -173,7 +176,10 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(
+                        &format!("ArrangeByKey {:?}", variant),
+                        compute_state.enable_arrangement_size_logging,
+                    )
                     .trace;
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
