@@ -264,16 +264,16 @@ evaluate each request. This evaluation will happen off the main coordinator thre
 ### Request Limits
 [request_limits]: #request_limits
 
-To start we'll aim to support at least 100 requests per second, in other words, 10 sources could
-receive 10 requests per second. We can probably scale further, but this seems like a sensible limit
-to start at. Also we'll add an [`axum::middleware`](https://docs.rs/axum/latest/axum/middleware/index.html)
-that enforces rate limiting on our new endpoint. This should be a pretty easy way to prevent a
+To start we'll aim to support at least 100 concurrent requests, in other words, 10 sources could
+at one time be processing 10 requests each. We can probably scale further, but this seems like a
+sensible limit to start at. We'll do this by adding an [`axum::middleware`](https://docs.rs/axum/latest/axum/middleware/index.html)
+to enforce this limit on our new endpoint. This should be a pretty easy way to prevent a
 misbehaving source from taking down all of `environmentd`.
 
 We'll also introduce a maximum size the body of each request can be, the default limit will be
-16KiB.
+2MB.
 
-Both the maximum number of requests per second, and max body size, will be configurable via
+Both the maximum number of concurrent requests, and max body size, will be configurable via
 LaunchDarkly, and later we can introduce SQL syntax so the user can `ALTER` these parameters on a
 per-source basis.
 

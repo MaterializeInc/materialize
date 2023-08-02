@@ -23,6 +23,13 @@ use std::str::FromStr;
 
 use uncased::UncasedStr;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(typescript_custom_section)]
+const KEYWORDS_TS_DEF: &'static str = r#"export function getKeywords(): string[];"#;
+
 // The `Keyword` type and the keyword constants are automatically generated from
 // the list in keywords.txt by the crate's build script.
 //
@@ -138,4 +145,15 @@ impl fmt::Display for Keyword {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = getKeywords, skip_typescript)]
+// #[wasm_bindgen] cannot be applied directly to KEYWORDS, only to functions, structs, enums,
+// impls, or extern blocks. Wrap this in a function.
+pub fn get_keywords() -> Vec<JsValue> {
+    KEYWORDS
+        .keys()
+        .map(|k| JsValue::from(k.to_string()))
+        .collect()
 }

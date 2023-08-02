@@ -77,22 +77,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::time::Duration;
 
+use crate::{
+    AppendBatch, Data, Stash, StashCollection, StashError, StashFactory, TableTransaction,
+    Timestamp, TypedCollection, INSERT_BATCH_SPLIT_SIZE,
+};
 use futures::Future;
 use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::spawn;
-use mz_stash::{
-    AppendBatch, Data, Stash, StashCollection, StashError, StashFactory, TableTransaction,
-    Timestamp, TypedCollection, INSERT_BATCH_SPLIT_SIZE,
-};
 use postgres_openssl::MakeTlsConnector;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::Config;
 
-pub static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
-pub static C2: TypedCollection<i64, i64> = TypedCollection::new("c2");
-pub static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoint");
+static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
+static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoint");
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -638,8 +637,8 @@ where
                     ],
                     None,
                 )
-                .await
-                .unwrap();
+                    .await
+                    .unwrap();
                 tx.seal(orders.id, Antichain::from_elem(3), None)
                     .await
                     .unwrap();

@@ -446,7 +446,7 @@ where
                 .await
                 .expect("could not open persist client");
 
-            let write = persist_client
+            let mut write = persist_client
                 .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                     shard_id,
                     Arc::new(target_relation_desc),
@@ -462,7 +462,11 @@ where
                 .await
                 .expect("could not open persist shard");
 
-            let upper = write.upper().clone();
+            // TODO: this sink currently cannot tolerate a stale upper... which is bad because the
+            // upper can become stale as soon as it is read. (For example, if another concurrent
+            // instance of the sink has updated it.) Fetching a recent upper helps to mitigate this,
+            // but ideally we would just skip ahead if we discover that our upper is stale.
+            let upper = write.fetch_recent_upper().await.clone();
             // explicitly expire the once-used write handle.
             write.expire().await;
             upper

@@ -43,7 +43,7 @@ class FastPathFilterNoIndex(FastPath):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > CREATE DEFAULT INDEX ON v1;
 
@@ -73,7 +73,7 @@ class MFPPushdown(Scenario):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true

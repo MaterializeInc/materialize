@@ -3503,8 +3503,6 @@ impl_display_t!(RevokePrivilegesStatement);
 pub enum TargetRoleSpecification<T: AstInfo> {
     /// Specific list of roles.
     Roles(Vec<T::RoleName>),
-    /// The current role executing the statement.
-    CurrentRole,
     /// All current and future roles.
     AllRoles,
 }
@@ -3513,7 +3511,6 @@ impl<T: AstInfo> AstDisplay for TargetRoleSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             TargetRoleSpecification::Roles(roles) => f.write_node(&display::comma_separated(roles)),
-            TargetRoleSpecification::CurrentRole => {}
             TargetRoleSpecification::AllRoles => f.write_str("ALL ROLES"),
         }
     }
@@ -3626,7 +3623,6 @@ impl<T: AstInfo> AstDisplay for AlterDefaultPrivilegesStatement<T> {
                 f.write_str(" FOR ROLE ");
                 f.write_node(&self.target_roles);
             }
-            TargetRoleSpecification::CurrentRole => {}
             TargetRoleSpecification::AllRoles => {
                 f.write_str(" FOR ");
                 f.write_node(&self.target_roles);

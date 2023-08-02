@@ -92,7 +92,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_adapter::catalog::storage::{stash, BootstrapArgs};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
-use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
+use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
@@ -143,6 +143,8 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
+    /// Number of concurrent requests accepted for webhooks, `None` indicates a default limit.
+    pub concurrent_webhook_req_count: Option<usize>,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -478,29 +480,14 @@ impl Listeners {
         let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
-        let system_parameter_frontend = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-            let ld_key_map = config.launchdarkly_key_map;
-            let env_id = config.environment_id.clone();
-            let metrics_registry = config.metrics_registry.clone();
-            let now = config.now.clone();
-            // The `SystemParameterFrontend::new` call needs to be wrapped in a
-            // spawn_blocking call because the LaunchDarkly SDK initialization uses
-            // `reqwest::blocking::client`. This should be revisited after the SDK
-            // is updated to 1.0.0.
-            let system_parameter_frontend = task::spawn_blocking(
-                || "SystemParameterFrontend::new",
-                move || {
-                    SystemParameterFrontend::new(
-                        env_id,
-                        &metrics_registry,
-                        ld_sdk_key.as_str(),
-                        ld_key_map,
-                        now,
-                    )
-                },
-            )
-            .await??;
-            Some(Arc::new(system_parameter_frontend))
+        let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
+            Some(SystemParameterSyncConfig::new(
+                config.environment_id.clone(),
+                &config.metrics_registry,
+                config.now.clone(),
+                ld_sdk_key,
+                config.launchdarkly_key_map,
+            ))
         } else {
             None
         };
@@ -528,7 +515,7 @@ impl Listeners {
             storage_usage_retention_period: config.storage_usage_retention_period,
             segment_client: segment_client.clone(),
             egress_ips: config.egress_ips,
-            system_parameter_frontend: system_parameter_frontend.clone(),
+            system_parameter_sync_config: system_parameter_sync_config.clone(),
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
@@ -586,6 +573,9 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
+                concurrent_webhook_req_count: config
+                    .concurrent_webhook_req_count
+                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics,
             });
             server::serve(http_conns, http_server)
@@ -600,15 +590,14 @@ impl Listeners {
             });
         }
 
-        // If system_parameter_frontend and config_sync_loop_interval are present,
+        // If system_parameter_sync_config and config_sync_loop_interval are present,
         // start the system_parameter_sync loop.
-        if let Some(system_parameter_frontend) = system_parameter_frontend {
-            let system_parameter_backend = SystemParameterBackend::new(adapter_client).await?;
+        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
             task::spawn(
                 || "system_parameter_sync",
                 AssertUnwindSafe(system_parameter_sync(
-                    system_parameter_frontend,
-                    system_parameter_backend,
+                    system_parameter_sync_config,
+                    adapter_client,
                     config.config_sync_loop_interval,
                 ))
                 .ore_catch_unwind(),

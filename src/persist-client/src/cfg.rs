@@ -142,7 +142,7 @@ impl PersistConfig {
                 compaction_heuristic_min_inputs: AtomicUsize::new(8),
                 compaction_heuristic_min_parts: AtomicUsize::new(8),
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
-                compaction_memory_bound_bytes: AtomicUsize::new(1024 * MB),
+                compaction_memory_bound_bytes: AtomicUsize::new(1024 * MiB),
                 compaction_minimum_timeout: RwLock::new(Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT),
                 consensus_connection_pool_ttl: RwLock::new(Self::DEFAULT_CONSENSUS_CONNPOOL_TTL),
                 consensus_connection_pool_ttl_stagger: RwLock::new(
@@ -221,11 +221,12 @@ impl PersistConfig {
     }
 }
 
-pub(crate) const MB: usize = 1024 * 1024;
+#[allow(non_upper_case_globals)]
+pub(crate) const MiB: usize = 1024 * 1024;
 
 impl PersistConfig {
     /// Default value for [`DynamicConfig::blob_target_size`].
-    pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MB;
+    pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MiB;
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].

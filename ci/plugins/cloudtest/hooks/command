@@ -12,6 +12,7 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. test/cloudtest/config.bash
 
 run_args=(
     "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
@@ -40,7 +41,7 @@ bin/ci-builder run stable test/cloudtest/reset
 rm -f kubectl-*.log
 
 ci_collapsed_heading "kail: Start a new instance"
-NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context kind-cloudtest --log-level info
+NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context "$K8S_CONTEXT" --log-level info
 
 ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
 bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log

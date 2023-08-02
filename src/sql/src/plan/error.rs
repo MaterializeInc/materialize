@@ -47,7 +47,7 @@ pub enum PlanError {
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
         feature: String,
-        documentation_link: String,
+        documentation_link: Option<String>,
         details: Option<String>,
     },
     UnknownColumn {
@@ -358,7 +358,10 @@ impl fmt::Display for PlanError {
                 Ok(())
             }
             Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
-                write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
+                write!(f, "{feature} is not supported",)?;
+                if let Some(documentation_path) = documentation_path {
+                    write!(f, ", for more information consult the documentation at https://materialize.com/docs/{documentation_path}")?;
+                }
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(

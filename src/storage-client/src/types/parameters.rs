@@ -9,11 +9,10 @@
 
 //! Configuration parameter types.
 
-use std::collections::BTreeMap;
-
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_service::params::GrpcClientParameters;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +25,7 @@ include!(concat!(
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct StorageParameters {
     /// Persist client configuration.
     pub persist: PersistParameters,
@@ -45,47 +44,44 @@ pub struct StorageParameters {
     /// A set of parameters used to configure the maximum number of in-flight bytes
     /// emitted by persist_sources feeding storage dataflows
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
+    /// gRPC client parameters.
+    pub grpc_client: GrpcClientParameters,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageMaxInflightBytesConfig {
     /// The default value for the max in-flight bytes
     pub max_inflight_bytes_default: Option<usize>,
     /// Specified percentage which will be used to calculate the max in-flight from the
     /// memory limit of the cluster in use.
-    pub max_inflight_bytes_cluster_size_percent: Option<usize>,
-    /// A map of different cluster sizes and their corresponding memory limits in bytes
-    /// This will be used to find out the memory limit of the cluster in use.
-    pub cluster_size_memory_map: BTreeMap<String, usize>,
+    pub max_inflight_bytes_cluster_size_percent: Option<f64>,
+    /// Whether or not the above configs only apply to disk-using dataflows.
+    pub disk_only: bool,
+}
+
+impl Default for StorageMaxInflightBytesConfig {
+    fn default() -> Self {
+        Self {
+            max_inflight_bytes_default: Default::default(),
+            max_inflight_bytes_cluster_size_percent: Default::default(),
+            disk_only: true,
+        }
+    }
 }
 
 impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesConfig {
     fn into_proto(&self) -> ProtoStorageMaxInflightBytesConfig {
         ProtoStorageMaxInflightBytesConfig {
             max_in_flight_bytes_default: self.max_inflight_bytes_default.map(u64::cast_from),
-            max_in_flight_bytes_cluster_size_percent: self
-                .max_inflight_bytes_cluster_size_percent
-                .map(u64::cast_from),
-            cluster_size_memory_map: self
-                .cluster_size_memory_map
-                .iter()
-                .map(|(cluster_size, memory_limit)| {
-                    (cluster_size.into_proto(), u64::cast_from(*memory_limit))
-                })
-                .collect(),
+            max_in_flight_bytes_cluster_size_percent: self.max_inflight_bytes_cluster_size_percent,
+            disk_only: self.disk_only,
         }
     }
     fn from_proto(proto: ProtoStorageMaxInflightBytesConfig) -> Result<Self, TryFromProtoError> {
-        let mut cluster_size_memory_map = BTreeMap::new();
-        for (cluster_size, memory_limit) in proto.cluster_size_memory_map {
-            cluster_size_memory_map.insert(cluster_size, usize::cast_from(memory_limit));
-        }
         Ok(Self {
             max_inflight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
-            max_inflight_bytes_cluster_size_percent: proto
-                .max_in_flight_bytes_cluster_size_percent
-                .map(usize::cast_from),
-            cluster_size_memory_map,
+            max_inflight_bytes_cluster_size_percent: proto.max_in_flight_bytes_cluster_size_percent,
+            disk_only: proto.disk_only,
         })
     }
 }
@@ -128,6 +124,7 @@ impl StorageParameters {
             tracing,
             upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
+            grpc_client,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -141,6 +138,7 @@ impl StorageParameters {
         self.upsert_auto_spill_config = upsert_auto_spill_config;
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
+        self.grpc_client.update(grpc_client);
     }
 }
 
@@ -162,6 +160,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             storage_dataflow_max_inflight_bytes_config: Some(
                 self.storage_dataflow_max_inflight_bytes_config.into_proto(),
             ),
+            grpc_client: Some(self.grpc_client.into_proto()),
         }
     }
 
@@ -194,6 +193,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .into_rust_if_some(
                     "ProtoStorageParameters::storage_dataflow_max_inflight_bytes_config",
                 )?,
+            grpc_client: proto
+                .grpc_client
+                .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
         })
     }
 }

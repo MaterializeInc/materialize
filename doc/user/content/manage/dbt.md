@@ -9,7 +9,7 @@ menu:
   main:
     parent: manage
     name: "Use dbt to manage Materialize"
-    weight: 10
+    weight: 11
 ---
 
 {{< note >}}

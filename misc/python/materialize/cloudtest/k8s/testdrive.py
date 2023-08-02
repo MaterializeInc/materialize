@@ -50,6 +50,7 @@ class Testdrive(K8sPod):
         no_reset: bool = False,
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
+        default_timeout: str = "300s",
     ) -> None:
         wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
@@ -62,7 +63,7 @@ class Testdrive(K8sPod):
             "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
             "--kafka-addr=redpanda:9092",
             "--schema-registry-url=http://redpanda:8081",
-            "--default-timeout=300s",
+            f"--default-timeout={default_timeout}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",

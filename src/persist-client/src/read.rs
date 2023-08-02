@@ -1023,9 +1023,6 @@ where
     ///   like an MFP you might be pushing down. Reason being that if you are
     ///   projecting or transforming in a way that allows further consolidation,
     ///   amazing.
-    /// - The parts are already sorted by `(K, V, T)`, which means we could do a
-    ///   streaming consolidate within a part by walking through each `(K, V)`
-    ///   pair. (This would be pushed up into FetchedPart.)
     /// - Reuse any code we write to streaming-merge consolidate in
     ///   persist_source here.
     pub async fn snapshot_and_fetch(
@@ -1050,17 +1047,12 @@ where
             .await;
             self.process_returned_leased_part(part);
             contents.extend(fetched_part);
-            // NB: If FetchedPart learns to streaming consolidate its output,
-            // this can stay true for the first part (and more generally as long
-            // as contents was empty before we added it to contents).
+            // NB: FetchedPart streaming consolidates its output, but it's possible
+            // that decoding introduces duplicates again.
             is_consolidated = false;
 
             // If the size of contents has doubled since the last consolidated
             // size, try consolidating it again.
-            //
-            // Note that parts are internally consolidated, but we advance the
-            // timestamp to the as_of, so even the first part might benefit from
-            // consolidation.
             if contents.len() >= last_consolidate_len * 2 {
                 consolidate_updates(&mut contents);
                 last_consolidate_len = contents.len();
@@ -1168,6 +1160,7 @@ mod tests {
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn drop_unused_subscribe() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1193,6 +1186,56 @@ mod tests {
             "snapshot must have batches for test to be meaningful"
         );
         drop(subscribe);
+    }
+
+    // Verifies that we streaming-consolidate away identical key-values in the same batch.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn streaming_consolidate() {
+        let data = &[
+            // Identical records should sum together...
+            (("k".to_owned(), "v".to_owned()), 0, 1),
+            (("k".to_owned(), "v".to_owned()), 1, 1),
+            (("k".to_owned(), "v".to_owned()), 2, 1),
+            // ...and when they cancel out entirely they should be omitted.
+            (("k2".to_owned(), "v".to_owned()), 0, 1),
+            (("k2".to_owned(), "v".to_owned()), 1, -1),
+        ];
+
+        let (mut write, read) = {
+            let client = new_test_client().await;
+            client.cfg.dynamic.set_blob_target_size(1000); // So our batch stays together!
+            client
+                .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+                .await
+        };
+
+        write.expect_compare_and_append(data, 0, 5).await;
+
+        let mut snapshot = read
+            .subscribe(timely::progress::Antichain::from_elem(4))
+            .await
+            .unwrap();
+
+        let mut updates = vec![];
+        'outer: loop {
+            for event in snapshot.fetch_next().await {
+                match event {
+                    ListenEvent::Progress(t) => {
+                        if !t.less_than(&4) {
+                            break 'outer;
+                        }
+                    }
+                    ListenEvent::Updates(data) => {
+                        updates.extend(data);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            updates,
+            &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
+        )
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.

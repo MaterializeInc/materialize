@@ -183,7 +183,7 @@ ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Error","payload":{"message":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block","code":"25001"}}
+{"type":"Error","payload":{"message":"transaction in read-only mode","code":"25006","detail":"SELECT queries cannot be combined with other query types, including SUBSCRIBE."}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text

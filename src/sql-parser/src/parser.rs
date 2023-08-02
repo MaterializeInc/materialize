@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
-use mz_sql_lexer::lexer::{self, LexerError, Token};
+use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use IsLateral::*;
@@ -271,7 +271,7 @@ impl From<Keyword> for Ident {
 /// SQL Parser
 struct Parser<'a> {
     sql: &'a str,
-    tokens: Vec<(Token, usize)>,
+    tokens: Vec<PosToken>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
     recursion_guard: RecursionGuard,
@@ -306,7 +306,7 @@ enum SetPrecedence {
 
 impl<'a> Parser<'a> {
     /// Parse the specified tokens
-    fn new(sql: &'a str, tokens: Vec<(Token, usize)>) -> Self {
+    fn new(sql: &'a str, tokens: Vec<PosToken>) -> Self {
         Parser {
             sql,
             tokens,
@@ -1552,17 +1552,16 @@ impl<'a> Parser<'a> {
 
     /// Return the nth token that has not yet been processed.
     fn peek_nth_token(&self, n: usize) -> Option<Token> {
-        self.tokens.get(self.index + n).map(|(t, _)| t.clone())
+        self.tokens
+            .get(self.index + n)
+            .map(|token| token.kind.clone())
     }
 
     /// Return the next token that has not yet been processed, or None if
     /// reached end-of-file, and mark it as processed. OK to call repeatedly
     /// after reaching EOF.
     fn next_token(&mut self) -> Option<Token> {
-        let token = self
-            .tokens
-            .get(self.index)
-            .map(|(token, _range)| token.clone());
+        let token = self.tokens.get(self.index).map(|token| token.kind.clone());
         self.index += 1;
         token
     }
@@ -1579,7 +1578,7 @@ impl<'a> Parser<'a> {
     /// next token starts.
     fn peek_pos(&self) -> usize {
         match self.tokens.get(self.index) {
-            Some((_token, pos)) => *pos,
+            Some(token) => token.offset,
             None => self.sql.len(),
         }
     }
@@ -1592,7 +1591,7 @@ impl<'a> Parser<'a> {
     fn peek_prev_pos(&self) -> usize {
         assert!(self.index > 0);
         match self.tokens.get(self.index - 1) {
-            Some((_token, pos)) => *pos,
+            Some(token) => token.offset,
             None => self.sql.len(),
         }
     }
@@ -4323,7 +4322,11 @@ impl<'a> Parser<'a> {
                         .parse_comma_separated(Parser::parse_item_name)
                         .map_parser_err(StatementKind::AlterSource)?;
 
-                    let cascade = self.parse_keyword(CASCADE);
+                    let cascade = matches!(
+                        self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "ALTER SOURCE...DROP")
+                            .map_parser_err(StatementKind::AlterSource)?,
+                        Some(CASCADE),
+                    );
 
                     Statement::AlterSource(AlterSourceStatement {
                         source_name,
@@ -4714,19 +4717,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let target_roles = if self.parse_keyword(FOR) {
-            match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
-                ROLE | USER => TargetRoleSpecification::Roles(
-                    self.parse_comma_separated(Parser::parse_identifier)?,
-                ),
-                ALL => {
-                    self.expect_keyword(ROLES)?;
-                    TargetRoleSpecification::AllRoles
-                }
-                _ => unreachable!(),
+        self.expect_keyword(FOR)?;
+        let target_roles = match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
+            ROLE | USER => TargetRoleSpecification::Roles(
+                self.parse_comma_separated(Parser::parse_identifier)?,
+            ),
+            ALL => {
+                self.expect_keyword(ROLES)?;
+                TargetRoleSpecification::AllRoles
             }
-        } else {
-            TargetRoleSpecification::CurrentRole
+            _ => unreachable!(),
         };
         let target_objects = if self.parse_keyword(IN) {
             match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {

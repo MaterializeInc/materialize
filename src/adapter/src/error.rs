@@ -202,6 +202,8 @@ pub enum AdapterError {
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
     MultiTableWriteTransaction,
+    /// The transaction can only execute a single statement.
+    SingleStatementTransaction,
     /// An error occurred in the storage layer
     Storage(mz_storage_client::controller::StorageError),
     /// An error occurred in the compute layer
@@ -399,6 +401,7 @@ impl AdapterError {
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
@@ -536,6 +539,9 @@ impl fmt::Display for AdapterError {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
             AdapterError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
+            AdapterError::SingleStatementTransaction => {
+                f.write_str("this transaction can only execute a single statement")
+            }
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
             }

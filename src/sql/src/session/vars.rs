@@ -748,6 +748,23 @@ mod upsert_rocksdb {
             "The upsert in-memory state size threshold in bytes after which it will spill to disk",
         internal: true,
     };
+
+    pub static UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS: ServerVar<u32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_stats_log_interval_seconds"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_STATS_LOG_INTERVAL_S,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
+    pub static UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS: ServerVar<u32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_stats_persist_interval_seconds"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -874,7 +891,7 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Option<usize>> =
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Option<Numeric>> =
     ServerVar {
         name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_percent"),
         value: &None,
@@ -884,6 +901,14 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Opt
     If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
         internal: true,
     };
+
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_max_inflight_bytes_disk_only"),
+    value: &true,
+    description: "Whether or not `storage_dataflow_max_inflight_bytes` applies only to \
+        upsert dataflows using disks. Defaults to true (Materialize).",
+    internal: true,
+};
 
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
@@ -1102,6 +1127,31 @@ const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+/// Configuration for gRPC client connections.
+mod grpc_client {
+    use super::*;
+
+    pub const CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_connect_timeout"),
+        value: &Duration::from_secs(5),
+        description: "Timeout to apply to initial gRPC client connection establishment.",
+        internal: true,
+    };
+    pub const HTTP2_KEEP_ALIVE_INTERVAL: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_http2_keep_alive_interval"),
+        value: &Duration::from_secs(3),
+        description: "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
+        internal: true,
+    };
+    pub const HTTP2_KEEP_ALIVE_TIMEOUT: ServerVar<Duration> = ServerVar {
+        name: UncasedStr::new("grpc_client_http2_keep_alive_timeout"),
+        value: &Duration::from_secs(5),
+        description:
+            "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
+        internal: true,
+    };
+}
+
 // Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 // availability of features.
 //
@@ -1240,7 +1290,6 @@ feature_flags!(
         enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
-    (enable_managed_clusters, "managed clusters"),
     (
         enable_cardinality_estimates,
         "join planning with cardinality estimates"
@@ -1869,6 +1918,8 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -1879,6 +1930,7 @@ impl SystemVars {
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -1908,7 +1960,10 @@ impl SystemVars {
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
-            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS);
+            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+            .with_var(&grpc_client::CONNECT_TIMEOUT)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT);
         vars.refresh_internal_state();
         vars
     }
@@ -2259,6 +2314,14 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
     }
 
+    pub fn upsert_rocksdb_stats_log_interval_seconds(&self) -> u32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
+    }
+
+    pub fn upsert_rocksdb_stats_persist_interval_seconds(&self) -> u32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -2345,8 +2408,13 @@ impl SystemVars {
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_percent` configuration parameter.
-    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<usize> {
+    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<Numeric> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
+    pub fn storage_dataflow_max_inflight_bytes_disk_only(&self) -> bool {
+        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
@@ -2447,6 +2515,18 @@ impl SystemVars {
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+    }
+
+    pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
+        *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
+    }
+
+    pub fn grpc_client_http2_keep_alive_timeout(&self) -> Duration {
+        *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
+    }
+
+    pub fn grpc_connect_timeout(&self) -> Duration {
+        *self.expect_value(&grpc_client::CONNECT_TIMEOUT)
     }
 }
 
@@ -3812,6 +3892,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT.name()
+        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -3831,6 +3912,8 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.

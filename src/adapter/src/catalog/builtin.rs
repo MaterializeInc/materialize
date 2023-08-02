@@ -1999,6 +1999,49 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     is_retained_metrics_object: false,
 });
 
+pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_prepared_statement_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("sql", ScalarType::String.nullable(false))
+        .with_column("prepared_at", ScalarType::TimestampTz.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_statement_execution_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column(
+            "params",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("began_at", ScalarType::TimestampTz.nullable(false))
+        .with_column("finished_at", ScalarType::TimestampTz.nullable(true))
+        .with_column("finished_status", ScalarType::String.nullable(true))
+        .with_column("error_message", ScalarType::String.nullable(true))
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_session_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("connected_at", ScalarType::TimestampTz.nullable(false))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("authenticated_user", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -4498,8 +4541,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
+        Builtin::Table(&MZ_SESSION_HISTORY),
         Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
+        Builtin::Table(&MZ_PREPARED_STATEMENT_HISTORY),
+        Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),

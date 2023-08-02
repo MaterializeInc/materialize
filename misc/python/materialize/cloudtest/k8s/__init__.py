@@ -31,6 +31,7 @@ from kubernetes.config import new_client_from_config  # type: ignore
 from pg8000 import Connection, Cursor
 
 from materialize import ROOT, mzbuild, ui
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 
 
 class K8sResource:
@@ -65,7 +66,7 @@ class K8sResource:
         return RbacAuthorizationV1Api(api_client)
 
     def context(self) -> str:
-        return "kind-cloudtest"
+        return DEFAULT_K8S_CONTEXT_NAME
 
     def namespace(self) -> str:
         return "default"

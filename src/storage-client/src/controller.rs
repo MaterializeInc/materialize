@@ -278,13 +278,7 @@ pub trait StorageController: Debug + Send {
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
-    fn connect_replica(
-        &mut self,
-        id: StorageInstanceId,
-        location: ClusterReplicaLocation,
-        // The human readable `string` cluster size if there is one
-        cluster_size: Option<String>,
-    );
+    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
 
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(
@@ -1033,8 +1027,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .await
             .expect("could not connect to postgres storage stash");
 
-        // Ensure all collections are initialized, otherwise they panic if
-        // they're read before being written to.
+        // Ensure all collections are initialized, otherwise they cannot
+        // be read.
         async fn maybe_get_init_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             typed: &TypedCollection<K, V>,
@@ -1047,14 +1041,15 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
                 .collection::<K, V>(typed.name())
                 .await
                 .expect("named collection must exist");
-            let upper = tx
-                .upper(collection.id)
+            if !collection
+                .is_initialized(tx)
                 .await
-                .expect("collection known to exist");
-            if upper.elements() == [mz_stash::Timestamp::MIN] {
+                .expect("collection known to exist")
+            {
                 Some(
                     collection
-                        .make_batch_lower(upper)
+                        .make_batch_tx(tx)
+                        .await
                         .expect("stash operation must succeed"),
                 )
             } else {
@@ -1167,6 +1162,7 @@ where
             self.build_info,
             self.metrics.for_instance(id),
             self.state.envd_epoch,
+            self.state.config.grpc_client.clone(),
         );
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -1183,18 +1179,13 @@ where
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    fn connect_replica(
-        &mut self,
-        id: StorageInstanceId,
-        location: ClusterReplicaLocation,
-        cluster_size: Option<String>,
-    ) {
+    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation) {
         let client = self
             .state
             .clients
             .get_mut(&id)
             .unwrap_or_else(|| panic!("instance {id} does not exist"));
-        client.connect(location, cluster_size);
+        client.connect(location);
     }
 
     fn drop_replica(

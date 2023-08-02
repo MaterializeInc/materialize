@@ -539,6 +539,14 @@ where
                 .as_ref()
                 .ok_or(DataflowCreationError::MissingAsOf)?;
 
+            // When we initialize per-replica write frontiers (and thereby the per-replica read
+            // capabilities), we cannot use the `as_of` because of reconciliation: Existing
+            // slow replicas might be reading from the inputs at times before the `as_of` and we
+            // would rather not crash them by allowing their inputs to compact too far. So instead
+            // we initialize the per-replica write frontiers with the smallest possible value that
+            // is a valid read capability for all inputs, which is the join of all input `since`s.
+            let mut replica_write_frontier = Antichain::from_elem(T::minimum());
+
             // Record all transitive dependencies of the outputs.
             let mut storage_dependencies = Vec::new();
             let mut compute_dependencies = Vec::new();
@@ -556,6 +564,7 @@ where
                 }
 
                 storage_dependencies.push(*source_id);
+                replica_write_frontier.join_assign(&since.to_owned());
             }
 
             // Validate indexes have `since.less_equal(as_of)`.
@@ -565,9 +574,10 @@ where
                 let since = collection.read_capabilities.frontier();
                 if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
                     Err(DataflowCreationError::SinceViolation(*index_id))?;
-                } else {
-                    compute_dependencies.push(*index_id);
                 }
+
+                compute_dependencies.push(*index_id);
+                replica_write_frontier.join_assign(&since.to_owned());
             }
 
             // Canonicalize dependencies.
@@ -610,7 +620,7 @@ where
                         compute_dependencies.clone(),
                     ),
                 );
-                updates.push((export_id, as_of.clone()));
+                updates.push((export_id, replica_write_frontier.clone()));
             }
             // Initialize tracking of replica frontiers.
             let replica_ids: Vec<_> = self.compute.replica_ids().collect();

@@ -260,6 +260,7 @@ enum TransactionMode {
     Savepoint,
 }
 
+/// Factory type used to open new one or more [`Stash`].
 #[derive(Debug, Clone)]
 pub struct StashFactory {
     metrics: Arc<Metrics>,
@@ -452,7 +453,7 @@ impl std::fmt::Debug for Stash {
 }
 
 impl Stash {
-    /// Drops all tables associated with the stash if they exist.
+    /// Drops all tables associated with the stash if they exist. Only used in tests and benchmarks.
     pub async fn clear(url: &str, tls: MakeTlsConnector) -> Result<(), StashError> {
         let (client, connection) = tokio_postgres::connect(url, tls).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
@@ -489,7 +490,8 @@ impl Stash {
     }
 
     /// Verifies stash invariants. Should only be called by tests.
-    pub async fn verify(&self) -> Result<(), StashError> {
+    #[cfg(test)]
+    pub(crate) async fn verify(&self) -> Result<(), StashError> {
         let client = self.client.as_ref().unwrap();
 
         // Because consolidation is in a separate task, allow this to retry.
@@ -630,7 +632,7 @@ impl Stash {
     ///         })
     ///     })
     ///     .await
-    //  }
+    ///  }
     /// ```
     #[tracing::instrument(name = "stash::transact", level = "debug", skip_all)]
     pub(crate) async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
@@ -1055,11 +1057,17 @@ impl<T> TransactionError<T> {
 }
 
 impl Stash {
+    /// Returns a mapping from stash collection Id to stash collection name.
     pub async fn collections(&mut self) -> Result<BTreeMap<Id, String>, StashError> {
         self.with_transaction(move |tx| Box::pin(async move { tx.collections().await }))
             .await
     }
 
+    /// Returns Ok if the stash is the current leader and an error otherwise.
+    ///
+    /// Note: This can be optimized to not increment the version, which is done automatically via
+    /// `with_commit`. It will probably be more efficient to retry an in-determinate read-only
+    /// transaction than relying on incrementing the version.
     pub async fn confirm_leadership(&mut self) -> Result<(), StashError> {
         self.with_transaction(|_| Box::pin(async { Ok(()) })).await
     }

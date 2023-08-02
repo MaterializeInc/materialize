@@ -11,14 +11,17 @@ use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::EpochMillis;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, Value};
+use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogItem, CatalogItemType};
+use mz_sql::names::ObjectId;
 use mz_storage_client::types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
 use crate::catalog::storage::Transaction;
-use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
+use crate::catalog::{storage, Catalog, ConnCatalog, SerializedCatalogItem};
 
 async fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
@@ -66,6 +69,7 @@ pub(crate) async fn migrate(
 
     info!("migrating from catalog version {:?}", catalog_version);
 
+    let now = (catalog.config().now)();
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
     // rewrite_items(&mut tx, None, |_tx, _cat, _stmt| Box::pin(async { Ok(()) })).await?;
@@ -88,6 +92,10 @@ pub(crate) async fn migrate(
         })
     })
     .await?;
+
+    sync_cluster_replica_owners(&cat, &mut tx, now)?;
+    sync_source_owners(&cat, &mut tx, now)?;
+
     tx.commit().await?;
     info!(
         "migration from catalog version {:?} complete",
@@ -304,4 +312,177 @@ async fn pg_source_table_metadata_rewrite(
             ))),
         });
     }
+}
+
+// Update the owners of all linked clusters, linked cluster replicas, and subsources so that their
+// owners match their linked object or primary source.
+//
+// TODO(migration): delete in version v.64 (released in v0.63 + 1 additional
+// release)
+fn sync_source_owners(
+    catalog: &Catalog,
+    tx: &mut Transaction,
+    now: EpochMillis,
+) -> Result<(), anyhow::Error> {
+    let mut updated_clusters = BTreeMap::new();
+    let mut updated_cluster_replicas = BTreeMap::new();
+    let mut updated_items = BTreeMap::new();
+
+    for cluster in catalog.user_clusters() {
+        if let Some(linked_id) = cluster.linked_object_id() {
+            let linked_owner_id = catalog.get_entry(&linked_id).owner_id();
+            let old_owner = cluster.owner_id();
+            if &old_owner != linked_owner_id {
+                let mut new_cluster = cluster.clone();
+                new_cluster.owner_id = *linked_owner_id;
+                updated_clusters.insert(cluster.id(), new_cluster);
+                add_to_audit_log(
+                    tx,
+                    mz_audit_log::EventType::Alter,
+                    mz_audit_log::ObjectType::Cluster,
+                    mz_audit_log::EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                        object_id: ObjectId::Cluster(cluster.id()).to_string(),
+                        old_owner_id: old_owner.to_string(),
+                        new_owner_id: linked_owner_id.to_string(),
+                    }),
+                    now,
+                )?;
+            }
+        }
+    }
+
+    for cluster_replica in catalog.user_cluster_replicas() {
+        let cluster = catalog.get_cluster(cluster_replica.cluster_id());
+        if let Some(linked_id) = cluster.linked_object_id() {
+            let linked_owner_id = catalog.get_entry(&linked_id).owner_id();
+            let old_owner = cluster_replica.owner_id();
+            if &old_owner != linked_owner_id {
+                let mut new_replica = cluster_replica.clone();
+                new_replica.owner_id = *linked_owner_id;
+                updated_cluster_replicas.insert(
+                    cluster_replica.replica_id(),
+                    (cluster_replica.cluster_id(), new_replica),
+                );
+                add_to_audit_log(
+                    tx,
+                    mz_audit_log::EventType::Alter,
+                    mz_audit_log::ObjectType::ClusterReplica,
+                    mz_audit_log::EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                        object_id: ObjectId::ClusterReplica((
+                            cluster_replica.cluster_id(),
+                            cluster_replica.replica_id(),
+                        ))
+                        .to_string(),
+                        old_owner_id: old_owner.to_string(),
+                        new_owner_id: linked_owner_id.to_string(),
+                    }),
+                    now,
+                )?;
+            }
+        }
+    }
+
+    for source in catalog.user_sources() {
+        if source.is_subsource() {
+            let primary_source = source
+                .used_by()
+                .iter()
+                .find(|id| catalog.get_entry(id).item_type() == CatalogItemType::Source)
+                .expect("subsource must have primary source");
+            let primary_source_owner = catalog.get_entry(primary_source).owner_id();
+            let old_owner = source.owner_id();
+            if old_owner != primary_source_owner {
+                let mut new_source = source.clone();
+                new_source.owner_id = *primary_source_owner;
+                let definition = SerializedCatalogItem::V1 {
+                    create_sql: new_source.create_sql().to_string(),
+                };
+                updated_items.insert(
+                    source.id,
+                    storage::Item {
+                        id: new_source.id,
+                        name: new_source.name,
+                        definition,
+                        owner_id: new_source.owner_id,
+                        privileges: new_source.privileges.all_values_owned().collect(),
+                    },
+                );
+                add_to_audit_log(
+                    tx,
+                    mz_audit_log::EventType::Alter,
+                    mz_audit_log::ObjectType::Source,
+                    mz_audit_log::EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                        object_id: ObjectId::Item(source.id()).to_string(),
+                        old_owner_id: old_owner.to_string(),
+                        new_owner_id: primary_source_owner.to_string(),
+                    }),
+                    now,
+                )?;
+            }
+        }
+    }
+
+    tx.update_clusters(updated_clusters)
+        .expect("corrupt catalog");
+    tx.update_cluster_replicas(updated_cluster_replicas)
+        .expect("corrupt catalog");
+    tx.update_items(updated_items).expect("corrupt catalog");
+
+    Ok(())
+}
+
+// Update the owners of all cluster replicas so that their owners match their cluster.
+//
+// TODO(migration): delete in version v.64 (released in v0.63 + 1 additional
+// release)
+fn sync_cluster_replica_owners(
+    catalog: &Catalog,
+    tx: &mut Transaction,
+    now: EpochMillis,
+) -> Result<(), anyhow::Error> {
+    let mut updated_cluster_replicas = BTreeMap::new();
+    for cluster_replica in catalog.user_cluster_replicas() {
+        let cluster = catalog.get_cluster(cluster_replica.cluster_id());
+        let old_owner = cluster_replica.owner_id();
+        if old_owner != cluster.owner_id() {
+            let mut new_replica = cluster_replica.clone();
+            new_replica.owner_id = cluster.owner_id();
+            updated_cluster_replicas.insert(
+                cluster_replica.replica_id(),
+                (cluster_replica.cluster_id(), new_replica),
+            );
+            add_to_audit_log(
+                tx,
+                mz_audit_log::EventType::Alter,
+                mz_audit_log::ObjectType::ClusterReplica,
+                mz_audit_log::EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                    object_id: ObjectId::ClusterReplica((
+                        cluster_replica.cluster_id(),
+                        cluster_replica.replica_id(),
+                    ))
+                    .to_string(),
+                    old_owner_id: old_owner.to_string(),
+                    new_owner_id: cluster.owner_id().to_string(),
+                }),
+                now,
+            )?;
+        }
+    }
+    tx.update_cluster_replicas(updated_cluster_replicas)
+        .expect("corrupt catalog");
+    Ok(())
+}
+
+fn add_to_audit_log(
+    tx: &mut Transaction,
+    event_type: mz_audit_log::EventType,
+    object_type: mz_audit_log::ObjectType,
+    details: mz_audit_log::EventDetails,
+    occurred_at: EpochMillis,
+) -> Result<(), anyhow::Error> {
+    let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+    let event =
+        mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
+    tx.insert_audit_log_event(event);
+    Ok(())
 }

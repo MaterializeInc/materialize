@@ -30,7 +30,7 @@ hex = "0.4.3"
 itertools = "0.10.5"
 once_cell = "1.16.0"
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore", features = ["bytes", "smallvec", "stack", "test"] }
+mz-ore = { path = "../ore", features = ["bytes", "smallvec", "stack", "test", "serde"] }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 num-traits = "0.2.15"

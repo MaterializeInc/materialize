@@ -1,3 +1,8 @@
+# Legacy framework !
+
+This framework is considered legacy. While it continues to run in CI, it is recommended that
+new functionality is tested using Platform Checks in test/platform-checks. Any Check that
+is defined in that framework will be run by the CI in various upgrade contexts as well.
 
 # testdrive-based upgrade test framework
 

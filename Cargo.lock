@@ -1995,7 +1995,7 @@ checksum = "2eac3c0b9fa6eb75255ebb42c0ba3e2210d102a66d2795afef6fed668f373311"
 [[package]]
 name = "eventsource-client"
 version = "0.11.0"
-source = "git+https://github.com/MaterializeInc/rust-eventsource-client#7189b690cbfa7ff5be2e943fbce83b8a8b67b928"
+source = "git+https://github.com/MaterializeInc/rust-eventsource-client#fb749fde693a9757289238ee71d4e9b3590fb24b"
 dependencies = [
  "futures",
  "hyper",
@@ -2934,7 +2934,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#5c36592edc75b620482a92e6991147aee7baf2d8"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#fb0eaf5bee43f9a590a237705d190e6650d9ecd8"
 dependencies = [
  "built",
  "chrono",
@@ -3155,6 +3155,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "lol_alloc"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36aabc32b791f1a506e0bb90e0fa03e983500549d7b1f2dad45b5fc20ef45974"
+dependencies = [
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -3494,6 +3503,7 @@ dependencies = [
  "mz-rocksdb-types",
  "mz-secrets",
  "mz-segment",
+ "mz-service",
  "mz-sql",
  "mz-sql-parser",
  "mz-ssh-util",
@@ -3612,7 +3622,6 @@ dependencies = [
  "futures",
  "mz-repr",
  "mz-secrets",
- "mz-sql",
  "tracing",
  "workspace-hack",
 ]
@@ -3763,7 +3772,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.63.0-dev"
+version = "0.64.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3898,6 +3907,7 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
+ "mz-service",
  "mz-stash",
  "mz-storage-client",
  "once_cell",
@@ -3914,7 +3924,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.63.0-dev"
+version = "0.64.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4466,7 +4476,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.63.0-dev"
+version = "0.64.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4871,22 +4881,30 @@ dependencies = [
  "futures",
  "http",
  "itertools",
+ "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
  "mz-ore",
  "mz-proto",
+ "mz-repr",
  "mz-secrets",
  "once_cell",
  "os_info",
+ "proptest",
+ "proptest-derive",
  "prost",
+ "prost-build",
+ "protobuf-src",
  "semver",
  "sentry-tracing",
+ "serde",
  "sysinfo",
  "timely",
  "tokio",
  "tokio-stream",
  "tonic",
+ "tonic-build",
  "tower",
  "tracing",
  "workspace-hack",
@@ -4957,11 +4975,13 @@ name = "mz-sql-lexer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "lol_alloc",
  "mz-ore",
  "phf",
  "phf_codegen",
  "serde",
  "uncased",
+ "wasm-bindgen",
  "workspace-hack",
 ]
 
@@ -5009,6 +5029,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-repr",
  "mz-secrets",
+ "mz-service",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
@@ -6328,9 +6349,9 @@ checksum = "dbf0c48bc1d91375ae5c3cd81e3722dff1abcf81a30960240640d223f59fe0e5"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.59"
+version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aeca18b86b413c660b781aa319e4e2648a3e6f9eadc9b47e9038e6fe9f3451b"
+checksum = "18fb31db3f9bddb2ea821cde30a9f70117e3f119938b5ee630b7403aa6e2ead9"
 dependencies = [
  "unicode-ident",
 ]
@@ -6728,7 +6749,7 @@ dependencies = [
  "cc",
  "libc",
  "once_cell",
- "spin",
+ "spin 0.5.2",
  "untrusted",
  "web-sys",
  "winapi",
@@ -7430,6 +7451,15 @@ name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
+
+[[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+dependencies = [
+ "lock_api",
+]
 
 [[package]]
 name = "ssh-key"

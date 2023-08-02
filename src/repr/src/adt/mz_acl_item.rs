@@ -519,7 +519,9 @@ impl Columnation for AclItem {
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-pub struct PrivilegeMap(BTreeMap<RoleId, Vec<MzAclItem>>);
+pub struct PrivilegeMap(
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")] BTreeMap<RoleId, Vec<MzAclItem>>,
+);
 
 impl PrivilegeMap {
     /// Creates a new empty `PrivilegeMap`.

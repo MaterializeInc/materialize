@@ -21,11 +21,16 @@ use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::to_datetime;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::statement_logging::{
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementPreparedRecord,
+};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
@@ -48,6 +53,9 @@ use crate::catalog::builtin::{
     MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+};
+use crate::catalog::builtin::{
+    MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
 };
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
@@ -1286,6 +1294,29 @@ impl CatalogState {
         }
     }
 
+    pub fn pack_session_history_update(&self, event: &SessionHistoryEvent) -> BuiltinTableUpdate {
+        let SessionHistoryEvent {
+            id,
+            connected_at,
+            application_name,
+            authenticated_user,
+        } = event;
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SESSION_HISTORY),
+            row: Row::pack_slice(&[
+                Datum::Uuid(*id),
+                Datum::TimestampTz(
+                    mz_ore::now::to_datetime(*connected_at)
+                        .try_into()
+                        .expect("must fit"),
+                ),
+                Datum::String(&*application_name),
+                Datum::String(&*authenticated_user),
+            ]),
+            diff: 1,
+        }
+    }
+
     pub fn pack_default_privileges_update(
         &self,
         default_privilege_object: &DefaultPrivilegeObject,
@@ -1347,5 +1378,148 @@ impl CatalogState {
             )
             .expect("privileges is 1 dimensional, and its length is used for the array length");
         row
+    }
+
+    pub fn pack_statement_prepared_update(
+        &self,
+        record: &StatementPreparedRecord,
+    ) -> BuiltinTableUpdate {
+        let StatementPreparedRecord {
+            id,
+            session_id,
+            name,
+            sql,
+            prepared_at,
+        } = record;
+        let row = Row::pack_slice(&[
+            Datum::Uuid(*id),
+            Datum::Uuid(*session_id),
+            Datum::String(name.as_str()),
+            Datum::String(sql.as_str()),
+            Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
+        ]);
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_PREPARED_STATEMENT_HISTORY),
+            row,
+            diff: 1,
+        }
+    }
+
+    fn pack_statement_execution_inner(
+        &self,
+        record: &StatementBeganExecutionRecord,
+        packer: &mut RowPacker,
+    ) {
+        let StatementBeganExecutionRecord {
+            id,
+            prepared_statement_id,
+            sample_rate,
+            params,
+            began_at,
+        } = record;
+
+        packer.extend([
+            Datum::Uuid(*id),
+            Datum::Uuid(*prepared_statement_id),
+            Datum::Float64((*sample_rate).into()),
+        ]);
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: params.len(),
+                }],
+                params
+                    .iter()
+                    .map(|p| Datum::from(p.as_ref().map(String::as_str))),
+            )
+            .expect("correct array dimensions");
+        packer.push(Datum::TimestampTz(
+            to_datetime(*began_at).try_into().expect("Sane system time"),
+        ));
+    }
+
+    pub fn pack_statement_began_execution_update(
+        &self,
+        record: &StatementBeganExecutionRecord,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        self.pack_statement_execution_inner(record, &mut packer);
+        packer.extend([
+            // finished_at
+            Datum::Null,
+            // was_successful
+            Datum::Null,
+            // was_canceled
+            Datum::Null,
+            // was_aborted
+            Datum::Null,
+            // error_message
+            Datum::Null,
+            // rows_returned
+            Datum::Null,
+            // was_fast_path
+            Datum::Null,
+        ]);
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
+            row,
+            diff,
+        }
+    }
+
+    pub fn pack_full_statement_execution_update(
+        &self,
+        began_record: &StatementBeganExecutionRecord,
+        ended_record: &StatementEndedExecutionRecord,
+    ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        self.pack_statement_execution_inner(began_record, &mut packer);
+        let (status, error_message, rows_returned, execution_strategy) = match &ended_record.reason
+        {
+            StatementEndedExecutionReason::Success {
+                rows_returned,
+                execution_strategy,
+            } => (
+                "success",
+                None,
+                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                execution_strategy.map(|es| es.name()),
+            ),
+            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
+            StatementEndedExecutionReason::Errored { error } => {
+                ("error", Some(error.as_str()), None, None)
+            }
+            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
+        };
+        packer.extend([
+            Datum::TimestampTz(
+                to_datetime(ended_record.ended_at)
+                    .try_into()
+                    .expect("Sane system time"),
+            ),
+            status.into(),
+            error_message.into(),
+            rows_returned.into(),
+            execution_strategy.into(),
+        ]);
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
+            row,
+            diff: 1,
+        }
+    }
+
+    pub fn pack_statement_ended_execution_updates(
+        &self,
+        began_record: &StatementBeganExecutionRecord,
+        ended_record: &StatementEndedExecutionRecord,
+    ) -> Vec<BuiltinTableUpdate> {
+        let retraction = self.pack_statement_began_execution_update(began_record, -1);
+        let new = self.pack_full_statement_execution_update(began_record, ended_record);
+        vec![retraction, new]
     }
 }

@@ -63,7 +63,6 @@ pub(crate) mod v28_to_v29;
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
-    #[allow(dead_code)]
     Delete(K1),
     /// Inserts the provided key-value pair. The key must not currently exist!
     Insert(K2, V2),

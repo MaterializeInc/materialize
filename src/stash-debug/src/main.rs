@@ -497,7 +497,7 @@ impl Usage {
             egress_ips: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
-            system_parameter_frontend: None,
+            system_parameter_sync_config: None,
             storage_usage_retention_period: None,
             connection_context: None,
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),

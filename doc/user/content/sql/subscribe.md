@@ -279,6 +279,7 @@ COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
 | [PHP](/integrations/php/#stream)|
 | [Python](/integrations/python/#stream)|
 | [Ruby](/integrations/ruby/#stream)|
+| [Rust](/integrations/rust/#stream)|
 
 ### Mapping rows to their updates
 

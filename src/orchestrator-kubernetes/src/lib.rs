@@ -593,11 +593,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
             .collect::<BTreeMap<_, _>>();
         let mut args = args(&listen_addrs);
-        args.push("--secrets-reader=kubernetes".into());
-        args.push(format!(
-            "--secrets-reader-kubernetes-context={}",
-            self.config.context
-        ));
 
         let anti_affinity = anti_affinity
             .map(|label_selectors| -> Result<_, anyhow::Error> {

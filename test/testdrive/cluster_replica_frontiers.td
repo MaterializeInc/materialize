@@ -33,7 +33,8 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
   ORDER BY mz_cluster_replicas.name;
 default r1
 
-> CREATE CLUSTER REPLICA default.r2 SIZE '2';
+$ postgres-execute connection=mz_system
+CREATE CLUSTER REPLICA default.r2 SIZE '2';
 
 > SELECT mz_clusters.name, mz_cluster_replicas.name, time > 0 FROM
   mz_catalog.mz_objects AS obj, mz_internal.mz_cluster_replica_frontiers AS frontiers,
@@ -44,8 +45,8 @@ default r1
 default r1 true
 default r2 true
 
-
-> DROP CLUSTER REPLICA default.r2;
+$ postgres-execute connection=mz_system
+DROP CLUSTER REPLICA default.r2;
 
 > SELECT mz_clusters.name, mz_cluster_replicas.name FROM
   mz_catalog.mz_objects AS obj, mz_internal.mz_cluster_replica_frontiers AS frontiers,

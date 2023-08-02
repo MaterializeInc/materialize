@@ -13,13 +13,12 @@ use mz_compute_client::protocol::command::ComputeParameters;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
+use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_client::types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;
-
-use crate::catalog::ClusterReplicaSizeMap;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
@@ -29,26 +28,12 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         persist: persist_config(config),
         tracing: tracing_config(config),
+        grpc_client: grpc_client_config(config),
     }
 }
 
 /// Return the current storage configuration, derived from the system configuration.
-pub fn storage_config(
-    config: &SystemVars,
-    cluster_replica_sizes: &ClusterReplicaSizeMap,
-) -> StorageParameters {
-    // populating map of cluster size and corresponding memory limits in bytes where the
-    // value is given
-    let cluster_size_memory_map = cluster_replica_sizes
-        .0
-        .iter()
-        .filter_map(|(cluster_size, replica_allocation)| {
-            replica_allocation
-                .memory_limit
-                .map(|memory| (cluster_size.to_owned(), usize::cast_from(memory.0.as_u64())))
-        })
-        .collect();
-
+pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
         persist: persist_config(config),
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
@@ -71,6 +56,8 @@ pub fn storage_config(
                 config.upsert_rocksdb_bottommost_compression_type(),
                 config.upsert_rocksdb_batch_size(),
                 config.upsert_rocksdb_retry_duration(),
+                config.upsert_rocksdb_stats_log_interval_seconds(),
+                config.upsert_rocksdb_stats_persist_interval_seconds(),
             ) {
                 Ok(u) => u,
                 Err(e) => {
@@ -92,10 +79,23 @@ pub fn storage_config(
         },
         storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
+            // Interpret the `Numeric` as a float here, we don't need perfect
+            // precision for a percentage. Unfortunately `Decimal` makes us handle errors.
             max_inflight_bytes_cluster_size_percent: config
-                .storage_dataflow_max_inflight_bytes_to_cluster_size_percent(),
-            cluster_size_memory_map,
+                .storage_dataflow_max_inflight_bytes_to_cluster_size_percent()
+                .and_then(|d| match d.try_into() {
+                    Err(e) => {
+                        tracing::error!(
+                            "Couldn't convert {:?} to f64, so defaulting to `None`: {e:?}",
+                            config.storage_dataflow_max_inflight_bytes_to_cluster_size_percent()
+                        );
+                        None
+                    }
+                    Ok(o) => Some(o),
+                }),
+            disk_only: config.storage_dataflow_max_inflight_bytes_disk_only(),
         },
+        grpc_client: grpc_client_config(config),
     }
 }
 
@@ -140,5 +140,13 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
+    }
+}
+
+fn grpc_client_config(config: &SystemVars) -> GrpcClientParameters {
+    GrpcClientParameters {
+        connect_timeout: Some(config.grpc_connect_timeout()),
+        http2_keep_alive_interval: Some(config.grpc_client_http2_keep_alive_interval()),
+        http2_keep_alive_timeout: Some(config.grpc_client_http2_keep_alive_timeout()),
     }
 }

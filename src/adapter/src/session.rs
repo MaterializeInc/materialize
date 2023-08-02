@@ -246,7 +246,9 @@ impl<T: TimestampManipulation> Session<T> {
                 TransactionOps::Peeks(_) | TransactionOps::Subscribe => {
                     txn.access == Some(TransactionAccessMode::ReadOnly)
                 }
-                TransactionOps::None | TransactionOps::Writes(_) => false,
+                TransactionOps::None
+                | TransactionOps::Writes(_)
+                | TransactionOps::SingleStatement { .. } => false,
             };
 
             if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
@@ -307,6 +309,11 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
+    /// Starts a single statement transaction, but only if no transaction has been started already.
+    pub fn start_transaction_single_stmt(&mut self, wall_time: DateTime<Utc>) {
+        self.start_transaction_implicit(wall_time, 1);
+    }
+
     /// Clears a transaction, setting its state to Default and destroying all
     /// portals. Returned are:
     /// - sinks that were started in this transaction and need to be dropped
@@ -342,6 +349,11 @@ impl<T: TimestampManipulation> Session<T> {
         &self.transaction
     }
 
+    /// Returns the current transaction status.
+    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<T> {
+        &mut self.transaction
+    }
+
     /// Returns the session's transaction code.
     pub fn transaction_code(&self) -> TransactionCode {
         self.transaction().into()
@@ -351,83 +363,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
-        match &mut self.transaction {
-            TransactionStatus::Started(Transaction { ops, access, .. })
-            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
-            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
-                match ops {
-                    TransactionOps::None => {
-                        if matches!(access, Some(TransactionAccessMode::ReadOnly))
-                            && matches!(add_ops, TransactionOps::Writes(_))
-                        {
-                            return Err(AdapterError::ReadOnlyTransaction);
-                        }
-                        *ops = add_ops;
-                    }
-                    TransactionOps::Peeks(determination) => match add_ops {
-                        TransactionOps::Peeks(add_timestamp_determination) => {
-                            match (
-                                &determination.timestamp_context,
-                                &add_timestamp_determination.timestamp_context,
-                            ) {
-                                (
-                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
-                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
-                                ) => {
-                                    assert_eq!(txn_timeline, add_timeline);
-                                    assert_eq!(txn_ts, add_ts);
-                                }
-                                (TimestampContext::NoTimestamp, _) => {
-                                    *determination = add_timestamp_determination
-                                }
-                                (_, TimestampContext::NoTimestamp) => {}
-                            };
-                        }
-                        // Iff peeks thus far do not have a timestamp (i.e.
-                        // they are constant), we can switch to a write
-                        // transaction.
-                        writes @ TransactionOps::Writes(..)
-                            if !determination.timestamp_context.contains_timestamp() =>
-                        {
-                            *ops = writes;
-                        }
-                        _ => return Err(AdapterError::ReadOnlyTransaction),
-                    },
-                    TransactionOps::Subscribe => {
-                        return Err(AdapterError::SubscribeOnlyTransaction)
-                    }
-                    TransactionOps::Writes(txn_writes) => match add_ops {
-                        TransactionOps::Writes(mut add_writes) => {
-                            // We should have already checked the access above, but make sure we don't miss
-                            // it anyway.
-                            assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
-                            txn_writes.append(&mut add_writes);
-
-                            if txn_writes
-                                .iter()
-                                .map(|op| op.id)
-                                .collect::<BTreeSet<_>>()
-                                .len()
-                                > 1
-                            {
-                                return Err(AdapterError::MultiTableWriteTransaction);
-                            }
-                        }
-                        // Iff peeks do not have a timestamp (i.e. they are
-                        // constant), we can permit them.
-                        TransactionOps::Peeks(determination)
-                            if !determination.timestamp_context.contains_timestamp() => {}
-                        _ => {
-                            return Err(AdapterError::WriteOnlyTransaction);
-                        }
-                    },
-                }
-            }
-            TransactionStatus::Default | TransactionStatus::Failed(_) => {
-                unreachable!()
-            }
-        }
-        Ok(())
+        self.transaction.add_ops(add_ops)
     }
 
     /// Returns a channel on which to send notices to the session.
@@ -923,7 +859,7 @@ pub enum TransactionStatus<T> {
     Failed(Transaction<T>),
 }
 
-impl<T> TransactionStatus<T> {
+impl<T: TimestampManipulation> TransactionStatus<T> {
     /// Extracts the inner transaction ops and write lock guard if not failed.
     pub fn into_ops_and_lock_guard(
         self,
@@ -1022,6 +958,92 @@ impl<T> TransactionStatus<T> {
             None => false,
         }
     }
+
+    /// Adds operations to the current transaction. An error is produced if
+    /// they cannot be merged (i.e., a timestamp-dependent read cannot be
+    /// merged to an insert).
+    pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+        match self {
+            TransactionStatus::Started(Transaction { ops, access, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                match ops {
+                    TransactionOps::None => {
+                        if matches!(access, Some(TransactionAccessMode::ReadOnly))
+                            && matches!(add_ops, TransactionOps::Writes(_))
+                        {
+                            return Err(AdapterError::ReadOnlyTransaction);
+                        }
+                        *ops = add_ops;
+                    }
+                    TransactionOps::Peeks(determination) => match add_ops {
+                        TransactionOps::Peeks(add_timestamp_determination) => {
+                            match (
+                                &determination.timestamp_context,
+                                &add_timestamp_determination.timestamp_context,
+                            ) {
+                                (
+                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
+                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
+                                ) => {
+                                    assert_eq!(txn_timeline, add_timeline);
+                                    assert_eq!(txn_ts, add_ts);
+                                }
+                                (TimestampContext::NoTimestamp, _) => {
+                                    *determination = add_timestamp_determination
+                                }
+                                (_, TimestampContext::NoTimestamp) => {}
+                            };
+                        }
+                        // Iff peeks thus far do not have a timestamp (i.e.
+                        // they are constant), we can switch to a write
+                        // transaction.
+                        writes @ TransactionOps::Writes(..)
+                            if !determination.timestamp_context.contains_timestamp() =>
+                        {
+                            *ops = writes;
+                        }
+                        _ => return Err(AdapterError::ReadOnlyTransaction),
+                    },
+                    TransactionOps::Subscribe => {
+                        return Err(AdapterError::SubscribeOnlyTransaction)
+                    }
+                    TransactionOps::Writes(txn_writes) => match add_ops {
+                        TransactionOps::Writes(mut add_writes) => {
+                            // We should have already checked the access above, but make sure we don't miss
+                            // it anyway.
+                            assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
+                            txn_writes.append(&mut add_writes);
+
+                            if txn_writes
+                                .iter()
+                                .map(|op| op.id)
+                                .collect::<BTreeSet<_>>()
+                                .len()
+                                > 1
+                            {
+                                return Err(AdapterError::MultiTableWriteTransaction);
+                            }
+                        }
+                        // Iff peeks do not have a timestamp (i.e. they are
+                        // constant), we can permit them.
+                        TransactionOps::Peeks(determination)
+                            if !determination.timestamp_context.contains_timestamp() => {}
+                        _ => {
+                            return Err(AdapterError::WriteOnlyTransaction);
+                        }
+                    },
+                    TransactionOps::SingleStatement { .. } => {
+                        return Err(AdapterError::SingleStatementTransaction)
+                    }
+                }
+            }
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {
+                unreachable!()
+            }
+        }
+        Ok(())
+    }
 }
 
 /// An abstraction allowing us to identify different transactions.
@@ -1067,7 +1089,8 @@ impl<T> Transaction<T> {
             TransactionOps::Peeks(_)
             | TransactionOps::None
             | TransactionOps::Subscribe
-            | TransactionOps::Writes(_) => None,
+            | TransactionOps::Writes(_)
+            | TransactionOps::SingleStatement { .. } => None,
         }
     }
 
@@ -1137,13 +1160,23 @@ pub enum TransactionOps<T> {
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),
+    /// This transaction has a prospective statement that will execute during commit.
+    SingleStatement {
+        /// The prospective statement.
+        stmt: Statement<Raw>,
+        /// The statement params.
+        params: mz_sql::plan::Params,
+    },
 }
 
 impl<T> TransactionOps<T> {
     fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
         match self {
             TransactionOps::Peeks(determination) => Some(determination),
-            TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
+            TransactionOps::None
+            | TransactionOps::Subscribe
+            | TransactionOps::Writes(_)
+            | TransactionOps::SingleStatement { .. } => None,
         }
     }
 }

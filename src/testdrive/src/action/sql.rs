@@ -136,7 +136,9 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::RevokePrivileges { .. }
         | Statement::RevokeRole { .. } => {
             let disk_state = state
-                .with_catalog_copy(|catalog| catalog.state().dump())
+                .with_catalog_copy(|catalog| {
+                    catalog.state().dump().expect("state must be dumpable")
+                })
                 .await
                 .map_err(|e| anyhow!("failed to dump on-disk catalog state: {e}"))?;
             if let Some(disk_state) = disk_state {
@@ -148,13 +150,18 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 .text()
                 .await?;
                 if disk_state != mem_state {
-                    bail!(
-                        "the on-disk state of the catalog does not match its in-memory state\n\
-                     disk:{}\n\
-                     mem:{}",
-                        disk_state,
-                        mem_state
-                    );
+                    // The state objects here are around 100k lines pretty printed, so find the
+                    // first lines that differs and show context around it.
+                    let diff = similar::TextDiff::from_lines(&mem_state, &disk_state)
+                        .unified_diff()
+                        .context_radius(50)
+                        .to_string()
+                        .lines()
+                        .take(200)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    bail!("the on-disk state of the catalog does not match its in-memory state:\n{diff}");
                 }
             }
         }

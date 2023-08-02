@@ -590,7 +590,10 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
-    /// If this catalog item is a source, it return the IDs of its subsources
+    /// Reports whether this catalog item is a subsource.
+    fn is_subsource(&self) -> bool;
+
+    /// If this catalog item is a source, it return the IDs of its subsources.
     fn subsources(&self) -> BTreeSet<GlobalId>;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
@@ -1444,7 +1447,7 @@ impl Display for ErrorMessageObjectDescription {
 }
 
 /// Specification for objects that will be affected by a default privilege.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct DefaultPrivilegeObject {
     /// The role id that created the object.
     pub role_id: RoleId,
@@ -1473,8 +1476,15 @@ impl DefaultPrivilegeObject {
     }
 }
 
+impl std::fmt::Display for DefaultPrivilegeObject {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // TODO: Don't just wrap Debug.
+        write!(f, "{self:?}")
+    }
+}
+
 /// Specification for the privileges that will be granted from default privileges.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct DefaultPrivilegeAclItem {
     /// The role that will receive the privileges.
     pub grantee: RoleId,

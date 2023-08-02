@@ -171,6 +171,38 @@ REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
+# CREATE CLUSTER REPLICA
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+----
+db error: ERROR: must be owner of CLUSTER clus
+
+simple conn=child,user=child
+CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+----
+db error: ERROR: must be owner of CLUSTER clus
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER clus OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE CLUSTER REPLICA clus.r3 SIZE '1';
+----
+COMPLETE 0
+
 # CREATE SCHEMA
 
 simple conn=joe,user=joe
@@ -961,6 +993,23 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON DATABASE materialize FROM joe;
+----
+COMPLETE 0
+
+# DROP CLUSTER REPLICA
+
+simple conn=joe,user=joe
+DROP CLUSTER REPLICA clus.r2;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP CLUSTER REPLICA clus.r3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER clus;
 ----
 COMPLETE 0
 
@@ -2722,42 +2771,32 @@ COMPLETE 0
 ## Cluster Replica
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO joe;
+GRANT CREATECLUSTER ON SYSTEM TO joe;
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA default.r2 SIZE '1';
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE CREATE ON CLUSTER default FROM joe;
+CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-ALTER CLUSTER REPLICA default.r2 OWNER TO other;
+CREATE CLUSTER REPLICA clus.r2 SIZE '1';
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO joe;
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-ALTER CLUSTER REPLICA default.r2 OWNER TO other;
+ALTER CLUSTER REPLICA clus.r2 OWNER TO other;
 ----
-COMPLETE 0
+db error: ERROR: altering the owner of a cluster replica is not supported
 
 simple conn=mz_system,user=mz_system
-DROP CLUSTER REPLICA default.r2;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE CREATE, USAGE ON CLUSTER default FROM joe;
+DROP CLUSTER clus;
 ----
 COMPLETE 0
 

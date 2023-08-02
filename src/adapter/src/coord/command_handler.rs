@@ -44,7 +44,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{Session, TransactionStatus};
+use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac, ExecuteContext};
 
@@ -166,7 +166,7 @@ impl Coordinator {
 
             Command::DumpCatalog { session, tx } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(Ok(self.catalog().dump()), session);
+                tx.send(self.catalog().dump().map_err(AdapterError::from), session);
             }
 
             Command::CopyRows {
@@ -445,7 +445,7 @@ impl Coordinator {
     ) {
         // Verify that this statement type can be executed in the current
         // transaction state.
-        match ctx.session().transaction() {
+        match ctx.session_mut().transaction_mut() {
             // By this point we should be in a running transaction.
             TransactionStatus::Default => unreachable!(),
 
@@ -489,7 +489,8 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
+            txn @ TransactionStatus::InTransactionImplicit(_)
+            | txn @ TransactionStatus::InTransaction(_) => {
                 match stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
@@ -531,47 +532,72 @@ impl Coordinator {
                     // Statements below must by run singly (in Started).
                     Statement::AlterCluster(_)
                     | Statement::AlterConnection(_)
+                    | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
+                    | Statement::AlterObjectRename(_)
+                    | Statement::AlterOwner(_)
+                    | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterSink(_)
                     | Statement::AlterSource(_)
-                    | Statement::AlterObjectRename(_)
-                    | Statement::AlterRole(_)
-                    | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)
-                    | Statement::AlterOwner(_)
+                    | Statement::AlterSystemSet(_)
+                    | Statement::CreateCluster(_)
+                    | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
+                    | Statement::CreateMaterializedView(_)
                     | Statement::CreateRole(_)
-                    | Statement::CreateCluster(_)
-                    | Statement::CreateClusterReplica(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
-                    | Statement::CreateWebhookSource(_)
                     | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
-                    | Statement::CreateMaterializedView(_)
+                    | Statement::CreateWebhookSource(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)
                     | Statement::GrantPrivileges(_)
                     | Statement::GrantRole(_)
                     | Statement::Insert(_)
+                    | Statement::ReassignOwned(_)
                     | Statement::RevokePrivileges(_)
-                    | Statement::AlterDefaultPrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
-                    | Statement::ValidateConnection(_)
-                    | Statement::ReassignOwned(_) => {
+                    | Statement::ValidateConnection(_) => {
+                        // Statements whose tag is trivial (known only from an unexecuted statement) can
+                        // be run in a special single-statement explicit mode. In this mode (`BEGIN;
+                        // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
+                        // delay execution until `COMMIT`.
+                        let mut resp_kind = Plan::generated_from((&stmt).into())
+                            .into_iter()
+                            .map(ExecuteResponse::generated_from)
+                            .flatten()
+                            .map(|r| r.try_into())
+                            .collect::<Vec<Result<ExecuteResponse, _>>>();
+                        // If we're not in an implicit transaction and we could generate exactly one
+                        // valid ExecuteResponse, we can delay execution until commit.
+                        if !txn.is_implicit() && resp_kind.len() == 1 {
+                            if let Ok(resp) = resp_kind.swap_remove(0) {
+                                if let Err(err) =
+                                    txn.add_ops(TransactionOps::SingleStatement { stmt, params })
+                                {
+                                    ctx.retire(Err(err));
+                                    return;
+                                }
+                                ctx.retire(Ok(resp));
+                                return;
+                            }
+                        }
+
                         return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
                             stmt.to_string(),
-                        )))
+                        )));
                     }
                 }
             }
@@ -594,21 +620,22 @@ impl Coordinator {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
             stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
-                // Checks if the session is authorized to purify a statement. Usually
-                // authorization is checked after planning, however purification happens before
-                // planning, which may require the use of some connections and secrets.
-                if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
-                    return ctx.retire(Err(e));
-                }
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
-
                 let catalog = self.owned_catalog();
                 let now = self.now();
                 let connection_context = self.connection_context.clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let catalog = catalog.for_session(ctx.session());
+
+                    // Checks if the session is authorized to purify a statement. Usually
+                    // authorization is checked after planning, however purification happens before
+                    // planning, which may require the use of some connections and secrets.
+                    if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
+                        return ctx.retire(Err(e));
+                    }
+
                     let result =
                         mz_sql::pure::purify_statement(catalog, now, stmt, connection_context)
                             .await
@@ -637,7 +664,7 @@ impl Coordinator {
             ))),
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(ctx.session_mut(), stmt, &params) {
+            _ => match self.plan_statement(ctx.session(), stmt, &params) {
                 Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },

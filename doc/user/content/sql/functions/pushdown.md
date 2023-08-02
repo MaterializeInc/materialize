@@ -1,17 +1,14 @@
 ---
-title: "pushdown functions"
+title: "Pushdown functions"
 description: "Functions for use with the filter pushdown feature"
 menu:
   main:
     parent: 'sql-functions'
 ---
 
-{{< public-preview >}}
-`try_parse_monotonic_iso8601_timestamp`
-{{</ public-preview >}}
-
-You must <a href="https://materialize.com/contact/">contact us</a> to enable
-this feature in your Materialize region.
+{{< private-preview >}}
+[Temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
+{{</ private-preview >}}
 
 `try_parse_monotonic_iso8601_timestamp` parses a subset of [ISO 8601]
 timestamps that is chosen to both:
@@ -20,16 +17,11 @@ timestamps that is chosen to both:
   function and
 - For which the lexicographical order corresponds to chronological order.
 
-In contract to other parsing functions, inputs that fail to parse return `NULL`
+In contrast to other parsing functions, inputs that fail to parse return `NULL`
 instead of error.
 
 Combined, this allows `try_parse_monotonic_iso8601_timestamp` to be used with
-the [temporal-filter pushdown] feature on `string` timestamps stored in [jsonb] columns.
-
-[ISO 8601]: https://en.wikipedia.org/wiki/ISO_8601
-[Date.toISOString()]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/toISOString
-[temporal-filter pushdown]: /transform-data/patterns/temporal-filters/#temporal-filter-pushdown
-[jsonb]: /sql/types/jsonb/
+the [temporal filter pushdown] feature on `string` timestamps stored in [jsonb] columns.
 
 Specifically, the accepted format is `YYYY-MM-DDThh:mm:ss.sssZ`:
 
@@ -69,3 +61,8 @@ SELECT try_parse_monotonic_iso8601_timestamp('nope') AS ts;
 --------
  NULL
 ```
+
+[ISO 8601]: https://en.wikipedia.org/wiki/ISO_8601
+[Date.toISOString()]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/toISOString
+[temporal filter pushdown]: /transform-data/patterns/temporal-filters/#temporal-filter-pushdown
+[jsonb]: /sql/types/jsonb/

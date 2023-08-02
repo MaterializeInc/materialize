@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -103,7 +104,7 @@ use crate::catalog::builtin::{
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
-use crate::config::{SynchronizedParameters, SystemParameterFrontend};
+use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
@@ -169,30 +170,55 @@ impl Clone for Catalog {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
     database_by_name: BTreeMap<String, DatabaseId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     database_by_id: BTreeMap<DatabaseId, Database>,
+    #[serde(serialize_with = "skip_temp_items")]
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
+    #[serde(skip)]
     temporary_schemas: BTreeMap<ConnectionId, Schema>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     clusters_by_id: BTreeMap<ClusterId, Cluster>,
     clusters_by_name: BTreeMap<String, ClusterId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
     roles_by_name: BTreeMap<String, RoleId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     roles_by_id: BTreeMap<RoleId, Role>,
+    #[serde(skip)]
     config: mz_sql::catalog::CatalogConfig,
+    #[serde(skip)]
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    #[serde(skip)]
     default_storage_cluster_size: Option<String>,
+    #[serde(skip)]
     availability_zones: Vec<String>,
+    #[serde(skip)]
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     default_privileges: DefaultPrivileges,
     system_privileges: PrivilegeMap,
+}
+
+fn skip_temp_items<S>(
+    entries: &BTreeMap<GlobalId, CatalogEntry>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    mz_ore::serde::map_key_to_string(
+        entries.iter().filter(|(_k, v)| v.conn_id().is_none()),
+        serializer,
+    )
 }
 
 impl CatalogState {
@@ -1508,15 +1534,15 @@ impl CatalogState {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> String {
-        // Note: database_by_id is a Map whose keys are not Strings, but serializing
-        // a Map to JSON requires the keys be strings, hence the mapping here.
-        let database_by_str: BTreeMap<String, _> = self
-            .database_by_id
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.debug_json()))
-            .collect();
-        serde_json::to_string(&database_by_str).expect("serialization cannot fail")
+    pub fn dump(&self) -> Result<String, Error> {
+        serde_json::to_string_pretty(&self).map_err(|e| {
+            Error::new(ErrorKind::Unstructured(format!(
+                // Don't panic here because we don't have compile-time failures for maps with
+                // non-string keys.
+                "internal error: could not dump catalog: {}",
+                e
+            )))
+        })
     }
 
     pub fn availability_zones(&self) -> &[String] {
@@ -1736,40 +1762,20 @@ impl ConnCatalog<'_> {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Database {
     pub name: String,
     pub id: DatabaseId,
     #[serde(skip)]
     pub oid: u32,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
 
-impl Database {
-    /// Returns a `Database` formatted as a `serde_json::Value` that is suitable for debugging. For
-    /// example `CatalogState::dump`.
-    fn debug_json(&self) -> serde_json::Value {
-        let schemas_by_str: BTreeMap<String, _> = self
-            .schemas_by_id
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.debug_json()))
-            .collect();
-
-        serde_json::json!({
-            "name": self.name,
-            "id": self.id,
-            "schemas_by_id": schemas_by_str,
-            "schemas_by_name": self.schemas_by_name,
-            "owner_id": self.owner_id,
-            "privileges": self.privileges.debug_json(),
-        })
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
@@ -1779,21 +1785,6 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
-}
-
-impl Schema {
-    /// Returns a `Schema` formatted as a `serde_json::Value` that is suitable for debugging. For
-    /// example `CatalogState::dump`.
-    fn debug_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "name": self.name,
-            "id": self.id,
-            "items": self.items,
-            "functions": self.functions,
-            "owner_id": self.owner_id,
-            "privileges": self.privileges.debug_json(),
-        })
-    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1862,12 +1853,14 @@ pub struct Cluster {
     pub name: String,
     pub id: ClusterId,
     pub config: ClusterConfig,
+    #[serde(skip)]
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     pub linked_object_id: Option<GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
@@ -1898,6 +1891,7 @@ pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub config: ReplicaConfig,
+    #[serde(skip)]
     pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
     pub owner_id: RoleId,
 }
@@ -1931,11 +1925,13 @@ pub struct ClusterReplicaProcessStatus {
     pub time: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     item: CatalogItem,
+    #[serde(skip)]
     used_by: Vec<GlobalId>,
     id: GlobalId,
+    #[serde(skip)]
     oid: u32,
     name: QualifiedItemName,
     owner_id: RoleId,
@@ -1963,6 +1959,7 @@ pub struct Table {
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
+    #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub custom_logical_compaction_window: Option<Duration>,
@@ -2040,6 +2037,8 @@ impl DataSourceDesc {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
+    // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
+    #[serde(skip)]
     pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
@@ -2228,6 +2227,7 @@ pub struct Sink {
     pub from: GlobalId,
     // TODO(benesch): this field duplicates information that could be derived
     // from the connection ID. Too hard to fix at the moment.
+    #[serde(skip)]
     pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
@@ -2871,16 +2871,31 @@ struct AllocatedBuiltinSystemIds<T> {
     migrated_builtins: Vec<GlobalId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
 pub struct DefaultPrivileges {
-    privileges: BTreeMap<DefaultPrivilegeObject, BTreeMap<RoleId, DefaultPrivilegeAclItem>>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    privileges: BTreeMap<DefaultPrivilegeObject, RoleDefaultPrivileges>,
 }
 
-impl Default for DefaultPrivileges {
-    fn default() -> DefaultPrivileges {
-        DefaultPrivileges {
-            privileges: Default::default(),
-        }
+// Use a new type here because otherwise we have two levels of BTreeMap, both needing
+// map_key_to_string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
+struct RoleDefaultPrivileges(
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    BTreeMap<RoleId, DefaultPrivilegeAclItem>,
+);
+
+impl Deref for RoleDefaultPrivileges {
+    type Target = BTreeMap<RoleId, DefaultPrivilegeAclItem>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RoleDefaultPrivileges {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -3318,7 +3333,7 @@ impl Catalog {
         catalog
             .load_system_configuration(
                 config.system_parameter_defaults,
-                config.system_parameter_frontend,
+                config.system_parameter_sync_config,
             )
             .await?;
 
@@ -3872,14 +3887,14 @@ impl Catalog {
     ///    `system_parameter_defaults` map.
     /// 3. Overwrite and persist selected parameter values from the
     ///    configuration that can be pulled from the provided
-    ///    `system_parameter_frontend` (if present).
+    ///    `system_parameter_sync_config` (if present).
     ///
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+        system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
             let mut storage = self.storage().await;
@@ -3911,7 +3926,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        if let Some(system_parameter_frontend) = system_parameter_frontend {
+        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
             if !self.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
 
@@ -3953,10 +3968,10 @@ impl Catalog {
                 //       LaunchDarkly configuration, for when LaunchDarkly comes
                 //       back online.
                 //    6. Reboot environmentd.
-                system_parameter_frontend.ensure_initialized().await;
 
                 let mut params = SynchronizedParameters::new(self.state.system_config().clone());
-                system_parameter_frontend.pull(&mut params);
+                let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+                frontend.pull(&mut params);
                 let ops = params
                     .modified()
                     .into_iter()
@@ -4626,7 +4641,7 @@ impl Catalog {
             egress_ips: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
-            system_parameter_frontend: None,
+            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
             connection_context: None,
@@ -7476,8 +7491,8 @@ impl Catalog {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> CatalogDump {
-        CatalogDump::new(self.state.dump())
+    pub fn dump(&self) -> Result<CatalogDump, Error> {
+        Ok(CatalogDump::new(self.state.dump()?))
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -8729,6 +8744,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
+    }
+
+    fn is_subsource(&self) -> bool {
+        self.is_subsource()
     }
 
     fn subsources(&self) -> BTreeSet<GlobalId> {
