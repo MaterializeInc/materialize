@@ -63,6 +63,8 @@ ORDER BY -2*a;
 0
 
 # This looks a bit weird if we compare it with the previous two tests, but Postgres does the same
+# See https://www.postgresql.org/docs/current/queries-order.html
+# "Note that an output column name has to stand alone, that is, it cannot be used in an expression"
 query error db error: ERROR: column "d" does not exist
 SELECT 2*a as d
 FROM foo
