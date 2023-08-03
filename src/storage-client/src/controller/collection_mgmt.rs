@@ -164,7 +164,15 @@ impl CollectionManager {
                                     .collect();
 
                                 // Append updates to persist!
-                                let append_result = write_handle.monotonic_append(request).await.expect("sender hung up");
+                                let append_result = match write_handle.monotonic_append(request).await {
+                                    Ok(append_result) => append_result,
+                                    Err(_recv_error) => {
+                                        // Sender hung up, this seems fine and can
+                                        // happen when shutting down.
+                                        notify_listeners(updates, |_id| Err(StorageError::ShuttingDown("PersistWriteWorker")));
+                                        break
+                                    }
+                                };
 
                                 match append_result {
                                     // Everything was successful!
