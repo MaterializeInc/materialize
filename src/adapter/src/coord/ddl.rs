@@ -495,7 +495,6 @@ impl Coordinator {
         if let Some(Some(ReplicaMetadata {
             last_heartbeat,
             metrics,
-            write_frontiers,
         })) = self.transient_replica_metadata.insert(replica_id, None)
         {
             let mut updates = vec![];
@@ -514,12 +513,6 @@ impl Coordinator {
                     .pack_replica_metric_updates(replica_id, &metrics, -1);
                 updates.extend(retraction.into_iter());
             }
-            let retraction = self.catalog().state().pack_replica_write_frontiers_updates(
-                replica_id,
-                &write_frontiers,
-                -1,
-            );
-            updates.extend(retraction.into_iter());
             self.buffer_builtin_table_updates(updates);
         }
         self.controller

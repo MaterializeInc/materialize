@@ -110,22 +110,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation. |
 | `disk_percent`   | [`double precision`] | Currently null. Reserved for later use.                    |
 
-### `mz_cluster_replica_frontiers`
-
-The `mz_cluster_replica_frontiers` table describes the frontiers of each [dataflow] in the system.
-[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to this table, but `mz_compute_frontiers`
-exposes the frontiers known to the compute replicas while `mz_cluster_replica_frontiers` contains
-the frontiers the coordinator is aware of.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
-| Field         | Type             | Meaning                                                                                                                                                  |
-| ------------- | ------------     | --------                                                                                                                                                 |
-| `replica_id`  | [`text`]         | The ID of a cluster replica.                                                                                                                             |
-| `export_id `  | [`text`]         | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                                                                                       |
-
 ### `mz_cluster_replica_heartbeats`
 
 The `mz_cluster_replica_heartbeats` table gives the last known heartbeat of all
@@ -153,6 +137,52 @@ each replica, including the times at which it was created and dropped
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+
+### `mz_frontiers`
+
+The `mz_frontiers` table describes the frontiers of each source, sink, table,
+materialized view, index, and subscription in the system, as observed from the
+coordinator.
+
+For objects that are installed on replicas (e.g., materialized views and
+indexes), the `replica_id` field is always non-`NULL`. If an object is installed
+on multiple replicas, it has multiple entries describing the frontier on each
+individual replica. For objects that are not installed on replicas (e.g.,
+tables), the `replica_id` field is `NULL`.
+
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to `mz_frontiers`,
+but `mz_compute_frontiers` reports the frontiers known to the active compute
+replica, while `mz_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_frontiers` contains storage
+objects (sources, sinks, and tables) as well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_frontiers -->
+| Field         | Type             | Meaning                                                                             |
+| ------------- | ------------     | --------                                                                            |
+| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
+| `replica_id`  | [`text`]         | The ID of a cluster replica, or `NULL` if the object is not installed on a replica. |
+| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
+
+### `mz_global_frontiers`
+
+The `mz_global_frontiers` view describes the global frontiers of each source,
+sink, table, materialized view, index, and subscription in the system, as
+observed from the coordinator.
+
+For objects that are installed on replicas (e.g., materialized views and
+indexes), the global frontier is the maximum of the per-replica frontiers.
+Objects that are not installed on replicas only have a single, global frontier.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_global_frontiers -->
+| Field         | Type             | Meaning                                                                       |
+| ------------- | ------------     | --------                                                                      |
+| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription. |
+| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                            |
 
 ### `mz_kafka_sources`
 
