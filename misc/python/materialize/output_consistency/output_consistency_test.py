@@ -22,6 +22,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
+from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
@@ -146,7 +147,9 @@ class OutputConsistencyTest:
             config, randomized_picker, input_data, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
-        sql_executor = create_sql_executor(config, connection, output_printer)
+        sql_executors = SqlExecutors(
+            create_sql_executor(config, connection, output_printer)
+        )
 
         if config.skip_postgres_incompatible_types:
             input_data.remove_postgres_incompatible_types()
@@ -158,7 +161,7 @@ class OutputConsistencyTest:
             expression_generator,
             query_generator,
             output_comparator,
-            sql_executor,
+            sql_executors,
             randomized_picker,
             ignore_filter,
             output_printer,

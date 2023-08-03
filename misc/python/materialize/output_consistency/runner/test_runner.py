@@ -17,7 +17,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 from materialize.output_consistency.execution.query_execution_manager import (
     QueryExecutionManager,
 )
-from materialize.output_consistency.execution.sql_executor import SqlExecutor
+from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
@@ -47,7 +47,7 @@ class ConsistencyTestRunner:
         expression_generator: ExpressionGenerator,
         query_generator: QueryGenerator,
         outcome_comparator: ResultComparator,
-        sql_executor: SqlExecutor,
+        sql_executors: SqlExecutors,
         randomized_picker: RandomizedPicker,
         ignore_filter: InconsistencyIgnoreFilter,
         output_printer: OutputPrinter,
@@ -58,11 +58,10 @@ class ConsistencyTestRunner:
         self.expression_generator = expression_generator
         self.query_generator = query_generator
         self.outcome_comparator = outcome_comparator
-        self.sql_executor = sql_executor
         self.execution_manager = QueryExecutionManager(
             evaluation_strategies,
             config,
-            sql_executor,
+            sql_executors,
             outcome_comparator,
             output_printer,
         )
@@ -128,7 +127,8 @@ class ConsistencyTestRunner:
             if shall_abort_after_iteration:
                 break
 
-        self.execution_manager.complete()
+        for strategy in self.evaluation_strategies:
+            self.execution_manager.complete(strategy)
 
         return test_summary
 
