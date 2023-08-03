@@ -29,6 +29,9 @@ from materialize.output_consistency.generators.query_generator import QueryGener
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     InconsistencyIgnoreFilter,
 )
+from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
+    EvaluationScenario,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -39,12 +42,13 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 
 
 def run_output_consistency_tests(
-    connection: Connection, args: argparse.Namespace
+    connection: Connection, scenario: EvaluationScenario, args: argparse.Namespace
 ) -> ConsistencyTestSummary:
     """Entry point for output consistency tests"""
 
     return _run_output_consistency_tests_internal(
         connection,
+        scenario,
         args.seed,
         args.dry_run,
         args.fail_fast,
@@ -87,6 +91,7 @@ def parse_output_consistency_input_args(
 
 def _run_output_consistency_tests_internal(
     connection: Connection,
+    scenario: EvaluationScenario,
     random_seed: str,
     dry_run: bool,
     fail_fast: bool,
@@ -102,6 +107,7 @@ def _run_output_consistency_tests_internal(
 
     config = ConsistencyTestConfiguration(
         random_seed=random_seed,
+        scenario=scenario,
         dry_run=dry_run,
         fail_fast=fail_fast,
         verbose_output=verbose_output,
@@ -114,7 +120,8 @@ def _run_output_consistency_tests_internal(
         use_autocommit=True,
         split_and_retry_on_db_error=True,
         print_reproduction_code=True,
-        skip_postgres_incompatible_types=False,
+        skip_postgres_incompatible_types=scenario
+        == EvaluationScenario.POSTGRES_CONSISTENCY,
     )
 
     output_printer.print_config(config)
@@ -189,7 +196,9 @@ def main() -> int:
         )
         return 1
 
-    result = run_output_consistency_tests(connection, args)
+    result = run_output_consistency_tests(
+        connection, EvaluationScenario.OUTPUT_CONSISTENCY, args
+    )
     return 0 if result.all_passed() else 1
 
 

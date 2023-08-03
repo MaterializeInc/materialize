@@ -11,6 +11,9 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
+    EvaluationScenario,
+)
 from materialize.output_consistency.output_consistency_test import (
     parse_output_consistency_input_args,
     run_output_consistency_tests,
@@ -35,6 +38,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parse_output_consistency_input_args(parser)
     connection = c.sql_connection()
 
-    test_summary = run_output_consistency_tests(connection, args)
+    test_summary = run_output_consistency_tests(
+        connection, EvaluationScenario.POSTGRES_CONSISTENCY, args
+    )
 
     assert test_summary.all_passed(), "At least one test failed"
