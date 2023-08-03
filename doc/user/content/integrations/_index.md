@@ -137,18 +137,6 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 | dbt Core  | {{< supportLevel beta >}}        | See the [dbt documentation](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile) for more details, and the [dbt + Materialize guide](/integrations/dbt/) for a step-by-step breakdown of the integration. | [](#notify) |
 | dbt Cloud | {{< supportLevel in-progress >}} | Not supported yet. We are working with the dbt community to bring native Materialize support to dbt Cloud soon.                                                                                                                | [](#notify) |
 
-### SQL clients
-
-| Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
-| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/#sql-clients) for more details. Some backslash meta-commands are not yet supported {{% gh 9721 %}}.
-| DBeaver      | {{< supportLevel production >}}  | Connect using the [Materialize database driver](/integrations/sql-clients/#dbeaver).                                                                                                                                                                                              |             |
-| DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |             |
-| pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                | [](#notify) |
-| TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
-
-👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
-
 ### Terraform
 
 Materialize maintains a
@@ -163,6 +151,27 @@ your organization.
 While Materialize offers support for its provider, Materialize does not offer
 support for these modules.
 {{</ note >}}
+
+### SQL clients
+
+| Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
+| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/#sql-clients) for more details. Some backslash meta-commands are not yet supported {{% gh 9721 %}}.
+| DBeaver      | {{< supportLevel production >}}  | Connect using the [Materialize database driver](/integrations/sql-clients/#dbeaver).                                                                                                                                                                                              |             |
+| DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |             |
+| pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                | [](#notify) |
+| TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
+
+👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+
+### Monitoring
+
+| Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
+| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Datadog      | {{< supportLevel production >}}  | See the [Datadog guide](/manage/monitor/datadog/) for a step-by-step breakdown of the integration.
+| Grafana      | {{< supportLevel production >}}  | See the [Grafana guide](https://github.com/MaterializeInc/demos/tree/main/integrations/prometheus-sql-exporter#materialize--grafana) for a step-by-step breakdown of the integration.                                                                                                                                                                                              |             |
+
+👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
 ## Client libraries and ORMs
 
