@@ -9,9 +9,7 @@
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::{
-    raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
-};
+use mz_ore::metrics::{raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, MetricsRegistry, UIntGauge};
 use mz_repr::GlobalId;
 use prometheus::core::AtomicF64;
 
@@ -22,8 +20,8 @@ pub struct ComputeMetrics {
     pub history_dataflow_count: UIntGauge,
 
     // reconciliation
-    pub reconciliation_reused_dataflows: IntCounter,
-    pub reconciliation_replaced_dataflows: raw::IntCounterVec,
+    pub reconciliation_reused_dataflows_count_total: raw::IntCounterVec,
+    pub reconciliation_replaced_dataflows_count_total: raw::IntCounterVec,
 
     // dataflow state
     pub dataflow_initial_output_duration_seconds: GaugeVec,
@@ -41,14 +39,15 @@ impl ComputeMetrics {
                 name: "mz_compute_replica_history_dataflow_count",
                 help: "The number of dataflows in the replica's command history.",
             )),
-            reconciliation_reused_dataflows: registry.register(metric!(
-                name: "mz_compute_reconciliation_reused_dataflows",
-                help: "The number of dataflows that were reused during compute reconciliation.",
+            reconciliation_reused_dataflows_count_total: registry.register(metric!(
+                name: "mz_compute_reconciliation_reused_dataflows_count_total",
+                help: "The total number of dataflows that were reused during compute reconciliation.",
+                var_labels: ["worker_id"],
             )),
-            reconciliation_replaced_dataflows: registry.register(metric!(
-                name: "mz_compute_reconciliation_replaced_dataflows",
-                help: "The number of dataflows that were replaced during compute reconciliation.",
-                var_labels: ["reason"],
+            reconciliation_replaced_dataflows_count_total: registry.register(metric!(
+                name: "mz_compute_reconciliation_replaced_dataflows_count_total",
+                help: "The total number of dataflows that were replaced during compute reconciliation.",
+                var_labels: ["worker_id", "reason"],
             )),
             dataflow_initial_output_duration_seconds: registry.register(metric!(
                 name: "mz_dataflow_initial_output_duration_seconds",
@@ -101,24 +100,29 @@ impl ComputeMetrics {
     /// recorded as unsuccessful, with a reason based on the first property that does not hold.
     pub fn record_dataflow_reconciliation(
         &self,
+        worker_id: usize,
         compatible: bool,
         uncompacted: bool,
         subscribe_free: bool,
     ) {
+        let worker = worker_id.to_string();
+
         if !compatible {
-            self.reconciliation_replaced_dataflows
-                .with_label_values(&["incompatible"])
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "incompatible"])
                 .inc();
         } else if !uncompacted {
-            self.reconciliation_replaced_dataflows
-                .with_label_values(&["compacted"])
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "compacted"])
                 .inc();
         } else if !subscribe_free {
-            self.reconciliation_replaced_dataflows
-                .with_label_values(&["subscribe"])
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "subscribe"])
                 .inc();
         } else {
-            self.reconciliation_reused_dataflows.inc();
+            self.reconciliation_reused_dataflows_count_total
+                .with_label_values(&[&worker])
+                .inc();
         }
     }
 }

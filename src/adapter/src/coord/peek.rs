@@ -124,7 +124,7 @@ where
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
-                MirRelationExpr::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
+                MirRelationExpr::fmt_indexed_filter(f, ctx, id, literal_constraints.clone(), None)?;
                 writeln!(f)?;
                 ctx.as_mut().reset();
                 Ok(())

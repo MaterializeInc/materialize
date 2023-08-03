@@ -559,6 +559,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 }
 
                                 compute_state.metrics.record_dataflow_reconciliation(
+                                    self.timely_worker.index(),
                                     compatible,
                                     uncompacted,
                                     subscribe_free,

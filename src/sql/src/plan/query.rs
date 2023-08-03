@@ -1245,13 +1245,13 @@ fn plan_query_inner(
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
             let ecx = &ExprContext {
                 qcx,
-                name: "ORDER BY clause",
+                name: "ORDER BY clause of a set expression",
                 scope: &scope,
                 relation_type: &qcx.relation_type(&expr),
-                allow_aggregates: true,
+                allow_aggregates: false,
                 allow_subqueries: true,
                 allow_parameters: true,
-                allow_windows: true,
+                allow_windows: false,
             };
             let output_columns: Vec<_> = scope.column_names().enumerate().collect();
             let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by, &output_columns)?;

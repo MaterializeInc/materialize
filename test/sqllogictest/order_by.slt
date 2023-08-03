@@ -91,6 +91,102 @@ SELECT DISTINCT a FROM foo ORDER BY a + 1
 query error column "b" does not exist
 (SELECT a FROM foo) UNION (SELECT a FROM foo) ORDER BY b
 
+# We should pick up the column name from the first input of UNION.
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY a;
+----
+-3
+-2
+-1
+0
+1
+2
+
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a FROM foo)
+ORDER BY a;
+----
+0
+1
+2
+
+query error ERROR: column "a" does not exist
+(SELECT a-3 FROM foo)
+UNION
+(SELECT a FROM foo)
+ORDER BY a;
+
+# We support complex expressions in the ORDER BY of a set expression (Postgres doesn't).
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY -2*a+3;
+----
+2
+1
+0
+-1
+-2
+-3
+
+# But we don't support aggregations in the ORDER BY of a set expression (same in Postgres)
+query error db error: ERROR: aggregate functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.sum\)
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY sum(a);
+
+# ... or window functions (same in Postgres).
+query error db error: ERROR: window functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.lag\)
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY lag(a) OVER ();
+
+# We support window functions in a normal ORDER BY, though
+query I
+SELECT a FROM foo
+ORDER BY lag(a) OVER (ORDER BY a) NULLS LAST;
+----
+1
+2
+0
+
+query I
+SELECT a FROM foo
+ORDER BY lag(a) OVER (ORDER BY -a NULLS FIRST) DESC NULLS LAST;
+----
+1
+0
+2
+
+# We support subqueries in ORDER BY
+query IT
+SELECT a, b FROM foo
+ORDER BY a IN (SELECT length(b)-1 FROM foo), -a;
+----
+1  one
+0  zero
+2  two
+
+# ... even for a set expression
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a+1 FROM foo)
+ORDER BY a IN (SELECT length(b)-1 FROM foo), -a;
+----
+1
+0
+3
+2
+
 # Using a column twice and referring to it by its alias in the ORDER BY should
 # work.
 query II
