@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-from typing import List
 
 import pg8000
 from pg8000 import Connection
@@ -191,11 +190,19 @@ class OutputConsistencyTest:
     def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
         return InconsistencyIgnoreFilter()
 
-    def create_evaluation_strategies(self) -> List[EvaluationStrategy]:
+    def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
         return [
             DataFlowRenderingEvaluation(),
             ConstantFoldingEvaluation(),
         ]
+
+
+def connect(host: str, port: int, user: str, password: str | None = None) -> Connection:
+    try:
+        return pg8000.connect(host=host, port=port, user=user, password=password)
+    except InterfaceError:
+        print(f"Connecting to database failed (host={host}, port={port}, user={user})!")
+        raise
 
 
 def main() -> int:
@@ -213,11 +220,8 @@ def main() -> int:
     db_user = "materialize"
 
     try:
-        connection = pg8000.connect(host=args.host, port=args.port, user=db_user)
+        connection = connect(args.host, args.port, db_user)
     except InterfaceError:
-        print(
-            f"Connecting to database failed (host={args.host}, port={args.port}, user={db_user})!"
-        )
         return 1
 
     result = test.run_output_consistency_tests(connection, args)
