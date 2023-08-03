@@ -73,7 +73,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -130,33 +130,6 @@ impl AwsSecretsController {
             .iter()
             .map(|(key, value)| Tag::builder().key(key).value(value).build())
             .collect()
-    }
-
-    // TODO [Alex Hunt] Remove after all customers have been migrated.
-    pub async fn migrate_from<C>(&self, other_secrets_controller: &C) -> Result<(), anyhow::Error>
-    where
-        C: SecretsController,
-    {
-        let other_secrets: BTreeSet<GlobalId> =
-            other_secrets_controller.list().await?.into_iter().collect();
-        tracing::debug!("Found {} legacy secrets", other_secrets.len());
-
-        let aws_secrets: BTreeSet<GlobalId> = self.list().await?.into_iter().collect();
-        tracing::debug!("Found {} AWS secrets", aws_secrets.len());
-
-        let other_secrets_reader = other_secrets_controller.reader();
-        let secrets_to_migrate = other_secrets.difference(&aws_secrets);
-        for secret in secrets_to_migrate {
-            tracing::debug!("Migrating secret {}", secret);
-            let data = other_secrets_reader.read(secret.to_owned()).await?;
-            self.ensure(secret.to_owned(), &data).await?;
-        }
-        for secret in other_secrets {
-            tracing::debug!("Deleting legacy secret {}", secret);
-            other_secrets_controller.delete(secret).await?;
-        }
-        tracing::info!("Secret migration completed.");
-        Ok(())
     }
 }
 

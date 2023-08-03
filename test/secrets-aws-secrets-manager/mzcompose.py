@@ -55,20 +55,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    # Create some secrets with the process secrets controller
-    # to test migration to the AWS secrets controller.
-    with c.override(Materialized()):
-        c.up("materialized")
-        c.sql("CREATE SECRET oldsecret1 AS 'oldsecret'")
-        c.sql("CREATE SECRET oldsecret2 AS 'another oldsecret'")
-        c.exec(
-            "materialized",
-            "bash",
-            "-c",
-            "[ -f /mzdata/secrets/u1 ] && [ -f /mzdata/secrets/u1 ] && exit 0 || exit 1",
-        )
-        c.stop("materialized")
-
     c.up("localstack")
 
     aws_endpoint_url = f"http://localhost:{c.port('localstack', 4566)}"
@@ -172,51 +158,34 @@ def workflow_default(c: Composition) -> None:
         )
 
     c.up("materialized")
-    # Old secrets should not exist on disk.
-    c.exec(
-        "materialized",
-        "bash",
-        "-c",
-        "[ ! -f /mzdata/secrets/u1 ] && [ ! -f /mzdata/secrets/u1 ] && exit 0 || exit 1",
-    )
     secrets = list_secrets()
     assert orphan_1_name not in secrets
     assert orphan_2_name in secrets
     assert other_name in secrets
     # Should include migrated secrets and secrets for other environments
-    assert len(secrets) == 4
+    assert len(secrets) == 2
 
     c.sql("CREATE SECRET secret AS 's3cret'")
     secrets = list_secrets()
 
-    # Old secrets should be migrated
-    assert secret_name("u1") in secrets
-    assert b"oldsecret" == get_secret_value("u1")
-    assert secret_name("u2") in secrets
-    assert b"another oldsecret" == get_secret_value("u2")
-
     # New secret should exist with specified contents
-    assert secret_name("u3") in secrets
-    assert b"s3cret" == get_secret_value("u3")
+    assert secret_name("u1") in secrets
+    assert b"s3cret" == get_secret_value("u1")
 
     # Secrets should have expected tags
-    secret_u3 = secrets[secret_name("u3")]
+    secret_u1 = secrets[secret_name("u1")]
     for tag in expected_tags:
-        assert tag in secret_u3["Tags"]
+        assert tag in secret_u1["Tags"]
 
     # Check that alter secret gets reflected in Secrets Manager
     c.sql("ALTER SECRET secret AS 'tops3cret'")
-    assert b"tops3cret" == get_secret_value("u3")
+    assert b"tops3cret" == get_secret_value("u1")
 
     # Rename should not change the contents in Secrets Manager
     c.sql("ALTER SECRET secret RENAME TO renamed_secret")
-    assert b"tops3cret" == get_secret_value("u3")
+    assert b"tops3cret" == get_secret_value("u1")
 
     c.sql("DROP SECRET renamed_secret")
     # Check that the file has been deleted from Secrets Manager
     secrets = list_secrets()
-    assert secret_name("u3") not in secrets
-
-    # Ensure that migration code does not prevent a second restart
-    c.stop("materialized")
-    c.up("materialized")
+    assert secret_name("u1") not in secrets
