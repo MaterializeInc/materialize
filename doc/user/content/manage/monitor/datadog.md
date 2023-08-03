@@ -47,7 +47,7 @@ which has been tried and tested in production environments.
    connection. Example: instead of `name@email.com`, use `name%40email.com`.
    {{</ note >}}
 
-   _config.yml_
+   **Filename:** config.yml
    ```yaml
    ---
    jobs:
