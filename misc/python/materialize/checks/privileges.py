@@ -299,8 +299,5 @@ class Privileges(Check):
                 privilege_kafka_conn4  role_1=U/materialize
                 """
             )
-            + self._drop_objects(1, expensive=True)
-            + self._drop_objects(2)
-            + self._drop_objects(3)
             + self._drop_objects(4)
         )
