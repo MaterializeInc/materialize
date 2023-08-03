@@ -32,7 +32,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
 use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{info, warn};
 use IsLateral::*;
 use IsOptional::*;
 

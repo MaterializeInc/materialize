@@ -7366,7 +7366,6 @@ impl Catalog {
     }
 
     // Parses the given SQL string into a `CatalogItem`.
-    #[tracing::instrument(level = "info", skip(self, pcx))]
     fn parse_item(
         &self,
         id: GlobalId,

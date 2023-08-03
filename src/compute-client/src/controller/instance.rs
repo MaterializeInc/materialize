@@ -26,6 +26,7 @@ use mz_storage_client::controller::{ReadPolicy, StorageController};
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
@@ -777,13 +778,13 @@ where
     pub fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) {
         for uuid in &uuids {
             let Some(peek) = self.compute.peeks.get_mut(uuid) else {
-                tracing::warn!("did not find pending peek for {uuid}");
+                tracing::info!("did not find pending peek for {uuid}");
                 continue;
             };
 
             // Canceled peeks should not be further responded to.
             let Some(otel_ctx) = peek.otel_ctx.take() else {
-                tracing::warn!("peek {uuid} has already been served");
+                tracing::info!("peek {uuid} has already been served");
                 continue;
             };
 
@@ -801,7 +802,9 @@ where
                 ));
         }
 
+        info!("Sending cancel to compute");
         self.compute.send(ComputeCommand::CancelPeeks { uuids });
+        info!("Cancel sent to compute");
     }
 
     /// Assigns a read policy to specific identifiers.

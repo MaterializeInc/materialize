@@ -30,7 +30,7 @@ use mz_sql::plan::{
 use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{oneshot, watch};
-use tracing::Instrument;
+use tracing::{info, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
@@ -803,6 +803,7 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
+        info!("GOT TERMINATE MESSAGE");
         if self.active_conns.get(session.conn_id()).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
@@ -823,7 +824,9 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .dec();
         self.active_conns.remove(session.conn_id());
+        info!("Cancelling pending peeks");
         self.cancel_pending_peeks(session.conn_id());
+        info!("pending peeks cancelled");
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }

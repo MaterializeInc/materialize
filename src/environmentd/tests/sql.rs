@@ -1546,7 +1546,6 @@ fn test_utilization_hold() {
 // the panic and allow the compute instance to restart (instead of crash loop
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
-#[ignore] // TODO(necaris): Re-enable this as soon as possible
 #[mz_ore::test]
 fn test_github_12546() {
     let config = util::Config::default().with_propagate_crashes(false);
@@ -1557,34 +1556,51 @@ fn test_github_12546() {
         .block_on(async {
             let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
 
+            println!("Creating table");
             client
                 .batch_execute("CREATE TABLE test(a text);")
                 .await
                 .unwrap();
+            println!("Table created");
+            println!("Inserting into table");
             client
-                .batch_execute("INSERT INTO test VALUES ('a');")
+                .batch_execute("INSERT INTO test VALUES ('this panic is intentional');")
                 .await
                 .unwrap();
+            println!("Table inserted");
 
+            println!("Querying mz_panic");
             let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
+            println!("mz_panic queried");
+            println!("Creating timeout");
             let timeout = tokio::time::timeout(Duration::from_secs(2), query);
+            println!("Timeout created");
             // We expect the timeout to trigger because the query should be crashing the
             // compute instance.
+            println!("Awaiting timeout");
             assert_eq!(
                 timeout.await.unwrap_err().to_string(),
                 "deadline has elapsed"
             );
+            println!("Timeout awaited");
 
             // Aborting the connection should cause its pending queries to be cancelled,
             // allowing the compute instances to stop crashing while trying to execute
             // them.
+            println!("Aborting connection");
             conn_task.abort();
+            println!("Connection aborted");
 
             // Need to await `conn_task` to actually deliver the `abort`.
+            println!("Awaiting connection");
             let _ = conn_task.await;
+            println!("Connection awaited");
 
             // Make a new connection to verify the compute instance can now start.
+            println!("Making a new connection");
             let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
+            println!("new connection made");
+            println!("Querying table");
             assert_eq!(
                 client
                     .query_one("SELECT count(*) FROM test", &[])
@@ -1593,6 +1609,7 @@ fn test_github_12546() {
                     .get::<_, i64>(0),
                 1,
             );
+            println!("Table queried");
 
             Ok::<_, Box<dyn Error>>(())
         })

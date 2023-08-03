@@ -23,6 +23,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{Expr, OrderByExpr, SubscribeOutput};
+use tracing::info;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
