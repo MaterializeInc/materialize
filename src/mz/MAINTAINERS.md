@@ -23,7 +23,7 @@
    ```
    git checkout MERGED-SHA
    git tag -am mz-$VERSION mz-$VERSION
-   git push --set-upstream upstream $VERSION
+   git push --set-upstream upstream mz-$VERSION
    ```
 
 5. Find the [Deploy mz](https://buildkite.com/materialize/deploy-mz) Buildkite
