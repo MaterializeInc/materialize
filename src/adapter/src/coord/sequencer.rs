@@ -35,7 +35,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionStatus};
 use crate::util::{send_immediate_rows, ClientTransmitter};
-use crate::{rbac, ExecuteContext};
+use crate::{rbac, ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -66,7 +66,8 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
-        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        let mut responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
         let session_catalog = self.catalog.for_session(ctx.session());

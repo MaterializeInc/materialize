@@ -98,7 +98,10 @@ use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_ore::task::{self, RuntimeExt};
+use mz_ore::{
+    assert_contains,
+    task::{self, RuntimeExt},
+};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
 use rand::RngCore;
@@ -1999,6 +2002,63 @@ fn test_github_20262() {
             assert_eq!(text, next);
         }
     }
+}
+
+// Test that the server properly handles cancellation requests of read-then-write queries.
+// See #20404.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_read_then_write() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
+        .unwrap();
+
+    // Lots of races here, so try this whole thing in a loop.
+    Retry::default()
+        .clamp_backoff(Duration::ZERO)
+        .retry(|_state| {
+            let mut client1 = server.connect(postgres::NoTls).unwrap();
+            let mut client2 = server.connect(postgres::NoTls).unwrap();
+            let cancel_token = client2.cancel_token();
+
+            client1.batch_execute("DELETE FROM foo").unwrap();
+            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
+            client1
+                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
+                .unwrap();
+
+            let handle1 = thread::spawn(move || {
+                let err =  client1
+                    .batch_execute("insert into foo select a, case when mz_internal.mz_sleep(ts) > 0 then 0 end as ts from foo")
+                    .unwrap_err();
+                assert_contains!(
+                    err.to_string(),
+                    "statement timeout"
+                );
+                client1
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            let handle2 = thread::spawn(move || {
+                client2
+                .batch_execute("insert into foo values ('blah', 1);")
+                .unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            cancel_token.cancel_query(postgres::NoTls)?;
+            let mut client1 = handle1.join().unwrap();
+            handle2.join().unwrap();
+            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
+            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
+            if rows !=1 {
+                anyhow::bail!("unexpected row count: {rows}");
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .unwrap();
 }
 
 #[mz_ore::test]

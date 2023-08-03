@@ -754,8 +754,9 @@ impl ExecuteResponse {
         }
     }
 
-    /// Expresses which [`PlanKind`] generate which set of
-    /// [`ExecuteResponseKind`].
+    /// Expresses which [`PlanKind`] generate which set of [`ExecuteResponseKind`].
+    /// `ExecuteResponseKind::Canceled` could be generated at any point as well, but that is
+    /// excluded from this function.
     pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
         use ExecuteResponseKind::*;
         use PlanKind::*;
