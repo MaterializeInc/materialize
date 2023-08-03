@@ -63,6 +63,9 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     ./setup
     ```
 
+4. On macOS, configure Docker to use "gRPC FUSE" as file sharing implementation for the containers
+   (Docker settings, tab "General"). This will speed up the execution of cloudtests.
+
 # Running tests
 
 To run all short tests:
