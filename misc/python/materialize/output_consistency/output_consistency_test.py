@@ -41,141 +41,151 @@ from materialize.output_consistency.selection.randomized_picker import Randomize
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
-def run_output_consistency_tests(
-    connection: Connection, scenario: EvaluationScenario, args: argparse.Namespace
-) -> ConsistencyTestSummary:
-    """Entry point for output consistency tests"""
+class OutputConsistencyTest:
+    def run_output_consistency_tests(
+        self,
+        connection: Connection,
+        scenario: EvaluationScenario,
+        args: argparse.Namespace,
+    ) -> ConsistencyTestSummary:
+        """Entry point for output consistency tests"""
 
-    return _run_output_consistency_tests_internal(
-        connection,
-        scenario,
-        args.seed,
-        args.dry_run,
-        args.fail_fast,
-        args.verbose,
-        args.max_cols_per_query,
-        args.max_runtime_in_sec,
-        args.max_iterations,
-        args.avoid_expressions_expecting_db_error,
-    )
-
-
-def parse_output_consistency_input_args(
-    parser: argparse.ArgumentParser,
-) -> argparse.Namespace:
-    parser.add_argument("--seed", default="0", type=str)
-    parser.add_argument(
-        "--dry-run", default=False, type=bool, action=argparse.BooleanOptionalAction
-    )
-    parser.add_argument(
-        "--fail-fast", default=False, type=bool, action=argparse.BooleanOptionalAction
-    )
-    parser.add_argument(
-        "--verbose",
-        default=False,
-        type=bool,
-        action=argparse.BooleanOptionalAction,
-    )
-    parser.add_argument("--max-cols-per-query", default=20, type=int)
-    parser.add_argument("--max-runtime-in-sec", default=600, type=int)
-    parser.add_argument("--max-iterations", default=100000, type=int)
-    parser.add_argument(
-        "--avoid-expressions-expecting-db-error",
-        default=False,
-        type=bool,
-        action=argparse.BooleanOptionalAction,
-    )
-
-    return parser.parse_args()
-
-
-def _run_output_consistency_tests_internal(
-    connection: Connection,
-    scenario: EvaluationScenario,
-    random_seed: str,
-    dry_run: bool,
-    fail_fast: bool,
-    verbose_output: bool,
-    max_cols_per_query: int,
-    max_runtime_in_sec: int,
-    max_iterations: int,
-    avoid_expressions_expecting_db_error: bool,
-) -> ConsistencyTestSummary:
-    input_data = ConsistencyTestInputData()
-
-    output_printer = OutputPrinter(input_data)
-
-    config = ConsistencyTestConfiguration(
-        random_seed=random_seed,
-        scenario=scenario,
-        dry_run=dry_run,
-        fail_fast=fail_fast,
-        verbose_output=verbose_output,
-        max_cols_per_query=max_cols_per_query,
-        max_runtime_in_sec=max_runtime_in_sec,
-        max_iterations=max_iterations,
-        avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
-        queries_per_tx=20,
-        max_pending_expressions=100,
-        use_autocommit=True,
-        split_and_retry_on_db_error=True,
-        print_reproduction_code=True,
-        skip_postgres_incompatible_types=scenario
-        == EvaluationScenario.POSTGRES_CONSISTENCY,
-    )
-
-    output_printer.print_config(config)
-    config.validate()
-
-    evaluation_strategies = [
-        DataFlowRenderingEvaluation(),
-        ConstantFoldingEvaluation(),
-    ]
-
-    randomized_picker = RandomizedPicker(config)
-
-    ignore_filter = InconsistencyIgnoreFilter()
-
-    expression_generator = ExpressionGenerator(config, randomized_picker, input_data)
-    query_generator = QueryGenerator(
-        config, randomized_picker, input_data, ignore_filter
-    )
-    output_comparator = ResultComparator(ignore_filter)
-    sql_executor = create_sql_executor(config, connection, output_printer)
-
-    if config.skip_postgres_incompatible_types:
-        input_data.remove_postgres_incompatible_types()
-
-    test_runner = ConsistencyTestRunner(
-        config,
-        input_data,
-        evaluation_strategies,
-        expression_generator,
-        query_generator,
-        output_comparator,
-        sql_executor,
-        randomized_picker,
-        ignore_filter,
-        output_printer,
-    )
-    test_runner.setup()
-
-    output_printer.start_section("Test execution")
-
-    if not config.verbose_output:
-        output_printer.print_info(
-            "Printing only queries with inconsistencies or warnings in non-verbose mode."
+        return self._run_output_consistency_tests_internal(
+            connection,
+            scenario,
+            args.seed,
+            args.dry_run,
+            args.fail_fast,
+            args.verbose,
+            args.max_cols_per_query,
+            args.max_runtime_in_sec,
+            args.max_iterations,
+            args.avoid_expressions_expecting_db_error,
         )
-        output_printer.print_empty_line()
 
-    test_summary = test_runner.start()
+    def parse_output_consistency_input_args(
+        self,
+        parser: argparse.ArgumentParser,
+    ) -> argparse.Namespace:
+        parser.add_argument("--seed", default="0", type=str)
+        parser.add_argument(
+            "--dry-run", default=False, type=bool, action=argparse.BooleanOptionalAction
+        )
+        parser.add_argument(
+            "--fail-fast",
+            default=False,
+            type=bool,
+            action=argparse.BooleanOptionalAction,
+        )
+        parser.add_argument(
+            "--verbose",
+            default=False,
+            type=bool,
+            action=argparse.BooleanOptionalAction,
+        )
+        parser.add_argument("--max-cols-per-query", default=20, type=int)
+        parser.add_argument("--max-runtime-in-sec", default=600, type=int)
+        parser.add_argument("--max-iterations", default=100000, type=int)
+        parser.add_argument(
+            "--avoid-expressions-expecting-db-error",
+            default=False,
+            type=bool,
+            action=argparse.BooleanOptionalAction,
+        )
 
-    output_printer.print_test_summary(test_summary)
+        return parser.parse_args()
 
-    return test_summary
+    def _run_output_consistency_tests_internal(
+        self,
+        connection: Connection,
+        scenario: EvaluationScenario,
+        random_seed: str,
+        dry_run: bool,
+        fail_fast: bool,
+        verbose_output: bool,
+        max_cols_per_query: int,
+        max_runtime_in_sec: int,
+        max_iterations: int,
+        avoid_expressions_expecting_db_error: bool,
+    ) -> ConsistencyTestSummary:
+        input_data = ConsistencyTestInputData()
+
+        output_printer = OutputPrinter(input_data)
+
+        config = ConsistencyTestConfiguration(
+            random_seed=random_seed,
+            scenario=scenario,
+            dry_run=dry_run,
+            fail_fast=fail_fast,
+            verbose_output=verbose_output,
+            max_cols_per_query=max_cols_per_query,
+            max_runtime_in_sec=max_runtime_in_sec,
+            max_iterations=max_iterations,
+            avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
+            queries_per_tx=20,
+            max_pending_expressions=100,
+            use_autocommit=True,
+            split_and_retry_on_db_error=True,
+            print_reproduction_code=True,
+            skip_postgres_incompatible_types=scenario
+            == EvaluationScenario.POSTGRES_CONSISTENCY,
+        )
+
+        output_printer.print_config(config)
+        config.validate()
+
+        evaluation_strategies = [
+            DataFlowRenderingEvaluation(),
+            ConstantFoldingEvaluation(),
+        ]
+
+        randomized_picker = RandomizedPicker(config)
+
+        ignore_filter = InconsistencyIgnoreFilter()
+
+        expression_generator = ExpressionGenerator(
+            config, randomized_picker, input_data
+        )
+        query_generator = QueryGenerator(
+            config, randomized_picker, input_data, ignore_filter
+        )
+        output_comparator = ResultComparator(ignore_filter)
+        sql_executor = create_sql_executor(config, connection, output_printer)
+
+        if config.skip_postgres_incompatible_types:
+            input_data.remove_postgres_incompatible_types()
+
+        test_runner = ConsistencyTestRunner(
+            config,
+            input_data,
+            evaluation_strategies,
+            expression_generator,
+            query_generator,
+            output_comparator,
+            sql_executor,
+            randomized_picker,
+            ignore_filter,
+            output_printer,
+        )
+        test_runner.setup()
+
+        output_printer.start_section("Test execution")
+
+        if not config.verbose_output:
+            output_printer.print_info(
+                "Printing only queries with inconsistencies or warnings in non-verbose mode."
+            )
+            output_printer.print_empty_line()
+
+        test_summary = test_runner.start()
+
+        output_printer.print_test_summary(test_summary)
+
+        return test_summary
 
 
 def main() -> int:
+    test = OutputConsistencyTest()
     parser = argparse.ArgumentParser(
         prog="output-consistency-test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -185,7 +195,7 @@ def main() -> int:
 
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
-    args = parse_output_consistency_input_args(parser)
+    args = test.parse_output_consistency_input_args(parser)
     db_user = "materialize"
 
     try:
@@ -196,7 +206,7 @@ def main() -> int:
         )
         return 1
 
-    result = run_output_consistency_tests(
+    result = test.run_output_consistency_tests(
         connection, EvaluationScenario.OUTPUT_CONSISTENCY, args
     )
     return 0 if result.all_passed() else 1
