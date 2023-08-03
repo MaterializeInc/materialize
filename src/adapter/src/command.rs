@@ -21,6 +21,7 @@ use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_ore::str::StrExt;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
 use mz_secrets::cache::CachingSecretsReader;
@@ -82,6 +83,10 @@ pub enum Command {
         action: EndTransactionAction,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        // TODO: Ideally this would just be a tracing::Span, but that seems like
+        // it might be tickling a bug in tracing_opentelemetry:
+        // https://github.com/tokio-rs/tracing-opentelemetry/issues/14
+        otel_ctx: OpenTelemetryContext,
     },
 
     CancelRequest {

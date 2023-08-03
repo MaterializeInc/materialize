@@ -69,9 +69,7 @@ impl Coordinator {
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::GroupCommitInitiate => {
-                self.try_group_commit().await;
-            }
+            Message::GroupCommitInitiate(span) => self.try_group_commit().instrument(span).await,
             Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
                 self.group_commit_apply(timestamp, responses, write_lock_guard)
                     .await;
