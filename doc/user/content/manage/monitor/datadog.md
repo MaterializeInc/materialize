@@ -152,7 +152,7 @@ defined in the sample `config.yml`.
 
 1. To use the sample dashboard, navigate to ⚙️ in the upper right corner, and
    select **Import dashboard JSON**. Copy and paste the contents of the provided
-   sample `.josn` file.
+   sample `.json` file.
 
     <br>
 
