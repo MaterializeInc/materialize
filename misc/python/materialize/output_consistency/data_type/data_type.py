@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -27,5 +30,9 @@ class DataType:
     ) -> ReturnTypeSpec:
         return ReturnTypeSpec(self.category)
 
-    def value_to_sql(self, string_value: str) -> str:
-        return f"{string_value}::{self.type_name}"
+    def get_type_name(self, sql_adjuster: SqlDialectAdjuster) -> str:
+        return sql_adjuster.adjust_type(self.type_name)
+
+    def value_to_sql(self, string_value: str, sql_adjuster: SqlDialectAdjuster) -> str:
+        adjusted_string_value = sql_adjuster.adjust_value(string_value, self.type_name)
+        return f"{adjusted_string_value}::{self.get_type_name(sql_adjuster)}"

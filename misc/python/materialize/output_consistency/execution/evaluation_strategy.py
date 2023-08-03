@@ -11,6 +11,10 @@ from enum import Enum
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    MzSqlDialectAdjuster,
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ROW_INDEX_COL_NAME,
     ValueStorageLayout,
@@ -42,6 +46,7 @@ class EvaluationStrategy:
         name: str,
         object_name_base: str,
         simple_db_object_name: str,
+        sql_adjuster: SqlDialectAdjuster = MzSqlDialectAdjuster(),
     ):
         """
         :param identifier: identifier of this strategy
@@ -53,6 +58,7 @@ class EvaluationStrategy:
         self.name = name
         self.object_name_base = object_name_base
         self.simple_db_object_name = simple_db_object_name
+        self.sql_adjuster = sql_adjuster
 
     def generate_sources(self, input_data: ConsistencyTestInputData) -> list[str]:
         statements = []
@@ -113,14 +119,15 @@ class EvaluationStrategy:
         column_specs = []
 
         # row index as first column (also for horizontal layout helpful to simplify aggregate functions with order spec)
-        type_info = " INT" if include_type else ""
+        int_type_name = self.sql_adjuster.adjust_type("INT")
+        type_info = f" {int_type_name}" if include_type else ""
         column_specs.append(f"{ROW_INDEX_COL_NAME}{type_info}")
 
         for type_with_values in input_data.all_data_types_with_values:
-            type_info = (
-                f" {type_with_values.data_type.type_name}" if include_type else ""
+            type_name = self.sql_adjuster.adjust_type(
+                type_with_values.data_type.type_name
             )
-            type_info = self._adjust_type_name(type_info)
+            type_info = f" {type_name}" if include_type else ""
 
             if storage_layout == ValueStorageLayout.HORIZONTAL:
                 for data_value in type_with_values.raw_values:
@@ -176,7 +183,7 @@ class EvaluationStrategy:
         for type_with_values in data_type_with_values:
             for data_value in type_with_values.raw_values:
                 if table_column_selection.is_included(data_value.column_name):
-                    row_values.append(data_value.to_sql_as_value())
+                    row_values.append(data_value.to_sql_as_value(self.sql_adjuster))
 
         return f"{', '.join(row_values)}"
 
@@ -202,7 +209,7 @@ class EvaluationStrategy:
                     continue
 
                 data_value = data_column.get_value_at_row(row_index)
-                row_values.append(data_value.to_sql_as_value())
+                row_values.append(data_value.to_sql_as_value(self.sql_adjuster))
 
             if row_selection.is_included(row_index):
                 rows.append(f"{', '.join(row_values)}")
