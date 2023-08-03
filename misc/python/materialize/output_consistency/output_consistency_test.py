@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+from typing import List
 
 import pg8000
 from pg8000 import Connection
@@ -19,6 +20,7 @@ from materialize.output_consistency.common.configuration import (
 from materialize.output_consistency.execution.evaluation_strategy import (
     ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
+    EvaluationStrategy,
 )
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
@@ -45,14 +47,12 @@ class OutputConsistencyTest:
     def run_output_consistency_tests(
         self,
         connection: Connection,
-        scenario: EvaluationScenario,
         args: argparse.Namespace,
     ) -> ConsistencyTestSummary:
         """Entry point for output consistency tests"""
 
         return self._run_output_consistency_tests_internal(
             connection,
-            scenario,
             args.seed,
             args.dry_run,
             args.fail_fast,
@@ -98,7 +98,6 @@ class OutputConsistencyTest:
     def _run_output_consistency_tests_internal(
         self,
         connection: Connection,
-        scenario: EvaluationScenario,
         random_seed: str,
         dry_run: bool,
         fail_fast: bool,
@@ -111,6 +110,7 @@ class OutputConsistencyTest:
         input_data = ConsistencyTestInputData()
 
         output_printer = OutputPrinter(input_data)
+        scenario = self.get_scenario()
 
         config = ConsistencyTestConfiguration(
             random_seed=random_seed,
@@ -134,14 +134,11 @@ class OutputConsistencyTest:
         output_printer.print_config(config)
         config.validate()
 
-        evaluation_strategies = [
-            DataFlowRenderingEvaluation(),
-            ConstantFoldingEvaluation(),
-        ]
+        evaluation_strategies = self.create_evaluation_strategies()
 
         randomized_picker = RandomizedPicker(config)
 
-        ignore_filter = InconsistencyIgnoreFilter()
+        ignore_filter = self.create_inconsistency_ignore_filter()
 
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
@@ -149,7 +146,7 @@ class OutputConsistencyTest:
         query_generator = QueryGenerator(
             config, randomized_picker, input_data, ignore_filter
         )
-        output_comparator = ResultComparator(ignore_filter)
+        output_comparator = self.create_result_comparator(ignore_filter)
         sql_executor = create_sql_executor(config, connection, output_printer)
 
         if config.skip_postgres_incompatible_types:
@@ -183,6 +180,23 @@ class OutputConsistencyTest:
 
         return test_summary
 
+    def get_scenario(self) -> EvaluationScenario:
+        return EvaluationScenario.OUTPUT_CONSISTENCY
+
+    def create_result_comparator(
+        self, ignore_filter: InconsistencyIgnoreFilter
+    ) -> ResultComparator:
+        return ResultComparator(ignore_filter)
+
+    def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
+        return InconsistencyIgnoreFilter()
+
+    def create_evaluation_strategies(self) -> List[EvaluationStrategy]:
+        return [
+            DataFlowRenderingEvaluation(),
+            ConstantFoldingEvaluation(),
+        ]
+
 
 def main() -> int:
     test = OutputConsistencyTest()
@@ -206,9 +220,7 @@ def main() -> int:
         )
         return 1
 
-    result = test.run_output_consistency_tests(
-        connection, EvaluationScenario.OUTPUT_CONSISTENCY, args
-    )
+    result = test.run_output_consistency_tests(connection, args)
     return 0 if result.all_passed() else 1
 
 
