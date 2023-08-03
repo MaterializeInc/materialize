@@ -38,7 +38,7 @@ ALTER SYSTEM SET enable_rbac_checks = true;
 
 SHOW enable_rbac_checks;
 
-  enable_rbac_checks
+ enable_rbac_checks
 ------------
  on
 ```
