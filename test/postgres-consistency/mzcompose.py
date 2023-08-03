@@ -34,6 +34,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     test = PostgresConsistencyTest()
     args = test.parse_output_consistency_input_args(parser)
     connection = c.sql_connection()
+    test.pg_connection = c.sql_connection(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+    )
 
     test_summary = test.run_output_consistency_tests(connection, args)
 

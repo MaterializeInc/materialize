@@ -147,9 +147,7 @@ class OutputConsistencyTest:
             config, randomized_picker, input_data, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
-        sql_executors = SqlExecutors(
-            create_sql_executor(config, connection, output_printer)
-        )
+        sql_executors = self.create_sql_executors(config, connection, output_printer)
 
         if config.skip_postgres_incompatible_types:
             input_data.remove_postgres_incompatible_types()
@@ -181,6 +179,14 @@ class OutputConsistencyTest:
         output_printer.print_test_summary(test_summary)
 
         return test_summary
+
+    def create_sql_executors(
+        self,
+        config: ConsistencyTestConfiguration,
+        connection: Connection,
+        output_printer: OutputPrinter,
+    ) -> SqlExecutors:
+        return SqlExecutors(create_sql_executor(config, connection, output_printer))
 
     def get_scenario(self) -> EvaluationScenario:
         return EvaluationScenario.OUTPUT_CONSISTENCY
