@@ -53,9 +53,10 @@ use mz_repr::{
     ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    visit, AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName,
@@ -2095,7 +2096,7 @@ fn plan_view_select(
     };
 
     // Step 6. Handle HAVING clause.
-    if let Some(having) = s.having {
+    if let Some(ref having) = s.having {
         let ecx = &ExprContext {
             qcx,
             name: "HAVING clause",
@@ -2106,13 +2107,47 @@ fn plan_view_select(
             allow_parameters: true,
             allow_windows: false,
         };
-        let expr = plan_expr(ecx, &having)
+        let expr = plan_expr(ecx, having)
             .map_err(check_ungrouped_col)?
             .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
-    // Step 7. Handle SELECT clause.
+    // Step 7. Gather window functions from SELECT and ORDER BY, and plan them.
+    //
+    // Note that window functions can be present only in SELECT and ORDER BY (including
+    // DISTINCT ON), because they are executed after grouped aggregations and HAVING.
+    //
+    // Also note that window functions in the ORDER BY can't refer to columns introduced in the
+    // SELECT. This is because when an output column appears in ORDER BY, it can only stand alone,
+    // and can't be part of a bigger expression.
+    // See https://www.postgresql.org/docs/current/queries-order.html:
+    // "Note that an output column name has to stand alone, that is, it cannot be used in an
+    // expression"
+    let window_funcs = {
+        let mut visitor = WindowFuncCollector::default();
+        visitor.visit_select(&s);
+        for o in order_by_exprs.iter() {
+            visitor.visit_order_by_expr(o);
+        }
+        visitor.into_result()
+    };
+    for window_func in window_funcs {
+        let ecx = &ExprContext {
+            qcx,
+            name: "window function",
+            scope: &group_scope,
+            relation_type: &qcx.relation_type(&relation_expr),
+            allow_aggregates: true,
+            allow_subqueries: true,
+            allow_parameters: true,
+            allow_windows: true,
+        };
+        relation_expr = relation_expr.map(vec![plan_expr(ecx, &window_func)?.type_as_any(ecx)?]);
+        group_scope.items.push(ScopeItem::from_expr(window_func));
+    }
+
+    // Step 8. Handle SELECT clause.
     let output_columns = {
         let mut new_exprs = vec![];
         let mut new_type = qcx.relation_type(&relation_expr);
@@ -2164,7 +2199,7 @@ fn plan_view_select(
     };
     let mut project_key: Vec<_> = output_columns.iter().map(|(i, _name)| *i).collect();
 
-    // Step 8. Handle intrusive ORDER BY and DISTINCT.
+    // Step 9. Handle intrusive ORDER BY and DISTINCT.
     let order_by = {
         let relation_type = qcx.relation_type(&relation_expr);
         let (mut order_by, mut map_exprs) = plan_order_by_exprs(
@@ -5507,6 +5542,45 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
         self.in_select_item = true;
         visit_mut::visit_select_item_mut(self, si);
         self.in_select_item = old;
+    }
+}
+
+#[derive(Default)]
+struct WindowFuncCollector {
+    window_funcs: Vec<Expr<Aug>>,
+}
+
+impl WindowFuncCollector {
+    fn into_result(self) -> Vec<Expr<Aug>> {
+        // Dedup while preserving the order.
+        let mut seen = BTreeSet::new();
+        let window_funcs_dedupped = self
+            .window_funcs
+            .into_iter()
+            .filter(move |expr| seen.insert(expr.clone()))
+            // Reverse the order, so that in case of a nested window function call, the
+            // inner one is evaluated first.
+            .rev()
+            .collect();
+        window_funcs_dedupped
+    }
+}
+
+impl Visit<'_, Aug> for WindowFuncCollector {
+    fn visit_expr(&mut self, expr: &Expr<Aug>) {
+        match expr {
+            Expr::Function(func) => {
+                if func.over.is_some() {
+                    self.window_funcs.push(expr.clone());
+                }
+            }
+            _ => (),
+        }
+        visit::visit_expr(self, expr);
+    }
+
+    fn visit_query(&mut self, _query: &Query<Aug>) {
+        // Don't go into subqueries. Those will be handled by their own `plan_view_select`.
     }
 }
 
