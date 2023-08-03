@@ -28,8 +28,14 @@ class DateTimeDataType(DataType):
         max_value: str,
         further_values: list[str],
         has_time_zone: bool = False,
+        is_pg_compatible: bool = True,
     ):
-        super().__init__(identifier, type_name, DataTypeCategory.DATE_TIME)
+        super().__init__(
+            identifier,
+            type_name,
+            DataTypeCategory.DATE_TIME,
+            is_pg_compatible=is_pg_compatible,
+        )
         self.min_value = min_value
         self.max_value = max_value
         self.further_values = further_values
@@ -83,6 +89,8 @@ INTERVAL_TYPE = DateTimeDataType(
     "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808",
     "178956970 years 7 months 2147483647 days 2562047788:00:54.775807",
     ["2 years 3 months 4 days 11:22:33.456789", "100 months 100 days", "44:45:45"],
+    # type is compatible but causes too many issues for now
+    is_pg_compatible=False,
 )
 
 DATE_TIME_DATA_TYPES: list[DateTimeDataType] = [

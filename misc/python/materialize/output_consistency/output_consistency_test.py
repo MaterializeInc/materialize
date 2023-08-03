@@ -127,12 +127,15 @@ class OutputConsistencyTest:
             use_autocommit=True,
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
-            skip_postgres_incompatible_types=scenario
+            postgres_compatible_mode=scenario
             == EvaluationScenario.POSTGRES_CONSISTENCY,
         )
 
         output_printer.print_config(config)
         config.validate()
+
+        if config.postgres_compatible_mode:
+            input_data.remove_postgres_incompatible_data()
 
         evaluation_strategies = self.create_evaluation_strategies()
 
@@ -148,9 +151,6 @@ class OutputConsistencyTest:
         )
         output_comparator = self.create_result_comparator(ignore_filter)
         sql_executors = self.create_sql_executors(config, connection, output_printer)
-
-        if config.skip_postgres_incompatible_types:
-            input_data.remove_postgres_incompatible_types()
 
         test_runner = ConsistencyTestRunner(
             config,

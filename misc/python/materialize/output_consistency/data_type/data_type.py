@@ -20,10 +20,17 @@ from materialize.output_consistency.operation.return_type_spec import ReturnType
 class DataType:
     """Defines a SQL data type"""
 
-    def __init__(self, identifier: str, type_name: str, category: DataTypeCategory):
+    def __init__(
+        self,
+        identifier: str,
+        type_name: str,
+        category: DataTypeCategory,
+        is_pg_compatible: bool = True,
+    ):
         self.identifier = identifier
         self.type_name = type_name
         self.category = category
+        self.is_pg_compatible = is_pg_compatible
 
     def resolve_return_type_spec(
         self, characteristics: set[ExpressionCharacteristics]
