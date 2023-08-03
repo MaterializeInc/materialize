@@ -886,18 +886,19 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            let now = if timeline == Timeline::EpochMilliseconds {
-                oracle.read_ts()
-            } else {
+            // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
+            // manually advanced here.
+            if timeline != Timeline::EpochMilliseconds {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
                 let id_bundle = self.ids_in_timeline(&timeline);
-                Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
+                let now =
+                    Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle));
+                oracle
+                    .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))
+                    .await;
             };
-            oracle
-                .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))
-                .await;
             let read_ts = oracle.read_ts();
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
                 read_holds = self.update_read_hold(read_holds, read_ts);
