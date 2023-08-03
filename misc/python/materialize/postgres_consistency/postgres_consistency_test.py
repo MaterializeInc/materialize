@@ -12,7 +12,6 @@ from typing import List
 from pg8000.exceptions import InterfaceError
 
 from materialize.output_consistency.execution.evaluation_strategy import (
-    ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
     EvaluationStrategy,
 )
@@ -27,6 +26,15 @@ from materialize.output_consistency.output_consistency_test import (
     connect,
 )
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+from materialize.postgres_consistency.execution.pg_evaluation_strategy import (
+    PgEvaluation,
+)
+from materialize.postgres_consistency.ignore_filter.pg_inconsistency_ignore_filter import (
+    PgInconsistencyIgnoreFilter,
+)
+from materialize.postgres_consistency.validation.pg_result_comparator import (
+    PostgresResultComparator,
+)
 
 
 class PostgresConsistencyTest(OutputConsistencyTest):
@@ -36,15 +44,20 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     def create_result_comparator(
         self, ignore_filter: InconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return ResultComparator(ignore_filter)
+        return PostgresResultComparator(ignore_filter)
 
     def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
-        return InconsistencyIgnoreFilter()
+        return PgInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> List[EvaluationStrategy]:
+        mz_evaluation_strategy = DataFlowRenderingEvaluation()
+        mz_evaluation_strategy.name = "Materialize evaluation"
+        mz_evaluation_strategy.simple_db_object_name = "mz_evaluation"
         return [
-            DataFlowRenderingEvaluation(),
-            ConstantFoldingEvaluation(),
+            # Materialize
+            mz_evaluation_strategy,
+            # Postgres
+            PgEvaluation(),
         ]
 
 

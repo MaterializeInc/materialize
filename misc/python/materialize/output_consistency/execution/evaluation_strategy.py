@@ -30,6 +30,7 @@ class EvaluationStrategyKey(Enum):
     DUMMY = 1
     MZ_DATAFLOW_RENDERING = 2
     MZ_CONSTANT_FOLDING = 3
+    POSTGRES = 4
 
 
 class EvaluationStrategy:
