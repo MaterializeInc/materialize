@@ -11,7 +11,9 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.output_consistency.output_consistency_test import OutputConsistencyTest
+from materialize.postgres_consistency.postgres_consistency_test import (
+    PostgresConsistencyTest,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -29,7 +31,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized", "postgres")
 
-    test = OutputConsistencyTest()
+    test = PostgresConsistencyTest()
     args = test.parse_output_consistency_input_args(parser)
     connection = c.sql_connection()
 
