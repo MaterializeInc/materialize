@@ -119,7 +119,7 @@ configured to scrape the OpenMetrics format.
    for the Datadog Agent installed in the previous step, edit the
    `openmetrics.d/conf.yaml` file at the root of the installation directory.
 
-   _openmetrics.d/conf.yaml_
+   **Filename**: openmetrics.d/conf.yaml
    ```yaml
    init_config:
        timeout: 50
