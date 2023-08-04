@@ -1197,7 +1197,7 @@ EOF
 # \set endDate '\'2012-11-24\''::timestamp
 
 query T multiline
-WITH
+EXPLAIN WITH
 MPP AS (SELECT RootPostId, count(*) as MessageCount FROM Message WHERE Message.creationDate BETWEEN '2012-08-29'::TIMESTAMP AND '2012-11-24'::TIMESTAMP GROUP BY RootPostId)
 SELECT Person.id AS "person.id"
      , Person.firstName AS "person.firstName"
@@ -1214,6 +1214,26 @@ SELECT Person.id AS "person.id"
  ORDER BY messageCount DESC, Person.id
  LIMIT 100
 ----
+Explained Query:
+  Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0..=#4]
+    Reduce group_by=[#0..=#2] aggregates=[count(*), sum(#3)]
+      Project (#1..=#3, #25)
+        Filter (#23) IS NULL AND (#11 <= 2012-11-24 00:00:00 UTC) AND (#11 >= 2012-08-29 00:00:00 UTC) AND (#1) IS NOT NULL
+          Join on=(#1 = #20 AND #12 = #24) type=delta
+            ArrangeBy keys=[[#1]]
+              Get materialize.public.person
+            ArrangeBy keys=[[#1], [#9]]
+              Get materialize.public.message
+            ArrangeBy keys=[[#0]]
+              Reduce group_by=[#0] aggregates=[count(*)]
+                Project (#2)
+                  Filter (#0 <= 2012-11-24 00:00:00 UTC) AND (#0 >= 2012-08-29 00:00:00 UTC) AND (#2) IS NOT NULL
+                    Get materialize.public.message
+
+Used Indexes:
+  - materialize.public.person_id
+  - materialize.public.message_messageid
+  - materialize.public.message_creatorpersonid
 
 EOF
 
