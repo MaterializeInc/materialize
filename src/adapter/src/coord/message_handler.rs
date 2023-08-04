@@ -25,7 +25,7 @@ use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Level};
+use tracing::{event, warn, Instrument, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
