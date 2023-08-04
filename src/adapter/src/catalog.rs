@@ -746,7 +746,13 @@ impl CatalogState {
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
+        let plan = mz_sql::plan::plan(
+            None,
+            &session_catalog,
+            stmt,
+            &Params::empty(),
+            &resolved_ids,
+        )?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer =
@@ -7384,7 +7390,8 @@ impl Catalog {
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
+        let plan =
+            mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
@@ -8264,6 +8271,10 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .map(|schema| schema as &dyn CatalogSchema),
             )
             .collect()
+    }
+
+    fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        self.state().get_mz_internal_schema_id()
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {

@@ -11,7 +11,7 @@
 //! put in more meaningfully named modules.
 
 use mz_repr::{GlobalId, ScalarType};
-use mz_sql::names::Aug;
+use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 
@@ -28,10 +28,11 @@ impl Coordinator {
         session: &Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
+        resolved_ids: &ResolvedIds,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
         let catalog = self.catalog().for_session(session);
-        let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params)?;
+        let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params, resolved_ids)?;
         Ok(plan)
     }
 

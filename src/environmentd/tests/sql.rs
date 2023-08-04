@@ -320,6 +320,7 @@ fn test_drop_connection_race() {
 #[mz_ore::test]
 fn test_time() {
     let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Confirm that `now()` and `current_timestamp()` both return a
@@ -1551,6 +1552,7 @@ fn test_utilization_hold() {
 fn test_github_12546() {
     let config = util::Config::default().with_propagate_crashes(false);
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     server
         .runtime
@@ -2200,6 +2202,7 @@ fn test_introspection_user_permissions() {
 fn test_idle_in_transaction_session_timeout() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client

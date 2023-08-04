@@ -53,6 +53,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_dangerous_functions": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",

@@ -307,6 +307,12 @@ impl State {
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
+        // Dangerous functions are useful for tests so we enable it for all tests.
+        inner_client
+            .batch_execute("ALTER SYSTEM SET enable_dangerous_functions = on")
+            .await
+            .context("enabling dangerous functions")?;
+
         for row in inner_client
             .query("SHOW DATABASES", &[])
             .await

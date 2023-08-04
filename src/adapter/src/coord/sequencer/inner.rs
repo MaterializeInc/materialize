@@ -4020,6 +4020,7 @@ impl Coordinator {
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
+                    &resolved_ids,
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
                 {
@@ -4232,6 +4233,7 @@ impl Coordinator {
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
+                    &resolved_ids,
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
                 {

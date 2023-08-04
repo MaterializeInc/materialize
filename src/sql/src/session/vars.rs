@@ -1159,12 +1159,12 @@ mod grpc_client {
     };
 }
 
-// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
-// availability of features.
-//
-// Note that not all ServerVar<bool> are feature flags. Feature flags are for variables that:
-// - Belong to `SystemVars`, _not_ `SessionVars`
-// - Default to false and must be explicitly enabled
+/// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
+/// availability of features.
+///
+/// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
+/// - Belong to `SystemVars`, _not_ `SessionVars`
+/// - Default to false and must be explicitly enabled
 macro_rules! feature_flags {
     ($(($name:expr, $feature_desc:literal)),+ $(,)?) => {
         paste::paste!{
@@ -1313,7 +1313,11 @@ feature_flags!(
         enable_try_parse_monotonic_iso8601_timestamp,
         "the try_parse_monotonic_iso8601_timestamp function"
     ),
-    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax")
+    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax"),
+    (
+        enable_dangerous_functions,
+        "executing potentially dangerous functions"
+    ),
 );
 
 /// Represents the input to a variable.

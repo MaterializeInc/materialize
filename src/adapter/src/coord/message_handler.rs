@@ -383,6 +383,7 @@ impl Coordinator {
                 ctx.session(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
+                &resolved_ids,
             ) {
                 Ok(Plan::CreateSource(plan)) => plan,
                 Ok(_) => {
@@ -407,7 +408,7 @@ impl Coordinator {
 
         let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
 
-        match self.plan_statement(ctx.session(), stmt, &params) {
+        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
             Ok(Plan::CreateSource(plan)) => {
                 let source_id = match self.catalog_mut().allocate_user_id().await {
                     Ok(id) => id,

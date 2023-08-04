@@ -668,7 +668,7 @@ impl Coordinator {
             ))),
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(ctx.session(), stmt, &params) {
+            _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
                 Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },
