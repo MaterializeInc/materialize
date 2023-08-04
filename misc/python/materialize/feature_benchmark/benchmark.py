@@ -38,6 +38,7 @@ class Benchmark:
         self._filter = filter
         self._termination_conditions = termination_conditions
         self._performance_aggregation = aggregation_class()
+        self._messages_aggregation = aggregation_class()
 
         if measure_memory:
             self._memory_aggregation = aggregation_class()
@@ -117,6 +118,14 @@ class Benchmark:
                 print(f"{i} {performance_measurement}")
                 self._performance_aggregation.append(performance_measurement)
 
+            messages = self._executor.Messages()
+            if messages is not None:
+                messages_measurement = Measurement(
+                    type=MeasurementType.MESSAGES, value=messages
+                )
+                print(f"{i}: {messages_measurement}")
+                self._messages_aggregation.append(messages_measurement)
+
             if self._memory_aggregation:
                 memory_measurement = Measurement(
                     type=MeasurementType.MEMORY,
@@ -130,7 +139,11 @@ class Benchmark:
 
             for termination_condition in self._termination_conditions:
                 if termination_condition.terminate(performance_measurement):
-                    return [self._performance_aggregation, self._memory_aggregation]
+                    return [
+                        self._performance_aggregation,
+                        self._messages_aggregation,
+                        self._memory_aggregation,
+                    ]
 
         assert False, "unreachable"
 
@@ -147,14 +160,14 @@ class Report:
 
     def dump(self) -> None:
         print(
-            f"{'NAME':<35} | {'TYPE':<10} | {'THIS':^11} | {'OTHER':^11} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'TYPE':<9} | {'THIS':^15} | {'OTHER':^15} | {'Regression?':^13} | 'THIS' is:"
         )
         print("-" * 100)
 
         for comparison in self._comparisons:
             regression = "!!YES!!" if comparison.is_regression() else "no"
             print(
-                f"{comparison.name:<35} | {comparison.type:<10} | {comparison.this():>11.3f} | {comparison.other():>11.3f} | {regression:^13} | {comparison.human_readable()}"
+                f"{comparison.name:<35} | {comparison.type:<9} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable()}"
             )
 
 

@@ -75,12 +75,12 @@ class TdAction(Action):
     ) -> None:
         executor = executor or self._executor
         assert executor
-        td_output = executor.Td(self._td_str)
-
         # Print each query once so that it is easier to reproduce regressions
         # based on just the logs from CI
         if executor.add_known_fragment(self._td_str):
-            print(td_output)
+            print(self._td_str)
+
+        executor.Td(self._td_str)
 
 
 class DummyAction(Action):
