@@ -38,7 +38,7 @@ use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
 use timely::progress::Antichain;
-use tracing::{event, warn, Level};
+use tracing::{event, info, warn, Level};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
@@ -462,6 +462,15 @@ impl Coordinator {
             }
         }
         .await;
+
+        for VersionedEvent::V1(event) in &audit_events {
+            info!(
+                annotation_type = "ddl",
+                audit_log.object_type = event.object_type.to_string(),
+                audit_log.event_type = event.event_type.to_string(),
+                audit_log.details = %event.details.as_json(),
+            );
+        }
 
         if let (Some(segment_client), Some(user_metadata)) = (
             &self.segment_client,
