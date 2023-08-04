@@ -1785,10 +1785,14 @@ impl MirRelationExpr {
         (size, max_depth)
     }
 
-    /// The MirRelationExpr is considered potentially expensive if and only if at least one of the
-    ///  following conditions is true:
+    /// The MirRelationExpr is considered potentially expensive if and only if
+    /// at least one of the following conditions is true:
+    ///
     ///  - It contains at least one FlatMap or a Reduce operator.
     ///  - It contains at least one MirScalarExpr with a function call.
+    ///
+    /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     pub fn could_run_expensive_function(&self) -> bool {
         let mut result = false;
         self.visit_pre(&mut |e: &MirRelationExpr| {
@@ -2020,6 +2024,8 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
 }
 
 impl CollectionPlan for MirRelationExpr {
+    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
             id: Id::Global(id), ..

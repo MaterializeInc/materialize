@@ -113,7 +113,7 @@ contains:cannot modify linked cluster "materialize_public_lg1"
 contains:cannot execute queries on cluster containing sources or sinks
 ! SUBSCRIBE v
 contains:cannot execute queries on cluster containing sources or sinks
-! EXPLAIN SELECT 1
+! EXPLAIN SELECT * FROM v
 contains:cannot execute queries on cluster containing sources or sinks
 > SET cluster = default
 
