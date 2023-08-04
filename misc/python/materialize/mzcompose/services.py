@@ -596,6 +596,7 @@ class Postgres(Service):
             "max_connections=5000",
         ],
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        volumes: List[str] = [],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
@@ -608,6 +609,7 @@ class Postgres(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+                "volumes": volumes,
             }
         )
         super().__init__(name=name, config=config)
