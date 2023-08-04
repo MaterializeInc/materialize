@@ -574,20 +574,14 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_) => {
-                        // Statements whose tag is trivial (known only from an unexecuted statement) can
-                        // be run in a special single-statement explicit mode. In this mode (`BEGIN;
-                        // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
-                        // delay execution until `COMMIT`.
-                        let mut resp_kind = Plan::generated_from((&stmt).into())
-                            .into_iter()
-                            .map(ExecuteResponse::generated_from)
-                            .flatten()
-                            .map(|r| r.try_into())
-                            .collect::<Vec<Result<ExecuteResponse, _>>>();
                         // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
-                        if !txn.is_implicit() && resp_kind.len() == 1 {
-                            if let Ok(resp) = resp_kind.swap_remove(0) {
+                        if !txn.is_implicit() {
+                            // Statements whose tag is trivial (known only from an unexecuted statement) can
+                            // be run in a special single-statement explicit mode. In this mode (`BEGIN;
+                            // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
+                            // delay execution until `COMMIT`.
+                            if let Ok(resp) = ExecuteResponse::try_from(&stmt) {
                                 if let Err(err) =
                                     txn.add_ops(TransactionOps::SingleStatement { stmt, params })
                                 {
