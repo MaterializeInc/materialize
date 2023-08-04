@@ -7103,12 +7103,15 @@ impl Catalog {
                     let prev = prev
                         .map(|x| x.to_string())
                         .unwrap_or_else(|| "none".to_string());
-                    info!(
-                        annotation_type = "system_configuration",
-                        system_configuration.var = name,
-                        system_configuration.prev = prev,
-                        system_configuration.new = var.value(),
-                    );
+                    let new = var.value();
+                    if prev != new {
+                        info!(
+                            annotation_type = "system_configuration",
+                            system_configuration.var = name,
+                            system_configuration.prev = prev,
+                            system_configuration.new = new,
+                        );
+                    }
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
