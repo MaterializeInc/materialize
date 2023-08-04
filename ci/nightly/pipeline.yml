@@ -469,7 +469,7 @@ steps:
     label: "Checks upgrade, whole-Mz restart"
     timeout_in_minutes: 60
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -491,7 +491,7 @@ steps:
     label: "Checks upgrade across two versions"
     timeout_in_minutes: 60
     agents:
-      queue: linux-x86_64
+      queue: linux-builder-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -502,7 +502,7 @@ steps:
     label: "Checks upgrade from X-2 directly to HEAD"
     timeout_in_minutes: 60
     agents:
-      queue: linux-x86_64
+      queue: linux-builder-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -513,7 +513,7 @@ steps:
     label: "Checks upgrade across four versions"
     timeout_in_minutes: 60
     agents:
-      queue: linux-x86_64
+      queue: linux-builder-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
