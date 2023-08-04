@@ -484,7 +484,7 @@ where
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
                 let query_root_span =
-                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                    tracing::info_span!(parent: None, "advance_ready", otel.name = message_name);
                 query_root_span.follows_from(tracing::Span::current());
                 self.query(sql).instrument(query_root_span).await?
             }
@@ -518,7 +518,7 @@ where
                     Ok(n) => ExecuteCount::Count(n),
                 };
                 let execute_root_span =
-                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                    tracing::info_span!(parent: None, "advance_ready", otel.name = message_name);
                 execute_root_span.follows_from(tracing::Span::current());
                 let state = self
                     .execute(
