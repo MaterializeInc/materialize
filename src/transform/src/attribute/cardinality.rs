@@ -74,7 +74,7 @@ pub trait Factorizer {
     fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp;
     /// Computes selectivity of the predicate `expr`, given that `unique_columns` are indexed/unique
     ///
-    /// The result should be in the range (0, 1.0]
+    /// The result should be in the range [0, 1.0]
     fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp;
     /// Computes selectivity for a filter
     fn filter(
@@ -254,11 +254,11 @@ impl Factorizer for WorstCaseFactorizer {
         for expr in predicates {
             let predicate_scaling_factor = self.predicate(expr, &unique_columns);
 
-            // constant scaling factors should be in (0,1]
+            // constant scaling factors should be in [0,1]
             debug_assert!(match predicate_scaling_factor {
-                SymExp::Constant(OrderedFloat(n)) => 0.0 < n && n <= 1.0,
+                SymExp::Constant(OrderedFloat(n)) => 0.0 <= n && n <= 1.0,
                 _ => true,
-            });
+            }, "predicate scaling factor {predicate_scaling_factor} should be in the range [0,1]");
 
             factor = factor * predicate_scaling_factor;
         }
