@@ -355,7 +355,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         //  * The collection is a subscribe, in which case we will emit a
         //    `SubscribeResponse::Dropped` independently.
         //  * The collection has already advanced to the empty frontier, in which case
-        //    the final `FrontierUppers` response already serves the purpose of reporting
+        //    the final `FrontierUpper` response already serves the purpose of reporting
         //    the end of the dataflow.
         if !collection.is_subscribe() && !collection.reported_frontier().is_empty() {
             self.compute_state.dropped_collections.push(id);
@@ -475,8 +475,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             collection.set_reported_frontier(new_reported_frontier);
         }
 
-        if !new_uppers.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
+        for (id, upper) in new_uppers {
+            self.send_compute_response(ComputeResponse::FrontierUpper { id, upper });
         }
     }
 
@@ -488,18 +488,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         // advanced to the empty frontier by announcing that it has advanced to the empty
         // frontier. We should introduce a new compute response variant that has the right
         // semantics.
-        let mut new_uppers = Vec::with_capacity(dropped_collections.len());
         for id in dropped_collections {
             // Sanity check: A collection that was dropped should not exist.
             assert!(
                 !self.compute_state.collection_exists(id),
                 "tried to report a dropped collection that still exists: {id}"
             );
-            new_uppers.push((id, Antichain::new()));
-        }
-
-        if !new_uppers.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
+            self.send_compute_response(ComputeResponse::FrontierUpper {
+                id,
+                upper: Antichain::new(),
+            });
         }
     }
 

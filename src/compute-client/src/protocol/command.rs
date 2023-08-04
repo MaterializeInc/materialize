@@ -119,7 +119,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// should prefer panicking over producing incorrect results.
     ///
     /// After receiving a `CreateDataflow` command, if the created dataflow exports indexes or
-    /// storage sinks, the replica must produce [`FrontierUppers`] responses that report the
+    /// storage sinks, the replica must produce [`FrontierUpper`] responses that report the
     /// advancement of the `upper` frontiers of these compute collections.
     ///
     /// After receiving a `CreateDataflow` command, if the created dataflow exports subscribes, the
@@ -130,7 +130,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`source_imports`]: DataflowDescription::source_imports
     /// [`index_imports`]: DataflowDescription::index_imports
     /// [`as_of`]: DataflowDescription::as_of
-    /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
+    /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
     CreateDataflow(DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>),
@@ -161,10 +161,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// compute collections.
     ///
     /// A replica that receives an `AllowCompaction` command with the empty frontier must
-    /// eventually respond with a [`FrontierUppers`] response reporting the empty frontier for the
+    /// eventually respond with a [`FrontierUpper`] response reporting the empty frontier for the
     /// same collection. ([#16275])
     ///
-    /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
+    /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     AllowCompaction {
         id: GlobalId,

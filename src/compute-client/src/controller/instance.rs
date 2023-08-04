@@ -1061,8 +1061,8 @@ where
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
-            ComputeResponse::FrontierUppers(list) => {
-                self.handle_frontier_uppers(list, replica_id);
+            ComputeResponse::FrontierUpper { id, upper } => {
+                self.handle_frontier_upper(id, upper, replica_id);
                 None
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
@@ -1093,43 +1093,39 @@ where
         }
     }
 
-    fn handle_frontier_uppers(
+    fn handle_frontier_upper(
         &mut self,
-        list: Vec<(GlobalId, Antichain<T>)>,
+        id: GlobalId,
+        new_frontier: Antichain<T>,
         replica_id: ReplicaId,
     ) {
-        // According to the compute protocol, replicas are not allowed to send `FrontierUppers`
+        // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
-        let mut updates = Vec::with_capacity(list.len());
-        for (id, new_frontier) in list {
-            let Ok(coll) = self.compute.collection(id) else {
+        let Ok(coll) = self.compute.collection(id) else {
                 tracing::warn!(
                     ?replica_id,
                     "Frontier update for unknown collection {id}: {:?}",
                     new_frontier.elements(),
                 );
                 tracing::error!("Replica reported an untracked collection frontier");
-                continue;
+                return;
             };
 
-            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
-                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
-                    tracing::warn!(
-                        ?replica_id,
-                        "Frontier of collection {id} regressed: {:?} -> {:?}",
-                        old_frontier.elements(),
-                        new_frontier.elements(),
-                    );
-                    tracing::error!("Replica reported a regressed collection frontier");
-                    continue;
-                }
+        if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
+            if !PartialOrder::less_equal(old_frontier, &new_frontier) {
+                tracing::warn!(
+                    ?replica_id,
+                    "Frontier of collection {id} regressed: {:?} -> {:?}",
+                    old_frontier.elements(),
+                    new_frontier.elements(),
+                );
+                tracing::error!("Replica reported a regressed collection frontier");
+                return;
             }
-
-            updates.push((id, new_frontier));
         }
 
-        self.update_write_frontiers(replica_id, &updates);
+        self.update_write_frontiers(replica_id, &[(id, new_frontier)]);
     }
 
     fn handle_peek_response(

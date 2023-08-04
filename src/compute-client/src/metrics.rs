@@ -391,7 +391,7 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `ComputeResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
-    frontier_uppers: M,
+    frontier_upper: M,
     peek_response: M,
     subscribe_response: M,
 }
@@ -402,7 +402,7 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
-            frontier_uppers: build_metric("frontier_uppers"),
+            frontier_upper: build_metric("frontier_upper"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
         }
@@ -412,7 +412,7 @@ impl<M> ResponseMetrics<M> {
         use crate::protocol::response::proto_compute_response::Kind::*;
 
         match proto.kind.as_ref().unwrap() {
-            FrontierUppers(_) => &self.frontier_uppers,
+            FrontierUpper(_) => &self.frontier_upper,
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
         }

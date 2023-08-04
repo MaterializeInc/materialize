@@ -108,7 +108,6 @@
 //! [`CancelPeek`]: self::command::ComputeCommand::CancelPeek
 //! [`UpdateConfiguration`]: self::command::ComputeCommand::UpdateConfiguration
 //! [`ComputeResponse`]: self::response::ComputeResponse
-//! [`FrontierUppers`]: self::response::ComputeResponse::FrontierUppers
 //! [`Canceled`]: self::response::PeekResponse::Canceled
 //! [`SubscribeResponse::DroppedAt`]: self::response::SubscribeResponse::DroppedAt
 

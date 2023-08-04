@@ -14,6 +14,7 @@ use std::num::NonZeroUsize;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_client::client::ProtoTrace;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -34,17 +35,16 @@ include!(concat!(
 /// [`ComputeCommand`]: super::command::ComputeCommand
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
-    /// `FrontierUppers` announces the advancement of the upper frontiers of the specified compute
-    /// collections. The response contains a mapping of collection IDs to their new upper
-    /// frontiers.
+    /// `FrontierUpper` announces the advancement of the upper frontier of the specified compute
+    /// collection. The response contain a collection ID and that collection's new upper frontier.
     ///
-    /// Upon receiving a `FrontierUppers` response, the controller may assume that the replica has
-    /// finished computing the given collections up to at least the given frontiers. It may also
-    /// assume that the replica has finished reading from the collections’ inputs up to those
-    /// frontiers.
+    /// Upon receiving a `FrontierUpper` response, the controller may assume that the replica has
+    /// finished computing the given collection up to at least the given frontier. It may also
+    /// assume that the replica has finished reading from the collection’s inputs up to that
+    /// frontier.
     ///
-    /// Replicas must send `FrontierUppers` responses for compute collections that are indexes or
-    /// storage sinks. Replicas must not send `FrontierUppers` responses for subscribes.
+    /// Replicas must send `FrontierUpper` responses for compute collections that are indexes or
+    /// storage sinks. Replicas must not send `FrontierUpper` responses for subscribes.
     ///
     /// Replicas must never report regressing frontiers. Specifically:
     ///
@@ -53,7 +53,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * Subsequent reported frontiers for a collection must not be less than any frontier
     ///     reported previously for the same collection.
     ///
-    /// Replicas must send a `FrontierUppers` response reporting advancement to the empty frontier
+    /// Replicas must send a `FrontierUpper` response reporting advancement to the empty frontier
     /// for a collection in two cases:
     ///
     ///   * The collection has advanced to the empty frontier (e.g. because its inputs have advanced
@@ -64,9 +64,9 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// Once a collection was reported to have been advanced to the empty upper frontier:
     ///
     ///   * It must no longer read from its inputs.
-    ///   * The replica must not send further `FrontierUppers` responses for that collection.
+    ///   * The replica must not send further `FrontierUpper` responses for that collection.
     ///
-    /// The replica must not send `FrontierUppers` responses for collections that have not
+    /// The replica must not send `FrontierUpper` responses for collections that have not
     /// been created previously by a [`CreateDataflow` command] or by a [`CreateInstance`
     /// command].
     ///
@@ -74,7 +74,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
+    FrontierUpper { id: GlobalId, upper: Antichain<T> },
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
     /// a `Uuid` that matches the command's [`Peek::uuid`].
@@ -135,7 +135,10 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
         use proto_compute_response::*;
         ProtoComputeResponse {
             kind: Some(match self {
-                ComputeResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                ComputeResponse::FrontierUpper { id, upper } => FrontierUpper(ProtoTrace {
+                    id: Some(id.into_proto()),
+                    upper: Some(upper.into_proto()),
+                }),
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
                         id: Some(id.into_proto()),
@@ -156,9 +159,10 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
         match proto.kind {
-            Some(FrontierUppers(traces)) => {
-                Ok(ComputeResponse::FrontierUppers(traces.into_rust()?))
-            }
+            Some(FrontierUpper(trace)) => Ok(ComputeResponse::FrontierUpper {
+                id: trace.id.into_rust_if_some("ProtoTrace::id")?,
+                upper: trace.upper.into_rust_if_some("ProtoTrace::upper")?,
+            }),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
@@ -183,8 +187,8 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
-                .prop_map(ComputeResponse::FrontierUppers)
+            (any::<GlobalId>(), any_antichain())
+                .prop_map(|(id, upper)| ComputeResponse::FrontierUpper { id, upper })
                 .boxed(),
             (any_uuid(), any::<PeekResponse>())
                 .prop_map(|(id, resp)| {
