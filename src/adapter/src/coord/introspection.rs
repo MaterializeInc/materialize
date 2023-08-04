@@ -19,10 +19,11 @@
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
 use mz_expr::CollectionPlan;
+use mz_repr::explain::Explainee;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
-use mz_sql::plan::{Plan, SubscribeFrom};
+use mz_sql::plan::{ExplainPlan, Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE};
@@ -50,6 +51,14 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
                 SubscribeFrom::Id(_) => false,
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
+        ),
+        Plan::Explain(ExplainPlan {
+            raw_plan,
+            explainee: Explainee::Query,
+            ..
+        }) => (
+            raw_plan.depends_on(),
+            raw_plan.could_run_expensive_function(),
         ),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)

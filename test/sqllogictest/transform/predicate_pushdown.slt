@@ -396,10 +396,12 @@ Explained Query:
               Map ("materialized-view") // { arity: 9 }
                 Get mz_catalog.mz_materialized_views // { arity: 8 }
 
-Source mz_catalog.mz_views
-  filter=(true)
 Source mz_catalog.mz_materialized_views
   filter=(true)
+
+Used Indexes:
+  - mz_internal.mz_show_schemas_ind
+  - mz_internal.mz_show_views_ind
 
 EOF
 

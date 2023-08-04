@@ -71,6 +71,19 @@ Explained Query (fast path):
 
 EOF
 
+# Test introspection queries (index found based on cluster auto-routing).
+query T multiline
+EXPLAIN SELECT * FROM mz_internal.mz_source_status_history
+----
+Explained Query (fast path):
+  Project (#1, #0, #2..=#4)
+    ReadExistingIndex mz_internal.mz_source_status_history_ind
+
+Used Indexes:
+  - mz_internal.mz_source_status_history_ind
+
+EOF
+
 # Test basic linear chains (fast path).
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
