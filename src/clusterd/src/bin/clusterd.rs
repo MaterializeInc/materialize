@@ -328,6 +328,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             &args.tracing.startup_log_filter,
             args.aws_external_id,
             secrets_reader,
+            None,
         ),
         StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit)?,
     )?;

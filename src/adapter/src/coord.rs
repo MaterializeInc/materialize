@@ -1321,6 +1321,7 @@ impl Coordinator {
         if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
             // Clean up any extraneous VpcEndpoints that shouldn't exist.
             let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
+            let existing_vpc_endpoints = BTreeSet::from_iter(existing_vpc_endpoints.into_keys());
             let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();
             let vpc_endpoints_to_remove = existing_vpc_endpoints.difference(&desired_vpc_endpoints);
             for id in vpc_endpoints_to_remove {

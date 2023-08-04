@@ -81,6 +81,7 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::ArgEnum;
+use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
@@ -176,6 +177,7 @@ pub struct KubernetesOrchestrator {
     secret_api: Api<Secret>,
     vpc_endpoint_api: Api<VpcEndpoint>,
     namespaces: Mutex<BTreeMap<String, Arc<dyn NamespacedOrchestrator>>>,
+    resource_reader: Arc<KubernetesResourceReader>,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -190,6 +192,8 @@ impl KubernetesOrchestrator {
         config: KubernetesOrchestratorConfig,
     ) -> Result<KubernetesOrchestrator, anyhow::Error> {
         let (client, kubernetes_namespace) = util::create_client(config.context.clone()).await?;
+        let resource_reader =
+            Arc::new(KubernetesResourceReader::new(config.context.clone()).await?);
         Ok(KubernetesOrchestrator {
             client: client.clone(),
             kubernetes_namespace,
@@ -197,6 +201,7 @@ impl KubernetesOrchestrator {
             secret_api: Api::default_namespaced(client.clone()),
             vpc_endpoint_api: Api::default_namespaced(client),
             namespaces: Mutex::new(BTreeMap::new()),
+            resource_reader,
         })
     }
 }

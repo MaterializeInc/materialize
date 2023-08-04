@@ -880,6 +880,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             (orchestrator, secrets_controller, None)
         }
     };
+    let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
@@ -1001,6 +1002,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     &args.tracing.startup_log_filter,
                     args.aws_external_id_prefix,
                     secrets_reader,
+                    cloud_resource_reader,
                 ),
                 tracing_handle,
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
