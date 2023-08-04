@@ -1261,8 +1261,15 @@ impl UnplannedSourceEnvelope {
                                 key_desc.with_names([key_name.to_string()])
                             }
                         };
-                        // In all cases the first column is the key
-                        (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
+                        let (key_desc, key) = match self {
+                            UnplannedSourceEnvelope::None(_) => (key_desc, None),
+                            // If we're applying the upsert logic the key column will be unique
+                            UnplannedSourceEnvelope::Upsert { .. } => {
+                                (key_desc.with_key(vec![0]), Some(vec![0]))
+                            }
+                            _ => unreachable!(),
+                        };
+                        (key_desc.concat(value_desc), key)
                     }
                 };
                 let desc = keyed.concat(metadata_desc);
