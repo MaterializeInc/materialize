@@ -1019,6 +1019,7 @@ where
                     // in bind. We don't do it in bind because I'm not sure what purpose it would
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
+                    println!("[btv] Portal state: NotStarted");
                     self.start_transaction(Some(1));
                     match self
                         .adapter_client
@@ -1052,17 +1053,54 @@ where
                 }
                 PortalState::InProgress(rows) => {
                     let rows = rows.take().expect("InProgress rows must be populated");
-                    self.send_rows(
-                        row_desc.expect("portal missing row desc on resumption"),
-                        portal_name,
-                        rows,
-                        max_rows,
-                        get_response,
-                        fetch_portal_name,
-                        timeout,
-                    )
-                    .await
-                    .map(|(state, _)| state)
+                    let (result, statement_ended_execution_reason) = match self
+                        .send_rows(
+                            row_desc.expect("portal missing row desc on resumption"),
+                            portal_name,
+                            rows,
+                            max_rows,
+                            get_response,
+                            fetch_portal_name,
+                            timeout,
+                        )
+                        .await
+                    {
+                        Err(e) => {
+                            // This is an error communicating with the connection.
+                            // We consider that to be a cancelation, rather than a query error.
+                            (Err(e), StatementEndedExecutionReason::Canceled)
+                        }
+                        Ok((ok, SendRowsEndedReason::Canceled)) => {
+                            (Ok(ok), StatementEndedExecutionReason::Canceled)
+                        }
+                        // NOTE: For now the `rows_returned` in
+                        // fetches is a bit confusing.  We record
+                        // `Some(n)` for the first fetch, where `n` is
+                        // the number of rows returned by the inner
+                        // execute (regardless of how many rows the
+                        // fetch fetched) , and `None` for subsequent fetches.
+                        //
+                        // This arguably makes sense since the rows
+                        // returned measures how much work the compute
+                        // layer had to do to satisfy the query, but
+                        // we should revisit it if/when we start
+                        // logging the inner execute separately.
+                        Ok((ok, SendRowsEndedReason::Success { rows_returned: _ })) => (
+                            Ok(ok),
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: None,
+                                execution_strategy: None,
+                            },
+                        ),
+                        Ok((ok, SendRowsEndedReason::Errored { error })) => {
+                            (Ok(ok), StatementEndedExecutionReason::Errored { error })
+                        }
+                    };
+                    if let Some(outer_ctx_extra) = outer_ctx_extra {
+                        self.adapter_client
+                            .retire_execute(outer_ctx_extra, statement_ended_execution_reason);
+                    }
+                    result
                 }
                 // FETCH is an awkward command for our current architecture. In Postgres it
                 // will extract <count> rows from the target portal, cache them, and return
@@ -1071,17 +1109,36 @@ where
                 // we must remember the number of rows that were returned. Use this tag to
                 // remember that information and return it.
                 PortalState::Completed(Some(tag)) => {
+                    println!("[btv] Portal state: Completed with tag {tag}");
                     let tag = tag.to_string();
+                    if let Some(outer_ctx_extra) = outer_ctx_extra {
+                        self.adapter_client.retire_execute(
+                            outer_ctx_extra,
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: None,
+                                execution_strategy: None,
+                            },
+                        );
+                    }
                     self.send(BackendMessage::CommandComplete { tag }).await?;
                     Ok(State::Ready)
                 }
                 PortalState::Completed(None) => {
+                    let error = format!(
+                        "portal {} cannot be run",
+                        Ident::new(portal_name).to_ast_string_stable()
+                    );
+                    if let Some(outer_ctx_extra) = outer_ctx_extra {
+                        self.adapter_client.retire_execute(
+                            outer_ctx_extra,
+                            StatementEndedExecutionReason::Errored {
+                                error: error.clone(),
+                            },
+                        );
+                    }
                     self.error(ErrorResponse::error(
                         SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-                        format!(
-                            "portal {} cannot be run",
-                            Ident::new(portal_name).to_ast_string_stable()
-                        ),
+                        error,
                     ))
                     .await
                 }
