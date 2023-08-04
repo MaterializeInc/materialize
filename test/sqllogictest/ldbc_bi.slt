@@ -3058,7 +3058,7 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     SELECT * FROM forward WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
   ),
   forward (src bigint, dst bigint, w double precision) AS (
-    SELECT DISTINCT ON (src, dst) src, dst, w 
+    SELECT DISTINCT ON (src, dst) src, dst, w
     FROM (
       SELECT f as src, f as dst, 0.0 as w FROM srcs
       UNION ALL
@@ -3074,7 +3074,7 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     SELECT * FROM reverse WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
   ),
   reverse (src bigint, dst bigint, w double precision) AS (
-    SELECT DISTINCT ON (src, dst) src, dst, w 
+    SELECT DISTINCT ON (src, dst) src, dst, w
     FROM (
       SELECT t as src, t as dst, 0.0 as w FROM dsts
       UNION ALL
@@ -3097,7 +3097,7 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     SELECT min(w) FROM paths
   )
 
-SELECT * 
+SELECT *
 FROM paths
 WHERE w = (SELECT MIN(w) FROM paths)
 ----
