@@ -11,7 +11,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -20,6 +20,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use mz_ore::collections::CollectionExt;
+use mz_ore::soft_assert;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
@@ -28,8 +30,9 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, PlanKind, WebhookValidation, WebhookValidationSecret};
+use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, WebhookValidation, WebhookValidationSecret};
 use mz_sql::session::vars::Var;
+use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{oneshot, watch};
 
@@ -483,7 +486,7 @@ impl fmt::Debug for AppendWebhookResponse {
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(EnumKind, Derivative)]
 #[derivative(Debug)]
-#[enum_kind(ExecuteResponseKind)]
+#[enum_kind(ExecuteResponseKind, derive(PartialOrd, Ord))]
 pub enum ExecuteResponse {
     /// The default privileges were altered.
     AlteredDefaultPrivileges,
@@ -614,6 +617,46 @@ pub enum ExecuteResponse {
     Updated(usize),
     /// A connection was validated.
     ValidatedConnection,
+}
+
+impl TryFrom<&Statement<Raw>> for ExecuteResponse {
+    type Error = ();
+
+    /// Returns Ok if this Statement always produces a single, trivial ExecuteResponse.
+    fn try_from(stmt: &Statement<Raw>) -> Result<Self, Self::Error> {
+        let resp_kinds = Plan::generated_from(stmt.into())
+            .into_iter()
+            .map(ExecuteResponse::generated_from)
+            .flatten()
+            .collect::<BTreeSet<ExecuteResponseKind>>();
+        let resps = resp_kinds
+            .iter()
+            .map(|r| (*r).try_into())
+            .collect::<Result<Vec<ExecuteResponse>, _>>();
+        // Check if this statement's possible plans yield exactly one possible ExecuteResponse.
+        if let Ok(resps) = resps {
+            if resps.len() == 1 {
+                return Ok(resps.into_element());
+            }
+        }
+        let resp = match stmt {
+            Statement::DropObjects(DropObjectsStatement { object_type, .. }) => {
+                ExecuteResponse::DroppedObject((*object_type).into())
+            }
+            Statement::AlterObjectRename(AlterObjectRenameStatement { object_type, .. })
+            | Statement::AlterOwner(AlterOwnerStatement { object_type, .. }) => {
+                ExecuteResponse::AlteredObject((*object_type).into())
+            }
+            _ => return Err(()),
+        };
+        // Ensure that if the planner ever adds possible plans we complain here.
+        soft_assert!(
+            resp_kinds.len() == 1
+                && resp_kinds.first().expect("must exist") == &ExecuteResponseKind::from(&resp),
+            "ExecuteResponses out of sync with planner"
+        );
+        Ok(resp)
+    }
 }
 
 impl TryInto<ExecuteResponse> for ExecuteResponseKind {

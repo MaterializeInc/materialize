@@ -775,3 +775,27 @@ SELECT 1
 
 statement ok
 ROLLBACK
+
+# Test ALTER and DROP which go through separate paths to determine the correct response.
+statement ok
+BEGIN
+
+statement ok
+ALTER SOURCE s RENAME TO v
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DROP SOURCE v
+
+statement ok
+COMMIT
+
+simple
+SHOW SOURCES
+----
+COMPLETE 0
