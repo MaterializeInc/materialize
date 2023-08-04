@@ -303,3 +303,53 @@ $ kafka-ingest topic=proto-structured
 key    id1  id2  measurement
 ----------------------------
 (1,2)  1    2    10
+
+#
+# Regression test for #20981
+#
+
+# For UPSERT sources with INCLUDE KEY, we expect the queries to
+# take advantage of the uniqueness propery of the key column.
+
+? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
+Explained Query:
+  Project (#0)
+    Get materialize.public.bareformatconfluent
+
+> CREATE DEFAULT INDEX ON bareformatconfluent;
+
+? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
+Explained Query (fast path):
+  Project (#0)
+    ReadExistingIndex materialize.public.bareformatconfluent_primary_idx
+
+Used Indexes:
+  - materialize.public.bareformatconfluent_primary_idx
+
+> CREATE SOURCE envelope_none_with_key
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-avro-data-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE KEY AS named
+  ENVELOPE NONE
+
+# For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
+# so we expect that query plans will contain an explicit Distinct group_by
+
+? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
+Explained Query:
+  Distinct group_by=[#0] monotonic
+    Project (#0)
+      Get materialize.public.envelope_none_with_key
+
+> CREATE DEFAULT INDEX ON envelope_none_with_key;
+
+? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
+Explained Query:
+  Distinct group_by=[#0] monotonic
+    Project (#0)
+      Get materialize.public.envelope_none_with_key
+
+Used Indexes:
+  - materialize.public.envelope_none_with_key_primary_idx
