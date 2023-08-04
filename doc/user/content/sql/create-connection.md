@@ -574,6 +574,47 @@ The privileges required to execute this statement are:
 - `USAGE` privileges on all connections and secrets used in the connection definition.
 - `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
 
+## Connection validation {#connection-validation}
+
+For the connection types that don't require additional setup steps Materialize
+will validate their connection and authentication parameters on creation to
+ensure that it can connect to the external system. If this validation step
+fails, the creation of the connection will also fail and the validation error
+will be returned.
+
+For connection types that do require additional setup steps after creation
+Materialize does not run validation on creation. To validate these connection
+types once the setup steps are completed you can use the [`VALIDATE
+CONNECTION`](/sql/validate-connection) command to check if everything is set up
+correctly.
+
+### Default validation behavior
+
+The following table summarizes the connection types for which Materialize will
+automatically validate their parameters on creation:
+
+Connection Type             | Validates by default |
+----------------------------|----------------------|
+PostgreSQL                  | ✓                    |
+Kafka                       | ✓                    |
+Confluent Schema Registry   | ✓                    |
+SSH Tunnel                  |                      |
+AWS PrivateLink             |                      |
+
+Regardless of the default behavior, all connection types allow you to change
+whether validation happens on creation by using the `VALIDATE` [with
+option](#with-options). This can be useful in situation where the parameters
+are known to be correct but the external system is unavailable at the time of
+creation.
+
+## `WITH` options {#with-options}
+
+All connection types support the following `WITH` options:
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be perfomed as part of this creation statement.
+
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
