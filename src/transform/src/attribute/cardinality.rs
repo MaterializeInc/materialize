@@ -255,10 +255,13 @@ impl Factorizer for WorstCaseFactorizer {
             let predicate_scaling_factor = self.predicate(expr, &unique_columns);
 
             // constant scaling factors should be in [0,1]
-            debug_assert!(match predicate_scaling_factor {
-                SymExp::Constant(OrderedFloat(n)) => 0.0 <= n && n <= 1.0,
-                _ => true,
-            }, "predicate scaling factor {predicate_scaling_factor} should be in the range [0,1]");
+            debug_assert!(
+                match predicate_scaling_factor {
+                    SymExp::Constant(OrderedFloat(n)) => 0.0 <= n && n <= 1.0,
+                    _ => true,
+                },
+                "predicate scaling factor {predicate_scaling_factor} should be in the range [0,1]"
+            );
 
             factor = factor * predicate_scaling_factor;
         }
