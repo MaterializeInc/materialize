@@ -214,7 +214,6 @@ All metrics in this list have an `instance_id` label identifying the compute ins
 
 The following list describes the metrics we want to collect in the replicas.
 These metrics are either exported directly or from introspection sources using the prometheus-exporter.
-All metrics in this list have a `worker_id` label identifying the Timely worker.
 
 * Command history
   * [x] `mz_compute_replica_history_command_count`
@@ -238,57 +237,55 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Description**: The total time spent computing dataflows, by dataflow.
     * **Export Type**: prometheus-exporter, through the `mz_scheduling_elapsed` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to dataflows that have an elapsed time of more than 1 second.
-  * [x] `mz_dataflow_join_elapsed_seconds_total`
-    * **Type**: gauge
-    * **Labels**: `worker_id`, `collection_id`
-    * **Description**: The total time spent computing joins in dataflows, by dataflow.
-    * **Export Type**: prometheus-exporter, through the `mz_scheduling_elapsed` introspection source
-    * **Notes**: To reduce the cardinality of this metric, we limit it to joins that have an elapsed time of more than 1 second.
-  * [x] `mz_dataflow_shutdown_duration_seconds`
+  * [ ] `mz_dataflow_shutdown_duration_seconds`
     * **Type**: histogram
     * **Labels**: `worker_id`
     * **Description**: A histogram of dataflow shutdown durations since restart.
     * **Export Type**: prometheus-exporter, through the `mz_dataflow_shutdown_durations_histogram` introspection source
   * [x] `mz_dataflow_frontiers`
     * **Type**: gauge
-    * **Labels**: `worker_id`, `collection_id`
+    * **Labels**: `collection_id`
     * **Description**: The frontiers of dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_compute_frontiers` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
   * [x] `mz_dataflow_import_frontiers`
     * **Type**: gauge
-    * **Labels**: `worker_id`, `collection_id`
+    * **Labels**: `collection_id`
     * **Description**: The import frontiers of dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_compute_import_frontiers` introspection source
     * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
-  * [x] `mz_dataflow_initial_output_duration_seconds`
+  * [ ] `mz_dataflow_initial_output_duration_seconds`
     * **Type**: gauge
-    * **Labels**: `worker_id`, `collection_id`
+    * **Labels**: `collection_id`
     * **Description**: The time from dataflow installation up to when the first output was produced.
     * **Export Type**: direct
     * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
                  See also [Dataflow Hydration Time](#dataflow-hydration-time).
 * Arrangements
-  * [ ] `mz_arrangement_count`
+  * [x] `mz_arrangement_count`
     * **Type**: gauge
-    * **Labels**: `worker_id`
-    * **Description**: The number of arrangements in all dataflows.
+    * **Labels**: `collection_id`
+    * **Description**: The number of arrangements in a dataflow.
     * **Export Type**: prometheus-exporter, through the `mz_arrangement_sizes` introspection source
-  * [ ] `mz_arrangement_record_count`
+    * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
+  * [x] `mz_arrangement_record_count`
     * **Type**: gauge
-    * **Labels**: `worker_id`
-    * **Description**: The number of records in all arrangements in all dataflows.
+    * **Labels**: `worker_id`, `collection_id`
+    * **Description**: The number of records in all arrangements in a dataflow.
     * **Export Type**: prometheus-exporter, through the `mz_arrangement_sizes` introspection source
-  * [ ] `mz_arrangement_batch_count`
+    * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
+  * [x] `mz_arrangement_batch_count`
     * **Type**: gauge
-    * **Labels**: `worker_id`
+    * **Labels**: `worker_id`, `collection_id`
     * **Description**: The number of batches in all arrangements in all dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_arrangement_sizes` introspection source
+    * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
   * [ ] `mz_arrangement_size_bytes`
     * **Type**: gauge
-    * **Labels**: `worker_id`
+    * **Labels**: `worker_id`, `collection_id`
     * **Description**: The size of all arrangements in all dataflows.
     * **Export Type**: prometheus-exporter, through the `mz_arrangement_sizes` introspection source
+    * **Notes**: To reduce the cardinality of this metric, we limit it to non-transient dataflows.
   * [x] `mz_arrangement_maintenance_seconds_total`
     * **Type**: counter
     * **Labels**: `worker_id`
@@ -312,12 +309,12 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
     * **Notes**: This metric exists already as `mz_compute_reconciliation_replaced_dataflows`.
                  Proposing to rename to follow the Prometheus naming conventions, and adding a worker label.
 * Peeks
-  * [ ] `mz_compute_replica_peek_count`
+  * [x] `mz_compute_replica_peek_count`
     * **Type**: gauge
     * **Labels**: `worker_id`
     * **Description**: The number of pending peeks.
     * **Export Type**: prometheus-exporter, through the `mz_active_peeks` introspection source
-  * [ ] `mz_compute_replica_peek_duration_seconds`
+  * [x] `mz_compute_replica_peek_duration_seconds`
     * **Type**: histogram
     * **Labels**: `worker_id`
     * **Description**: A histogram of peek durations since restart.
@@ -326,10 +323,10 @@ All metrics in this list have a `worker_id` label identifying the Timely worker.
                  Proposing to make it report seconds instead of nanoseconds, in line with the Prometheus conventions.
                  Also proposing to add the `compute_replica` prefix, to make it clear where the metric is collected.
 * Scheduling
-  * [ ] `mz_compute_replica_park_duration_seconds`
-    * **Type**: histogram
+  * [x] `mz_compute_replica_park_duration_seconds_total`
+    * **Type**: gauge
     * **Labels**: `worker_id`
-    * **Description**: A histogram of worker park durations since restart.
+    * **Description**: The total time workers were parked since restart.
     * **Export Type**: prometheus-exporter, through the `mz_scheduling_parks_histogram` introspection source
 
 #### Per-dataflow Metrics
