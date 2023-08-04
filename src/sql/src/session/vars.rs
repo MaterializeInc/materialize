@@ -1569,6 +1569,10 @@ impl SessionVars {
             Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
+        } else if name == MAX_IDENTIFIER_LENGTH.name {
+            Err(VarError::ReadOnlyParameter(
+                MAX_IDENTIFIER_LENGTH.name.as_str(),
+            ))
         } else {
             self.vars
                 .get_mut(name)
