@@ -116,7 +116,7 @@ class ConfigureMz(MzcomposeAction):
         if (
             MzVersion.parse("0.58.0-dev")
             <= e.current_mz_version
-            <= MzVersion.parse("0.63.0-dev")
+            <= MzVersion.parse("0.63.99")
         ):
             system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
 
