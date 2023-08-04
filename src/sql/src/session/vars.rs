@@ -1127,6 +1127,13 @@ const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_consolidate_after_union_negate"),
+    value: &true,
+    description: "consolidation after Unions that have a Negated input (Materialize).",
+    internal: false,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -1958,6 +1965,7 @@ impl SystemVars {
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
+            .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
@@ -2500,6 +2508,10 @@ impl SystemVars {
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
+    }
+
+    pub fn enable_consolidate_after_union_negate(&self) -> bool {
+        *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
     }
 
     /// Returns the `enable_default_connection_validation` configuration parameter.
