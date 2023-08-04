@@ -37,5 +37,9 @@ if ! try_last_failed; then
     done
 fi
 try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
-try bin/pyactivate -m pytest -qq --doctest-modules misc/python
+
+if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
+  try bin/pyactivate -m pytest -qq --doctest-modules misc/python
+fi
+
 try_finish
