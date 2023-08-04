@@ -29,7 +29,7 @@ use crate::catalog::{
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
+    ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -45,6 +45,7 @@ pub(crate) mod show;
 mod tcl;
 mod validate;
 
+use crate::session::vars;
 pub(crate) use ddl::PgConfigOptionExtracted;
 use mz_repr::role_id::RoleId;
 
@@ -252,6 +253,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
+    resolved_ids: &ResolvedIds,
 ) -> Result<Plan, PlanError> {
     let param_types = params
         .types
@@ -268,6 +270,20 @@ pub fn plan(
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
     };
+
+    if resolved_ids
+        .0
+        .iter()
+        // Filter out items that may not have been created yet, such as sub-sources.
+        .filter_map(|id| catalog.try_get_item(id))
+        .any(|item| {
+            item.func().is_ok()
+                && item.name().qualifiers.schema_spec
+                    == SchemaSpecifier::Id(*catalog.get_mz_internal_schema_id())
+        })
+    {
+        scx.require_feature_flag(&vars::ENABLE_DANGEROUS_FUNCTIONS)?;
+    }
 
     let plan = match stmt {
         // DDL statements.

@@ -1093,6 +1093,11 @@ impl<'a> RunnerInner<'a> {
                 )
                 .await?;
         }
+
+        // Dangerous functions are useful for tests so we enable it for all tests.
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_dangerous_functions = on", &[])
+            .await?;
         Ok(())
     }
 

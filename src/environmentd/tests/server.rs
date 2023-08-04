@@ -2011,6 +2011,7 @@ fn test_github_20262() {
 fn test_cancel_read_then_write() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -2266,7 +2267,11 @@ fn webhook_concurrency_limit() {
     let config = util::Config::default().with_concurrent_webhook_req_count(concurrency_limit);
     let server = util::start_server(config).unwrap();
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_webhook_sources", "enable_unstable_dependencies"]);
+    server.enable_feature_flags(&[
+        "enable_webhook_sources",
+        "enable_unstable_dependencies",
+        "enable_dangerous_functions",
+    ]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
