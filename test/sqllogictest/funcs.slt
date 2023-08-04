@@ -1627,13 +1627,16 @@ statement error executing potentially dangerous functions is not supported
 SELECT mz_internal.mz_panic('hello')
 
 statement ok
-CREATE TABLE dangerous_table (a INT)
+CREATE TABLE dangerous_table (a INT, b TEXT)
 
 statement ok
-INSERT INTO dangerous_table VALUES (1)
+INSERT INTO dangerous_table (a) VALUES (1)
 
 statement error executing potentially dangerous functions is not supported
 SELECT mz_internal.mz_any(a) FROM dangerous_table
+
+statement error executing potentially dangerous functions is not supported
+INSERT INTO dangerous_table (b) VALUES (mz_internal.mz_panic('hello'))
 
 statement ok
 DROP TABLE dangerous_table
