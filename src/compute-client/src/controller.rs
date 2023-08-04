@@ -19,7 +19,7 @@
 //!
 //! The state maintained for a compute instance can be viewed as a partial map from `GlobalId` to
 //! collection. It is an error to use an identifier before it has been "created" with
-//! `create_dataflows()`. Once created, the controller holds a read capability for each output
+//! `create_dataflow()`. Once created, the controller holds a read capability for each output
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
 //! collection is dropped with either `drop_collections()` or by allowing compaction to the empty
 //! frontier.
@@ -29,7 +29,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::time::Duration;
 
@@ -449,12 +449,12 @@ where
     /// It installs read dependencies from the outputs to the inputs, so that the input read
     /// capabilities will be held back to the output read capabilities, ensuring that we are
     /// always able to return to a state that can serve the output read capabilities.
-    pub fn create_dataflows(
+    pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance(instance_id)?.create_dataflows(dataflows)?;
+        self.instance(instance_id)?.create_dataflow(dataflow)?;
         Ok(())
     }
 
@@ -494,23 +494,21 @@ where
         Ok(())
     }
 
-    /// Cancel existing peek requests.
+    /// Cancel an existing peek request.
     ///
     /// Canceling a peek is best effort. The caller may see any of the following
     /// after canceling a peek request:
     ///
     ///   * A `PeekResponse::Rows` indicating that the cancellation request did
-    ///    not take effect in time and the query succeeded.
-    ///
+    ///     not take effect in time and the query succeeded.
     ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
-    ///
     ///   * No `PeekResponse` at all.
-    pub fn cancel_peeks(
+    pub fn cancel_peek(
         &mut self,
         instance_id: ComputeInstanceId,
-        uuids: BTreeSet<Uuid>,
+        uuid: Uuid,
     ) -> Result<(), InstanceMissing> {
-        self.instance(instance_id)?.cancel_peeks(uuids);
+        self.instance(instance_id)?.cancel_peek(uuid);
         Ok(())
     }
 

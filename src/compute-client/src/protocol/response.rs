@@ -67,11 +67,11 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * The replica must not send further `FrontierUppers` responses for that collection.
     ///
     /// The replica must not send `FrontierUppers` responses for collections that have not
-    /// been created previously by a [`CreateDataflows` command] or by a [`CreateInstance`
+    /// been created previously by a [`CreateDataflow` command] or by a [`CreateInstance`
     /// command].
     ///
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
-    /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
+    /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
@@ -81,15 +81,15 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///
     /// The replica must send exactly one `PeekResponse` for every [`Peek` command] it received.
     ///
-    /// If the replica did not receive a [`CancelPeeks` command] for a peek, it must not send a
-    /// [`Canceled`] response for that peek. If the replica did receive a [`CancelPeeks` command]
+    /// If the replica did not receive a [`CancelPeek` command] for a peek, it must not send a
+    /// [`Canceled`] response for that peek. If the replica did receive a [`CancelPeek` command]
     /// for a peek, it may send any of the three [`PeekResponse`] variants.
     ///
     /// The replica must not send `PeekResponse`s for peek IDs that were not previously specified
     /// in a [`Peek` command].
     ///
     /// [`Peek` command]: super::command::ComputeCommand::Peek
-    /// [`CancelPeeks` command]: super::command::ComputeCommand::CancelPeeks
+    /// [`CancelPeek` command]: super::command::ComputeCommand::CancelPeek
     /// [`Peek::uuid`]: super::command::Peek::uuid
     /// [`Canceled`]: PeekResponse::Canceled
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
@@ -97,7 +97,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// `SubscribeResponse` reports the results emitted by an active subscribe over some time
     /// interval.
     ///
-    /// For each subscribe that was installed by a previous [`CreateDataflows` command], the
+    /// For each subscribe that was installed by a previous [`CreateDataflow` command], the
     /// replica must emit [`Batch`] responses that cover the entire time interval from the
     /// minimum time until the subscribe advances to the empty frontier or is
     /// dropped. The time intervals of consecutive [`Batch`]es must be increasing, contiguous,
@@ -120,11 +120,11 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * The replica must not send further `SubscribeResponse`s for that subscribe.
     ///
     /// The replica must not send `SubscribeResponse`s for subscribes that have not been
-    /// created previously by a [`CreateDataflows` command].
+    /// created previously by a [`CreateDataflow` command].
     ///
     /// [`Batch`]: SubscribeResponse::Batch
     /// [`DroppedAt`]: SubscribeResponse::DroppedAt
-    /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
+    /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }

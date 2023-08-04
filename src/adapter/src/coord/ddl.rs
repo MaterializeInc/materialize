@@ -388,7 +388,7 @@ impl Coordinator {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
                         self.controller
                             .active_compute()
-                            .cancel_peeks(pending_peek.cluster_id, vec![uuid].into_iter().collect())
+                            .cancel_peek(pending_peek.cluster_id, uuid)
                             .unwrap_or_terminate("unable to cancel peek");
                         // Client may have left.
                         let _ = pending_peek.sender.send(PeekResponse::Error(format!(

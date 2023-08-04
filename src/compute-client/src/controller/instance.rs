@@ -104,7 +104,7 @@ pub(super) struct Instance<T> {
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
-    /// [`ActiveInstance::create_dataflows`].
+    /// [`ActiveInstance::create_dataflow`].
     ///
     /// Entries are removed when two conditions are fulfilled:
     ///
@@ -130,7 +130,7 @@ pub(super) struct Instance<T> {
     /// Currently in-progress subscribes.
     ///
     /// New entries are added for all subscribes exported from dataflows created through
-    /// [`ActiveInstance::create_dataflows`].
+    /// [`ActiveInstance::create_dataflow`].
     ///
     /// The entry for a subscribe is removed once at least one replica has reported the subscribe
     /// to have advanced to the empty frontier or to have been dropped, implying that no further
@@ -527,178 +527,171 @@ where
     }
 
     /// Create the described dataflows and initializes state for their output.
-    pub fn create_dataflows(
+    pub fn create_dataflow(
         &mut self,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
-        // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
+        // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
-        for dataflow in dataflows.iter() {
-            let as_of = dataflow
-                .as_of
-                .as_ref()
-                .ok_or(DataflowCreationError::MissingAsOf)?;
+        let as_of = dataflow
+            .as_of
+            .as_ref()
+            .ok_or(DataflowCreationError::MissingAsOf)?;
 
-            // When we initialize per-replica write frontiers (and thereby the per-replica read
-            // capabilities), we cannot use the `as_of` because of reconciliation: Existing
-            // slow replicas might be reading from the inputs at times before the `as_of` and we
-            // would rather not crash them by allowing their inputs to compact too far. So instead
-            // we initialize the per-replica write frontiers with the smallest possible value that
-            // is a valid read capability for all inputs, which is the join of all input `since`s.
-            let mut replica_write_frontier = Antichain::from_elem(T::minimum());
+        // When we initialize per-replica write frontiers (and thereby the per-replica read
+        // capabilities), we cannot use the `as_of` because of reconciliation: Existing
+        // slow replicas might be reading from the inputs at times before the `as_of` and we
+        // would rather not crash them by allowing their inputs to compact too far. So instead
+        // we initialize the per-replica write frontiers with the smallest possible value that
+        // is a valid read capability for all inputs, which is the join of all input `since`s.
+        let mut replica_write_frontier = Antichain::from_elem(T::minimum());
 
-            // Record all transitive dependencies of the outputs.
-            let mut storage_dependencies = Vec::new();
-            let mut compute_dependencies = Vec::new();
+        // Record all transitive dependencies of the outputs.
+        let mut storage_dependencies = Vec::new();
+        let mut compute_dependencies = Vec::new();
 
-            // Validate sources have `since.less_equal(as_of)`.
-            for source_id in dataflow.source_imports.keys() {
-                let since = &self
-                    .storage_controller
-                    .collection(*source_id)
-                    .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
-                    .read_capabilities
-                    .frontier();
-                if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
-                    Err(DataflowCreationError::SinceViolation(*source_id))?;
-                }
-
-                storage_dependencies.push(*source_id);
-                replica_write_frontier.join_assign(&since.to_owned());
+        // Validate sources have `since.less_equal(as_of)`.
+        for source_id in dataflow.source_imports.keys() {
+            let since = &self
+                .storage_controller
+                .collection(*source_id)
+                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
+                .read_capabilities
+                .frontier();
+            if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
+                Err(DataflowCreationError::SinceViolation(*source_id))?;
             }
 
-            // Validate indexes have `since.less_equal(as_of)`.
-            // TODO(mcsherry): Instead, return an error from the constructing method.
-            for index_id in dataflow.index_imports.keys() {
-                let collection = self.compute.collection(*index_id)?;
-                let since = collection.read_capabilities.frontier();
-                if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
-                    Err(DataflowCreationError::SinceViolation(*index_id))?;
-                }
+            storage_dependencies.push(*source_id);
+            replica_write_frontier.join_assign(&since.to_owned());
+        }
 
-                compute_dependencies.push(*index_id);
-                replica_write_frontier.join_assign(&since.to_owned());
+        // Validate indexes have `since.less_equal(as_of)`.
+        // TODO(mcsherry): Instead, return an error from the constructing method.
+        for index_id in dataflow.index_imports.keys() {
+            let collection = self.compute.collection(*index_id)?;
+            let since = collection.read_capabilities.frontier();
+            if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
+                Err(DataflowCreationError::SinceViolation(*index_id))?;
             }
 
-            // Canonicalize dependencies.
-            // Probably redundant based on key structure, but doing for sanity.
-            storage_dependencies.sort();
-            storage_dependencies.dedup();
-            compute_dependencies.sort();
-            compute_dependencies.dedup();
+            compute_dependencies.push(*index_id);
+            replica_write_frontier.join_assign(&since.to_owned());
+        }
 
-            // We will bump the internals of each input by the number of dependents (outputs).
-            let outputs = dataflow.sink_exports.len() + dataflow.index_exports.len();
-            let mut changes = ChangeBatch::new();
-            for time in as_of.iter() {
-                // TODO(benesch): fix this dangerous use of `as`.
-                #[allow(clippy::as_conversions)]
-                changes.update(time.clone(), outputs as i64);
-            }
-            // Update storage read capabilities for inputs.
-            let mut storage_read_updates = storage_dependencies
-                .iter()
-                .map(|id| (*id, changes.clone()))
-                .collect();
-            self.storage_controller
-                .update_read_capabilities(&mut storage_read_updates);
-            // Update compute read capabilities for inputs.
-            let mut compute_read_updates = compute_dependencies
-                .iter()
-                .map(|id| (*id, changes.clone()))
-                .collect();
-            self.update_read_capabilities(&mut compute_read_updates);
+        // Canonicalize dependencies.
+        // Probably redundant based on key structure, but doing for sanity.
+        storage_dependencies.sort();
+        storage_dependencies.dedup();
+        compute_dependencies.sort();
+        compute_dependencies.dedup();
 
-            // Install collection state for each of the exports.
-            let mut updates = Vec::new();
-            for export_id in dataflow.export_ids() {
-                self.compute.collections.insert(
-                    export_id,
-                    CollectionState::new(
-                        as_of.clone(),
-                        storage_dependencies.clone(),
-                        compute_dependencies.clone(),
-                    ),
-                );
-                updates.push((export_id, replica_write_frontier.clone()));
-            }
-            // Initialize tracking of replica frontiers.
-            let replica_ids: Vec<_> = self.compute.replica_ids().collect();
-            for replica_id in replica_ids {
-                self.update_write_frontiers(replica_id, &updates);
-            }
+        // We will bump the internals of each input by the number of dependents (outputs).
+        let outputs = dataflow.sink_exports.len() + dataflow.index_exports.len();
+        let mut changes = ChangeBatch::new();
+        for time in as_of.iter() {
+            // TODO(benesch): fix this dangerous use of `as`.
+            #[allow(clippy::as_conversions)]
+            changes.update(time.clone(), outputs as i64);
+        }
+        // Update storage read capabilities for inputs.
+        let mut storage_read_updates = storage_dependencies
+            .iter()
+            .map(|id| (*id, changes.clone()))
+            .collect();
+        self.storage_controller
+            .update_read_capabilities(&mut storage_read_updates);
+        // Update compute read capabilities for inputs.
+        let mut compute_read_updates = compute_dependencies
+            .iter()
+            .map(|id| (*id, changes.clone()))
+            .collect();
+        self.update_read_capabilities(&mut compute_read_updates);
 
-            // Initialize tracking of subscribes.
-            for subscribe_id in dataflow.subscribe_ids() {
-                self.compute
-                    .subscribes
-                    .insert(subscribe_id, ActiveSubscribe::new());
-            }
+        // Install collection state for each of the exports.
+        let mut updates = Vec::new();
+        for export_id in dataflow.export_ids() {
+            self.compute.collections.insert(
+                export_id,
+                CollectionState::new(
+                    as_of.clone(),
+                    storage_dependencies.clone(),
+                    compute_dependencies.clone(),
+                ),
+            );
+            updates.push((export_id, replica_write_frontier.clone()));
+        }
+        // Initialize tracking of replica frontiers.
+        let replica_ids: Vec<_> = self.compute.replica_ids().collect();
+        for replica_id in replica_ids {
+            self.update_write_frontiers(replica_id, &updates);
+        }
+
+        // Initialize tracking of subscribes.
+        for subscribe_id in dataflow.subscribe_ids() {
+            self.compute
+                .subscribes
+                .insert(subscribe_id, ActiveSubscribe::new());
         }
 
         // Here we augment all imported sources and all exported sinks with with the appropriate
         // storage metadata needed by the compute instance.
-        let mut augmented_dataflows = Vec::with_capacity(dataflows.len());
-        for d in dataflows {
-            let mut source_imports = BTreeMap::new();
-            for (id, (si, monotonic)) in d.source_imports {
-                let collection = self
-                    .storage_controller
-                    .collection(id)
-                    .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
-                let desc = SourceInstanceDesc {
-                    storage_metadata: collection.collection_metadata.clone(),
-                    arguments: si.arguments,
-                    typ: collection.description.desc.typ().clone(),
-                };
-                source_imports.insert(id, (desc, monotonic));
-            }
-
-            let mut sink_exports = BTreeMap::new();
-            for (id, se) in d.sink_exports {
-                let connection = match se.connection {
-                    ComputeSinkConnection::Persist(conn) => {
-                        let metadata = self
-                            .storage_controller
-                            .collection(id)
-                            .map_err(|_| DataflowCreationError::CollectionMissing(id))?
-                            .collection_metadata
-                            .clone();
-                        let conn = PersistSinkConnection {
-                            value_desc: conn.value_desc,
-                            storage_metadata: metadata,
-                        };
-                        ComputeSinkConnection::Persist(conn)
-                    }
-                    ComputeSinkConnection::Subscribe(conn) => {
-                        ComputeSinkConnection::Subscribe(conn)
-                    }
-                };
-                let desc = ComputeSinkDesc {
-                    from: se.from,
-                    from_desc: se.from_desc,
-                    connection,
-                    with_snapshot: se.with_snapshot,
-                    up_to: se.up_to,
-                };
-                sink_exports.insert(id, desc);
-            }
-
-            augmented_dataflows.push(DataflowDescription {
-                source_imports,
-                sink_exports,
-                // The rest of the fields are identical
-                index_imports: d.index_imports,
-                objects_to_build: d.objects_to_build,
-                index_exports: d.index_exports,
-                as_of: d.as_of,
-                until: d.until,
-                debug_name: d.debug_name,
-            });
+        let mut source_imports = BTreeMap::new();
+        for (id, (si, monotonic)) in dataflow.source_imports {
+            let collection = self
+                .storage_controller
+                .collection(id)
+                .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
+            let desc = SourceInstanceDesc {
+                storage_metadata: collection.collection_metadata.clone(),
+                arguments: si.arguments,
+                typ: collection.description.desc.typ().clone(),
+            };
+            source_imports.insert(id, (desc, monotonic));
         }
 
+        let mut sink_exports = BTreeMap::new();
+        for (id, se) in dataflow.sink_exports {
+            let connection = match se.connection {
+                ComputeSinkConnection::Persist(conn) => {
+                    let metadata = self
+                        .storage_controller
+                        .collection(id)
+                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
+                        .collection_metadata
+                        .clone();
+                    let conn = PersistSinkConnection {
+                        value_desc: conn.value_desc,
+                        storage_metadata: metadata,
+                    };
+                    ComputeSinkConnection::Persist(conn)
+                }
+                ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
+            };
+            let desc = ComputeSinkDesc {
+                from: se.from,
+                from_desc: se.from_desc,
+                connection,
+                with_snapshot: se.with_snapshot,
+                up_to: se.up_to,
+            };
+            sink_exports.insert(id, desc);
+        }
+
+        let augmented_dataflow = DataflowDescription {
+            source_imports,
+            sink_exports,
+            // The rest of the fields are identical
+            index_imports: dataflow.index_imports,
+            objects_to_build: dataflow.objects_to_build,
+            index_exports: dataflow.index_exports,
+            as_of: dataflow.as_of,
+            until: dataflow.until,
+            debug_name: dataflow.debug_name,
+        };
+
         self.compute
-            .send(ComputeCommand::CreateDataflows(augmented_dataflows));
+            .send(ComputeCommand::CreateDataflow(augmented_dataflow));
 
         Ok(())
     }
@@ -773,35 +766,33 @@ where
         Ok(())
     }
 
-    /// Cancels existing peek requests.
-    pub fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) {
-        for uuid in &uuids {
-            let Some(peek) = self.compute.peeks.get_mut(uuid) else {
+    /// Cancels an existing peek request.
+    pub fn cancel_peek(&mut self, uuid: Uuid) {
+        let Some(peek) = self.compute.peeks.get_mut(&uuid) else {
                 tracing::warn!("did not find pending peek for {uuid}");
-                continue;
+                return;
             };
 
-            // Canceled peeks should not be further responded to.
-            let Some(otel_ctx) = peek.otel_ctx.take() else {
+        // Canceled peeks should not be further responded to.
+        let Some(otel_ctx) = peek.otel_ctx.take() else {
                 tracing::warn!("peek {uuid} has already been served");
-                continue;
+                return;
             };
 
-            let response = PeekResponse::Canceled;
-            let duration = peek.requested_at.elapsed();
-            self.compute
-                .metrics
-                .observe_peek_response(&response, duration);
+        let response = PeekResponse::Canceled;
+        let duration = peek.requested_at.elapsed();
+        self.compute
+            .metrics
+            .observe_peek_response(&response, duration);
 
-            // Enqueue the response to the cancellation.
-            self.compute
-                .ready_responses
-                .push_back(ComputeControllerResponse::PeekResponse(
-                    *uuid, response, otel_ctx,
-                ));
-        }
+        // Enqueue the response to the cancellation.
+        self.compute
+            .ready_responses
+            .push_back(ComputeControllerResponse::PeekResponse(
+                uuid, response, otel_ctx,
+            ));
 
-        self.compute.send(ComputeCommand::CancelPeeks { uuids });
+        self.compute.send(ComputeCommand::CancelPeek { uuid });
     }
 
     /// Assigns a read policy to specific identifiers.
@@ -1023,7 +1014,6 @@ where
 
         // Translate our net compute actions into `AllowCompaction` commands
         // and a list of collections that are potentially ready to be dropped
-        let mut compaction_commands = Vec::new();
         let mut dropped_collection_ids = Vec::new();
         for (id, change) in compute_net.iter_mut() {
             let frontier = self
@@ -1036,12 +1026,9 @@ where
             }
             if !change.is_empty() {
                 let frontier = frontier.to_owned();
-                compaction_commands.push((*id, frontier));
+                self.compute
+                    .send(ComputeCommand::AllowCompaction { id: *id, frontier });
             }
-        }
-        if !compaction_commands.is_empty() {
-            self.compute
-                .send(ComputeCommand::AllowCompaction(compaction_commands));
         }
         if !dropped_collection_ids.is_empty() {
             self.update_dropped_collections(dropped_collection_ids);
