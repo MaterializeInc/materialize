@@ -419,11 +419,10 @@ class Composition:
             yield
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
-            error = str(e)
-            if isinstance(e, UIError):
-                print(f"mzcompose: test case {name} failed: {e}", file=sys.stderr)
-            else:
-                print(f"mzcompose: test case {name} failed:", file=sys.stderr)
+            error = f"{str(type(e))}: {e}"
+            print(f"mzcompose: test case {name} failed: {error}", file=sys.stderr)
+
+            if not isinstance(e, UIError):
                 traceback.print_exc()
         elapsed = time.time() - start_time
         self.test_results[name] = Composition.TestResult(elapsed, error)

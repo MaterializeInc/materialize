@@ -73,9 +73,11 @@ impl TypeCategory {
         match typ {
             ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
             ScalarType::Bool => Self::Boolean,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid | ScalarType::MzAclItem => {
-                Self::UserDefined
-            }
+            ScalarType::AclItem
+            | ScalarType::Bytes
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::MzAclItem => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
             | ScalarType::Timestamp
@@ -132,7 +134,7 @@ impl TypeCategory {
         }
     }
 
-    /// Like `from_type`, but for catalog types.
+    /// Like [`TypeCategory::from_type`], but for catalog types.
     // TODO(benesch): would be nice to figure out how to share code with
     // `from_type`, but the refactor to enable that would be substantial.
     pub fn from_catalog_type<T>(catalog_type: &CatalogType<T>) -> Self
@@ -143,7 +145,8 @@ impl TypeCategory {
         match catalog_type {
             CatalogType::Array { .. } | CatalogType::Int2Vector => Self::Array,
             CatalogType::Bool => Self::Boolean,
-            CatalogType::Bytes
+            CatalogType::AclItem
+            | CatalogType::Bytes
             | CatalogType::Jsonb
             | CatalogType::Uuid
             | CatalogType::MzAclItem => Self::UserDefined,
@@ -843,6 +846,7 @@ impl From<ScalarBaseType> for ParamType {
             Array | List | Map | Record | Range => {
                 panic!("use polymorphic parameters rather than {:?}", s);
             }
+            AclItem => ScalarType::AclItem,
             Bool => ScalarType::Bool,
             Int16 => ScalarType::Int16,
             Int32 => ScalarType::Int32,
@@ -1743,6 +1747,17 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float32) => UnaryFunc::AbsFloat32(func::AbsFloat32) => Float32, 1394;
             params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64) => Float64, 1395;
         },
+        "aclexplode" => Table {
+            params!(ScalarType::Array(Box::new(ScalarType::AclItem))) =>  Operation::unary(move |_ecx, aclitems| {
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::AclExplode,
+                        exprs: vec![aclitems],
+                    },
+                    column_names: vec!["grantor".into(), "grantee".into(), "privilege_type".into(), "is_grantable".into()],
+                })
+            }) => ReturnType::set_of(RecordAny), 1689;
+        },
         "array_cat" => Scalar {
             params!(ArrayAnyCompatible, ArrayAnyCompatible) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::ArrayArrayConcat))
@@ -2167,6 +2182,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "ltrim" => Scalar {
             params!(String) => UnaryFunc::TrimLeadingWhitespace(func::TrimLeadingWhitespace) => String, 881;
             params!(String, String) => BinaryFunc::TrimLeading => String, 875;
+        },
+        "makeaclitem" => Scalar {
+            params!(Oid, Oid, String, Bool) => VariadicFunc::MakeAclItem => AclItem, 1365;
         },
         "make_timestamp" => Scalar {
             params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp => Timestamp, 3461;
@@ -3234,6 +3252,14 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_OID;
         },
+        "has_role" => Scalar {
+            params!(String, String, String) => sql_impl_func("pg_has_role($1, $2, $3)") => Bool, oid::FUNC_HAS_ROLE_TEXT_TEXT_TEXT_OID;
+            params!(String, Oid, String) => sql_impl_func("pg_has_role($1, $2, $3)") => Bool, oid::FUNC_HAS_ROLE_TEXT_OID_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("pg_has_role($1, $2, $3)") => Bool, oid::FUNC_HAS_ROLE_OID_TEXT_TEXT_OID;
+            params!(Oid, Oid, String) => sql_impl_func("pg_has_role($1, $2, $3)") => Bool, oid::FUNC_HAS_ROLE_OID_OID_TEXT_OID;
+            params!(String, String) => sql_impl_func("pg_has_role($1, $2)") => Bool, oid::FUNC_HAS_ROLE_TEXT_TEXT_OID;
+            params!(Oid, String) => sql_impl_func("pg_has_role($1, $2)") => Bool, oid::FUNC_HAS_ROLE_OID_TEXT_OID;
+        },
         "has_secret_privilege" => Scalar {
             params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_OID_TEXT_OID;
@@ -3423,6 +3449,15 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
+        "aclitem_grantor" => Scalar {
+            params!(AclItem) => UnaryFunc::AclItemGrantor(func::AclItemGrantor) => Oid, oid::FUNC_ACL_ITEM_GRANTOR_OID;
+        },
+        "aclitem_grantee" => Scalar {
+            params!(AclItem) => UnaryFunc::AclItemGrantee(func::AclItemGrantee) => Oid, oid::FUNC_ACL_ITEM_GRANTEE_OID;
+        },
+        "aclitem_privileges" => Scalar {
+            params!(AclItem) => UnaryFunc::AclItemPrivileges(func::AclItemPrivileges) => Oid, oid::FUNC_ACL_ITEM_PRIVILEGES_OID;
+        },
         "is_rbac_enabled" => Scalar {
             params!() => UnmaterializableFunc::IsRbacEnabled => Bool, oid::FUNC_IS_RBAC_ENABLED_OID;
         },
@@ -3431,6 +3466,17 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         },
         "mz_acl_item_contains_privilege" => Scalar {
             params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
+        },
+        "mz_aclexplode" => Table {
+            params!(ScalarType::Array(Box::new(ScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::MzAclExplode,
+                        exprs: vec![mz_aclitems],
+                    },
+                    column_names: vec!["grantor".into(), "grantee".into(), "privilege_type".into(), "is_grantable".into()],
+                })
+            }) => ReturnType::set_of(RecordAny), oid::FUNC_MZ_ACL_ITEM_EXPLODE_OID;
         },
         "mz_aclitem_grantor" => Scalar {
             params!(MzAclItem) => UnaryFunc::MzAclItemGrantor(func::MzAclItemGrantor) => String, oid::FUNC_MZ_ACL_ITEM_GRANTOR_OID;
@@ -4266,6 +4312,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
             params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3882;
             params!(MzAclItem, MzAclItem) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_ACL_ITEM_EQ_MZ_ACL_ITEM_OID;
+            params!(AclItem, AclItem) => BinaryFunc::Eq => Bool, 974;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq => Bool, 1753;

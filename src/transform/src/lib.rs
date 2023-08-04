@@ -168,15 +168,6 @@ impl<'a> TransformArgs<'a> {
         }
     }
 
-    /// Generates a `TransformArgs` instance for the given `IndexOracle` with a `GlobalId`
-    pub fn with_id(indexes: &'a dyn IndexOracle, global_id: &'a GlobalId) -> Self {
-        Self {
-            indexes,
-            stats: &EmptyStatisticsOracle,
-            global_id: Some(global_id),
-        }
-    }
-
     /// Geneates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with a `GlobalId`
     pub fn with_id_and_stats(
         indexes: &'a dyn IndexOracle,
@@ -270,7 +261,7 @@ impl IndexOracle for EmptyIndexOracle {
 }
 
 /// A trait for a type that can estimate statistics about a given `GlobalId`
-pub trait StatisticsOracle: fmt::Debug {
+pub trait StatisticsOracle: fmt::Debug + Send {
     /// Returns a cardinality estimate for the given identifier
     ///
     /// Returning `None` means "no estimate"; returning `Some(0)` means estimating that the shard backing `id` is empty

@@ -484,7 +484,7 @@ where
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
                 let query_root_span =
-                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                    tracing::info_span!(parent: None, "advance_ready", otel.name = message_name);
                 query_root_span.follows_from(tracing::Span::current());
                 self.query(sql).instrument(query_root_span).await?
             }
@@ -518,7 +518,7 @@ where
                     Ok(n) => ExecuteCount::Count(n),
                 };
                 let execute_root_span =
-                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                    tracing::info_span!(parent: None, "advance_ready", otel.name = message_name);
                 execute_root_span.follows_from(tracing::Span::current());
                 let state = self
                     .execute(
@@ -916,6 +916,14 @@ where
                             .error(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
                                 "binary encoding of map types is not implemented",
+                            ))
+                            .await;
+                    }
+                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::AclItem) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                "binary encoding of aclitem types does not exist",
                             ))
                             .await;
                     }
@@ -1491,7 +1499,6 @@ where
             | ExecuteResponse::CreatedSecret { .. }
             | ExecuteResponse::CreatedSink { .. }
             | ExecuteResponse::CreatedSource { .. }
-            | ExecuteResponse::CreatedSources
             | ExecuteResponse::CreatedTable { .. }
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }

@@ -17,15 +17,18 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_expr::EvalError;
 use mz_ore::str::StrExt;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{ColumnType, GlobalId, Row, ScalarType};
+use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_secrets::cache::CachingSecretsReader;
+use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, PlanKind};
+use mz_sql::plan::{ExecuteTimeout, PlanKind, WebhookValidation, WebhookValidationSecret};
 use mz_sql::session::vars::Var;
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{oneshot, watch};
@@ -80,6 +83,10 @@ pub enum Command {
         action: EndTransactionAction,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        // TODO: Ideally this would just be a tracing::Span, but that seems like
+        // it might be tickling a bug in tracing_opentelemetry:
+        // https://github.com/tokio-rs/tracing-opentelemetry/issues/14
+        otel_ctx: OpenTelemetryContext,
     },
 
     CancelRequest {
@@ -280,18 +287,186 @@ impl IntoIterator for GetVariablesResponse {
     }
 }
 
-/// Type of closure that is called to validate a webhook request.
-pub type AppendWebhookValidation = Box<
-    dyn FnOnce(mz_repr::Datum, mz_repr::Datum) -> Result<bool, EvalError>
-        + Send
-        + std::panic::UnwindSafe,
->;
+/// Errors returns when running validation of a webhook request.
+#[derive(thiserror::Error, Debug)]
+pub enum AppendWebhookError {
+    // A secret that we need for validation has gone missing.
+    #[error("could not read a required secret")]
+    MissingSecret,
+    #[error("the provided request body is not UTF-8")]
+    NonUtf8Body,
+    // Note: we should _NEVER_ add more detail to this error, including the actual error we got
+    // when running validation. This is because the error messages might contain info about the
+    // arguments provided to the validation expression, we could contains user SECRETs. So by
+    // including any more detail we might accidentally expose SECRETs.
+    #[error("validation failed")]
+    ValidationError,
+    // Note: we should _NEVER_ add more detail to this error, see above as to why.
+    #[error("internal error when validating request")]
+    InternalError,
+}
+
+/// Contains all of the components necessary for running webhook validation.
+///
+/// To actually validate a webhook request call [`AppendWebhookValidator::eval`].
+pub struct AppendWebhookValidator {
+    validation: WebhookValidation,
+    secrets_reader: CachingSecretsReader,
+}
+
+impl AppendWebhookValidator {
+    pub fn new(validation: WebhookValidation, secrets_reader: CachingSecretsReader) -> Self {
+        AppendWebhookValidator {
+            validation,
+            secrets_reader,
+        }
+    }
+
+    pub async fn eval(
+        self,
+        body: bytes::Bytes,
+        headers: Arc<BTreeMap<String, String>>,
+    ) -> Result<bool, AppendWebhookError> {
+        let AppendWebhookValidator {
+            validation,
+            secrets_reader,
+        } = self;
+
+        let WebhookValidation {
+            expression,
+            secrets,
+            bodies: body_columns,
+            headers: header_columns,
+        } = validation;
+
+        // Use the secrets reader to get any secrets.
+        let mut secret_contents = BTreeMap::new();
+        for WebhookValidationSecret {
+            id,
+            column_idx,
+            use_bytes,
+        } in secrets
+        {
+            let secret = secrets_reader
+                .read(id)
+                .await
+                .map_err(|_| AppendWebhookError::MissingSecret)?;
+            secret_contents.insert(column_idx, (secret, use_bytes));
+        }
+
+        // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
+        // work.
+        let validate = move || {
+            // Gather our Datums for evaluation
+            //
+            // TODO(parkmycar): Re-use the RowArena when we implement rate limiting.
+            let temp_storage = RowArena::default();
+            let mut datums = Vec::with_capacity(
+                body_columns.len() + header_columns.len() + secret_contents.len(),
+            );
+
+            // Append all of our body columns.
+            for (column_idx, use_bytes) in body_columns {
+                assert_eq!(column_idx, datums.len(), "body index and datums mismatch!");
+
+                let datum = if use_bytes {
+                    Datum::Bytes(&body[..])
+                } else {
+                    let s = std::str::from_utf8(&body[..])
+                        .map_err(|_| AppendWebhookError::NonUtf8Body)?;
+                    Datum::String(s)
+                };
+                datums.push(datum);
+            }
+
+            // Append all of our header columns, re-using Row packings.
+            //
+            // TODO(parkmycar): Use `std::cell::OnceCell` when #20779 merges.
+            let headers_byte = once_cell::unsync::OnceCell::new();
+            let headers_text = once_cell::unsync::OnceCell::new();
+            for (column_idx, use_bytes) in header_columns {
+                assert_eq!(column_idx, datums.len(), "index and datums mismatch!");
+
+                let row = if use_bytes {
+                    headers_byte.get_or_init(|| {
+                        let mut row = Row::with_capacity(1);
+                        let mut packer = row.packer();
+                        packer.push_dict(
+                            headers
+                                .iter()
+                                .map(|(name, val)| (name.as_str(), Datum::Bytes(val.as_bytes()))),
+                        );
+                        row
+                    })
+                } else {
+                    headers_text.get_or_init(|| {
+                        let mut row = Row::with_capacity(1);
+                        let mut packer = row.packer();
+                        packer.push_dict(
+                            headers
+                                .iter()
+                                .map(|(name, val)| (name.as_str(), Datum::String(val))),
+                        );
+                        row
+                    })
+                };
+                datums.push(row.unpack_first());
+            }
+
+            // Append all of our secrets to our datums, in the correct column order.
+            for column_idx in datums.len()..datums.len() + secret_contents.len() {
+                // Get the secret that corresponds with what is the next "column";
+                let (secret, use_bytes) = secret_contents
+                    .get(&column_idx)
+                    .expect("more secrets to provide, but none for the next column");
+
+                if *use_bytes {
+                    datums.push(Datum::Bytes(secret));
+                } else {
+                    let secret_str = std::str::from_utf8(&secret[..]).expect("valid UTF-8");
+                    datums.push(Datum::String(secret_str));
+                }
+            }
+
+            // Run our validation
+            let valid = expression
+                .eval(&datums[..], &temp_storage)
+                .map_err(|_| AppendWebhookError::ValidationError)?;
+            match valid {
+                Datum::True => Ok::<_, AppendWebhookError>(true),
+                Datum::False | Datum::Null => Ok(false),
+                _ => unreachable!("Creating a webhook source asserts we return a boolean"),
+            }
+        };
+
+        // Then run the validation itself.
+        let valid = mz_ore::task::spawn_blocking(
+            || "webhook-validator-expr",
+            move || {
+                // Since the validation expression is technically a user defined function, we want to
+                // be extra careful and guard against issues taking down the entire process.
+                mz_ore::panic::catch_unwind(validate).map_err(|_| {
+                    tracing::error!("panic while validating webhook request!");
+                    AppendWebhookError::InternalError
+                })
+            },
+        )
+        .await
+        .context("joining on validation")
+        .map_err(|e| {
+            tracing::error!("Failed to run validation for webhook, {e}");
+            AppendWebhookError::InternalError
+        })??;
+
+        valid
+    }
+}
 
 pub struct AppendWebhookResponse {
     pub tx: MonotonicAppender,
     pub body_ty: ColumnType,
     pub header_ty: Option<ColumnType>,
-    pub validate_expr: Option<AppendWebhookValidation>,
+    pub validator: Option<AppendWebhookValidator>,
 }
 
 impl fmt::Debug for AppendWebhookResponse {
@@ -356,8 +531,6 @@ pub enum ExecuteResponse {
     CreatedWebhookSource,
     /// The requested source was created.
     CreatedSource,
-    /// The requested sources were created.
-    CreatedSources,
     /// The requested table was created.
     CreatedTable,
     /// The requested view was created.
@@ -443,6 +616,77 @@ pub enum ExecuteResponse {
     ValidatedConnection,
 }
 
+impl TryInto<ExecuteResponse> for ExecuteResponseKind {
+    type Error = ();
+
+    /// Attempts to convert into an ExecuteResponse. Returns an error if not possible without
+    /// actually executing a statement.
+    fn try_into(self) -> Result<ExecuteResponse, Self::Error> {
+        match self {
+            ExecuteResponseKind::AlteredDefaultPrivileges => {
+                Ok(ExecuteResponse::AlteredDefaultPrivileges)
+            }
+            ExecuteResponseKind::AlteredObject => Err(()),
+            ExecuteResponseKind::AlteredIndexLogicalCompaction => {
+                Ok(ExecuteResponse::AlteredIndexLogicalCompaction)
+            }
+            ExecuteResponseKind::AlteredRole => Ok(ExecuteResponse::AlteredRole),
+            ExecuteResponseKind::AlteredSystemConfiguration => {
+                Ok(ExecuteResponse::AlteredSystemConfiguration)
+            }
+            ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
+            ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
+            ExecuteResponseKind::CopyTo => Err(()),
+            ExecuteResponseKind::CopyFrom => Err(()),
+            ExecuteResponseKind::CreatedConnection => Ok(ExecuteResponse::CreatedConnection),
+            ExecuteResponseKind::CreatedDatabase => Ok(ExecuteResponse::CreatedDatabase),
+            ExecuteResponseKind::CreatedSchema => Ok(ExecuteResponse::CreatedSchema),
+            ExecuteResponseKind::CreatedRole => Ok(ExecuteResponse::CreatedRole),
+            ExecuteResponseKind::CreatedCluster => Ok(ExecuteResponse::CreatedCluster),
+            ExecuteResponseKind::CreatedClusterReplica => {
+                Ok(ExecuteResponse::CreatedClusterReplica)
+            }
+            ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
+            ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
+            ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
+            ExecuteResponseKind::CreatedWebhookSource => Ok(ExecuteResponse::CreatedWebhookSource),
+            ExecuteResponseKind::CreatedSource => Ok(ExecuteResponse::CreatedSource),
+            ExecuteResponseKind::CreatedTable => Ok(ExecuteResponse::CreatedTable),
+            ExecuteResponseKind::CreatedView => Ok(ExecuteResponse::CreatedView),
+            ExecuteResponseKind::CreatedViews => Ok(ExecuteResponse::CreatedViews),
+            ExecuteResponseKind::CreatedMaterializedView => {
+                Ok(ExecuteResponse::CreatedMaterializedView)
+            }
+            ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
+            ExecuteResponseKind::Deallocate => Err(()),
+            ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
+            ExecuteResponseKind::Deleted => Err(()),
+            ExecuteResponseKind::DiscardedTemp => Ok(ExecuteResponse::DiscardedTemp),
+            ExecuteResponseKind::DiscardedAll => Ok(ExecuteResponse::DiscardedAll),
+            ExecuteResponseKind::DroppedObject => Err(()),
+            ExecuteResponseKind::DroppedOwned => Ok(ExecuteResponse::DroppedOwned),
+            ExecuteResponseKind::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
+            ExecuteResponseKind::Fetch => Err(()),
+            ExecuteResponseKind::GrantedPrivilege => Ok(ExecuteResponse::GrantedPrivilege),
+            ExecuteResponseKind::GrantedRole => Ok(ExecuteResponse::GrantedRole),
+            ExecuteResponseKind::Inserted => Err(()),
+            ExecuteResponseKind::Prepare => Ok(ExecuteResponse::Prepare),
+            ExecuteResponseKind::Raised => Ok(ExecuteResponse::Raised),
+            ExecuteResponseKind::ReassignOwned => Ok(ExecuteResponse::ReassignOwned),
+            ExecuteResponseKind::RevokedPrivilege => Ok(ExecuteResponse::RevokedPrivilege),
+            ExecuteResponseKind::RevokedRole => Ok(ExecuteResponse::RevokedRole),
+            ExecuteResponseKind::SendingRows => Err(()),
+            ExecuteResponseKind::SetVariable => Err(()),
+            ExecuteResponseKind::StartedTransaction => Ok(ExecuteResponse::StartedTransaction),
+            ExecuteResponseKind::Subscribing => Err(()),
+            ExecuteResponseKind::TransactionCommitted => Err(()),
+            ExecuteResponseKind::TransactionRolledBack => Err(()),
+            ExecuteResponseKind::Updated => Err(()),
+            ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
+        }
+    }
+}
+
 impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
         use ExecuteResponse::*;
@@ -467,7 +711,6 @@ impl ExecuteResponse {
             CreatedSink { .. } => Some("CREATE SINK".into()),
             CreatedWebhookSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
-            CreatedSources => Some("CREATE SOURCES".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
@@ -511,8 +754,9 @@ impl ExecuteResponse {
         }
     }
 
-    /// Expresses which [`PlanKind`] generate which set of
-    /// [`ExecuteResponseKind`].
+    /// Expresses which [`PlanKind`] generate which set of [`ExecuteResponseKind`].
+    /// `ExecuteResponseKind::Canceled` could be generated at any point as well, but that is
+    /// excluded from this function.
     pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
         use ExecuteResponseKind::*;
         use PlanKind::*;
@@ -533,6 +777,7 @@ impl ExecuteResponse {
                 vec![AlteredObject]
             }
             AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
+            AlterSetCluster => vec![AlteredObject],
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
@@ -549,7 +794,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
-            CreateSource | CreateSources => vec![CreatedSource, CreatedSources],
+            CreateSource | CreateSources => vec![CreatedSource],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
             CreateTable => vec![CreatedTable],

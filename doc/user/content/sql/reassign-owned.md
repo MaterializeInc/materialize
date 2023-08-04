@@ -34,8 +34,6 @@ REASSIGN OWNED BY joe, george TO mike;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Role membership in `old_role` and `new_role`.

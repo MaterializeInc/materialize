@@ -28,7 +28,11 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Materialized(),
+    Materialized(
+        additional_system_parameter_defaults={
+            "log_filter": "mz_cluster::server=debug,info",
+        },
+    ),
     Testdrive(),
 ]
 
@@ -453,7 +457,6 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             disruption.disruption(c)
 
             validate(c)
-
             validate_introspection_compaction(c, disruption.compaction_checks)
 
         cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]

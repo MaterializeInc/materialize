@@ -46,8 +46,6 @@ my_schema
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATE` privileges on the containing database.

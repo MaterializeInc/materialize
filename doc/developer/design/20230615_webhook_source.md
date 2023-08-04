@@ -73,7 +73,10 @@ After executing this request, we'll create a source with the following columns:
 | name    | type                        | optional?                                      |
 |---------|-----------------------------|------------------------------------------------|
 | body    | `bytea`, `jsonb`, or `text` | No                                             |
-| headers | `map[text -> text]`         | Yes, present if `INCLUDE HEADERS` is specified |
+| headers | `map[text => text]`         | Yes, present if `INCLUDE HEADERS` is specified |
+
+The `headers` map, if present, maps the name of each header in the
+request, converted to lower case, to its value.
 
 We'll add a new endpoint to the existing [`base_router`](https://github.com/MaterializeInc/materialize/blob/6e1f4c7352427301d782438d614feafb0f644442/src/environmentd/src/http.rs#L747)
 in `environmentd` with the path: `/api/webhook/:database/:schema/:name`. This follows the existing
@@ -161,16 +164,99 @@ request headers. An issue though is everyone does this just a little bit differe
 * Buildkite signature = HMAC of "#{timestamp}.#{body}"
 * GitHub signature = "body=" + HMAC of {body}
 
-As such we'll need to support some custom logic for validation. What we can do is support a
-`VALIDATE USING` statement that accepts only a single scalar expression. This expression will
-be provided the request `headers` as `map[text] -> text`, and the `body` as `text` _regardless of
-whether or not the source has `INCLUDE HEADERS` or what `FORMAT BODY` is specified._ For example:
+As such we'll need to support some custom logic for validation. What we can do
+is support a `CHECK` constraint, like [PostgreSQL supports on
+tables][pg-check-constraint], which validates the incoming HTTP request
+by executing a Boolean-valued scalar expression. As an example:
 
 ```
-VALIDATE USING (
-  headers['X-Signature'] = hmac('sha256', SECRET webhook_secret, body)
+CHECK (
+  WITH (
+    SECRET db.schema.webhook_secret,
+    HEADERS,
+    BODY
+  )
+  headers['x-signature'] = hmac('sha256', webhook_secret, body)
 )
 ```
+
+The full syntax for the `CHECK` constraint is as follows:
+
+```ebnf
+check-option = 'CHECK' '('
+    ['WITH' '(' check-with (',' check-with)* ')']
+    scalar-expr
+')' ;
+
+check-with = (
+    'SECRET' object-name [AS ident] [BYTES] |
+    'HEADERS' ['AS' ident] [BYTES] |
+    'BODY' ['AS' ident] [BYTES]
+) ;
+```
+
+The `WITH` clause, designed to be reminiscent of a common table expression in a
+`SELECT` statement, allows the check constraint to gain access to secrets and
+to the properties of the incoming HTTP request:
+
+  * The `SECRET` clause makes the specified secret available to the constraint
+    expression via the specified name. If no name is specified for a given
+    secret, the secret is made available under its item name in the catalog
+    (e.g., a secret named `db.sch.sek` is made avaialable with name `sek`). If
+    the `BYTES` option is specified, the secret has type `bytea`; otherwise the
+    secret has type `text`.
+  * The `HEADERS` clause makes the HTTP request's headers available to the
+    constraint expression via the specified name, or `headers` if no name is
+    specified. If the `BYTES` option is specified, the headers have type
+    `map[text => bytea]`; otherwise the headers have type `map[text => text]`.
+    Like with `INCLUDE HEADERS`, the keys of the map are _lowercase_ header
+    names.
+  * The `BODY` clause makes the HTTP request's body available to the constraint
+    expression via the specified name, or `body` if no name is specified. If the
+    `BYTES` option is specified, the body has type `bytea`; otherwise the body
+    has type `text`.
+
+> **Note**
+>
+> The `BYTES` option may be deferred to future work.
+
+If the constraint expression evaluates to `true`, the incoming HTTP request is
+accepted. If the constraint expression evalutes to `false` or NULL, or produces
+an error, the incoming HTTP request is rejected with a 403 Forbidden status
+code.
+
+The components of the `WITH` clause may be specified in any order, and even
+multiple times. For example, the following are all valid:
+
+  * `CHECK (WITH (HEADERS, BODY) ...)`
+  * `CHECK (WITH (BODY, HEADERS) ...)`
+  * `CHECK (WITH (BODY AS b1, BODY AS b2) ...)`
+  * `CHECK (WITH (BODY AS btext, BODY AS bbytes BYTES) ...)`
+
+However, to avoid user error, `WITH` clauses that define the same name multiple
+times will be rejected. For example, the following are all invalid:
+
+  * `CHECK (WITH (HEADERS AS body, BODY) ...)`
+  * `CHECK (WITH (BODY, BODY) ...)`
+  * `CHECK (WITH (SECRETS (schema1.foo, schema2.foo)) ...)`
+
+Note that we decouple the `BODY FORMAT` and `INCLUDE HEADERS` options, which
+control the request properties that are ultimately stored by the source, from
+the `WITH` options which control which request properties are available to the
+constraint expression. This is intentional. In typical usage, the constraint
+expression needs access to an `x-signature` header and the body as `text`, while
+the source itself wants to decode the body as JSON and discard all headers.
+Decoupling these options allows the constraint expression to access these
+request properties in its desired format, without committing the source to
+persisting them in that format.
+
+To ensure that secrets referenced by the expression are not exposed, Materialize
+will not provide details about why a request failed validation, neither via the
+HTTP response to the webhook request, nor via system catalog tables. This is
+necessary because SQL expressions that error can might include the secret
+contents in the error message. Consider `WITH (SECRET s) s::int4`, which will
+produce an error message like `invalid input syntax for type integer: invalid
+digit found in string: "<secret value>"`.
 
 Internally the provided expression will be turned into a `MirScalarExpr` which will be used to
 evaluate each request. This evaluation will happen off the main coordinator thread.
@@ -178,16 +264,16 @@ evaluate each request. This evaluation will happen off the main coordinator thre
 ### Request Limits
 [request_limits]: #request_limits
 
-To start we'll aim to support at least 100 requests per second, in other words, 10 sources could
-receive 10 requests per second. We can probably scale further, but this seems like a sensible limit
-to start at. Also we'll add an [`axum::middleware`](https://docs.rs/axum/latest/axum/middleware/index.html)
-that enforces rate limiting on our new endpoint. This should be a pretty easy way to prevent a
+To start we'll aim to support at least 100 concurrent requests, in other words, 10 sources could
+at one time be processing 10 requests each. We can probably scale further, but this seems like a
+sensible limit to start at. We'll do this by adding an [`axum::middleware`](https://docs.rs/axum/latest/axum/middleware/index.html)
+to enforce this limit on our new endpoint. This should be a pretty easy way to prevent a
 misbehaving source from taking down all of `environmentd`.
 
 We'll also introduce a maximum size the body of each request can be, the default limit will be
-16KiB.
+2MB.
 
-Both the maximum number of requests per second, and max body size, will be configurable via
+Both the maximum number of concurrent requests, and max body size, will be configurable via
 LaunchDarkly, and later we can introduce SQL syntax so the user can `ALTER` these parameters on a
 per-source basis.
 
@@ -283,7 +369,25 @@ be a big win for the ergonomics of the feature.
 6. Supporting "recipes" for request validation for common webhook applications. For example,
    `VALIDATE STRIPE (SECRET ...)` would handle HMAC-ing the body of the request, and matching it
    against the exact header that Stripe expects.
+7. Including headers selectively, e.g.:
 
+   ```
+   CREATE SOURCE src FROM WEBHOOK (
+       INCLUDE HEADERS (
+           'header-1' AS header_1
+           'header-2' AS header_2 BYTES
+       ),
+       CHECK (
+           WITH (HEADER 'x-signature' AS x_signature)
+           x_signature ...
+       )
+   )
+   ```
+
+   Selectively including headers yields efficiency in two ways. First, unneeded
+   headers don't need to be packed into a `map` for the `CHECK` constraint,
+   which saves a bit of CPU and memory. Second, unneeded headers don't need to
+   be stored on disk.
 
 As a _rough sketch_, the north star for this feature in terms of SQL syntax could be:
 
@@ -293,7 +397,8 @@ CREATE SOURCE <name> FROM WEBHOOK
   BODY FORMAT JSON,
   INCLUDE HEADERS,
   -- reject the request if this expression returns False.
-  VALIDATE USING (
+  CHECK (
+    WITH (HEADERS)
     SELECT headers->>'signature' = sha256hash(body)
   ),
   -- transform the body and headers into a well formed relation, before persisting it.
@@ -319,3 +424,5 @@ CREATE SOURCE <name> FROM WEBHOOK
   up a new attack vector that we probably need to lock down. For example, maybe we support an allow
   list or block list of IP addresses. Do we need to have DDOS protection higher up in the stack? We
   should at least come up with a plan here so we know how we're exposed and prioritize from there.
+
+[pg-check-constraint]: https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS

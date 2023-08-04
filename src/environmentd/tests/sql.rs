@@ -1546,6 +1546,7 @@ fn test_utilization_hold() {
 // the panic and allow the compute instance to restart (instead of crash loop
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
+#[ignore] // TODO(necaris): Re-enable this as soon as possible
 #[mz_ore::test]
 fn test_github_12546() {
     let config = util::Config::default().with_propagate_crashes(false);

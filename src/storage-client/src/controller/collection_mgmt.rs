@@ -20,10 +20,16 @@ use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::client::TimestamplessUpdate;
 use crate::controller::{persist_handles, StorageError};
+
+// Note(parkmycar): The capacity here was chosen arbitrarily.
+const CHANNEL_CAPACITY: usize = 256;
+// We only append data once per-second.
+const DEFAULT_APPEND_CADANCE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct CollectionManager {
@@ -55,12 +61,11 @@ impl CollectionManager {
         let collections: Arc<Mutex<BTreeSet<GlobalId>>> = Arc::new(Mutex::new(BTreeSet::new()));
         let collections_outer = Arc::clone(&collections);
 
-        // Note(parkmycar): The capacity here was chosen randomly.
         let (tx, mut rx) = mpsc::channel::<(
             GlobalId,
             Vec<(Row, Diff)>,
             oneshot::Sender<Result<(), StorageError>>,
-        )>(256);
+        )>(CHANNEL_CAPACITY);
 
         // Allows callers to wait until we finish any in-progress work.
         //
@@ -74,7 +79,8 @@ impl CollectionManager {
         let notifies_outer = Arc::clone(&notifies);
 
         mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+            let mut interval = tokio::time::interval(Duration::from_millis(1_000));
+
             loop {
                 // Notify any waiters.
                 notifies
@@ -111,8 +117,12 @@ impl CollectionManager {
                             }
                         }
                     },
-                    cmd = rx.recv_many(64) => {
+                    cmd = rx.recv_many(CHANNEL_CAPACITY) => {
                         if let Some(batch) = cmd {
+                            // To rate limit appends to persist we add artifical latency, and will
+                            // finish no sooner than this instant.
+                            let min_time_to_complete = Instant::now() + DEFAULT_APPEND_CADANCE;
+
                             // Group all of our updates based on ID.
                             let mut updates: BTreeMap<GlobalId, UpdateRequest> = BTreeMap::new();
                             for (id, rows, notif) in batch {
@@ -154,7 +164,15 @@ impl CollectionManager {
                                     .collect();
 
                                 // Append updates to persist!
-                                let append_result = write_handle.monotonic_append(request).await.expect("sender hung up");
+                                let append_result = match write_handle.monotonic_append(request).await {
+                                    Ok(append_result) => append_result,
+                                    Err(_recv_error) => {
+                                        // Sender hung up, this seems fine and can
+                                        // happen when shutting down.
+                                        notify_listeners(updates, |_id| Err(StorageError::ShuttingDown("PersistWriteWorker")));
+                                        break
+                                    }
+                                };
 
                                 match append_result {
                                     // Everything was successful!
@@ -205,6 +223,12 @@ impl CollectionManager {
                                     }
                                 }
                             }
+
+                            // Wait until our artificial latency has completed.
+                            //
+                            // Note: if writing to persist took longer than `DEFAULT_APPEND_CADANCE`
+                            // this await will resolve immediately.
+                            tokio::time::sleep_until(min_time_to_complete).await;
                         }
                     }
                 }

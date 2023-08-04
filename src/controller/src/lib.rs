@@ -112,6 +112,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
+use mz_service::secrets::SecretsReaderCliArgs;
 use mz_stash::StashFactory;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
@@ -121,6 +122,7 @@ use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
@@ -153,6 +155,8 @@ pub struct ControllerConfig {
     pub metrics_registry: MetricsRegistry,
     /// The URL for Persist PubSub.
     pub persist_pubsub_url: String,
+    /// Arguments for secrets readers.
+    pub secrets_args: SecretsReaderCliArgs,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -171,8 +175,6 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification that the write frontiers of the replicas have changed.
-    ComputeReplicaWriteFrontiers(BTreeMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -189,9 +191,6 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             }
             ComputeControllerResponse::ReplicaMetrics(id, metrics) => {
                 ControllerResponse::ComputeReplicaMetrics(id, metrics)
-            }
-            ComputeControllerResponse::ReplicaWriteFrontiers(frontiers) => {
-                ControllerResponse::ComputeReplicaWriteFrontiers(frontiers)
             }
         }
     }
@@ -210,6 +209,8 @@ enum Readiness {
     Compute,
     /// The metrics channel is ready.
     Metrics,
+    /// Frontiers are ready for recording.
+    Frontiers,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -230,9 +231,14 @@ pub struct Controller<T = mz_repr::Timestamp> {
     metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
     metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
+    /// Periodic notification to record frontiers.
+    frontiers_ticker: Interval,
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
+
+    /// Arguments for secrets readers.
+    pub secrets_args: SecretsReaderCliArgs,
 }
 
 impl<T> Controller<T> {
@@ -278,6 +284,9 @@ where
                 _ = Pin::new(&mut self.metrics_rx).peek() => {
                     self.readiness = Readiness::Metrics;
                 }
+                _ = self.frontiers_ticker.tick() => {
+                    self.readiness = Readiness::Frontiers;
+                }
             }
         }
     }
@@ -305,7 +314,16 @@ where
                 .next()
                 .await
                 .map(|(id, metrics)| ControllerResponse::ComputeReplicaMetrics(id, metrics))),
+            Readiness::Frontiers => {
+                self.record_frontiers().await;
+                Ok(None)
+            }
         }
+    }
+
+    async fn record_frontiers(&mut self) {
+        let compute_frontiers = self.compute.replica_write_frontiers();
+        self.storage.record_frontiers(compute_frontiers).await;
     }
 
     /// Produces a timestamp that reflects all data available in
@@ -359,6 +377,9 @@ where
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
+        let mut frontiers_ticker = time::interval(Duration::from_secs(1));
+        frontiers_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         Self {
             storage: Box::new(storage_controller),
             compute: compute_controller,
@@ -369,7 +390,9 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
+            frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
+            secrets_args: config.secrets_args,
         }
     }
 }

@@ -37,11 +37,14 @@ REVOKE data_scientist FROM joe, mike;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATEROLE` privileges on the systems.
+
+## Useful views
+
+- [`mz_internal.mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members)
+- [`mz_internal.mz_show_my_role_members`](/sql/system-catalog/mz_internal/#mz_show_my_role_members)
 
 ## Related pages
 

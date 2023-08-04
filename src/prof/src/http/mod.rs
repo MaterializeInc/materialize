@@ -84,7 +84,7 @@ pub struct FlamegraphTemplate<'a> {
     pub mzfg: &'a str,
 }
 
-#[allow(clippy::drop_copy)]
+#[allow(dropping_copy_types)]
 async fn time_prof<'a>(
     merge_threads: bool,
     build_info: &BuildInfo,

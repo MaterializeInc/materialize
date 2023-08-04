@@ -604,7 +604,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
         );
-        let mut machine = Machine::new(
+        let machine = Machine::new(
             self.cfg.clone(),
             shard_id,
             Arc::clone(&self.metrics),
@@ -631,16 +631,7 @@ impl PersistClient {
                 gc.clone(),
             )
         });
-        let heartbeat_ts = (self.cfg.now)();
-        let (shard_upper, _, maintenance) = machine
-            .register_writer(
-                &writer_id,
-                &diagnostics.handle_purpose,
-                self.cfg.writer_lease_duration,
-                heartbeat_ts,
-            )
-            .await;
-        maintenance.start_performing(&machine, &gc);
+        let upper = machine.applier.clone_upper();
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -650,9 +641,9 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.isolated_runtime),
             writer_id,
+            &diagnostics.handle_purpose,
             schemas,
-            shard_upper.0,
-            heartbeat_ts,
+            upper,
         )
         .await;
         Ok(writer)
@@ -723,18 +714,15 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::panic::AssertUnwindSafe;
     use std::pin::Pin;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::Context;
     use std::time::Duration;
 
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
-    use mz_ore::future::OreFutureExt;
-    use mz_ore::now::NowFn;
+
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
@@ -892,6 +880,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn sanity_check() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -939,6 +928,7 @@ mod tests {
 
     // Sanity check that the open_reader and open_writer calls work.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn open_reader_writer() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1250,6 +1240,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn multiple_shards() {
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1290,6 +1281,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_upper() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1321,6 +1313,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn append_with_invalid_upper() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1384,6 +1377,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1440,6 +1434,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1490,6 +1485,7 @@ mod tests {
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_append() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1537,6 +1533,7 @@ mod tests {
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_append_per_writer() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1579,6 +1576,7 @@ mod tests {
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_compare_and_append() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1625,6 +1623,7 @@ mod tests {
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_compare_and_append_per_writer() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1654,96 +1653,6 @@ mod tests {
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn writer_heartbeat() {
-        let data = vec![
-            (("1".to_owned(), "one".to_owned()), 1, 1),
-            (("2".to_owned(), "two".to_owned()), 2, 1),
-            (("3".to_owned(), "three".to_owned()), 3, 1),
-        ];
-
-        let shard_id = ShardId::new();
-        let now = Arc::new(AtomicU64::new(0));
-        let now_clone = Arc::clone(&now);
-        let mut cache = new_test_client_cache();
-        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::SeqCst));
-        let (mut write, _) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
-            .await
-            .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
-
-        let lease_duration_ms = u64::try_from(write.cfg.writer_lease_duration.as_millis()).unwrap();
-
-        // we won't heartbeat if enough time hasn't passed
-        let heartbeat = write.last_heartbeat;
-        now.fetch_add(1, Ordering::SeqCst);
-        write.maybe_heartbeat_writer().await;
-        assert_eq!(write.last_heartbeat, heartbeat);
-
-        // but we will heartbeat if we're past half our lease duration
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.maybe_heartbeat_writer().await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // performing a compare_and_append should also heartbeat the writer
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_compare_and_append(&data[0..1], 0, 2).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // preparing a batch should heartbeat if it fills up a full batch part
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_batch(&data[1..3], 1, 4).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // but a batch operation that doesn't fill up a full batch part should NOT heartbeat.
-        // presumably it didn't take long to prepare <1 full batch part, and it'll be heartbeated
-        // as part of a subsequent compare_and_append
-        let heartbeat = write.last_heartbeat;
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_batch(&[], 0, 1).await;
-        assert_eq!(write.last_heartbeat, heartbeat);
-
-        // one more check: failed calls to append should heartbeat
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        let _failed_append = write
-            .append(
-                &data[3..],
-                Antichain::from_elem(99),
-                Antichain::from_elem(100),
-            )
-            .await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // and verify that other handles can expire our writer as routine maintenance
-        now.fetch_add(lease_duration_ms * 2, Ordering::SeqCst);
-        let (_, mut read) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
-            .await
-            .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
-
-        let (_, _, maintenance) = read
-            .machine
-            .heartbeat_leased_reader(&read.reader_id, now.load(Ordering::SeqCst))
-            .await;
-        maintenance
-            .perform(&read.machine.clone(), &read.gc.clone())
-            .await;
-        let expired_writer_heartbeat = AssertUnwindSafe(write.maybe_heartbeat_writer())
-            .ore_catch_unwind()
-            .await;
-        assert!(matches!(expired_writer_heartbeat, Err(_)));
     }
 
     #[mz_ore::test]
@@ -1922,6 +1831,7 @@ mod tests {
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_blocking_reads() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -1993,13 +1903,14 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
         let mut cache = new_test_client_cache();
         cache.cfg.reader_lease_duration = Duration::from_millis(1);
         cache.cfg.writer_lease_duration = Duration::from_millis(1);
-        let (mut write, mut read) = cache
+        let (_write, mut read) = cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),
@@ -2012,14 +1923,6 @@ mod tests {
             .heartbeat_task
             .take()
             .expect("handle should have heartbeat task");
-        let write_heartbeat_task = write
-            .heartbeat_task
-            .take()
-            .expect("handle should have heartbeat task");
-        write.expire().await;
-        let () = write_heartbeat_task
-            .await
-            .expect("task should shutdown cleanly");
         read.expire().await;
         let () = read_heartbeat_task
             .await
@@ -2030,6 +1933,7 @@ mod tests {
     /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
     /// would panic.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_16743_heartbeat_tombstone() {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
         let (mut write, mut read) = new_test_client()
@@ -2046,8 +1950,6 @@ mod tests {
         // Verify that heartbeating doesn't panic.
         read.last_heartbeat = 0;
         read.maybe_heartbeat_reader().await;
-        write.last_heartbeat = 0;
-        write.maybe_heartbeat_writer().await;
     }
 
     proptest! {

@@ -185,7 +185,8 @@ fn main() -> anyhow::Result<()> {
         .map(|entry| format!("protos/{}", entry.name))
         .collect();
 
-    const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]";
+    const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize)]";
+    const ARBITRARY_ATTR: &str = "#[derive(::proptest_derive::Arbitrary)]";
 
     // 'as' is okay here because we're using it to define the type of the empty slice, which is
     // necessary since the method takes the slice as a generic arg.
@@ -209,6 +210,9 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("AuditLogKey.event", ATTR)
         .enum_attribute("StorageUsageKey.usage", ATTR)
         .enum_attribute("ResolvedDatabaseSpecifier.value", ATTR)
+        // We derive Arbitrary for all protobuf types for wire compatibility testing.
+        .message_attribute(".", ARBITRARY_ATTR)
+        .enum_attribute(".", ARBITRARY_ATTR)
         .compile_protos(
             &paths,
             &[ /*

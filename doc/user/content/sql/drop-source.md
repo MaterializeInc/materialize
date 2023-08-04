@@ -68,8 +68,6 @@ DROP SOURCE IF EXISTS my_source;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the dropped source.

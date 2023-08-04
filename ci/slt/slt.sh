@@ -32,6 +32,7 @@ tests=(
     test/sqllogictest/introspection/*.slt \
     test/sqllogictest/explain/*.slt \
     test/sqllogictest/transform/*.slt \
+    test/sqllogictest/special/* \
 )
 tests_without_views=(
     # errors:

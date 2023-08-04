@@ -62,7 +62,7 @@ Type               | Supported? | Details
 
 ### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each Materialize index can have the following components:
+Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, `table` or `materialized view` materializations. Each Materialize index can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------

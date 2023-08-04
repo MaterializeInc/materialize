@@ -12,7 +12,6 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = false
 ALTER SYSTEM SET enable_disk_cluster_replicas = true
-ALTER SYSTEM SET enable_managed_clusters = true
 ALTER SYSTEM SET disk_cluster_replicas_default = false
 
 > DROP CLUSTER IF EXISTS c;

@@ -140,6 +140,7 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSetCluster(AlterSetClusterPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
     PurifiedAlterSource {
@@ -201,6 +202,9 @@ impl Plan {
             }
             StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
+            StatementKind::AlterSetCluster => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterSetCluster]
+            }
             StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
             StatementKind::AlterSystemReset => {
@@ -343,6 +347,7 @@ impl Plan {
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
+            Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
@@ -820,6 +825,12 @@ pub struct AlterNoopPlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSetClusterPlan {
+    pub id: GlobalId,
+    pub set_cluster: ClusterId,
+}
+
+#[derive(Debug)]
 pub struct AlterIndexSetOptionsPlan {
     pub id: GlobalId,
     pub options: Vec<IndexOption>,
@@ -1065,9 +1076,7 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
-    Webhook {
-        validate_using: Option<MirScalarExpr>,
-    },
+    Webhook(Option<WebhookValidation>),
 }
 
 #[derive(Clone, Debug)]
@@ -1076,6 +1085,30 @@ pub struct Ingestion {
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WebhookValidation {
+    /// The expression used to validate a request.
+    pub expression: MirScalarExpr,
+    /// The column index to provide the request body and whether to provide it as bytes.
+    pub bodies: Vec<(usize, bool)>,
+    /// The column index to provide the request headers and whether to provide the values as bytes.
+    ///
+    /// TODO(parkmycar): Support filtering down to specific headers.
+    pub headers: Vec<(usize, bool)>,
+    /// Any secrets that are used in that validation.
+    pub secrets: Vec<WebhookValidationSecret>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WebhookValidationSecret {
+    /// Identifies the secret by [`GlobalId`].
+    pub id: GlobalId,
+    /// Column index for the expression context that this secret was originally evaluated in.
+    pub column_idx: usize,
+    /// Whether or not this secret should be provided to the expression as Bytes or a String.
+    pub use_bytes: bool,
 }
 
 #[derive(Clone, Debug)]

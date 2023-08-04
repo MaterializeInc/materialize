@@ -261,10 +261,6 @@ mz_cluster_links
 BASE TABLE
 materialize
 mz_internal
-mz_cluster_replica_frontiers
-BASE TABLE
-materialize
-mz_internal
 mz_cluster_replica_heartbeats
 BASE TABLE
 materialize
@@ -417,6 +413,14 @@ mz_dataflows_per_worker
 VIEW
 materialize
 mz_internal
+mz_frontiers
+SOURCE
+materialize
+mz_internal
+mz_global_frontiers
+VIEW
+materialize
+mz_internal
 mz_kafka_sources
 BASE TABLE
 materialize
@@ -461,6 +465,10 @@ mz_postgres_sources
 BASE TABLE
 materialize
 mz_internal
+mz_prepared_statement_history
+BASE TABLE
+materialize
+mz_internal
 mz_records_per_dataflow
 VIEW
 materialize
@@ -501,11 +509,35 @@ mz_scheduling_parks_histogram_raw
 SOURCE
 materialize
 mz_internal
+mz_session_history
+BASE TABLE
+materialize
+mz_internal
 mz_sessions
 BASE TABLE
 materialize
 mz_internal
+mz_show_all_my_privileges
+VIEW
+materialize
+mz_internal
+mz_show_all_privileges
+VIEW
+materialize
+mz_internal
+mz_show_cluster_privileges
+VIEW
+materialize
+mz_internal
 mz_show_cluster_replicas
+VIEW
+materialize
+mz_internal
+mz_show_database_privileges
+VIEW
+materialize
+mz_internal
+mz_show_default_privileges
 VIEW
 materialize
 mz_internal
@@ -514,6 +546,50 @@ VIEW
 materialize
 mz_internal
 mz_show_materialized_views
+VIEW
+materialize
+mz_internal
+mz_show_my_cluster_privileges
+VIEW
+materialize
+mz_internal
+mz_show_my_database_privileges
+VIEW
+materialize
+mz_internal
+mz_show_my_default_privileges
+VIEW
+materialize
+mz_internal
+mz_show_my_object_privileges
+VIEW
+materialize
+mz_internal
+mz_show_my_role_members
+VIEW
+materialize
+mz_internal
+mz_show_my_schema_privileges
+VIEW
+materialize
+mz_internal
+mz_show_my_system_privileges
+VIEW
+materialize
+mz_internal
+mz_show_object_privileges
+VIEW
+materialize
+mz_internal
+mz_show_role_members
+VIEW
+materialize
+mz_internal
+mz_show_schema_privileges
+VIEW
+materialize
+mz_internal
+mz_show_system_privileges
 VIEW
 materialize
 mz_internal
@@ -539,6 +615,10 @@ materialize
 mz_internal
 mz_source_statuses
 VIEW
+materialize
+mz_internal
+mz_statement_execution_history
+BASE TABLE
 materialize
 mz_internal
 mz_storage_shards

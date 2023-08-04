@@ -38,13 +38,19 @@ use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
 
+// These `sql_stats_automatic_collection_enabled` are for the cost-based
+// optimizer but all the queries against this table are single-table and very
+// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
+// really get us anything. OTOH, the background jobs that crdb creates to
+// collect these stats fill up the jobs table (slowing down all sorts of
+// things).
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
     data bytea NOT NULL,
     PRIMARY KEY(shard, sequence_number)
-);
+) WITH (sql_stats_automatic_collection_enabled = false);
 ";
 
 impl ToSql for SeqNo {
@@ -247,8 +253,8 @@ impl PostgresConsensus {
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
         client
             .batch_execute(&format!(
-                "{}; {}",
-                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;"
+                "{} {}",
+                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
             ))
             .await?;
 

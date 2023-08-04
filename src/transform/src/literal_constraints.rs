@@ -155,9 +155,12 @@ impl LiteralConstraints {
                             // common here, so we explicitly add it.)
                             keys: vec![(0..key.len()).collect()],
                         },
-                    };
+                    }
+                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::Column).collect_vec()]);
 
                     *relation = MirRelationExpr::Join {
+                        // It's important to keep the `filter_list` in the second position.
+                        // Both the lowering and EXPLAIN depends on this.
                         inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
                         equivalences: key
                             .iter()

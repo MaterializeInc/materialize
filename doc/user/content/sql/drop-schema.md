@@ -67,8 +67,6 @@ DROP SCHEMA IF EXISTS my_schema;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the dropped schema.

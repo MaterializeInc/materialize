@@ -20,8 +20,8 @@
 //!   crate during a network request.
 //! * [`Error::Api`]: indicates a Materialize cloud API error while
 //!   processing the request.
-//! * [`Error::EmptyRegion`]: indicates an error when no environments are
-//!   available in a requested region.
+//! * [`Error::EmptyRegion`]: indicates an error when no region is
+//!   available in a requested cloud region.
 //! * [`Error::CloudProviderRegionParseError`]: indicates an error trying to parse
 //!   a cloud provider region. Always make sure the string is correctly formatted.
 
@@ -66,20 +66,15 @@ pub enum Error {
     /// Indicates a Materialize admin error from a request.
     #[error("API error during a Materialize cloud API request: {0}")]
     AdminApi(#[from] mz_frontegg_client::error::Error),
-    /// Indicates an error when no environments are
+    /// Indicates an error when no customer region is
     /// available in a requested region.
-    #[error("No environment available in this region.")]
+    #[error("No region available in this cloud region.")]
     EmptyRegion,
     /// Indicates an error trying to parse a
     /// cloud provider region.
     /// Always make sure the string is correctly formatted.
     #[error("Error parsing cloud provider.")]
     CloudProviderRegionParseError,
-    /// Indicates an error when the response from the
-    /// endpoint /api/environmentassignment does not contains
-    /// exactly one environment assignment
-    #[error("Response did not contain exactly one environment assignment.")]
-    InvalidEnvironmentAssignment,
     /// Indicates an error when trying to retrieve the
     /// domain from the client endpoint
     #[error("Failed to retrieve domain from client endpoint.")]
@@ -93,4 +88,8 @@ pub enum Error {
     /// Indicates that a timeout has been reached.
     #[error("Timeout reached.")]
     TimeoutError,
+    /// Indicates that the request was executed successfully but returns no content (204).
+    /// E.g.: It happens when trying to request information from a not enabled region.
+    #[error("Succesfull but no content.")]
+    SuccesfullButNoContent,
 }

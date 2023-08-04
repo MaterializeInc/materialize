@@ -23,8 +23,6 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATEROLE` privileges on the system.

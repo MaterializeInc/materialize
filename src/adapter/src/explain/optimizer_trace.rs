@@ -19,6 +19,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, UsedIndexes};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
+use mz_sql_parser::ast::ExplainStage;
 use tracing::dispatcher::{self};
 use tracing_subscriber::prelude::*;
 
@@ -166,13 +167,23 @@ impl OptimizerTrace {
                     // update the context with the current time
                     context.duration = entry.full_duration;
                     match fast_path_plan {
-                        Some(fast_path_plan) if !context.config.no_fast_path => Ok(TraceEntry {
-                            instant: entry.instant,
-                            span_duration: entry.span_duration,
-                            full_duration: entry.full_duration,
-                            path: entry.path,
-                            plan: fast_path_plan.clone(),
-                        }),
+                        Some(fast_path_plan)
+                            if !context.config.no_fast_path && {
+                                [
+                                    ExplainStage::OptimizedPlan.path(),
+                                    ExplainStage::PhysicalPlan.path(),
+                                ]
+                                .contains(&entry.path.as_str())
+                            } =>
+                        {
+                            Ok(TraceEntry {
+                                instant: entry.instant,
+                                span_duration: entry.span_duration,
+                                full_duration: entry.full_duration,
+                                path: entry.path,
+                                plan: fast_path_plan.clone(),
+                            })
+                        }
                         _ => Ok(TraceEntry {
                             instant: entry.instant,
                             span_duration: entry.span_duration,

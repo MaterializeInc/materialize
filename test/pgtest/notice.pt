@@ -106,8 +106,7 @@ ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"TABLE \"t\" does not exist, skipping"}]}
 CommandComplete {"tag":"ALTER TABLE"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER REPLICA \"c.r\" does not exist, skipping"}]}
-CommandComplete {"tag":"ALTER CLUSTER REPLICA"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"altering the owner of a cluster replica is not supported"}]}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER \"c\" does not exist, skipping"}]}
 CommandComplete {"tag":"ALTER CLUSTER"}

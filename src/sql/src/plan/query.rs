@@ -55,11 +55,12 @@ use mz_repr::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CteBlock, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
-    HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select,
-    SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator, ShowStatement,
-    SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
+    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
+    Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
+    JoinConstraint, JoinOperator, Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName,
+    OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator,
+    ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
     UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use uuid::Uuid;
@@ -81,7 +82,10 @@ use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
-use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
+use crate::plan::{
+    transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
+    WebhookValidationSecret,
+};
 use crate::session::vars::{self, FeatureFlag};
 
 #[derive(Debug)]
@@ -905,39 +909,139 @@ pub fn plan_secret_as(
     Ok(expr)
 }
 
-/// Plans an expression in the VALIDATE USING position of a `CREATE SOURCE ... FROM WEBHOOK`.
+/// Plans an expression in the CHECK position of a `CREATE SOURCE ... FROM WEBHOOK`.
 pub fn plan_webhook_validate_using(
     scx: &StatementContext,
-    mut expr: Expr<Aug>,
-) -> Result<MirScalarExpr, PlanError> {
+    validate_using: CreateWebhookSourceCheck<Aug>,
+) -> Result<WebhookValidation, PlanError> {
     let qcx = QueryContext::root(scx, QueryLifetime::Static);
 
-    // We _always_ provide the body of the request as bytes and include the headers when validating
-    // a request, regardless of what has otherwise been specified for the source.
-    let column_typs = vec![
-        ColumnType {
-            scalar_type: ScalarType::Bytes,
+    let CreateWebhookSourceCheck {
+        options,
+        using: mut expr,
+    } = validate_using;
+
+    let mut column_typs = vec![];
+    let mut column_names = vec![];
+
+    let (bodies, headers, secrets) = options
+        .map(|o| (o.bodies, o.headers, o.secrets))
+        .unwrap_or_default();
+
+    // Append all of the bodies so they can be used in the expression.
+    let mut body_tuples = vec![];
+    for CreateWebhookSourceBody { alias, use_bytes } in bodies {
+        let scalar_type = use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+        let name = alias
+            .map(|a| a.into_string())
+            .unwrap_or_else(|| "body".to_string());
+
+        column_typs.push(ColumnType {
+            scalar_type,
             nullable: false,
-        },
-        ColumnType {
+        });
+        column_names.push(name);
+
+        // Store the column index so we can be sure to provide this body correctly.
+        let column_idx = column_typs.len() - 1;
+        // Double check we're consistent with column names.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "body column names and types don't match"
+        );
+        body_tuples.push((column_idx, use_bytes));
+    }
+
+    // Append all of the headers so they can be used in the expression.
+    let mut header_tuples = vec![];
+
+    for CreateWebhookSourceHeader { alias, use_bytes } in headers {
+        let value_type = use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+        let name = alias
+            .map(|a| a.into_string())
+            .unwrap_or_else(|| "headers".to_string());
+
+        column_typs.push(ColumnType {
             scalar_type: ScalarType::Map {
-                value_type: Box::new(ScalarType::String),
+                value_type: Box::new(value_type),
                 custom_id: None,
             },
             nullable: false,
-        },
-    ];
-    let column_names = ["body", "headers"];
+        });
+        column_names.push(name);
+
+        // Store the column index so we can be sure to provide this body correctly.
+        let column_idx = column_typs.len() - 1;
+        // Double check we're consistent with column names.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "header column names and types don't match"
+        );
+        header_tuples.push((column_idx, use_bytes));
+    }
+
+    // Append all secrets so they can be used in the expression.
+    let mut validation_secrets = vec![];
+
+    for CreateWebhookSourceSecret {
+        secret,
+        alias,
+        use_bytes,
+    } in secrets
+    {
+        // Either provide the secret to the validation expression as Bytes or a String.
+        let scalar_type = use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+
+        column_typs.push(ColumnType {
+            scalar_type,
+            nullable: false,
+        });
+        let ResolvedItemName::Item { id, full_name: FullItemName { item, .. }, .. } = secret else {
+            return Err(PlanError::InvalidSecret(Box::new(secret)));
+        };
+
+        // Plan the expression using the secret's alias, if one is provided.
+        let name = if let Some(alias) = alias {
+            alias.into_string()
+        } else {
+            item
+        };
+        column_names.push(name);
+
+        // Get the column index that corresponds for this secret, so we can make sure to provide the
+        // secrets in the correct order during evaluation.
+        let column_idx = column_typs.len() - 1;
+        // Double check that our column names and types match.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "column names and types don't match"
+        );
+
+        validation_secrets.push(WebhookValidationSecret {
+            id,
+            column_idx,
+            use_bytes,
+        });
+    }
 
     let relation_typ = RelationType::new(column_typs);
-    let desc = RelationDesc::new(relation_typ, column_names);
+    let desc = RelationDesc::new(relation_typ, column_names.clone());
     let scope = Scope::from_source(None, column_names);
 
     transform_ast::transform(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
-        name: "VALIDATE USING",
+        name: "CHECK",
         scope: &scope,
         relation_type: desc.typ(),
         allow_aggregates: false,
@@ -948,7 +1052,13 @@ pub fn plan_webhook_validate_using(
     let expr = plan_expr(ecx, &expr)?
         .type_as(ecx, &ScalarType::Bool)?
         .lower_uncorrelated()?;
-    Ok(expr)
+    let validation = WebhookValidation {
+        expression: expr,
+        bodies: body_tuples,
+        headers: header_tuples,
+        secrets: validation_secrets,
+    };
+    Ok(validation)
 }
 
 pub fn plan_default_expr(
@@ -1135,13 +1245,13 @@ fn plan_query_inner(
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
             let ecx = &ExprContext {
                 qcx,
-                name: "ORDER BY clause",
+                name: "ORDER BY clause of a set expression",
                 scope: &scope,
                 relation_type: &qcx.relation_type(&expr),
-                allow_aggregates: true,
+                allow_aggregates: false,
                 allow_subqueries: true,
                 allow_parameters: true,
-                allow_windows: true,
+                allow_windows: false,
             };
             let output_columns: Vec<_> = scope.column_names().enumerate().collect();
             let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by, &output_columns)?;
@@ -5196,6 +5306,7 @@ fn scalar_type_from_catalog(
                         custom_id: Some(id),
                     })
                 }
+                CatalogType::AclItem => Ok(ScalarType::AclItem),
                 CatalogType::Bool => Ok(ScalarType::Bool),
                 CatalogType::Bytes => Ok(ScalarType::Bytes),
                 CatalogType::Date => Ok(ScalarType::Date),

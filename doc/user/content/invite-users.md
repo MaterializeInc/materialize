@@ -22,12 +22,8 @@ You must be an Admin in your organization to invite new users.
 
 1. Select *Organization Admin* or *Organization Member* depending on what level of console access the user needs:
 
-    - **Organization Admin**: Can invite new users, edit account information,
-    and edit account security information.
-    - **Organization Member**: Can login to the console.
-
-    These roles do not refer to RBAC roles and privileges and refer to
-    actions users can take in the Materialize Console.
+    - **Organization Admin**: Can invite new users, edit account information, edit account security information, and are super users in the database.
+    - **Organization Member**: Can login to the console and have database permissions definied via [role-based access control](/manage/access-control/).
 
 2. Click the **Invite** button at the bottom right section of the screen.
 

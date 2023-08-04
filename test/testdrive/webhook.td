@@ -130,7 +130,10 @@ null
 
 > CREATE SOURCE webhook_bytes_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING ( headers->'signature' = 'test' );
+  CHECK (
+    WITH (HEADERS)
+    headers->'signature' = 'test'
+  );
 
 $ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=test
 123
@@ -140,8 +143,9 @@ $ webhook-append database=materialize schema=public name=webhook_bytes_with_vali
 
 > CREATE SOURCE webhook_bytes_with_hmac IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
-  VALIDATE USING (
-    decode(headers->'x-signature', 'base64') = hmac('body=' || convert_from(body, 'utf-8'), 'test_key', 'sha256')
+  CHECK (
+    WITH (HEADERS, BODY)
+    decode(headers->'x-signature', 'base64') = hmac('body=' || body, 'test_key', 'sha256')
   );
 
 $ webhook-append name=webhook_bytes_with_hmac x-signature=HA0rQdPkCiNNNAladA0eTI8x5WZp5z8rBawQHiywznI=
@@ -157,12 +161,28 @@ did_not_include_necessary_header
 "hello world"
 "another_request"
 
+> CREATE SECRET webhook_secret AS 'shared_key';
+
+> CREATE SOURCE webhook_bytes_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH ( HEADERS, BODY BYTES, SECRET webhook_secret BYTES )
+    decode(headers->'x-signature', 'base64') = hmac(body, webhook_secret, 'sha256')
+  )
+
+$ webhook-append name=webhook_bytes_with_secret x-signature=VNCe6bTKrlFO46GfiUYR/xFpeZ2H/KbLfR9oJKYAwkc=
+using an mz secret
+
+> SELECT * FROM webhook_bytes_with_secret;
+"using an mz secret"
+
 > CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  VALIDATE USING (
+  CHECK (
+    WITH (HEADERS, BODY)
     decode(split_part(headers->'x-buildkite-signature', 'signature::', 2), 'hex')
       =
-    hmac(split_part(split_part(headers->'x-buildkite-signature', 'timestamp::', 2), ',', 1) || '.' || convert_from(body, 'utf-8'), 'test_key', 'sha256')
+    hmac(split_part(split_part(headers->'x-buildkite-signature', 'timestamp::', 2), ',', 1) || '.' || body, 'test_key', 'sha256')
   );
 
 $ webhook-append name=webhook_buildkite x-buildkite-signature=timestamp::42,signature::b610a43432fe965eb8e2a3ce4939a6bafaad3f35583c596e2f7271125a346d95
@@ -173,7 +193,7 @@ i hope this works
 
 > CREATE SOURCE webhook_hex IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  VALIDATE USING ( decode(convert_from(body, 'utf-8'), 'hex') = '\x42' );
+  CHECK ( WITH (BODY) decode(body, 'hex') = '\x42' );
 
 $ webhook-append name=webhook_hex status=400
 # 'z' is an invalid character in hex which causes an evaluation failure.
@@ -189,10 +209,50 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 # Note: if you change the message in the panic, then you need to update ci_logged_errors_detect.py.
 > CREATE SOURCE webhook_validation_panic IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  VALIDATE USING ( mz_internal.mz_panic('webhook panic test') = headers::text );
+  CHECK (
+    WITH (HEADERS)
+    mz_internal.mz_panic('webhook panic test') = headers::text
+  );
 
-$ webhook-append name=webhook_validation_panic status=503
+$ webhook-append name=webhook_validation_panic status=500
 abc
+
+# Can use SECRETs as both Bytes and Strings.
+
+> CREATE SECRET webhook_secret_bytes AS 'this_key_is_bytes';
+
+> CREATE SOURCE webhook_double_validation IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (
+      HEADERS,
+      BODY BYTES,
+      SECRET webhook_secret,
+      SECRET webhook_secret_bytes BYTES
+    )
+    decode(headers->'x-signature-sha256', 'hex') = hmac(convert_from(body, 'utf-8'), webhook_secret, 'sha256')
+      AND
+    decode(headers->'x-signature-md5', 'hex') = hmac(body, webhook_secret_bytes, 'md5')
+  )
+
+$ webhook-append name=webhook_double_validation x-signature-sha256=20460da764521c155989f9ede00d6047c459c87bca6712eef27f72ae32c62d3f x-signature-md5=c34fd128f787067796212d31fced1881
+materialize space monkey
+
+> SELECT * FROM webhook_double_validation;
+"materialize space monkey"
+
+# Webhooks should support special characters like a /
+
+> CREATE SOURCE "webhook_with_/" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
+
+$ webhook-append name=webhook_with_/ status=404
+wont_work
+
+$ webhook-append name=webhook_with_%2F
+will_work
+
+> SELECT * FROM "webhook_with_/"
+"will_work"
 
 # Dropping a webhook source should drop the underlying persist shards.
 

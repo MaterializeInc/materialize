@@ -65,6 +65,7 @@ message ProtoDatum {
         uint64 mz_timestamp = 30;
         ProtoRange range = 31;
         mz_repr.adt.mz_acl_item.ProtoMzAclItem mz_acl_item = 32;
+        mz_repr.adt.mz_acl_item.ProtoAclItem acl_item = 33;
     }
 }
 

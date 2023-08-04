@@ -69,8 +69,6 @@ DROP INDEX IF EXISTS q01_geo_idx;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the dropped index.

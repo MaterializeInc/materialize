@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2023-04-09
+NIGHTLY_RUST_DATE=2023-06-27
 
 cd "$(dirname "$0")/.."
 
@@ -171,14 +171,15 @@ case "$cmd" in
             --env AWS_SESSION_TOKEN
             --env CI
             --env CI_COVERAGE_ENABLED
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env NO_COLOR
+            --env NPM_TOKEN
             --env POLAR_SIGNALS_API_TOKEN
             --env PYPI_TOKEN
             # For Miri with nightly Rust

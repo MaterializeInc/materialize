@@ -93,6 +93,7 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
+use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -122,6 +123,7 @@ use mz_persist_client::rpc::{
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
+use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -395,6 +397,18 @@ pub struct Args {
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
     orchestrator_kubernetes_coverage: bool,
+    /// The secrets controller implementation to use.
+    #[structopt(
+        long,
+        arg_enum,
+        env = "SECRETS_CONTROLLER",
+        default_value_ifs(&[
+            ("orchestrator", Some("kubernetes"), Some("kubernetes")),
+            ("orchestrator", Some("process"), Some("local-file"))
+        ]),
+        default_value("kubernetes"), // This shouldn't be possible, but it makes clap happy.
+    )]
+    secrets_controller: SecretsControllerKind,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -557,6 +571,17 @@ pub struct Args {
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
 
+    /// The list of tags to be set on AWS Secrets Manager secrets created by the
+    /// AwsSecretsController.
+    #[clap(
+        long,
+        env = "AWS_SECRETS_CONTROLLER_TAGS",
+        multiple = true,
+        value_delimiter = ';',
+        required_if_eq("secrets-controller", "aws-secrets-manager")
+    )]
+    aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
+
     #[clap(long, env = "DEPLOY_GENERATION")]
     deploy_generation: Option<u64>,
 
@@ -569,6 +594,17 @@ pub struct Args {
 enum OrchestratorKind {
     Kubernetes,
     Process,
+}
+
+// TODO [Alex Hunt] move this to a shared function that can be imported by the
+// region-controller.
+fn aws_secrets_controller_prefix(env_id: &EnvironmentId) -> String {
+    format!("/user-managed/{}/", env_id)
+}
+fn aws_secrets_controller_key_alias(env_id: &EnvironmentId) -> String {
+    // TODO [Alex Hunt] move this to a shared function that can be imported by the
+    // region-controller.
+    format!("alias/customer_key_{}", env_id)
 }
 
 fn main() {
@@ -617,11 +653,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         None
     };
 
-    let (tracing_handle, _tracing_guard) =
-        runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
+    let metrics_registry = MetricsRegistry::new();
+    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
+        StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
-        }))?;
+        },
+        metrics_registry.clone(),
+    ))?;
 
     if args.tracing.log_filter.is_some() {
         halt!(
@@ -641,7 +680,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let span = tracing::info_span!("environmentd::run").entered();
 
-    let metrics_registry = MetricsRegistry::new();
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
@@ -742,7 +780,31 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
-            let secrets_controller = Arc::clone(&orchestrator);
+            let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {
+                SecretsControllerKind::Kubernetes => {
+                    let sc = Arc::clone(&orchestrator);
+                    let sc: Arc<dyn SecretsController> = sc;
+                    sc
+                }
+                SecretsControllerKind::AwsSecretsManager => {
+                    Arc::new(
+                        runtime.block_on(AwsSecretsController::new(
+                            args.environment_id.cloud_provider_region(),
+                            // TODO [Alex Hunt] move this to a shared function that can be imported by the
+                            // region-controller.
+                            &aws_secrets_controller_prefix(&args.environment_id),
+                            &aws_secrets_controller_key_alias(&args.environment_id),
+                            args.aws_secrets_controller_tags
+                                .into_iter()
+                                .map(|tag| (tag.key, tag.value))
+                                .collect(),
+                        )),
+                    )
+                }
+                SecretsControllerKind::LocalFile => bail!(
+                    "SecretsControllerKind::LocalFile is not compatible with Orchestrator::Kubernetes."
+                ),
+            };
             let cloud_resource_controller = Arc::clone(&orchestrator);
             (
                 orchestrator,
@@ -773,6 +835,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         environment_id: args.environment_id.to_string(),
                         secrets_dir: args
                             .orchestrator_process_secrets_directory
+                            .clone()
                             .expect("clap enforced"),
                         command_wrapper: args
                             .orchestrator_process_wrapper
@@ -791,10 +854,33 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating process orchestrator")?,
             );
-            let secrets_controller = Arc::clone(&orchestrator);
+            let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {
+                SecretsControllerKind::Kubernetes => bail!(
+                    "SecretsControllerKind::Kubernetes is not compatible with Orchestrator::Process."
+                ),
+                SecretsControllerKind::AwsSecretsManager => {
+                    Arc::new(
+                        runtime.block_on(AwsSecretsController::new(
+                            args.environment_id.cloud_provider_region(),
+                            &aws_secrets_controller_prefix(&args.environment_id),
+                            &aws_secrets_controller_key_alias(&args.environment_id),
+                            args.aws_secrets_controller_tags
+                                .into_iter()
+                                .map(|tag| (tag.key, tag.value))
+                                .collect(),
+                        )),
+                    )
+                }
+                SecretsControllerKind::LocalFile => {
+                    let sc = Arc::clone(&orchestrator);
+                    let sc: Arc<dyn SecretsController> = sc;
+                    sc
+                }
+            };
             (orchestrator, secrets_controller, None)
         }
     };
+    let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
@@ -848,6 +934,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
+        // When serialized to args in the controller, only the relevant flags will be passed
+        // through, so we just set all of them
+        secrets_args: SecretsReaderCliArgs {
+            secrets_reader: args.secrets_controller,
+            secrets_reader_local_file_dir: args.orchestrator_process_secrets_directory,
+            secrets_reader_kubernetes_context: Some(args.orchestrator_kubernetes_context),
+            secrets_reader_aws_region: Some(
+                args.environment_id.cloud_provider_region().to_string(),
+            ),
+            secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
+        },
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -881,6 +978,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tls,
                 frontegg,
                 cors_allowed_origin,
+                concurrent_webhook_req_count: None,
                 adapter_stash_url: args.adapter_stash_url,
                 controller,
                 secrets_controller,
@@ -904,6 +1002,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     &args.tracing.startup_log_filter,
                     args.aws_external_id_prefix,
                     secrets_reader,
+                    cloud_resource_reader,
                 ),
                 tracing_handle,
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,

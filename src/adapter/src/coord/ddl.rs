@@ -108,6 +108,7 @@ impl Coordinator {
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
+        let mut update_secrets_caching_config = false;
 
         for op in &ops {
             match op {
@@ -192,6 +193,7 @@ impl Coordinator {
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
+                    update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -201,6 +203,7 @@ impl Coordinator {
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
+                    update_secrets_caching_config = true;
                 }
                 _ => (),
             }
@@ -454,6 +457,9 @@ impl Coordinator {
             if update_tracing_config {
                 self.update_tracing_config();
             }
+            if update_secrets_caching_config {
+                self.update_secrets_caching_config();
+            }
         }
         .await;
 
@@ -489,7 +495,6 @@ impl Coordinator {
         if let Some(Some(ReplicaMetadata {
             last_heartbeat,
             metrics,
-            write_frontiers,
         })) = self.transient_replica_metadata.insert(replica_id, None)
         {
             let mut updates = vec![];
@@ -508,12 +513,6 @@ impl Coordinator {
                     .pack_replica_metric_updates(replica_id, &metrics, -1);
                 updates.extend(retraction.into_iter());
             }
-            let retraction = self.catalog().state().pack_replica_write_frontiers_updates(
-                replica_id,
-                &write_frontiers,
-                -1,
-            );
-            updates.extend(retraction.into_iter());
             self.buffer_builtin_table_updates(updates);
         }
         self.controller
@@ -667,6 +666,11 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
+    }
+
+    fn update_secrets_caching_config(&mut self) {
+        let config = flags::caching_config(self.catalog.system_config());
+        self.caching_secrets_reader.set_policy(config);
     }
 
     fn update_tracing_config(&mut self) {
@@ -1003,6 +1007,7 @@ impl Coordinator {
                 Op::AlterRole { .. }
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
+                | Op::AlterSetCluster { .. }
                 | Op::DropTimeline(_)
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }

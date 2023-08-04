@@ -44,7 +44,8 @@ impl Endpoint {
             .host()
             .to_owned()
             .expect("endpoint url has a valid host");
-        let url_str = format!("https://sync.{host}");
+
+        let url_str = format!("https://api.{host}");
         let mut url = Url::parse(&url_str).expect("sync endpoint name should be valid");
         url.path_segments_mut()
             .expect("constructor validated URL can be a base")

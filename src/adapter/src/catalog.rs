@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -67,7 +68,7 @@ use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
-    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
+    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookValidation,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -103,7 +104,7 @@ use crate::catalog::builtin::{
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
-use crate::config::{SynchronizedParameters, SystemParameterFrontend};
+use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
@@ -115,6 +116,7 @@ mod error;
 mod migrate;
 
 pub mod builtin;
+mod inner;
 pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
@@ -169,30 +171,55 @@ impl Clone for Catalog {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
     database_by_name: BTreeMap<String, DatabaseId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     database_by_id: BTreeMap<DatabaseId, Database>,
+    #[serde(serialize_with = "skip_temp_items")]
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
+    #[serde(skip)]
     temporary_schemas: BTreeMap<ConnectionId, Schema>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     clusters_by_id: BTreeMap<ClusterId, Cluster>,
     clusters_by_name: BTreeMap<String, ClusterId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
     roles_by_name: BTreeMap<String, RoleId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     roles_by_id: BTreeMap<RoleId, Role>,
+    #[serde(skip)]
     config: mz_sql::catalog::CatalogConfig,
+    #[serde(skip)]
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    #[serde(skip)]
     default_storage_cluster_size: Option<String>,
+    #[serde(skip)]
     availability_zones: Vec<String>,
+    #[serde(skip)]
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     default_privileges: DefaultPrivileges,
     system_privileges: PrivilegeMap,
+}
+
+fn skip_temp_items<S>(
+    entries: &BTreeMap<GlobalId, CatalogEntry>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    mz_ore::serde::map_key_to_string(
+        entries.iter().filter(|(_k, v)| v.conn_id().is_none()),
+        serializer,
+    )
 }
 
 impl CatalogState {
@@ -874,6 +901,36 @@ impl CatalogState {
         }
     }
 
+    /// Move item `id` into the bound objects of cluster `in_cluster`, removes it from the old
+    /// cluster.
+    ///
+    /// Panics if
+    /// * the item doesn't exist,
+    /// * the item is not bound to the old cluster,
+    /// * the new cluster doesn't exist,
+    /// * the item is already bound to the new cluster.
+    pub(super) fn move_item(&mut self, id: GlobalId, in_cluster: ClusterId) {
+        let metadata = self.entry_by_id.get_mut(&id).expect("catalog out of sync");
+        if let Some(cluster_id) = metadata.item.cluster_id() {
+            assert!(
+                self.clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .remove(&id),
+                "catalog out of sync"
+            );
+        }
+        assert!(
+            self.clusters_by_id
+                .get_mut(&in_cluster)
+                .expect("catalog out of sync")
+                .bound_objects
+                .insert(id),
+            "catalog out of sync"
+        );
+    }
+
     fn get_database(&self, database_id: &DatabaseId) -> &Database {
         &self.database_by_id[database_id]
     }
@@ -1508,15 +1565,15 @@ impl CatalogState {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> String {
-        // Note: database_by_id is a Map whose keys are not Strings, but serializing
-        // a Map to JSON requires the keys be strings, hence the mapping here.
-        let database_by_str: BTreeMap<String, _> = self
-            .database_by_id
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.debug_json()))
-            .collect();
-        serde_json::to_string(&database_by_str).expect("serialization cannot fail")
+    pub fn dump(&self) -> Result<String, Error> {
+        serde_json::to_string_pretty(&self).map_err(|e| {
+            Error::new(ErrorKind::Unstructured(format!(
+                // Don't panic here because we don't have compile-time failures for maps with
+                // non-string keys.
+                "internal error: could not dump catalog: {}",
+                e
+            )))
+        })
     }
 
     pub fn availability_zones(&self) -> &[String] {
@@ -1736,40 +1793,20 @@ impl ConnCatalog<'_> {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Database {
     pub name: String,
     pub id: DatabaseId,
     #[serde(skip)]
     pub oid: u32,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
 
-impl Database {
-    /// Returns a `Database` formatted as a `serde_json::Value` that is suitable for debugging. For
-    /// example `CatalogState::dump`.
-    fn debug_json(&self) -> serde_json::Value {
-        let schemas_by_str: BTreeMap<String, _> = self
-            .schemas_by_id
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.debug_json()))
-            .collect();
-
-        serde_json::json!({
-            "name": self.name,
-            "id": self.id,
-            "schemas_by_id": schemas_by_str,
-            "schemas_by_name": self.schemas_by_name,
-            "owner_id": self.owner_id,
-            "privileges": self.privileges.debug_json(),
-        })
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
@@ -1779,21 +1816,6 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
-}
-
-impl Schema {
-    /// Returns a `Schema` formatted as a `serde_json::Value` that is suitable for debugging. For
-    /// example `CatalogState::dump`.
-    fn debug_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "name": self.name,
-            "id": self.id,
-            "items": self.items,
-            "functions": self.functions,
-            "owner_id": self.owner_id,
-            "privileges": self.privileges.debug_json(),
-        })
-    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1862,12 +1884,14 @@ pub struct Cluster {
     pub name: String,
     pub id: ClusterId,
     pub config: ClusterConfig,
+    #[serde(skip)]
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     pub linked_object_id: Option<GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
@@ -1898,6 +1922,7 @@ pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub config: ReplicaConfig,
+    #[serde(skip)]
     pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
     pub owner_id: RoleId,
 }
@@ -1931,11 +1956,13 @@ pub struct ClusterReplicaProcessStatus {
     pub time: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     item: CatalogItem,
+    #[serde(skip)]
     used_by: Vec<GlobalId>,
     id: GlobalId,
+    #[serde(skip)]
     oid: u32,
     name: QualifiedItemName,
     owner_id: RoleId,
@@ -1963,6 +1990,7 @@ pub struct Table {
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
+    #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub custom_logical_compaction_window: Option<Duration>,
@@ -1991,8 +2019,8 @@ pub enum DataSourceDesc {
     Progress,
     /// Receives data from HTTP requests.
     Webhook {
-        /// An optional expression which is used to validate each request received by this webhook.
-        validate_using: Option<MirScalarExpr>,
+        /// Optional components used to validation a webhook request.
+        validation: Option<WebhookValidation>,
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
@@ -2040,6 +2068,8 @@ impl DataSourceDesc {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
+    // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
+    #[serde(skip)]
     pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
@@ -2093,7 +2123,7 @@ impl Source {
                     );
                     DataSourceDesc::Source
                 }
-                mz_sql::plan::DataSourceDesc::Webhook { validate_using } => {
+                mz_sql::plan::DataSourceDesc::Webhook(validation) => {
                     assert!(
                         matches!(
                             plan.cluster_config,
@@ -2102,7 +2132,7 @@ impl Source {
                         "webhook sources must be created on an existing cluster"
                     );
                     DataSourceDesc::Webhook {
-                        validate_using,
+                        validation,
                         cluster_id: cluster_id.expect("checked above"),
                     }
                 }
@@ -2228,6 +2258,7 @@ pub struct Sink {
     pub from: GlobalId,
     // TODO(benesch): this field duplicates information that could be derived
     // from the connection ID. Too hard to fix at the moment.
+    #[serde(skip)]
     pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
@@ -2871,16 +2902,31 @@ struct AllocatedBuiltinSystemIds<T> {
     migrated_builtins: Vec<GlobalId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
 pub struct DefaultPrivileges {
-    privileges: BTreeMap<DefaultPrivilegeObject, BTreeMap<RoleId, DefaultPrivilegeAclItem>>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    privileges: BTreeMap<DefaultPrivilegeObject, RoleDefaultPrivileges>,
 }
 
-impl Default for DefaultPrivileges {
-    fn default() -> DefaultPrivileges {
-        DefaultPrivileges {
-            privileges: Default::default(),
-        }
+// Use a new type here because otherwise we have two levels of BTreeMap, both needing
+// map_key_to_string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
+struct RoleDefaultPrivileges(
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    BTreeMap<RoleId, DefaultPrivilegeAclItem>,
+);
+
+impl Deref for RoleDefaultPrivileges {
+    type Target = BTreeMap<RoleId, DefaultPrivilegeAclItem>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RoleDefaultPrivileges {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -3318,7 +3364,7 @@ impl Catalog {
         catalog
             .load_system_configuration(
                 config.system_parameter_defaults,
-                config.system_parameter_frontend,
+                config.system_parameter_sync_config,
             )
             .await?;
 
@@ -3872,14 +3918,14 @@ impl Catalog {
     ///    `system_parameter_defaults` map.
     /// 3. Overwrite and persist selected parameter values from the
     ///    configuration that can be pulled from the provided
-    ///    `system_parameter_frontend` (if present).
+    ///    `system_parameter_sync_config` (if present).
     ///
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+        system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
             let mut storage = self.storage().await;
@@ -3911,7 +3957,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        if let Some(system_parameter_frontend) = system_parameter_frontend {
+        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
             if !self.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
 
@@ -3953,10 +3999,10 @@ impl Catalog {
                 //       LaunchDarkly configuration, for when LaunchDarkly comes
                 //       back online.
                 //    6. Reboot environmentd.
-                system_parameter_frontend.ensure_initialized().await;
 
                 let mut params = SynchronizedParameters::new(self.state.system_config().clone());
-                system_parameter_frontend.pull(&mut params);
+                let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+                frontend.pull(&mut params);
                 let ops = params
                     .modified()
                     .into_iter()
@@ -4092,6 +4138,7 @@ impl Catalog {
         name_to_id_map: &BTreeMap<&str, GlobalId>,
     ) -> BuiltinType<IdReference> {
         let typ: CatalogType<IdReference> = match &builtin.details.typ {
+            CatalogType::AclItem => CatalogType::AclItem,
             CatalogType::Array { element_reference } => CatalogType::Array {
                 element_reference: name_to_id_map[element_reference],
             },
@@ -4625,7 +4672,7 @@ impl Catalog {
             egress_ips: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
-            system_parameter_frontend: None,
+            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
             connection_context: None,
@@ -5421,6 +5468,17 @@ impl Catalog {
 
                     info!("update role {name} ({id})");
                 }
+                Op::AlterSetCluster { id, cluster } => Self::transact_alter_set_cluster(
+                    state,
+                    tx,
+                    builtin_table_updates,
+                    oracle_write_ts,
+                    &drop_ids,
+                    audit_events,
+                    session,
+                    id,
+                    cluster,
+                )?,
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
@@ -5437,7 +5495,7 @@ impl Catalog {
                         )));
                     }
 
-                    let old_sink = match entry.item() {
+                    let mut new_sink = match entry.item() {
                         CatalogItem::Sink(sink) => sink.clone(),
                         other => {
                             coord_bail!("ALTER SINK entry was not a sink: {}", other.typ())
@@ -5447,7 +5505,7 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&old_sink.create_sql)
+                    let mut stmt = mz_sql::parse::parse(&new_sink.create_sql)
                         .expect("invalid create sql persisted to catalog")
                         .into_element()
                         .ast;
@@ -5482,13 +5540,13 @@ impl Catalog {
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
-                    let sink = CatalogItem::Sink(Sink {
-                        create_sql,
-                        ..old_sink
-                    });
+                    new_sink.create_sql = create_sql;
+                    let sink = CatalogEntry {
+                        item: CatalogItem::Sink(new_sink),
+                        ..(entry.clone())
+                    };
 
-                    let ser = Self::serialize_item(&sink);
-                    tx.update_item(id, &name.item, &ser)?;
+                    tx.update_item(id, &sink)?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5510,7 +5568,14 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(state, builtin_table_updates, id, to_name, sink, &drop_ids)?;
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        to_name,
+                        sink.item,
+                        &drop_ids,
+                    )?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -5528,7 +5593,7 @@ impl Catalog {
                         )));
                     }
 
-                    let old_source = match entry.item() {
+                    let mut new_source = match entry.item() {
                         CatalogItem::Source(source) => source.clone(),
                         other => {
                             coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ())
@@ -5538,7 +5603,7 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+                    let mut stmt = mz_sql::parse::parse(&new_source.create_sql)
                         .expect("invalid create sql persisted to catalog")
                         .into_element()
                         .ast;
@@ -5575,13 +5640,13 @@ impl Catalog {
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
-                    let source = CatalogItem::Source(Source {
-                        create_sql,
-                        ..old_source
-                    });
+                    new_source.create_sql = create_sql;
+                    let source = CatalogEntry {
+                        item: CatalogItem::Source(new_source.clone()),
+                        ..(entry.clone())
+                    };
 
-                    let ser = Self::serialize_item(&source);
-                    tx.update_item(id, &name.item, &ser)?;
+                    tx.update_item(id, &source)?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5603,7 +5668,14 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(state, builtin_table_updates, id, to_name, source, &drop_ids)?;
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        to_name,
+                        source.item,
+                        &drop_ids,
+                    )?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -5711,7 +5783,7 @@ impl Catalog {
                             database_name: Some(name),
                         }),
                     )?;
-                    create_schema(
+                    Self::create_schema(
                         state,
                         builtin_table_updates,
                         schema_id,
@@ -5777,7 +5849,7 @@ impl Catalog {
                             database_name: Some(state.database_by_id[&database_id].name.clone()),
                         }),
                     )?;
-                    create_schema(
+                    Self::create_schema(
                         state,
                         builtin_table_updates,
                         schema_id,
@@ -6516,11 +6588,7 @@ impl Catalog {
                                 let entry = state.get_entry_mut(id);
                                 update_privilege_fn(&mut entry.privileges);
                                 if !entry.item().is_temporary() {
-                                    tx.update_item(
-                                        *id,
-                                        &entry.name().item,
-                                        &Self::serialize_item(entry.item()),
-                                    )?;
+                                    tx.update_item(*id, entry)?;
                                 }
                                 builtin_table_updates.extend(state.pack_item_update(*id, 1));
                             }
@@ -6742,7 +6810,7 @@ impl Catalog {
                     to_full_name.item = to_name.clone();
 
                     let mut to_qualified_name = entry.name().clone();
-                    to_qualified_name.item = to_name;
+                    to_qualified_name.item = to_name.clone();
 
                     let details = EventDetails::RenameItemV1(mz_audit_log::RenameItemV1 {
                         id: id.to_string(),
@@ -6763,7 +6831,9 @@ impl Catalog {
                     }
 
                     // Rename item itself.
-                    let item = entry
+                    let mut new_entry = entry.clone();
+                    new_entry.name.item = to_name.clone();
+                    new_entry.item = entry
                         .item
                         .rename_item_refs(
                             current_full_name.clone(),
@@ -6781,11 +6851,11 @@ impl Catalog {
                                 message: e,
                             }))
                         })?;
-                    let serialized_item = Self::serialize_item(&item);
 
                     for id in entry.used_by() {
                         let dependent_item = state.get_entry(id);
-                        let to_item = dependent_item
+                        let mut to_entry = dependent_item.clone();
+                        to_entry.item = dependent_item
                             .item
                             .rename_item_refs(
                                 current_full_name.clone(),
@@ -6807,21 +6877,20 @@ impl Catalog {
                                 }))
                             })?;
 
-                        if !item.is_temporary() {
-                            let serialized_item = Self::serialize_item(&to_item);
-                            tx.update_item(*id, &dependent_item.name().item, &serialized_item)?;
+                        if !new_entry.item().is_temporary() {
+                            tx.update_item(*id, &to_entry)?;
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
 
-                        updates.push((id.clone(), dependent_item.name().clone(), to_item));
+                        updates.push((id.clone(), dependent_item.name().clone(), to_entry.item));
                     }
-                    if !item.is_temporary() {
-                        tx.update_item(id, &to_full_name.item, &serialized_item)?;
+                    if !new_entry.item().is_temporary() {
+                        tx.update_item(id, &new_entry)?;
                     }
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    updates.push((id, to_qualified_name, item));
+                    updates.push((id, to_qualified_name, new_entry.item));
                     for (id, to_name, to_item) in updates {
-                        update_item(
+                        Self::update_item(
                             state,
                             builtin_table_updates,
                             id,
@@ -6953,11 +7022,7 @@ impl Catalog {
                             );
                             entry.owner_id = new_owner;
                             if !entry.item().is_temporary() {
-                                tx.update_item(
-                                    *id,
-                                    &entry.name().item,
-                                    &Self::serialize_item(entry.item()),
-                                )?;
+                                tx.update_item(*id, entry)?;
                             }
                             builtin_table_updates.extend(state.pack_item_update(*id, 1));
                         }
@@ -7011,10 +7076,10 @@ impl Catalog {
                     ));
                 }
                 Op::UpdateItem { id, name, to_item } => {
-                    let ser = Self::serialize_item(&to_item);
-                    tx.update_item(id, &name.item, &ser)?;
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
+                    Self::update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
+                    let entry = state.get_entry(&id);
+                    tx.update_item(id, entry)?;
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
@@ -7082,102 +7147,102 @@ impl Catalog {
                 }
             };
         }
+        Ok(())
+    }
 
-        fn update_item(
-            state: &mut CatalogState,
-            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-            id: GlobalId,
-            to_name: QualifiedItemName,
-            to_item: CatalogItem,
-            // This lets us understand which items are dropped in this transaction so we can account
-            // for changes in dependencies.
-            drop_ids: &BTreeSet<GlobalId>,
-        ) -> Result<(), AdapterError> {
-            let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
-            info!(
-                "update {} {} ({})",
-                old_entry.item_type(),
-                state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
-                id
-            );
+    pub(crate) fn update_item(
+        state: &mut CatalogState,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        id: GlobalId,
+        to_name: QualifiedItemName,
+        to_item: CatalogItem,
+        // This lets us understand which items are dropped in this transaction so we can account
+        // for changes in dependencies.
+        drop_ids: &BTreeSet<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
+        info!(
+            "update {} {} ({})",
+            old_entry.item_type(),
+            state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
+            id
+        );
 
-            // Ensure any removal from the uses is accompanied by a drop.
-            let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
-                drop_ids.iter().chain(&to_item.uses().0).collect();
+        // Ensure any removal from the uses is accompanied by a drop.
+        let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
+            drop_ids.iter().chain(&to_item.uses().0).collect();
 
-            assert!(
-                old_entry
-                    .uses()
-                    .0
-                    .iter()
-                    .all(|id| to_item_uses_and_dropped_ids.contains(id)),
-                "all of the old entries used items must be accompanied by a drop \
+        assert!(
+            old_entry
+                .uses()
+                .0
+                .iter()
+                .all(|id| to_item_uses_and_dropped_ids.contains(id)),
+            "all of the old entries used items must be accompanied by a drop \
                 old_entry.uses: {:?}\
                 to_item.uses: {:?}\
                 drop_ids {:?}",
-                old_entry.uses(),
-                to_item.uses(),
-                drop_ids,
-            );
+            old_entry.uses(),
+            to_item.uses(),
+            drop_ids,
+        );
 
-            let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-            let schema = &mut state.get_schema_mut(
-                &old_entry.name().qualifiers.database_spec,
-                &old_entry.name().qualifiers.schema_spec,
-                conn_id,
-            );
-            schema.items.remove(&old_entry.name().item);
-            let mut new_entry = old_entry.clone();
-            new_entry.name = to_name;
-            new_entry.item = to_item;
-            schema.items.insert(new_entry.name().item.clone(), id);
-            state.entry_by_id.insert(id, new_entry);
-            builtin_table_updates.extend(state.pack_item_update(id, 1));
-            Ok(())
-        }
+        let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let schema = &mut state.get_schema_mut(
+            &old_entry.name().qualifiers.database_spec,
+            &old_entry.name().qualifiers.schema_spec,
+            conn_id,
+        );
+        schema.items.remove(&old_entry.name().item);
+        let mut new_entry = old_entry.clone();
+        new_entry.name = to_name;
+        new_entry.item = to_item;
+        schema.items.insert(new_entry.name().item.clone(), id);
+        state.entry_by_id.insert(id, new_entry);
+        builtin_table_updates.extend(state.pack_item_update(id, 1));
+        Ok(())
+    }
 
-        fn create_schema(
-            state: &mut CatalogState,
-            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-            id: SchemaId,
-            oid: u32,
-            database_id: DatabaseId,
-            schema_name: String,
-            owner_id: RoleId,
-            privileges: PrivilegeMap,
-        ) -> Result<(), AdapterError> {
-            info!(
-                "create schema {}.{}",
-                state.get_database(&database_id).name,
-                schema_name
-            );
-            let db = state
-                .database_by_id
-                .get_mut(&database_id)
-                .expect("catalog out of sync");
-            db.schemas_by_id.insert(
-                id.clone(),
-                Schema {
-                    name: QualifiedSchemaName {
-                        database: ResolvedDatabaseSpecifier::Id(database_id.clone()),
-                        schema: schema_name.clone(),
-                    },
-                    id: SchemaSpecifier::Id(id.clone()),
-                    oid,
-                    items: BTreeMap::new(),
-                    functions: BTreeMap::new(),
-                    owner_id,
-                    privileges,
+    fn create_schema(
+        state: &mut CatalogState,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        id: SchemaId,
+        oid: u32,
+        database_id: DatabaseId,
+        schema_name: String,
+        owner_id: RoleId,
+        privileges: PrivilegeMap,
+    ) -> Result<(), AdapterError> {
+        info!(
+            "create schema {}.{}",
+            state.get_database(&database_id).name,
+            schema_name
+        );
+        let db = state
+            .database_by_id
+            .get_mut(&database_id)
+            .expect("catalog out of sync");
+        db.schemas_by_id.insert(
+            id.clone(),
+            Schema {
+                name: QualifiedSchemaName {
+                    database: ResolvedDatabaseSpecifier::Id(database_id.clone()),
+                    schema: schema_name.clone(),
                 },
-            );
-            db.schemas_by_name.insert(schema_name, id.clone());
-            builtin_table_updates.push(state.pack_schema_update(
-                &ResolvedDatabaseSpecifier::Id(database_id.clone()),
-                &id,
-                1,
-            ));
-            Ok(())
-        }
+                id: SchemaSpecifier::Id(id.clone()),
+                oid,
+                items: BTreeMap::new(),
+                functions: BTreeMap::new(),
+                owner_id,
+                privileges,
+            },
+        );
+        db.schemas_by_name.insert(schema_name, id.clone());
+        builtin_table_updates.push(state.pack_schema_update(
+            &ResolvedDatabaseSpecifier::Id(database_id.clone()),
+            &id,
+            1,
+        ));
         Ok(())
     }
 
@@ -7247,7 +7312,7 @@ impl Catalog {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    fn serialize_item(item: &CatalogItem) -> SerializedCatalogItem {
+    pub(crate) fn serialize_item(item: &CatalogItem) -> SerializedCatalogItem {
         match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
@@ -7353,12 +7418,12 @@ impl Catalog {
                     }
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
-                    mz_sql::plan::DataSourceDesc::Webhook { validate_using } => {
+                    mz_sql::plan::DataSourceDesc::Webhook(validation) => {
                         let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
                             unreachable!("webhook sources must use an existing cluster");
                         };
                         DataSourceDesc::Webhook {
-                            validate_using,
+                            validation,
                             cluster_id: id,
                         }
                     }
@@ -7468,8 +7533,8 @@ impl Catalog {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> CatalogDump {
-        CatalogDump::new(self.state.dump())
+    pub fn dump(&self) -> Result<CatalogDump, Error> {
+        Ok(CatalogDump::new(self.state.dump()?))
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -7722,6 +7787,10 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterSetCluster {
+        id: GlobalId,
+        cluster: ClusterId,
+    },
     AlterSink {
         id: GlobalId,
         cluster_config: plan::SourceSinkClusterConfig,
@@ -8723,6 +8792,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
+    fn is_subsource(&self) -> bool {
+        self.is_subsource()
+    }
+
     fn subsources(&self) -> BTreeSet<GlobalId> {
         self.subsources()
     }
@@ -8737,6 +8810,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
+    }
+
+    fn cluster_id(&self) -> Option<ClusterId> {
+        self.item().cluster_id()
     }
 }
 

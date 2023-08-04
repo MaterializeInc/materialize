@@ -11,10 +11,10 @@
 
 #![warn(missing_debug_implementations)]
 
-use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
+use itertools::Itertools;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
@@ -36,6 +36,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
+use crate::plan::transform::{Transform, TransformConfig};
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
 pub mod interpret;
@@ -1083,9 +1084,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     .unwrap_or_else(AvailableCollections::new_raw);
 
                 // Seek out an arrangement key that might be constrained to a literal.
-                // TODO: Improve key selection heuristic.
-                // Note that most (actually all, as far as I know) of the cases that used to be
-                // handled by this code are instead handled by `CanonicalizeMfp`.
+                // Note: this code has very little use nowadays, as its job was mostly taken over
+                // by `LiteralConstraints` (see in the below longer comment).
                 let key_val = in_keys
                     .arranged
                     .iter()
@@ -1097,6 +1097,20 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Determine the plan of action for the `Get` stage.
                 let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
+                    // This code path used to handle looking up literals from indexes, but it's
+                    // mostly deprecated, as this is nowadays performed by the `LiteralConstraints`
+                    // MIR transform instead. However, it's still called in a couple of tricky
+                    // special cases:
+                    // - `LiteralConstraints` handles only Gets of global ids, so this code still
+                    //   gets to handle Filters on top of Gets of local ids.
+                    // - Lowering does a `MapFilterProject::extract_from_expression`, while
+                    //   `LiteralConstraints` does
+                    //   `MapFilterProject::extract_non_errors_from_expr_mut`.
+                    // - It might happen that new literal constraint optimization opportunities
+                    //   appear somewhere near the end of the MIR optimizer after
+                    //   `LiteralConstraints` has already run.
+                    // (Also note that a similar literal constraint handling machinery is also
+                    // present when handling the leftover MFP after this big match.)
                     mfp.permute(permutation.clone(), thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
                     GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
@@ -1301,9 +1315,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         let start: usize = 1;
                         let order = vec![(0usize, key.clone(), None)];
                         // All columns of the constant input will be part of the arrangement key.
-                        // Note that currently nothing else would make this arrangement exist, so
-                        // this will end up in `missing`, and thus we'll insert an LIR ArrangeBy
-                        // later.
                         let source_arrangement = (
                             (0..key.len())
                                 .map(MirScalarExpr::Column)
@@ -1366,15 +1377,28 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     if missing != Default::default() {
                         if is_delta {
                             // join_implementation.rs produced a sub-optimal plan here;
-                            // we shouldn't plan delta joins at all if not all of the required arrangements
-                            // are available. Print an error message, to increase the chances that
-                            // the user will tell us about this.
+                            // we shouldn't plan delta joins at all if not all of the required
+                            // arrangements are available. Soft panic in CI and log an error in
+                            // production to increase the chances that we will catch all situations
+                            // that violate this constraint.
                             soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
 Dataflow info: {}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
                         } else {
-                            // It's fine and expected that linear joins don't have all their arrangements available up front,
-                            // so no need to print an error here.
+                            soft_panic_or_log!("Arrangements depended on by a non-delta join are absent: {:?}
+Dataflow info: {}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
+                            // Nowadays MIR transforms take care to insert MIR ArrangeBys for each
+                            // Join input. (Earlier, they were missing in the following cases:
+                            //  - They were const-folded away for constant inputs. This is not
+                            //    happening since
+                            //    https://github.com/MaterializeInc/materialize/pull/16351
+                            //  - They were not being inserted for the constant input of
+                            //    `IndexedFilter`s. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/20920
+                            //  - They were not being inserted for the first input of Differential
+                            //    joins. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/16099)
                         }
                         let raw_plan = std::mem::replace(
                             input_plan,
@@ -1699,7 +1723,31 @@ This is not expected to cause incorrect results, but could indicate a performanc
         Self::refine_source_mfps(&mut dataflow);
 
         if enable_monotonic_oneshot_selects {
-            Self::refine_single_time_dataflow(&mut dataflow);
+            Self::refine_single_time_operator_selection(&mut dataflow);
+
+            // The relaxation of the `must_consolidate` flag performs an LIR-based
+            // analysis and transform under checked recursion. By a similar argument
+            // made in `from_mir`, we do not expect the recursion limit to be hit.
+            // However, if that happens, we propagate an error to the caller.
+            // To apply the transform, we first obtain monotonic source and index
+            // global IDs and add them to a `TransformConfig` instance.
+            let monotonic_ids = dataflow
+                .source_imports
+                .iter()
+                .filter_map(|(id, (_, monotonic))| if *monotonic { Some(id) } else { None })
+                .chain(
+                    dataflow
+                        .index_imports
+                        .iter()
+                        .filter_map(
+                            |(id, (_, _, monotonic))| if *monotonic { Some(id) } else { None },
+                        ),
+                )
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            let config = TransformConfig { monotonic_ids };
+            Self::refine_single_time_consolidation(&mut dataflow, &config)?;
         }
 
         mz_repr::explain::trace_plan(&dataflow);
@@ -1841,9 +1889,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         target = "optimizer",
         level = "debug",
         skip_all,
-        fields(path.segment = "refine_single_time_dataflow")
+        fields(path.segment = "refine_single_time_operator_selection")
     )]
-    fn refine_single_time_dataflow(dataflow: &mut DataflowDescription<Self>) {
+    fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
         // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
         if !dataflow.is_single_time() {
             return;
@@ -1885,6 +1933,34 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
         }
         mz_repr::explain::trace_plan(dataflow);
+    }
+
+    /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
+    /// the setting of the `must_consolidate` attribute of monotonic operators, if necessary,
+    /// whenever the input is deemed to be physically monotonic.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_single_time_consolidation")
+    )]
+    fn refine_single_time_consolidation(
+        dataflow: &mut DataflowDescription<Self>,
+        config: &TransformConfig,
+    ) -> Result<(), String> {
+        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
+        if !dataflow.is_single_time() {
+            return Ok(());
+        }
+
+        let transform = transform::RelaxMustConsolidate::<T>::new();
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            transform
+                .transform(config, &mut build_desc.plan)
+                .map_err(|_| "Maximum recursion limit error in consolidation relaxation.")?;
+        }
+        mz_repr::explain::trace_plan(dataflow);
+        Ok(())
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.

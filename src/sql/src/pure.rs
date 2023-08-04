@@ -321,10 +321,15 @@ async fn purify_create_source(
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 mut text_columns,
+                details,
                 ..
             } = options.clone().try_into()?;
             let publication = publication
                 .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
+
+            if details.is_some() {
+                return Err(PlanError::PgSourceUserSpecifiedDetails);
+            }
 
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection

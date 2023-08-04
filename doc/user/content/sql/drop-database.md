@@ -46,8 +46,6 @@ DROP DATABASE IF EXISTS my_db;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the dropped database.

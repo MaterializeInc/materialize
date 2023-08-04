@@ -60,9 +60,7 @@ impl SystemParameterBackend {
         match self.session_client.get_system_vars().await {
             Ok(vars) => {
                 for (name, value) in vars {
-                    if params.is_synchronized(&name) {
-                        params.modify(&name, &value);
-                    }
+                    params.modify(&name, &value);
                 }
             }
             Err(error) => {

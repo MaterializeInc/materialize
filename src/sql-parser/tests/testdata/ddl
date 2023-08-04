@@ -1093,6 +1093,26 @@ ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
 =>
 AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: true, action: DropSubsources { if_exists: true, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
 
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE x, y, z RESTRICT
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z RESTRICT
+----
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: true, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z RESTRICT
+----
+ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: true, action: DropSubsources { if_exists: true, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
 
 parse-statement
 ALTER SOURCE n ADD SUBSOURCE a.b.c.d
@@ -1224,16 +1244,16 @@ ALTER SOURCE IF EXISTS n ADD SOURCE a, b.c AS d
 parse-statement
 ALTER VIEW name SET (property = true)
 ----
-error: Expected one of RENAME or OWNER, found SET
+error: Expected CLUSTER, found left parenthesis
 ALTER VIEW name SET (property = true)
-                ^
+                    ^
 
 parse-statement
 ALTER MATERIALIZED VIEW name SET (property = true)
 ----
-error: Expected one of RENAME or OWNER, found SET
+error: Expected CLUSTER, found left parenthesis
 ALTER MATERIALIZED VIEW name SET (property = true)
-                             ^
+                                 ^
 
 parse-statement
 ALTER SINK name SET (property = true)
@@ -2436,3 +2456,129 @@ INSPECT SHARD 'foo'
 INSPECT SHARD 'foo'
 =>
 Show(InspectShard(InspectShardStatement { id: "foo" }))
+
+parse-statement
+ALTER MATERIALIZED VIEW snk SET CLUSTER clsname
+----
+ALTER MATERIALIZED VIEW snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: false, name: UnresolvedItemName([Ident("snk")]), object_type: MaterializedView, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER MATERIALIZED VIEW snk SET CLUSTER db.clsname
+----
+error: Expected end of statement, found dot
+ALTER MATERIALIZED VIEW snk SET CLUSTER db.clsname
+                                          ^
+
+parse-statement
+ALTER MATERIALIZED VIEW db.snk SET CLUSTER clsname
+----
+ALTER MATERIALIZED VIEW db.snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: false, name: UnresolvedItemName([Ident("db"), Ident("snk")]), object_type: MaterializedView, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER MATERIALIZED VIEW IF EXISTS snk SET CLUSTER clsname
+----
+ALTER MATERIALIZED VIEW IF EXISTS snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: true, name: UnresolvedItemName([Ident("snk")]), object_type: MaterializedView, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER MATERIALIZED VIEW snk SET CLUSTER
+----
+error: Expected identifier, found EOF
+ALTER MATERIALIZED VIEW snk SET CLUSTER
+                                       ^
+
+parse-statement
+ALTER MATERIALIZED VIEW * SET CLUSTER
+----
+error: Expected identifier, found star
+ALTER MATERIALIZED VIEW * SET CLUSTER
+                        ^
+
+parse-statement
+ALTER SOURCE snk SET CLUSTER clsname
+----
+ALTER SOURCE snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: false, name: UnresolvedItemName([Ident("snk")]), object_type: Source, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER SOURCE snk SET CLUSTER db.clsname
+----
+error: Expected end of statement, found dot
+ALTER SOURCE snk SET CLUSTER db.clsname
+                               ^
+
+parse-statement
+ALTER SOURCE db.snk SET CLUSTER clsname
+----
+ALTER SOURCE db.snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: false, name: UnresolvedItemName([Ident("db"), Ident("snk")]), object_type: Source, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER SOURCE IF EXISTS snk SET CLUSTER clsname
+----
+ALTER SOURCE IF EXISTS snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: true, name: UnresolvedItemName([Ident("snk")]), object_type: Source, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER SOURCE snk SET CLUSTER
+----
+error: Expected identifier, found EOF
+ALTER SOURCE snk SET CLUSTER
+                            ^
+
+parse-statement
+ALTER SOURCE * SET CLUSTER
+----
+error: Expected identifier, found star
+ALTER SOURCE * SET CLUSTER
+             ^
+
+parse-statement
+ALTER SINK snk SET CLUSTER clsname
+----
+ALTER SINK snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: false, name: UnresolvedItemName([Ident("snk")]), object_type: Sink, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER SINK snk SET CLUSTER db.clsname
+----
+error: Expected end of statement, found dot
+ALTER SINK snk SET CLUSTER db.clsname
+                             ^
+
+parse-statement
+ALTER SINK db.snk SET CLUSTER clsname
+----
+ALTER SINK db.snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: false, name: UnresolvedItemName([Ident("db"), Ident("snk")]), object_type: Sink, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER SINK IF EXISTS snk SET CLUSTER clsname
+----
+ALTER SINK IF EXISTS snk SET CLUSTER clsname
+=>
+AlterSetCluster(AlterSetClusterStatement { if_exists: true, name: UnresolvedItemName([Ident("snk")]), object_type: Sink, set_cluster: Unresolved(Ident("clsname")) })
+
+parse-statement
+ALTER SINK snk SET CLUSTER
+----
+error: Expected identifier, found EOF
+ALTER SINK snk SET CLUSTER
+                          ^
+
+parse-statement
+ALTER SINK * SET CLUSTER
+----
+error: Expected identifier, found star
+ALTER SINK * SET CLUSTER
+           ^

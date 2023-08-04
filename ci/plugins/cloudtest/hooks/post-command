@@ -12,9 +12,10 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. test/cloudtest/config.bash
 
 kubectl() {
-    bin/ci-builder run stable kubectl --context=kind-cloudtest "$@"
+    bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
 }
 
 export_cov() {
@@ -73,6 +74,10 @@ done
 kubectl get events > kubectl-get-events.log || true
 kubectl get all > kubectl-get-all.log || true
 kubectl describe all > kubectl-describe-all.log || true
+
+kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
+kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true
+kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || true
 
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log

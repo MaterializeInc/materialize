@@ -57,7 +57,7 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
@@ -415,6 +415,9 @@ impl<'a> FromSql<'a> for Slt {
         mut raw: &'a [u8],
     ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
         Ok(match *ty {
+            PgType::ACLITEM => Self(Value::AclItem(AclItem::decode_binary(
+                types::bytea_from_sql(raw),
+            )?)),
             PgType::BOOL => Self(Value::Bool(types::bool_from_sql(raw)?)),
             PgType::BYTEA => Self(Value::Bytea(types::bytea_from_sql(raw).to_vec())),
             PgType::CHAR => Self(Value::Char(u8::from_be_bytes(
@@ -533,7 +536,8 @@ impl<'a> FromSql<'a> for Slt {
         }
         matches!(
             *ty,
-            PgType::BOOL
+            PgType::ACLITEM
+                | PgType::BOOL
                 | PgType::BYTEA
                 | PgType::CHAR
                 | PgType::DATE
@@ -929,12 +933,13 @@ impl<'a> RunnerInner<'a> {
             )
         };
 
+        let secrets_dir = temp_dir.path().join("secrets");
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
-                secrets_dir: temp_dir.path().join("secrets"),
+                secrets_dir: secrets_dir.clone(),
                 command_wrapper: config
                     .orchestrator_process_wrapper
                     .as_ref()
@@ -974,12 +979,20 @@ impl<'a> RunnerInner<'a> {
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
+                secrets_args: mz_service::secrets::SecretsReaderCliArgs {
+                    secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_reader_local_file_dir: Some(secrets_dir),
+                    secrets_reader_kubernetes_context: None,
+                    secrets_reader_aws_region: None,
+                    secrets_reader_aws_prefix: None,
+                },
             },
             secrets_controller,
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
+            concurrent_webhook_req_count: None,
             unsafe_mode: true,
             all_features: false,
             metrics_registry,
@@ -1777,14 +1790,23 @@ pub async fn run_string(
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
+                if !outcome.failure() {
+                    writeln!(
+                        runner.config.stdout,
+                        "{}",
+                        util::indent("Warning detected for: ", 4)
+                    );
+                }
                 print_record(runner.config, &record);
             }
-            writeln!(
-                runner.config.stdout,
-                "{}",
-                util::indent(&outcome.to_string(), 4)
-            );
-            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            if runner.config.verbosity >= 2 || outcome.failure() {
+                writeln!(
+                    runner.config.stdout,
+                    "{}",
+                    util::indent(&outcome.to_string(), 4)
+                );
+                writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            }
         }
 
         outcomes.0[outcome.code()] += 1;

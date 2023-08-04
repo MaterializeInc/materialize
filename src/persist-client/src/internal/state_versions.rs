@@ -310,6 +310,9 @@ impl StateVersions {
                 shard_metrics
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
+                shard_metrics
+                    .live_writers
+                    .set(u64::cast_from(new_state.collections.writers.len()));
                 Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
@@ -965,8 +968,6 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         }
     }
     fn validate_against_state(&mut self, x: &State<T>) {
-        use std::borrow::Borrow;
-
         use mz_ore::collections::HashSet;
         use timely::PartialOrder;
 
@@ -998,13 +999,13 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .inc_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| x.key.borrow())
+            .map(|x| &*x.key)
             .collect();
         let full_parts = self
             .full_batches
             .iter()
             .flat_map(|x| x.parts.iter())
-            .map(|x| x.key.borrow())
+            .map(|x| &*x.key)
             .collect();
         assert_eq!(inc_parts, full_parts);
 
@@ -1021,6 +1022,7 @@ mod tests {
     /// Regression test for (part of) #17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_all_live_states_regression_uninitialized() {
         let client = new_test_client().await;
         let state_versions = StateVersions::new(

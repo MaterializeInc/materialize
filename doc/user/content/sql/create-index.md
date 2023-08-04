@@ -163,14 +163,13 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of `obj_name`.
 - `CREATE` privileges on the containing schema.
 - `CREATE` privileges on the containing cluster.
 - `USAGE` privileges on all types used in the index definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 

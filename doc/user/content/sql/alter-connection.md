@@ -50,8 +50,6 @@ be unable to authenticate with the bastion server.
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the connection.

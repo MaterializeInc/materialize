@@ -218,6 +218,16 @@ regex: the following columns contain unsupported types:\npostgres.public.enum_ta
   );
 regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
 
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    DETAILS 'abc'
+  )
+  FOR TABLES (
+    pk_table
+  );
+contains: must not specify DETAILS option in CREATE SOURCE
+
 #
 # Establish direct replication
 #
@@ -690,8 +700,10 @@ INSERT INTO pk_table VALUES (99999);
 
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
-! SELECT COUNT(*) = 0 FROM pk_table;
-regex:publication "mz_source" does not exist
+
+> SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
+"publication \"mz_source\" does not exist"
+"publication \"mz_source\" does not exist"
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;

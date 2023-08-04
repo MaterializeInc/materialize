@@ -122,8 +122,6 @@ SHOW VIEWS;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Ownership of the object being renamed.

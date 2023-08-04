@@ -44,7 +44,17 @@ SELECT pg_has_role('joe', 'group1', 'USAGE')
 false
 
 query B
+SELECT has_role('joe', 'group1', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
 ----
 false
 
@@ -54,7 +64,17 @@ SELECT pg_has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USA
 false
 
 query B
+SELECT has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+false
+
+query B
+SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 false
 
@@ -72,7 +92,17 @@ SELECT pg_has_role('joe', 'group1', 'USAGE')
 true
 
 query B
+SELECT has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), 'group1', 'USAGE')
 ----
 true
 
@@ -82,7 +112,17 @@ SELECT pg_has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USA
 true
 
 query B
+SELECT has_role('joe', (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
+----
+true
+
+query B
+SELECT has_role((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_roles WHERE name = 'group1'), 'USAGE')
 ----
 true
 
@@ -104,6 +144,11 @@ SELECT pg_has_role('joe', 'group1', 'USAGE')
 ----
 false
 
+query B
+SELECT has_role('joe', 'group1', 'USAGE')
+----
+false
+
 statement ok
 GRANT group1 TO joe
 
@@ -114,6 +159,11 @@ group1  joe  mz_system
 
 query B
 SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
 
@@ -154,12 +204,27 @@ SELECT pg_has_role('joe', 'group1', 'USAGE')
 true
 
 query B
+SELECT has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('joe', 'group2', 'USAGE')
 ----
 true
 
 query B
+SELECT has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+false
+
+query B
+SELECT has_role('group1', 'group2', 'USAGE')
 ----
 false
 
@@ -179,12 +244,27 @@ SELECT pg_has_role('joe', 'group1', 'USAGE')
 true
 
 query B
+SELECT has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('joe', 'group2', 'USAGE')
 ----
 true
 
 query B
+SELECT has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT has_role('group1', 'group2', 'USAGE')
 ----
 true
 
@@ -224,7 +304,17 @@ SELECT pg_has_role('joe', 'group2', 'USAGE')
 true
 
 query B
+SELECT has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT has_role('joe', 'group1', 'USAGE')
 ----
 false
 
@@ -234,7 +324,17 @@ SELECT pg_has_role('group1', 'joe', 'USAGE')
 false
 
 query B
+SELECT has_role('group1', 'joe', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT has_role('group1', 'group2', 'USAGE')
 ----
 true
 
@@ -244,7 +344,17 @@ SELECT pg_has_role('group2', 'joe', 'USAGE')
 false
 
 query B
+SELECT has_role('group2', 'joe', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role('group2', 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT has_role('group2', 'group1', 'USAGE')
 ----
 false
 
@@ -530,7 +640,17 @@ SELECT pg_has_role('joe', 'group2', 'USAGE')
 true
 
 query B
+SELECT has_role('joe', 'group2', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('joe', 'group1', 'USAGE')
+----
+true
+
+query B
+SELECT has_role('joe', 'group1', 'USAGE')
 ----
 true
 
@@ -540,7 +660,17 @@ SELECT pg_has_role('group1', 'joe', 'USAGE')
 false
 
 query B
+SELECT has_role('group1', 'joe', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role('group1', 'group2', 'USAGE')
+----
+true
+
+query B
+SELECT has_role('group1', 'group2', 'USAGE')
 ----
 true
 
@@ -550,7 +680,17 @@ SELECT pg_has_role('group2', 'joe', 'USAGE')
 false
 
 query B
+SELECT has_role('group2', 'joe', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role('group2', 'group1', 'USAGE')
+----
+false
+
+query B
+SELECT has_role('group2', 'group1', 'USAGE')
 ----
 false
 
@@ -572,7 +712,17 @@ SELECT pg_has_role('group1', 'USAGE')
 false
 
 query B
+SELECT has_role('group1', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role('group1', 'MEMBER')
+----
+false
+
+query B
+SELECT has_role('group1', 'MEMBER')
 ----
 false
 
@@ -587,7 +737,17 @@ SELECT pg_has_role('group1', 'USAGE')
 true
 
 query B
+SELECT has_role('group1', 'USAGE')
+----
+true
+
+query B
 SELECT pg_has_role('group1', 'MEMBER')
+----
+true
+
+query B
+SELECT has_role('group1', 'MEMBER')
 ----
 true
 
@@ -602,7 +762,17 @@ SELECT pg_has_role('group1', 'USAGE')
 false
 
 query B
+SELECT has_role('group1', 'USAGE')
+----
+false
+
+query B
 SELECT pg_has_role('group1', 'MEMBER')
+----
+false
+
+query B
+SELECT has_role('group1', 'MEMBER')
 ----
 false
 
@@ -621,12 +791,27 @@ SELECT pg_has_role(NULL, 'materialize', 'USAGE')
 NULL
 
 query B
+SELECT has_role(NULL, 'materialize', 'USAGE')
+----
+NULL
+
+query B
 SELECT pg_has_role('materialize', NULL, 'MEMBER')
 ----
 NULL
 
 query B
+SELECT has_role('materialize', NULL, 'MEMBER')
+----
+NULL
+
+query B
 SELECT pg_has_role('materialize', 'materialize', NULL)
+----
+NULL
+
+query B
+SELECT has_role('materialize', 'materialize', NULL)
 ----
 NULL
 
@@ -649,7 +834,17 @@ SELECT pg_has_role(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'mate
 false
 
 query B
+SELECT has_role(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'materialize', 'MEMBER')
+----
+false
+
+query B
 SELECT pg_has_role('materialize', ((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'USAGE')
+----
+false
+
+query B
+SELECT has_role('materialize', ((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 'USAGE')
 ----
 false
 

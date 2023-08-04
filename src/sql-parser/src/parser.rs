@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
-use mz_sql_lexer::lexer::{self, LexerError, Token};
+use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use IsLateral::*;
@@ -271,7 +271,7 @@ impl From<Keyword> for Ident {
 /// SQL Parser
 struct Parser<'a> {
     sql: &'a str,
-    tokens: Vec<(Token, usize)>,
+    tokens: Vec<PosToken>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
     recursion_guard: RecursionGuard,
@@ -306,7 +306,7 @@ enum SetPrecedence {
 
 impl<'a> Parser<'a> {
     /// Parse the specified tokens
-    fn new(sql: &'a str, tokens: Vec<(Token, usize)>) -> Self {
+    fn new(sql: &'a str, tokens: Vec<PosToken>) -> Self {
         Parser {
             sql,
             tokens,
@@ -1552,17 +1552,16 @@ impl<'a> Parser<'a> {
 
     /// Return the nth token that has not yet been processed.
     fn peek_nth_token(&self, n: usize) -> Option<Token> {
-        self.tokens.get(self.index + n).map(|(t, _)| t.clone())
+        self.tokens
+            .get(self.index + n)
+            .map(|token| token.kind.clone())
     }
 
     /// Return the next token that has not yet been processed, or None if
     /// reached end-of-file, and mark it as processed. OK to call repeatedly
     /// after reaching EOF.
     fn next_token(&mut self) -> Option<Token> {
-        let token = self
-            .tokens
-            .get(self.index)
-            .map(|(token, _range)| token.clone());
+        let token = self.tokens.get(self.index).map(|token| token.kind.clone());
         self.index += 1;
         token
     }
@@ -1579,7 +1578,7 @@ impl<'a> Parser<'a> {
     /// next token starts.
     fn peek_pos(&self) -> usize {
         match self.tokens.get(self.index) {
-            Some((_token, pos)) => *pos,
+            Some(token) => token.offset,
             None => self.sql.len(),
         }
     }
@@ -1592,7 +1591,7 @@ impl<'a> Parser<'a> {
     fn peek_prev_pos(&self) -> usize {
         assert!(self.index > 0);
         match self.tokens.get(self.index - 1) {
-            Some((_token, pos)) => *pos,
+            Some(token) => token.offset,
             None => self.sql.len(),
         }
     }
@@ -2845,11 +2844,23 @@ impl<'a> Parser<'a> {
         };
         let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
 
-        let validate_using = if self.parse_keywords(&[VALIDATE, USING]) {
+        let validate_using = if self.parse_keyword(CHECK) {
             self.expect_token(&Token::LParen)?;
-            let validate_using = self.parse_expr()?;
+
+            let options = if self.parse_keyword(WITH) {
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_create_webhook_check_options()?;
+                self.expect_token(&Token::RParen)?;
+
+                Some(options)
+            } else {
+                None
+            };
+
+            let using = self.parse_expr()?;
             self.expect_token(&Token::RParen)?;
-            Some(validate_using)
+
+            Some(CreateWebhookSourceCheck { options, using })
         } else {
             None
         };
@@ -2864,6 +2875,61 @@ impl<'a> Parser<'a> {
                 in_cluster,
             },
         ))
+    }
+
+    fn parse_create_webhook_check_options(
+        &mut self,
+    ) -> Result<CreateWebhookSourceCheckOptions<Raw>, ParserError> {
+        let mut secrets = vec![];
+        let mut headers = vec![];
+        let mut bodies = vec![];
+
+        fn parse_alias(parser: &mut Parser<'_>) -> Result<Option<Ident>, ParserError> {
+            parser
+                .parse_keyword(AS)
+                .then(|| parser.parse_identifier())
+                .transpose()
+        }
+
+        self.parse_comma_separated(|f| {
+            match f.expect_one_of_keywords(&[SECRET, HEADERS, BODY])? {
+                SECRET => {
+                    let secret = f.parse_raw_name()?;
+                    let alias = parse_alias(f)?;
+                    let use_bytes = f.parse_keyword(Keyword::Bytes);
+
+                    secrets.push(CreateWebhookSourceSecret {
+                        secret,
+                        alias,
+                        use_bytes,
+                    });
+
+                    Ok(())
+                }
+                HEADERS => {
+                    // TODO(parkmycar): Support filtering down to specific headers.
+                    let alias = parse_alias(f)?;
+                    let use_bytes = f.parse_keyword(Keyword::Bytes);
+                    headers.push(CreateWebhookSourceHeader { alias, use_bytes });
+
+                    Ok(())
+                }
+                BODY => {
+                    let alias = parse_alias(f)?;
+                    let use_bytes = f.parse_keyword(Keyword::Bytes);
+                    bodies.push(CreateWebhookSourceBody { alias, use_bytes });
+
+                    Ok(())
+                }
+                k => unreachable!("Unexpected keyword! {k}"),
+            }
+        })?;
+
+        Ok(CreateWebhookSourceCheckOptions {
+            secrets,
+            headers,
+            bodies,
+        })
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3993,39 +4059,7 @@ impl<'a> Parser<'a> {
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
-                let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
-                let name = UnresolvedObjectName::Item(
-                    self.parse_item_name().map_no_statement_parser_err()?,
-                );
-                let action = self
-                    .expect_one_of_keywords(&[RENAME, OWNER])
-                    .map_no_statement_parser_err()?;
-                self.expect_keyword(TO).map_no_statement_parser_err()?;
-                match action {
-                    RENAME => {
-                        let to_item_name = self
-                            .parse_identifier()
-                            .map_parser_err(StatementKind::AlterObjectRename)?;
-                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            to_item_name,
-                        }))
-                    }
-                    OWNER => {
-                        let new_owner = self
-                            .parse_identifier()
-                            .map_parser_err(StatementKind::AlterOwner)?;
-                        Ok(Statement::AlterOwner(AlterOwnerStatement {
-                            object_type,
-                            if_exists,
-                            name,
-                            new_owner,
-                        }))
-                    }
-                    _ => unreachable!(),
-                }
+                self.parse_alter_views(object_type)
             }
             ObjectType::Type => {
                 let if_exists = self
@@ -4256,7 +4290,11 @@ impl<'a> Parser<'a> {
                         .parse_comma_separated(Parser::parse_item_name)
                         .map_parser_err(StatementKind::AlterSource)?;
 
-                    let cascade = self.parse_keyword(CASCADE);
+                    let cascade = matches!(
+                        self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "ALTER SOURCE...DROP")
+                            .map_parser_err(StatementKind::AlterSource)?,
+                        Some(CASCADE),
+                    );
 
                     Statement::AlterSource(AlterSourceStatement {
                         source_name,
@@ -4284,6 +4322,13 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
+                    if let Some(stmt) = self.maybe_parse_alter_set_cluster(
+                        if_exists,
+                        &source_name,
+                        ObjectType::Source,
+                    ) {
+                        return stmt;
+                    }
                     self.expect_token(&Token::LParen)
                         .map_parser_err(StatementKind::AlterSource)?;
                     let set_options = self
@@ -4508,6 +4553,11 @@ impl<'a> Parser<'a> {
                     })
                 }
                 SET => {
+                    if let Some(result) =
+                        self.maybe_parse_alter_set_cluster(if_exists, &name, ObjectType::Sink)
+                    {
+                        return result;
+                    }
                     self.expect_token(&Token::LParen)
                         .map_parser_err(StatementKind::AlterSink)?;
                     let set_options = self
@@ -4647,19 +4697,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let target_roles = if self.parse_keyword(FOR) {
-            match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
-                ROLE | USER => TargetRoleSpecification::Roles(
-                    self.parse_comma_separated(Parser::parse_identifier)?,
-                ),
-                ALL => {
-                    self.expect_keyword(ROLES)?;
-                    TargetRoleSpecification::AllRoles
-                }
-                _ => unreachable!(),
+        self.expect_keyword(FOR)?;
+        let target_roles = match self.expect_one_of_keywords(&[ROLE, USER, ALL])? {
+            ROLE | USER => TargetRoleSpecification::Roles(
+                self.parse_comma_separated(Parser::parse_identifier)?,
+            ),
+            ALL => {
+                self.expect_keyword(ROLES)?;
+                TargetRoleSpecification::AllRoles
             }
-        } else {
-            TargetRoleSpecification::CurrentRole
+            _ => unreachable!(),
         };
         let target_objects = if self.parse_keyword(IN) {
             match self.expect_one_of_keywords(&[SCHEMA, DATABASE])? {
@@ -4714,6 +4761,79 @@ impl<'a> Parser<'a> {
                 grant_or_revoke,
             },
         ))
+    }
+
+    fn parse_alter_views(
+        &mut self,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_item_name().map_no_statement_parser_err()?;
+        let action = self
+            .expect_one_of_keywords(&[SET, RENAME, OWNER])
+            .map_no_statement_parser_err()?;
+        match action {
+            RENAME => {
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
+                let to_item_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterObjectRename)?;
+                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type,
+                    if_exists,
+                    name: UnresolvedObjectName::Item(name),
+                    to_item_name,
+                }))
+            }
+            SET => self.parse_alter_set_cluster(if_exists, name, object_type),
+            OWNER => {
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name: UnresolvedObjectName::Item(name),
+                    new_owner,
+                }))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Parses `CLUSTER name` fragments into a [`AlterSetClusterStatement`] if `CLUSTER` is found.
+    fn maybe_parse_alter_set_cluster(
+        &mut self,
+        if_exists: bool,
+        name: &UnresolvedItemName,
+        object_type: ObjectType,
+    ) -> Option<Result<Statement<Raw>, ParserStatementError>> {
+        if self.peek_keyword(CLUSTER) {
+            Some(self.parse_alter_set_cluster(if_exists, name.clone(), object_type))
+        } else {
+            None
+        }
+    }
+
+    /// Parses `IN CLUSTER name` fragments into a [`AlterSetClusterStatement`].
+    fn parse_alter_set_cluster(
+        &mut self,
+        if_exists: bool,
+        name: UnresolvedItemName,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserStatementError> {
+        self.expect_keyword(CLUSTER)
+            .map_parser_err(StatementKind::AlterSetCluster)?;
+        let set_cluster = self
+            .parse_raw_ident()
+            .map_parser_err(StatementKind::AlterSetCluster)?;
+        Ok(Statement::AlterSetCluster(AlterSetClusterStatement {
+            name,
+            if_exists,
+            set_cluster,
+            object_type,
+        }))
     }
 
     /// Parse a copy statement

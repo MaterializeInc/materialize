@@ -63,6 +63,9 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     ./setup
     ```
 
+4. On macOS, configure Docker to use "gRPC FUSE" as file sharing implementation for the containers
+   (Docker settings, tab "General"). This will speed up the execution of cloudtests.
+
 # Running tests
 
 To run all short tests:
@@ -182,7 +185,7 @@ wait(condition="delete", resource="secret/some_secret")
 
 ```python
 mz.testdrive.run(
-    dedent(
+    input=dedent(
         """
         > SELECT 1;
         1
@@ -261,3 +264,13 @@ can be very relevant for your linux distribution, if it is running
 In at least one case, a VPN (mullvad) was interfering with DNS resolution. Try
 de-activating your VPN and then tear down and restart your testing cluster to
 see if that helps.
+
+## botocore.exceptions.ClientError: An error occurred (AccessDenied) when calling the CreateMultipartUpload operation: Access Denied
+
+If tests are failing almost immediately while trying to upload a file to S3, it may be a bug in our debuginfo upload logic. You can _**unset**_ all your AWS credentials to work around this.
+
+## Failure joining worker nodes
+
+If `./setup` fails during the `Joining worker nodes` step and spams 404 error messages, the kubelet has likely died on at least one node. You can troubleshoot this by adding `--retain` to the `kind create cluster` command in `setup`, and then `docker exec -it "$node" bash` to access the node. From there you can access the kubelet logs with `journalctl -xeu kubelet`.
+
+Some common issues are listed at https://kind.sigs.k8s.io/docs/user/known-issues . We launch many nodes, so it is likely to be the inotify limits.

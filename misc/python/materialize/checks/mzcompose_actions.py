@@ -113,6 +113,13 @@ class ConfigureMz(MzcomposeAction):
             )
             system_settings.add("GRANT CREATE ON CLUSTER default TO materialize;")
 
+        if (
+            MzVersion.parse("0.58.0-dev")
+            <= e.current_mz_version
+            <= MzVersion.parse("0.63.99")
+        ):
+            system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
+
         system_settings = system_settings - e.system_settings
 
         if system_settings:

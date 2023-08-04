@@ -32,7 +32,9 @@ use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
+use tracing::instrument;
 
+use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
 
 /// Prometheus monitoring metrics.
@@ -370,7 +372,6 @@ impl MetricsVecs {
             compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
-            heartbeat_writer: self.cmd_metrics("heartbeat_writer"),
             expire_reader: self.cmd_metrics("expire_reader"),
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
@@ -570,7 +571,6 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append_noop: IntCounter,
     pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
-    pub(crate) heartbeat_writer: CmdMetrics,
     pub(crate) heartbeat_reader: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
     pub(crate) expire_writer: CmdMetrics,
@@ -1044,6 +1044,8 @@ pub struct StateMetrics {
     pub(crate) rollup_at_seqno_migration: IntCounter,
     pub(crate) fetch_recent_live_diffs_fast_path: IntCounter,
     pub(crate) fetch_recent_live_diffs_slow_path: IntCounter,
+    pub(crate) writer_added: IntCounter,
+    pub(crate) writer_removed: IntCounter,
 }
 
 impl StateMetrics {
@@ -1097,6 +1099,14 @@ impl StateMetrics {
                 name: "mz_persist_state_fetch_recent_live_diffs_slow_path",
                 help: "count of fetch_recent_live_diffs that hit the slow path",
             )),
+            writer_added: registry.register(metric!(
+                name: "mz_persist_state_writer_added",
+                help: "count of writers added to the state",
+            )),
+            writer_removed: registry.register(metric!(
+                name: "mz_persist_state_writer_removed",
+                help: "count of writers removed from the state",
+            )),
         }
     }
 }
@@ -1134,6 +1144,7 @@ pub struct ShardsMetrics {
     pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
+    live_writers: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1291,6 +1302,11 @@ impl ShardsMetrics {
                 help: "number of Blob::set calls for this shard",
                 var_labels: ["shard", "name"],
             )),
+            live_writers: registry.register(metric!(
+                name: "mz_persist_shard_live_writers",
+                help: "number of writers that have recently appended updates to this shard",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1362,6 +1378,7 @@ pub struct ShardMetrics {
         DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1449,7 +1466,10 @@ impl ShardMetrics {
                 .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             blob_sets: shards_metrics
                 .blob_sets
-                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            live_writers: shards_metrics
+                .live_writers
+                .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
         }
     }
 
@@ -2023,6 +2043,7 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
+    #[instrument(name = "blob::get", skip_all, fields(shard=blob_key_shard_id(key)))]
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let res = self
             .metrics
@@ -2040,6 +2061,7 @@ impl Blob for MetricsBlob {
         res
     }
 
+    #[instrument(name = "blob::list_keys_and_metadata", skip_all, fields(shard=blob_key_shard_id(key_prefix)))]
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,
@@ -2075,6 +2097,7 @@ impl Blob for MetricsBlob {
         res
     }
 
+    #[instrument(name = "blob::set", skip_all, fields(shard=blob_key_shard_id(key)))]
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
@@ -2090,6 +2113,7 @@ impl Blob for MetricsBlob {
         res
     }
 
+    #[instrument(name = "blob::delete", skip_all, fields(shard=blob_key_shard_id(key)))]
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let bytes = self
             .metrics
@@ -2139,6 +2163,7 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
+    #[instrument(name = "consensus::head", skip_all, fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
             .metrics
@@ -2156,6 +2181,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
+    #[instrument(name = "consensus::compare_and_set", skip_all, fields(shard=key))]
     async fn compare_and_set(
         &self,
         key: &str,
@@ -2184,6 +2210,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
+    #[instrument(name = "consensus::scan", skip_all, fields(shard=key))]
     async fn scan(
         &self,
         key: &str,
@@ -2207,6 +2234,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
+    #[instrument(name = "consensus::truncate", skip_all, fields(shard=key))]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let deleted = self
             .metrics
@@ -2220,6 +2248,11 @@ impl Consensus for MetricsConsensus {
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
     }
+}
+
+fn blob_key_shard_id(key: &str) -> Option<String> {
+    let (shard_id, _) = BlobKey::parse_ids(key).ok()?;
+    Some(shard_id.to_string())
 }
 
 /// Encode a frontier into an i64 acceptable for use in metrics.

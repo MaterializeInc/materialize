@@ -119,22 +119,27 @@ def cargo(
     ]
 
 
-def tool(arch: Arch, name: str, channel: Optional[str] = None) -> List[str]:
+def tool(
+    arch: Arch, name: str, channel: Optional[str] = None, prefix_name: bool = True
+) -> List[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
         arch: The CPU architecture to build for.
         name: The name of the binutils tool to invoke.
         channel: The Rust toolchain channel to use. Either None/"stable" or "nightly".
+        prefix_name: Whether or not the tool name should be prefixed with the target
+            architecture.
 
     Returns:
         A list of arguments specifying the beginning of the command to invoke.
     """
     if sys.platform == "darwin":
         _bootstrap_darwin(arch)
+    tool_name = f"{target(arch)}-{name}" if prefix_name else name
     return [
         *_enter_builder(arch, channel),
-        f"{target(arch)}-{name}",
+        tool_name,
     ]
 
 

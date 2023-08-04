@@ -67,6 +67,7 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
+    AlterSetCluster(AlterSetClusterStatement<T>),
     AlterSink(AlterSinkStatement<T>),
     AlterSource(AlterSourceStatement<T>),
     AlterSystemSet(AlterSystemSetStatement),
@@ -130,6 +131,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
+            Statement::AlterSetCluster(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
             Statement::AlterSink(stmt) => f.write_node(stmt),
             Statement::AlterSource(stmt) => f.write_node(stmt),
@@ -198,6 +200,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
+        StatementKind::AlterSetCluster => "alter_set_cluster",
         StatementKind::AlterSink => "alter_sink",
         StatementKind::AlterSource => "alter_source",
         StatementKind::AlterSystemSet => "alter_system_set",
@@ -659,7 +662,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub body_format: Format<T>,
     pub include_headers: bool,
-    pub validate_using: Option<Expr<T>>,
+    pub validate_using: Option<CreateWebhookSourceCheck<T>>,
     pub in_cluster: T::ClusterName,
 }
 
@@ -684,15 +687,143 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         }
 
         if let Some(validate) = &self.validate_using {
-            f.write_str(" VALIDATE USING ");
-            f.write_str("( ");
+            f.write_str(" ");
             f.write_node(validate);
-            f.write_str(" )");
         }
     }
 }
 
 impl_display_t!(CreateWebhookSourceStatement);
+
+/// `CHECK ( ... )`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceCheck<T: AstInfo> {
+    pub options: Option<CreateWebhookSourceCheckOptions<T>>,
+    pub using: Expr<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceCheck<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CHECK (");
+
+        if let Some(options) = &self.options {
+            f.write_node(options);
+            f.write_str(" ");
+        }
+
+        f.write_node(&self.using);
+        f.write_str(")");
+    }
+}
+
+impl_display_t!(CreateWebhookSourceCheck);
+
+/// `CHECK ( WITH ( ... ) )`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceCheckOptions<T: AstInfo> {
+    pub secrets: Vec<CreateWebhookSourceSecret<T>>,
+    pub headers: Vec<CreateWebhookSourceHeader>,
+    pub bodies: Vec<CreateWebhookSourceBody>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceCheckOptions<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("WITH (");
+
+        let mut delim = "";
+        if !self.headers.is_empty() {
+            f.write_node(&display::comma_separated(&self.headers[..]));
+            delim = ", ";
+        }
+        if !self.bodies.is_empty() {
+            f.write_str(delim);
+            f.write_node(&display::comma_separated(&self.bodies[..]));
+            delim = ", ";
+        }
+        if !self.secrets.is_empty() {
+            f.write_str(delim);
+            f.write_node(&display::comma_separated(&self.secrets[..]));
+        }
+
+        f.write_str(")");
+    }
+}
+
+impl_display_t!(CreateWebhookSourceCheckOptions);
+
+/// `SECRET ... [AS ...] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceSecret<T: AstInfo> {
+    pub secret: T::ItemName,
+    pub alias: Option<Ident>,
+    pub use_bytes: bool,
+}
+
+impl<T: AstInfo> AstDisplay for CreateWebhookSourceSecret<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SECRET ");
+        f.write_node(&self.secret);
+
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display_t!(CreateWebhookSourceSecret);
+
+/// `HEADER [AS ...] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceHeader {
+    pub alias: Option<Ident>,
+    pub use_bytes: bool,
+}
+
+impl AstDisplay for CreateWebhookSourceHeader {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("HEADERS");
+
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceHeader);
+
+/// `BODY [AS ...] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceBody {
+    pub alias: Option<Ident>,
+    pub use_bytes: bool,
+}
+
+impl AstDisplay for CreateWebhookSourceBody {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("BODY");
+
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceBody);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1062,6 +1193,33 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// `ALTER SET CLUSTER`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSetClusterStatement<T: AstInfo> {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub object_type: ObjectType,
+    pub set_cluster: T::ClusterName,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSetClusterStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+
+        if self.if_exists {
+            f.write_str(" IF EXISTS");
+        }
+
+        f.write_str(" ");
+        f.write_node(&self.name);
+
+        f.write_str(" SET CLUSTER ");
+        f.write_node(&self.set_cluster);
+    }
+}
+impl_display_t!(AlterSetClusterStatement);
 
 /// `CREATE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3375,8 +3533,6 @@ impl_display_t!(RevokePrivilegesStatement);
 pub enum TargetRoleSpecification<T: AstInfo> {
     /// Specific list of roles.
     Roles(Vec<T::RoleName>),
-    /// The current role executing the statement.
-    CurrentRole,
     /// All current and future roles.
     AllRoles,
 }
@@ -3385,7 +3541,6 @@ impl<T: AstInfo> AstDisplay for TargetRoleSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             TargetRoleSpecification::Roles(roles) => f.write_node(&display::comma_separated(roles)),
-            TargetRoleSpecification::CurrentRole => {}
             TargetRoleSpecification::AllRoles => f.write_str("ALL ROLES"),
         }
     }
@@ -3498,7 +3653,6 @@ impl<T: AstInfo> AstDisplay for AlterDefaultPrivilegesStatement<T> {
                 f.write_str(" FOR ROLE ");
                 f.write_node(&self.target_roles);
             }
-            TargetRoleSpecification::CurrentRole => {}
             TargetRoleSpecification::AllRoles => {
                 f.write_str(" FOR ");
                 f.write_node(&self.target_roles);

@@ -40,8 +40,6 @@ SHOW CREATE INDEX my_view_idx;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schema containing the index.

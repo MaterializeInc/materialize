@@ -42,7 +42,7 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
-    self, is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
+    self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
     SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
 };
@@ -1386,17 +1386,17 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_item(
         &mut self,
         id: GlobalId,
-        item_name: &str,
-        item: &SerializedCatalogItem,
+        entry: &catalog::CatalogEntry,
     ) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
+                let definition = Catalog::serialize_item(entry.item());
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: item_name.to_string(),
-                    definition: item.clone(),
-                    owner_id: v.owner_id,
-                    privileges: v.clone().privileges,
+                    name: entry.name().item.clone(),
+                    definition,
+                    owner_id: *entry.owner_id(),
+                    privileges: entry.privileges().all_values_owned().collect(),
                 })
             } else {
                 None
@@ -1417,18 +1417,15 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the called to either abort the transaction or commit.
-    pub(crate) fn update_items(
-        &mut self,
-        items: BTreeMap<GlobalId, (String, SerializedCatalogItem)>,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
-            if let Some((item_name, item)) = items.get(&k.gid) {
+            if let Some(item) = items.get(&k.gid) {
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: item_name.clone(),
-                    definition: item.clone(),
-                    owner_id: v.owner_id,
-                    privileges: v.privileges.clone(),
+                    name: item.name.item.clone(),
+                    definition: item.definition.clone(),
+                    owner_id: item.owner_id.clone(),
+                    privileges: item.privileges.clone(),
                 })
             } else {
                 None
@@ -1507,7 +1504,7 @@ impl<'a> Transaction<'a> {
     /// Returns an error if `id` is not found.
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
-    /// DO NOT call this function in a loop.
+    /// DO NOT call this function in a loop, use [`Self::update_clusters`] instead.
     pub(crate) fn update_cluster(
         &mut self,
         id: ClusterId,
@@ -1534,12 +1531,47 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Updates all clusters with ids matching the keys of `clusters` in the transaction, to the
+    /// corresponding value in `clusters`.
+    ///
+    /// Returns an error if any id in `clusters` is not found.
+    ///
+    /// NOTE: On error, there still may be some clusters updated in the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub(crate) fn update_clusters(
+        &mut self,
+        clusters: BTreeMap<ClusterId, catalog::Cluster>,
+    ) -> Result<(), Error> {
+        let n = self.clusters.update(|k, _v| {
+            if let Some(cluster) = clusters.get(&k.id) {
+                Some(ClusterValue {
+                    name: cluster.name().to_string(),
+                    linked_object_id: cluster.linked_object_id(),
+                    owner_id: cluster.owner_id,
+                    privileges: cluster.privileges().all_values_owned().collect(),
+                    config: cluster.config.clone(),
+                })
+            } else {
+                None
+            }
+        })?;
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+        if n == clusters.len() {
+            Ok(())
+        } else {
+            let update_ids: BTreeSet<_> = clusters.into_keys().collect();
+            let cluster_ids: BTreeSet<_> = self.clusters.items().keys().map(|k| k.id).collect();
+            let mut unknown = update_ids.difference(&cluster_ids);
+            Err(SqlCatalogError::UnknownCluster(unknown.join(", ")).into())
+        }
+    }
+
     /// Updates cluster replica `replica_id` in the transaction to `replica`.
     ///
     /// Returns an error if `replica_id` is not found.
     ///
     /// Runtime is linear with respect to the total number of cluster replicas in the stash.
-    /// DO NOT call this function in a loop.
+    /// DO NOT call this function in a loop, use [`Self::update_cluster_replicas`] instead.
     pub(crate) fn update_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
@@ -1563,6 +1595,41 @@ impl<'a> Transaction<'a> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownClusterReplica(replica_id.to_string()).into())
+        }
+    }
+
+    /// Updates all cluster replicas with ids matching the keys of `replicas` in the
+    /// transaction, to the corresponding value in `replicas`.
+    ///
+    /// Returns an error if any id in `replicas` is not found.
+    ///
+    /// NOTE: On error, there still may be some cluster replicas updated in the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub(crate) fn update_cluster_replicas(
+        &mut self,
+        replicas: BTreeMap<ReplicaId, (ClusterId, catalog::ClusterReplica)>,
+    ) -> Result<(), Error> {
+        let n = self.cluster_replicas.update(|k, _v| {
+            if let Some((cluster_id, replica)) = replicas.get(&k.id) {
+                Some(ClusterReplicaValue {
+                    cluster_id: *cluster_id,
+                    name: replica.name.clone(),
+                    config: replica.config.clone().into(),
+                    owner_id: replica.owner_id,
+                })
+            } else {
+                None
+            }
+        })?;
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+        if n == replicas.len() {
+            Ok(())
+        } else {
+            let update_ids: BTreeSet<_> = replicas.into_keys().collect();
+            let replica_ids: BTreeSet<_> =
+                self.cluster_replicas.items().keys().map(|k| k.id).collect();
+            let mut unknown = update_ids.difference(&replica_ids);
+            Err(SqlCatalogError::UnknownClusterReplica(unknown.join(", ")).into())
         }
     }
 
@@ -1724,8 +1791,7 @@ impl<'a> Transaction<'a> {
                 return Ok(());
             }
             let collection = typed.from_tx(tx).await?;
-            let upper = tx.upper(collection.id).await?;
-            let mut batch = collection.make_batch_lower(upper)?;
+            let mut batch = collection.make_batch_tx(tx).await?;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, k, v, *diff);
             }

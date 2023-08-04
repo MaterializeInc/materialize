@@ -1241,7 +1241,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                     }
                                   },
                                   "forms": {
-                                    "raw": false,
+                                    "raw": true,
                                     "arranged": [
                                       [
                                         [

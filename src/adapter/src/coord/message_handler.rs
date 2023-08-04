@@ -69,9 +69,7 @@ impl Coordinator {
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::GroupCommitInitiate => {
-                self.try_group_commit().await;
-            }
+            Message::GroupCommitInitiate(span) => self.try_group_commit().instrument(span).await,
             Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
                 self.group_commit_apply(timestamp, responses, write_lock_guard)
                     .await;
@@ -105,6 +103,13 @@ impl Coordinator {
             }
             Message::RetireExecute { data } => {
                 self.retire_execute(data);
+            }
+            Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+                self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                    .await;
+            }
+            Message::PeekStageReady { ctx, stage } => {
+                self.sequence_peek_stage(ctx, stage).await;
             }
         }
     }
@@ -325,36 +330,6 @@ impl Coordinator {
                     self.buffer_builtin_table_updates(updates);
                 }
             }
-            ControllerResponse::ComputeReplicaWriteFrontiers(updates) => {
-                let mut builtin_updates = vec![];
-                for (replica_id, new) in updates {
-                    let m = match self
-                        .transient_replica_metadata
-                        .entry(replica_id)
-                        .or_insert_with(|| Some(Default::default()))
-                    {
-                        // `None` is the tombstone for a removed replica
-                        None => continue,
-                        Some(md) => &mut md.write_frontiers,
-                    };
-                    let old = std::mem::replace(m, new.clone());
-                    if old != new {
-                        let retractions = self
-                            .catalog()
-                            .state()
-                            .pack_replica_write_frontiers_updates(replica_id, &old, -1);
-                        builtin_updates.extend(retractions.into_iter());
-
-                        let insertions = self
-                            .catalog()
-                            .state()
-                            .pack_replica_write_frontiers_updates(replica_id, &new, 1);
-                        builtin_updates.extend(insertions.into_iter());
-                    }
-                }
-
-                self.buffer_builtin_table_updates(builtin_updates);
-            }
         }
     }
 
@@ -362,7 +337,7 @@ impl Coordinator {
     async fn message_purified_statement_ready(
         &mut self,
         PurifiedStatementReady {
-            mut ctx,
+            ctx,
             result,
             params,
             resolved_ids,
@@ -405,7 +380,7 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e.into())),
             };
             let plan = match self.plan_statement(
-                ctx.session_mut(),
+                ctx.session(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
             ) {
@@ -432,7 +407,7 @@ impl Coordinator {
 
         let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
 
-        match self.plan_statement(ctx.session_mut(), stmt, &params) {
+        match self.plan_statement(ctx.session(), stmt, &params) {
             Ok(Plan::CreateSource(plan)) => {
                 let source_id = match self.catalog_mut().allocate_user_id().await {
                     Ok(id) => id,

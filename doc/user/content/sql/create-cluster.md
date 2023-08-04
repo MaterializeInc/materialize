@@ -188,8 +188,6 @@ REPLICA`](../create-cluster-replica).
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - `CREATECLUSTER` privileges on the system.

@@ -98,7 +98,10 @@ use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_ore::task;
+use mz_ore::{
+    assert_contains,
+    task::{self, RuntimeExt},
+};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
 use rand::RngCore;
@@ -2001,6 +2004,63 @@ fn test_github_20262() {
     }
 }
 
+// Test that the server properly handles cancellation requests of read-then-write queries.
+// See #20404.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_read_then_write() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
+        .unwrap();
+
+    // Lots of races here, so try this whole thing in a loop.
+    Retry::default()
+        .clamp_backoff(Duration::ZERO)
+        .retry(|_state| {
+            let mut client1 = server.connect(postgres::NoTls).unwrap();
+            let mut client2 = server.connect(postgres::NoTls).unwrap();
+            let cancel_token = client2.cancel_token();
+
+            client1.batch_execute("DELETE FROM foo").unwrap();
+            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
+            client1
+                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
+                .unwrap();
+
+            let handle1 = thread::spawn(move || {
+                let err =  client1
+                    .batch_execute("insert into foo select a, case when mz_internal.mz_sleep(ts) > 0 then 0 end as ts from foo")
+                    .unwrap_err();
+                assert_contains!(
+                    err.to_string(),
+                    "statement timeout"
+                );
+                client1
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            let handle2 = thread::spawn(move || {
+                client2
+                .batch_execute("insert into foo values ('blah', 1);")
+                .unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            cancel_token.cancel_query(postgres::NoTls)?;
+            let mut client1 = handle1.join().unwrap();
+            handle2.join().unwrap();
+            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
+            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
+            if rows !=1 {
+                anyhow::bail!("unexpected row count: {rows}");
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .unwrap();
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_metrics() {
@@ -2082,116 +2142,193 @@ fn webhook_concurrent_actions() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
             &[],
         )
         .expect("failed to create cluster");
     client
         .execute(
-            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON",
             &[],
         )
         .expect("failed to create source");
 
-    let now = || {
+    fn now() -> u128 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos()
-    };
+    }
 
     // Flag that lets us shutdown our threads.
     let keep_sending = Arc::new(AtomicBool::new(true));
-    let success_count = Arc::new(AtomicUsize::new(0));
-    let (tx, rx) = std::sync::mpsc::channel();
+    // Track how many requests were resolved before we dropped the collection.
+    let expected_success = Arc::new(AtomicUsize::new(0));
 
-    // Spin up a few threads that push a bunch of data to the webhook.
-    let posters: Vec<_> = (0..4)
-        .map(|thread_idx| {
-            let keep_sending_ = Arc::clone(&keep_sending);
-            let success_count_ = Arc::clone(&success_count);
-            let addr = server.inner.http_local_addr().clone();
-            let tx_ = tx.clone();
+    // Spin up a thread that will contiously push data to the webhook.
+    let keep_sending_ = Arc::clone(&keep_sending);
+    let runtime_handle = Arc::clone(&server.runtime);
+    let expected_success_ = Arc::clone(&expected_success);
+    let addr = server.inner.http_local_addr();
 
-            std::thread::spawn(move || {
-                let mut i = 0;
+    let poster = std::thread::spawn(move || {
+        let mut i = 0;
 
-                // Keep sending events until we're told to stop.
-                while keep_sending_.load(std::sync::atomic::Ordering::Relaxed) {
-                    let http_client = Client::new();
-                    let webhook_url = format!(
-                        "http://{}/api/webhook/materialize/public/webhook_json",
-                        addr,
-                    );
+        let http_client = reqwest::Client::new();
+        let mut tasks = Vec::with_capacity(500);
 
+        // Keep sending events until we're told to stop.
+        while keep_sending_.load(std::sync::atomic::Ordering::Relaxed) {
+            let webhook_url = format!(
+                "http://{}/api/webhook/materialize/public/webhook_json",
+                addr,
+            );
+
+            let http_client_ = http_client.clone();
+            let expected_success__ = Arc::clone(&expected_success_);
+            let handle =
+                runtime_handle.spawn_named(|| "webhook_concurrent_actions-appender", async move {
                     // Create an event.
                     let event = WebhookEvent {
                         ts: now(),
                         name: format!("event_{i}"),
-                        thread: thread_idx,
+                        thread: 1,
                     };
 
                     // Send all of our events to our webhook source.
-                    let resp = http_client
+                    let resp = http_client_
                         .post(&webhook_url)
                         .json(&event)
                         .send()
+                        .await
                         .expect("failed to POST event");
-                    tx_.send(resp.status()).expect("channel closed?");
+                    expected_success__.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    resp
+                });
+            tasks.push(handle);
+            i += 1;
 
-                    // Incrament the count of how many successes we should see.
-                    success_count_.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    i += 1;
-                }
-            })
-        })
-        .collect();
+            // Wait before sending another request.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Wait on all of the tasks to finish, then return the results.
+        let all_tasks = futures::future::join_all(tasks);
+        runtime_handle.block_on(all_tasks)
+    });
 
     // Let the posting threads run for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(4));
+    std::thread::sleep(std::time::Duration::from_secs(5));
 
     // We should see at least this many successes.
-    let expected_success = success_count.load(std::sync::atomic::Ordering::Relaxed);
+    let expected_success = expected_success.load(std::sync::atomic::Ordering::Relaxed);
     // Drop the source
     client
         .execute("DROP SOURCE webhook_json;", &[])
         .expect("failed to drop source");
 
     // Keep sending for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::thread::sleep(std::time::Duration::from_secs(2));
     // Stop the threads.
     keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
-    for handle in posters {
-        handle.join().expect("thread panicked!");
-    }
-    // Drop our sender, otherwise the channel will never complete?
-    drop(tx);
+    let results = poster.join().expect("thread panicked!");
 
     // Inspect the results.
-    let mut results = rx.into_iter();
+    let mut results = results
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("no join failures")
+        .into_iter()
+        .map(|r| r.status());
 
     // We should see at least "expected_success" number of successes, because this was the total
     // count before we dropped the source.
     for _ in 0..expected_success {
-        let status = results.next().expect("status to exist");
-        assert!(status.is_success())
+        let status = results.next().expect("element");
+        // Note it's possible we get rate limited as we append so we allow that here.
+        assert!(
+            status.is_success() || status == StatusCode::TOO_MANY_REQUESTS,
+            "status: {status:?}"
+        )
     }
     // We should have seen at least 100 successes.
     assert!(expected_success > 100);
 
-    // After we drop the source though, we should see a few successes followed by a bunch of
-    // NOT_FOUND.
-    let mut saw_atleast_one_success_after_close = false;
-    while let Some(status) = results.next() {
-        if status.is_success() {
-            saw_atleast_one_success_after_close = true;
-        }
-        assert!(
-            status.is_success() || status == http::StatusCode::NOT_FOUND,
-            "found bad status {status:?}"
+    // Best effort cleanup.
+    let _ = client.execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[]);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_concurrency_limit() {
+    let concurrency_limit = 15;
+    let config = util::Config::default().with_concurrent_webhook_req_count(concurrency_limit);
+    let server = util::start_server(config).unwrap();
+    // Note: we need enable_unstable_dependencies to use mz_sleep.
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_unstable_dependencies"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK \
+             BODY FORMAT TEXT \
+             CHECK ( WITH(BODY) body IS NOT NULL AND mz_internal.mz_sleep(5) IS NULL )",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text",
+        server.inner.http_local_addr().clone(),
+    );
+    let mut handles = Vec::with_capacity(concurrency_limit + 5);
+
+    for _ in 0..concurrency_limit + 5 {
+        let http_client_ = http_client.clone();
+        let webhook_url_ = webhook_url.clone();
+
+        let handle = server.runtime.spawn_named(
+            || "webhook-concurrency-limit-test".to_string(),
+            async move {
+                let resp = http_client_
+                    .post(webhook_url_)
+                    .body("a")
+                    .send()
+                    .await
+                    .expect("response to succeed");
+                resp.status()
+            },
         );
+        handles.push(handle);
     }
-    assert!(saw_atleast_one_success_after_close);
+    let results = server
+        .runtime
+        .block_on(futures::future::try_join_all(handles))
+        .expect("failed to wait for requests");
+
+    let successes = results
+        .iter()
+        .filter(|status_code| status_code.is_success())
+        .count();
+    // Note: if this status code changes, we need to update our docs.
+    let rate_limited = results
+        .iter()
+        .filter(|status_code| **status_code == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+
+    // We expect at least the number of requests we allow concurrently to succeed.
+    assert!(successes >= concurrency_limit);
+    // We send 5 more requests than our limit, but we assert only at least 3 get
+    // rate limited to reduce test flakiness.
+    assert!(rate_limited >= 3);
 }

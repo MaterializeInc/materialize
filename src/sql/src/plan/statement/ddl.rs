@@ -30,8 +30,8 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSinkAction,
-    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
@@ -106,16 +106,16 @@ use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
-    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View,
+    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
+    Source, SourceSinkClusterConfig, Table, Type, View, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -402,16 +402,16 @@ pub fn plan_create_webhook_source(
     } = stmt;
 
     let validate_using = validate_using
-        .map(|expr| query::plan_webhook_validate_using(scx, expr))
+        .map(|stmt| query::plan_webhook_validate_using(scx, stmt))
         .transpose()?;
-    if let Some(expr) = &validate_using {
+    if let Some(WebhookValidation { expression, .. }) = &validate_using {
         // If the validation expression doesn't reference any part of the request, then we should
         // return an error because it's almost definitely wrong.
-        if !expr.contains_column() {
+        if !expression.contains_column() {
             return Err(PlanError::WebhookValidationDoesNotUseColumns);
         }
         // Validation expressions cannot contain unmaterializable functions, e.g. now().
-        if expr.contains_unmaterializable() {
+        if expression.contains_unmaterializable() {
             return Err(PlanError::WebhookValidationNonDeterministic);
         }
     }
@@ -474,7 +474,7 @@ pub fn plan_create_webhook_source(
         name,
         source: Source {
             create_sql,
-            data_source: DataSourceDesc::Webhook { validate_using },
+            data_source: DataSourceDesc::Webhook(validate_using),
             desc,
         },
         if_not_exists,
@@ -2831,8 +2831,6 @@ pub fn plan_create_cluster(
     let managed = managed.unwrap_or_else(|| replicas.is_none());
 
     if managed {
-        scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
-
         if replicas.is_some() {
             sql_bail!("REPLICAS not supported for managed clusters");
         }
@@ -4024,19 +4022,39 @@ pub fn plan_drop_owned(
 
     // Replicas
     for replica in scx.catalog.get_cluster_replicas() {
-        if role_ids.contains(&replica.owner_id()) {
+        let cluster = scx.catalog.get_cluster(replica.cluster_id());
+        // We skip over linked cluster replicas because they will be added later when collecting
+        // the dependencies of the linked object.
+        if cluster.linked_object_id().is_none() && role_ids.contains(&replica.owner_id()) {
             drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
         }
     }
 
     // Clusters
     for cluster in scx.catalog.get_clusters() {
-        if role_ids.contains(&cluster.owner_id()) {
-            if !cascade && !cluster.bound_objects().is_empty() {
-                sql_bail!(
-                    "cannot drop cluster {} without CASCADE while it contains active objects",
-                    cluster.name().quoted()
-                );
+        // We skip over linked clusters because they will be added later when collecting
+        // the dependencies of the linked object.
+        if cluster.linked_object_id().is_none() && role_ids.contains(&cluster.owner_id()) {
+            // Note: CASCADE is not required for replicas.
+            if !cascade {
+                let non_owned_bound_objects: Vec<_> = cluster
+                    .bound_objects()
+                    .into_iter()
+                    .map(|global_id| scx.catalog.get_item(global_id))
+                    .filter(|item| !role_ids.contains(&item.owner_id()))
+                    .collect();
+                if !non_owned_bound_objects.is_empty() {
+                    let names: Vec<_> = non_owned_bound_objects
+                        .into_iter()
+                        .map(|item| scx.catalog.resolve_full_name(item.name()))
+                        .map(|name| name.to_string().quoted().to_string())
+                        .collect();
+                    sql_bail!(
+                        "cannot drop cluster {} without CASCADE: still depended upon by non-owned catalog items {}",
+                        cluster.name().quoted(),
+                        names.join(", ")
+                    );
+                }
             }
             drop_ids.push(cluster.id().into());
         }
@@ -4286,8 +4304,6 @@ pub fn plan_alter_cluster(
         if_exists,
     }: AlterClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTERS)?;
-
     let cluster = match resolve_cluster(scx, &name, if_exists)? {
         Some(entry) => entry,
         None => {
@@ -4423,6 +4439,81 @@ pub fn plan_alter_cluster(
         name: cluster.name().to_string(),
         options,
     }))
+}
+
+pub fn describe_alter_set_cluster(
+    _: &StatementContext,
+    _: AlterSetClusterStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_item_set_cluster(
+    scx: &StatementContext,
+    AlterSetClusterStatement {
+        if_exists,
+        set_cluster: in_cluster_name,
+        name,
+        object_type,
+    }: AlterSetClusterStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_ALTER_SET_CLUSTER)?;
+
+    let object_type = object_type.into();
+
+    // Prevent access to `SET CLUSTER` for unsupported objects.
+    match object_type {
+        ObjectType::MaterializedView => {}
+        ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
+            bail_unsupported!(20841, format!("ALTER {object_type} SET CLUSTER"))
+        }
+        _ => {
+            bail_never_supported!(
+                format!("ALTER {object_type} SET CLUSTER"),
+                "sql/alter-set-cluster/",
+                format!("{object_type} has no associated cluster")
+            )
+        }
+    }
+
+    let in_cluster = scx.catalog.get_cluster(in_cluster_name.id);
+
+    match resolve_item(scx, name.clone(), if_exists)? {
+        Some(entry) => {
+            let catalog_object_type: ObjectType = entry.item_type().into();
+            if catalog_object_type != object_type {
+                sql_bail!("Cannot modify {} as {object_type}", entry.item_type());
+            }
+            let current_cluster = entry.cluster_id();
+            let Some(current_cluster) = current_cluster else {
+                sql_bail!("No cluster associated with {name}");
+            };
+
+            if !scx
+                .catalog
+                .is_system_schema_specifier(&entry.name().qualifiers.schema_spec)
+            {
+                ensure_cluster_is_not_linked(scx, in_cluster.id())?;
+            }
+
+            if current_cluster == in_cluster.id() {
+                Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+            } else {
+                Ok(Plan::AlterSetCluster(AlterSetClusterPlan {
+                    id: entry.id(),
+                    set_cluster: in_cluster.id(),
+                }))
+            }
+        }
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
 }
 
 pub fn describe_alter_object_rename(
@@ -5009,7 +5100,7 @@ pub(crate) fn resolve_item<'a>(
 }
 
 /// Returns an error if the given cluster is a linked cluster
-fn ensure_cluster_is_not_linked(
+pub(crate) fn ensure_cluster_is_not_linked(
     scx: &StatementContext,
     cluster_id: ClusterId,
 ) -> Result<(), PlanError> {
@@ -5030,7 +5121,7 @@ fn ensure_cluster_is_not_linked(
 }
 
 /// Returns an error if the given cluster is a managed cluster
-pub(crate) fn ensure_cluster_is_not_managed(
+fn ensure_cluster_is_not_managed(
     scx: &StatementContext,
     cluster_id: ClusterId,
 ) -> Result<(), PlanError> {

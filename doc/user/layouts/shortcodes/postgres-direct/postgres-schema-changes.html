@@ -1,4 +1,22 @@
-Materialize does not support changes to schemas for existing publications, and
-will set the source into an error state if a breaking DDL change is detected
-upstream. To handle schema changes, you need to drop the existing sources and
-then recreate them after creating new publications for the updated schemas.
+Materialize supports changes to PostgreSQL sources' ingested tables (known as
+"subsources") in the following ways:
+
+#### Compatible schema changes
+
+- Adding columns to tables. Materialize will not ingest these columns.
+- Dropping columns that were added after the source was created. These columns
+are never ingested, so can be dropped without issue.
+- Adding or removing `NOT NULL` constraints to tables that were nullable when
+the source was created.
+
+#### Incompatible schema changes
+
+- All other changes to tables' schemas are considered "definite errors," and
+Materialize will prevent you from reading from the subsource after it detects
+this change occurred.
+
+However, if you make an incompatible schema change to a subsource's upstream
+table, you use use [`ALTER SOURCE`](/sql/alter-source/) to first drop the
+subsource (`DROP SUBSOURCE`), and then add it back to the source (`ADD
+SUBSOURCE`). When you add the subsource, it will have the Postgres table's
+current schema.

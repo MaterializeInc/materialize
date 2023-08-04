@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE SECRET secret1 AS 'secret';
+$ postgres-connect name=materialize url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
-> CREATE SECRET secret2 AS 'secret';
+# Before v0.62, `returning` was accepted as a bare identifier.
+
+$ skip-if
+SELECT mz_version_num() >= 6200;
+
+$ postgres-execute connection=materialize
+CREATE VIEW view_with_returning AS SELECT returning FROM (VALUES (1)) _ (returning)

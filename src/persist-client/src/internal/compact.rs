@@ -34,8 +34,8 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
-use crate::cfg::MB;
-use crate::fetch::{fetch_batch_part, EncodedPart};
+use crate::cfg::MiB;
+use crate::fetch::{fetch_batch_part, Cursor, EncodedPart};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
@@ -294,12 +294,12 @@ where
             // either our minimum timeout
             cfg.dynamic.compaction_minimum_timeout(),
             // or 1s per MB of input data
-            Duration::from_secs(u64::cast_from(total_input_bytes / MB)),
+            Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
 
         trace!(
             "compaction request for {}MBs ({} bytes), with timeout of {}s.",
-            total_input_bytes / MB,
+            total_input_bytes / MiB,
             total_input_bytes,
             timeout.as_secs_f64()
         );
@@ -720,7 +720,7 @@ where
         for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.pop_front() {
                 let start = Instant::now();
-                let mut part = part
+                let part = part
                     .join(shard_id, blob.as_ref(), &metrics, &shard_metrics, part_desc)
                     .await?;
                 // Ideally we'd hook into start_prefetches here, too, but runs
@@ -729,7 +729,8 @@ where
                 timings.part_fetching += start.elapsed();
                 let start = Instant::now();
                 let mut updates_decoded = 0;
-                while let Some((k, v, mut t, d)) = part.next() {
+                let mut cursor = Cursor::default();
+                while let Some((k, v, mut t, d)) = cursor.pop(&part) {
                     t.advance_by(desc.since().borrow());
                     let d = D::decode(d);
                     let k = k.to_vec();
@@ -767,7 +768,7 @@ where
                 let (part_desc, parts) = &mut runs[index];
                 if let Some(part) = parts.pop_front() {
                     let start = Instant::now();
-                    let mut part = part
+                    let part = part
                         .join(shard_id, blob.as_ref(), &metrics, &shard_metrics, part_desc)
                         .await?;
                     // start_prefetches is O(n) so calling it here is O(n^2). N
@@ -787,7 +788,8 @@ where
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
                     let mut updates_decoded = 0;
-                    while let Some((k, v, mut t, d)) = part.next() {
+                    let mut cursor = Cursor::default();
+                    while let Some((k, v, mut t, d)) = cursor.pop(&part) {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);
                         let k = k.to_vec();
@@ -1015,6 +1017,7 @@ mod tests {
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_minimum_since() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1081,6 +1084,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compaction_partial_order() {
         let data = vec![
             (
@@ -1165,6 +1169,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn prefetches() {
         let desc = Description::new(
             Antichain::from_elem(0u64),

@@ -179,17 +179,6 @@ pub async fn force_compaction(
     .await?;
 
     let writer_id = WriterId::new();
-    info!("registering writer {}", writer_id);
-    // We don't bother expiring this writer in various error codepaths, instead
-    // letting it time out. /shrug
-    let _ = machine
-        .register_writer(
-            &writer_id,
-            "persistcli admin force-compaction",
-            cfg.writer_lease_duration,
-            (cfg.now)(),
-        )
-        .await;
 
     let mut attempt = 0;
     'outer: loop {

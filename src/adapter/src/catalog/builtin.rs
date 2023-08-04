@@ -1229,6 +1229,28 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
+    name: "aclitem",
+    schema: PG_CATALOG_SCHEMA,
+    oid: 1033,
+    details: CatalogTypeDetails {
+        typ: CatalogType::AclItem,
+        array_id: None,
+    },
+};
+
+pub const TYPE_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_aclitem",
+    schema: PG_CATALOG_SCHEMA,
+    oid: 1034,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_ACL_ITEM.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1918,15 +1940,49 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     is_retained_metrics_object: true,
 });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replica_frontiers",
+pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::Frontiers),
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("export_id", ScalarType::String.nullable(false))
-        .with_column("time", ScalarType::MzTimestamp.nullable(false)),
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("time", ScalarType::MzTimestamp.nullable(true)),
     is_retained_metrics_object: false,
 });
+
+pub const MZ_GLOBAL_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_global_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_global_frontiers AS
+WITH
+  -- If a collection has reached the empty frontier on one of its replicas,
+  -- the entry for that replica is removed from `mz_frontiers`. In this case,
+  -- it should also be removed from `mz_global_frontiers`, to signal that the
+  -- global frontier is empty as well. The achieve that, we join the replica
+  -- lists from `mz_frontiers` with those in `mz_cluster_replicas`. If a
+  -- replica is missing from `mz_frontiers`, it won't have a match in this
+  -- join and will be omitted from the final output.
+  replica_lists AS (
+    SELECT list_agg(id) AS replicas
+    FROM mz_cluster_replicas
+    GROUP BY cluster_id
+    -- Add a `{NULL}` list to accomodate collections that are not installed
+    -- on a replica.
+    UNION VALUES (LIST[NULL])
+  ),
+  frontiers_with_replicas AS (
+    SELECT
+      object_id,
+      list_agg(replica_id) AS replicas,
+      max(time) AS time
+    FROM mz_internal.mz_frontiers
+    GROUP BY object_id
+  )
+SELECT object_id, time
+FROM frontiers_with_replicas
+JOIN replica_lists USING (replicas)",
+};
 
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_subscriptions",
@@ -1974,6 +2030,49 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     name: "mz_system_privileges",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_prepared_statement_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("sql", ScalarType::String.nullable(false))
+        .with_column("prepared_at", ScalarType::TimestampTz.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_statement_execution_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column(
+            "params",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("began_at", ScalarType::TimestampTz.nullable(false))
+        .with_column("finished_at", ScalarType::TimestampTz.nullable(true))
+        .with_column("finished_status", ScalarType::String.nullable(true))
+        .with_column("error_message", ScalarType::String.nullable(true))
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true)),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_session_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("connected_at", ScalarType::TimestampTz.nullable(false))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("authenticated_user", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
 
@@ -3714,6 +3813,278 @@ FROM
 ORDER BY 1, 2"#,
 };
 
+pub const MZ_SHOW_ROLE_MEMBERS: BuiltinView = BuiltinView {
+    name: "mz_show_role_members",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_role_members
+AS SELECT
+    r1.name AS role,
+    r2.name AS member,
+    r3.name AS grantor
+FROM mz_catalog.mz_role_members rm
+JOIN mz_roles r1 ON r1.id = rm.role_id
+JOIN mz_roles r2 ON r2.id = rm.member
+JOIN mz_roles r3 ON r3.id = rm.grantor
+ORDER BY role"#,
+};
+
+pub const MZ_SHOW_MY_ROLE_MEMBERS: BuiltinView = BuiltinView {
+    name: "mz_show_my_role_members",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_role_members
+AS SELECT role, member, grantor
+FROM mz_internal.mz_show_role_members
+WHERE pg_has_role(member, 'USAGE')"#,
+};
+
+pub const MZ_SHOW_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_system_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_system_privileges
+AS SELECT
+    grantor.name AS grantor,
+    CASE privileges.grantee
+        WHEN 'p' THEN 'PUBLIC'
+        ELSE grantee.name
+    END AS grantee,
+    privileges.privilege_type AS privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(ARRAY[privileges]).*
+    FROM mz_system_privileges) AS privileges
+LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
+};
+
+pub const MZ_SHOW_MY_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_my_system_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_system_privileges
+AS SELECT grantor, grantee, privilege_type
+FROM mz_internal.mz_show_system_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
+pub const MZ_SHOW_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_cluster_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_privileges
+AS SELECT
+    grantor.name AS grantor,
+    CASE privileges.grantee
+        WHEN 'p' THEN 'PUBLIC'
+        ELSE grantee.name
+    END AS grantee,
+    privileges.name AS name,
+    privileges.privilege_type AS privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(privileges).*, name
+    FROM mz_clusters
+    WHERE id NOT LIKE 's%') AS privileges
+LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
+};
+
+pub const MZ_SHOW_MY_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_my_cluster_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_cluster_privileges
+AS SELECT grantor, grantee, name, privilege_type
+FROM mz_internal.mz_show_cluster_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
+pub const MZ_SHOW_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_database_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_database_privileges
+AS SELECT
+    grantor.name AS grantor,
+    CASE privileges.grantee
+        WHEN 'p' THEN 'PUBLIC'
+        ELSE grantee.name
+    END AS grantee,
+    privileges.name AS name,
+    privileges.privilege_type AS privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(privileges).*, name
+    FROM mz_databases
+    WHERE id NOT LIKE 's%') AS privileges
+LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
+};
+
+pub const MZ_SHOW_MY_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_my_database_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_database_privileges
+AS SELECT grantor, grantee, name, privilege_type
+FROM mz_internal.mz_show_database_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
+pub const MZ_SHOW_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_schema_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_schema_privileges
+AS SELECT
+    grantor.name AS grantor,
+    CASE privileges.grantee
+        WHEN 'p' THEN 'PUBLIC'
+        ELSE grantee.name
+    END AS grantee,
+    databases.name AS database,
+    privileges.name AS name,
+    privileges.privilege_type AS privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(privileges).*, database_id, name
+    FROM mz_schemas
+    WHERE id NOT LIKE 's%') AS privileges
+LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_databases databases ON privileges.database_id = databases.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
+};
+
+pub const MZ_SHOW_MY_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_my_schema_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_schema_privileges
+AS SELECT grantor, grantee, database, name, privilege_type
+FROM mz_internal.mz_show_schema_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
+pub const MZ_SHOW_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_object_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_object_privileges
+AS SELECT
+    grantor.name AS grantor,
+    CASE privileges.grantee
+            WHEN 'p' THEN 'PUBLIC'
+            ELSE grantee.name
+        END AS grantee,
+    databases.name AS database,
+    schemas.name AS schema,
+    privileges.name AS name,
+    privileges.type AS object_type,
+    privileges.privilege_type AS privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(privileges).*, schema_id, name, type
+    FROM mz_objects
+    WHERE id NOT LIKE 's%') AS privileges
+LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_schemas schemas ON privileges.schema_id = schemas.id
+LEFT JOIN mz_databases databases ON schemas.database_id = databases.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
+};
+
+pub const MZ_SHOW_MY_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_my_object_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_object_privileges
+AS SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+FROM mz_internal.mz_show_object_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
+pub const MZ_SHOW_ALL_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_all_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_all_privileges
+AS SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
+FROM mz_internal.mz_show_system_privileges
+UNION ALL
+SELECT grantor, grantee, NULL AS database, NULL AS schema, name, 'cluster' AS object_type, privilege_type
+FROM mz_internal.mz_show_cluster_privileges
+UNION ALL
+SELECT grantor, grantee, NULL AS database, NULL AS schema, name, 'database' AS object_type, privilege_type
+FROM mz_internal.mz_show_database_privileges
+UNION ALL
+SELECT grantor, grantee, database, NULL AS schema, name, 'schema' AS object_type, privilege_type
+FROM mz_internal.mz_show_schema_privileges
+UNION ALL
+SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+FROM mz_internal.mz_show_object_privileges"#,
+};
+
+pub const MZ_SHOW_ALL_MY_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_all_my_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_all_my_privileges
+AS SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+FROM mz_internal.mz_show_all_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
+pub const MZ_SHOW_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_default_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_default_privileges
+AS SELECT
+    CASE defaults.role_id
+        WHEN 'p' THEN 'PUBLIC'
+        ELSE object_owner.name
+    END AS object_owner,
+	databases.name AS database,
+	schemas.name AS schema,
+	object_type,
+	CASE defaults.grantee
+	    WHEN 'p' THEN 'PUBLIC'
+        ELSE grantee.name
+    END AS grantee,
+	unnest(mz_internal.mz_format_privileges(defaults.privileges)) AS privilege_type
+FROM mz_default_privileges defaults
+LEFT JOIN mz_roles AS object_owner ON defaults.role_id = object_owner.id
+LEFT JOIN mz_roles AS grantee ON defaults.grantee = grantee.id
+LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
+LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
+WHERE defaults.grantee NOT LIKE 's%'
+    AND defaults.database_id IS NULL OR defaults.database_id NOT LIKE 's%'
+    AND defaults.schema_id IS NULL OR defaults.schema_id NOT LIKE 's%'"#,
+};
+
+pub const MZ_SHOW_MY_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
+    name: "mz_show_my_default_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_my_default_privileges
+AS SELECT object_owner, database, schema, object_type, grantee, privilege_type
+FROM mz_internal.mz_show_default_privileges
+WHERE
+    CASE
+        WHEN grantee = 'PUBLIC' THEN true
+        ELSE pg_has_role(grantee, 'USAGE')
+    END"#,
+};
+
 pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
     name: "mz_cluster_replica_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4119,6 +4490,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_TSTZ_RANGE_ARRAY),
         Builtin::Type(&TYPE_MZ_ACL_ITEM),
         Builtin::Type(&TYPE_MZ_ACL_ITEM_ARRAY),
+        Builtin::Type(&TYPE_ACL_ITEM),
+        Builtin::Type(&TYPE_ACL_ITEM_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -4191,7 +4564,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
@@ -4202,8 +4574,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
+        Builtin::Table(&MZ_SESSION_HISTORY),
         Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
+        Builtin::Table(&MZ_PREPARED_STATEMENT_HISTORY),
+        Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
@@ -4296,6 +4671,22 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_ROLE_TABLE_GRANTS),
         Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
         Builtin::View(&INFORMATION_SCHEMA_VIEWS),
+        Builtin::View(&MZ_SHOW_ROLE_MEMBERS),
+        Builtin::View(&MZ_SHOW_MY_ROLE_MEMBERS),
+        Builtin::View(&MZ_SHOW_SYSTEM_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_MY_SYSTEM_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_CLUSTER_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_MY_CLUSTER_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_DATABASE_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_MY_DATABASE_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_SCHEMA_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_MY_SCHEMA_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_OBJECT_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_MY_OBJECT_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_ALL_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_ALL_MY_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_DEFAULT_PRIVILEGES),
+        Builtin::View(&MZ_SHOW_MY_DEFAULT_PRIVILEGES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
@@ -4304,6 +4695,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::Source(&MZ_SINK_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
+        Builtin::Source(&MZ_FRONTIERS),
+        Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
@@ -4387,10 +4780,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use mz_expr::MirScalarExpr;
-    use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
+    use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
-    use mz_repr::{Datum, RowArena};
+    use mz_repr::{Datum, RowArena, Timestamp};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::func::{Func, OP_IMPLS};
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
@@ -4402,6 +4795,8 @@ mod tests {
     use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
+    use crate::coord::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+    use crate::session::Session;
 
     use super::*;
 
@@ -4789,6 +5184,14 @@ mod tests {
                 allow_windows: false,
             };
             let arena = RowArena::new();
+            let mut session = Session::dummy();
+            session
+                .start_transaction(to_datetime(0), None, None)
+                .expect("must succeed");
+            let prep_style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Time(Timestamp::MIN),
+                session: &session,
+            };
             // Extracted during planning; always panics when executed.
             let ignore_names = BTreeSet::from([
                 "avg",
@@ -4883,7 +5286,11 @@ mod tests {
                         let start = Instant::now();
                         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
                         if let Ok(hir) = res {
-                            if let Ok(mir) = hir.lower_uncorrelated() {
+                            if let Ok(mut mir) = hir.lower_uncorrelated() {
+                                // Populate unmaterialized functions.
+                                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
+                                    .expect("must succeed");
+
                                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                                     if let Some(return_styp) = return_styp {
                                         let mir_typ = mir.typ(&[]);
@@ -5032,7 +5439,8 @@ mod tests {
                         | typ @ ScalarType::MzAclItem => {
                             panic!("{typ:?} type found in {full_name}");
                         }
-                        ScalarType::Bool
+                        ScalarType::AclItem
+                        | ScalarType::Bool
                         | ScalarType::Int16
                         | ScalarType::Int32
                         | ScalarType::Int64

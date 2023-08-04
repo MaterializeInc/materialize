@@ -6,6 +6,7 @@ members = [
     "src/avro",
     "src/avro-derive",
     "src/aws-s3-util",
+    "src/aws-secrets-controller",
     "src/build-id",
     "src/build-info",
     "src/ccsr",
@@ -83,7 +84,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.68.2"
+rust-version = "1.71.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved

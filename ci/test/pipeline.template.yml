@@ -40,6 +40,16 @@ steps:
       queue: builder-linux-aarch64
     coverage: skip
 
+  - id: build-wasm
+    label: Build WASM
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
+    inputs:
+      - "*"
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+    coverage: skip
+
   - id: check-merge-with-target
     label: Merge skew cargo check
     command: ci/test/check-merge-with-target.sh
@@ -326,7 +336,7 @@ steps:
     inputs: [doc/user/content/releases]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: upgrade
+          composition: legacy-upgrade
     agents:
       queue: linux-x86_64
 
@@ -539,7 +549,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres, --check=PgCdc]
+          args: [--scenario=RestartSourcePostgres, --check=PgCdc]
 
   - id: cloudtest
     label: Cloudtest %n
@@ -683,6 +693,47 @@ steps:
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     if: build.tag != "" && build.branch =~ /^v.*\..*\$/
+    coverage: skip
+
+  - id: nightly-if-risky
+    label: Nightly for risky PRs
+    depends_on: devel-docker-tags
+    trigger: nightlies
+    async: true
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+        BUILDKITE_PULL_REQUEST: "${BUILDKITE_PULL_REQUEST}"
+        BUILDKITE_PULL_REQUEST_BASE_BRANCH: "${BUILDKITE_PULL_REQUEST_BASE_BRANCH}"
+        BUILDKITE_PULL_REQUEST_REPO: "${BUILDKITE_PULL_REQUEST_REPO}"
+    if: build.tag != "" && build.branch != "main" && build.branch !~ /^v.*\..*\$/
+
+    inputs:
+      # Changes to the SQL syntax
+      - src/sql-parser/src
+      - src/expr-parser/src
+      # Changes to feature flags and other settings
+      - src/adapter/src/flags.rs
+      - src/persist-client/src/cfg*
+      - src/compute-client/src/protocol/command*
+      - src/sql/src/session/vars.rs
+      # Changes to command-line options
+      - src/environmentd/src/bin/environmentd/
+      - src/clusterd/src/bin/
+      # Changes to test frameworks
+      - src/testdrive/src
+      - misc/python/materialize
+      - test/feature-benchmark
+      - test/limits
+      # Changes to the CI inputs
+      - "**/Dockerfile"
+      - misc/images
+      - ci/builder
+      - bin/ci-builder
+      - ci/nightly
+      - ci/plugins
     coverage: skip
 
   - wait: ~

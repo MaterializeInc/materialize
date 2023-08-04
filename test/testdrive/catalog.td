@@ -529,6 +529,7 @@ mz_dataflow_addresses_per_worker             log   <null>
 mz_dataflow_channels_per_worker              log   <null>
 mz_dataflow_operator_reachability_raw        log   <null>
 mz_dataflow_operators_per_worker             log   <null>
+mz_frontiers                                 source <null>
 mz_message_counts_received_raw               log   <null>
 mz_message_counts_sent_raw                   log   <null>
 mz_peek_durations_histogram_raw              log   <null>
@@ -545,14 +546,16 @@ name
 ----
 mz_aggregates
 mz_cluster_links
-mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_kafka_sources
 mz_postgres_sources
+mz_prepared_statement_history
+mz_session_history
 mz_sessions
+mz_statement_execution_history
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_view_foreign_keys
@@ -591,6 +594,7 @@ mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operators
 mz_dataflows
 mz_dataflows_per_worker
+mz_global_frontiers
 mz_message_counts
 mz_message_counts_per_worker
 mz_object_transitive_dependencies
@@ -604,9 +608,25 @@ mz_scheduling_elapsed
 mz_scheduling_elapsed_per_worker
 mz_scheduling_parks_histogram
 mz_scheduling_parks_histogram_per_worker
+mz_show_all_privileges
+mz_show_cluster_privileges
+mz_show_database_privileges
+mz_show_default_privileges
+mz_show_all_my_privileges
+mz_show_my_cluster_privileges
 mz_show_cluster_replicas
+mz_show_my_database_privileges
+mz_show_my_default_privileges
 mz_show_indexes
 mz_show_materialized_views
+mz_show_my_object_privileges
+mz_show_my_role_members
+mz_show_my_schema_privileges
+mz_show_my_system_privileges
+mz_show_object_privileges
+mz_show_role_members
+mz_show_schema_privileges
+mz_show_system_privileges
 mz_sink_statuses
 mz_source_statuses
 
@@ -623,7 +643,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-47
+49
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

@@ -36,8 +36,6 @@ DROP OWNED BY joe, george CASCADE;
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
 - Role membership in `role_name`.

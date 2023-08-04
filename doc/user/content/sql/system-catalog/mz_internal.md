@@ -110,22 +110,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation. |
 | `disk_percent`   | [`double precision`] | Currently null. Reserved for later use.                    |
 
-### `mz_cluster_replica_frontiers`
-
-The `mz_cluster_replica_frontiers` table describes the frontiers of each [dataflow] in the system.
-[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to this table, but `mz_compute_frontiers`
-exposes the frontiers known to the compute replicas while `mz_cluster_replica_frontiers` contains
-the frontiers the coordinator is aware of.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
-| Field         | Type             | Meaning                                                                                                                                                  |
-| ------------- | ------------     | --------                                                                                                                                                 |
-| `replica_id`  | [`text`]         | The ID of a cluster replica.                                                                                                                             |
-| `export_id `  | [`text`]         | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                                                                                       |
-
 ### `mz_cluster_replica_heartbeats`
 
 The `mz_cluster_replica_heartbeats` table gives the last known heartbeat of all
@@ -153,6 +137,52 @@ each replica, including the times at which it was created and dropped
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+
+### `mz_frontiers`
+
+The `mz_frontiers` table describes the frontiers of each source, sink, table,
+materialized view, index, and subscription in the system, as observed from the
+coordinator.
+
+For objects that are installed on replicas (e.g., materialized views and
+indexes), the `replica_id` field is always non-`NULL`. If an object is installed
+on multiple replicas, it has multiple entries describing the frontier on each
+individual replica. For objects that are not installed on replicas (e.g.,
+tables), the `replica_id` field is `NULL`.
+
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to `mz_frontiers`,
+but `mz_compute_frontiers` reports the frontiers known to the active compute
+replica, while `mz_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_frontiers` contains storage
+objects (sources, sinks, and tables) as well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_frontiers -->
+| Field         | Type             | Meaning                                                                             |
+| ------------- | ------------     | --------                                                                            |
+| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
+| `replica_id`  | [`text`]         | The ID of a cluster replica, or `NULL` if the object is not installed on a replica. |
+| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
+
+### `mz_global_frontiers`
+
+The `mz_global_frontiers` view describes the global frontiers of each source,
+sink, table, materialized view, index, and subscription in the system, as
+observed from the coordinator.
+
+For objects that are installed on replicas (e.g., materialized views and
+indexes), the global frontier is the maximum of the per-replica frontiers.
+Objects that are not installed on replicas only have a single, global frontier.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_global_frontiers -->
+| Field         | Type             | Meaning                                                                       |
+| ------------- | ------------     | --------                                                                      |
+| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription. |
+| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                            |
 
 ### `mz_kafka_sources`
 
@@ -198,6 +228,39 @@ system.
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
 
+<!--
+### `mz_prepared_statement_history`
+
+The `mz_prepared_statement_history` table contains a subset of all
+statements that have been prepared. It only contains statements that
+have one or more corresponding executions in
+[`mz_statement_execution_history`](#mz_statement_execution_history).
+
+| Field         | Type                         | Meaning                                                                                                                           |
+|---------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `id`          | [`uuid`]                     | The globally unique ID of the prepared statement.                                                                                        |
+| `session_id`  | [`uuid`]                     | The globally unique ID of the session that prepared the statement. Corresponds to [`mz_session_history.id`](#mz_session_history). |
+| `name`        | [`text`]                     | The name of the prepared statement (the default prepared statement's name is the empty string).                                   |
+| `sql`         | [`text`]                     | The SQL text of the prepared statement.                                                                                           |
+| `prepared_at` | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                     |
+-->
+
+<!--
+### `mz_session_history`
+
+The `mz_session_history` table contains all the sessions that have
+been established in the last 30 days, or (even if older) that are
+referenced from
+[`mz_prepared_statement_history`](#mz_prepared_statement_history).
+
+| Field                | Type                         | Meaning                                                                                                                           |
+|----------------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
+| `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
+| `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
+| `authenticated_user` | [`text`]                     | The name of the user for wish the session was established.                                                                        |
+-->
+
 ### `mz_sessions`
 
 The `mz_sessions` table contains a row for each active session in the system.
@@ -208,6 +271,236 @@ The `mz_sessions` table contains a row for each active session in the system.
 | `id`            | [`uint4`]                      | The ID of the session.                                                                                                    |
 | `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
 | `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
+
+### `mz_show_all_privileges`
+
+The `mz_show_all_privileges` view contains a row for each privilege granted
+in the system on user objects to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_all_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the privilege target.               |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+
+### `mz_show_cluster_privileges`
+
+The `mz_show_cluster_privileges` view contains a row for each cluster privilege granted
+in the system on user clusters to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_cluster_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the cluster.                    |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_database_privileges`
+
+The `mz_show_database_privileges` view contains a row for each database privilege granted
+in the system on user databases to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_database_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the database.                   |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_default_privileges`
+
+The `mz_show_default_privileges` view contains a row for each default privilege granted
+in the system in user databases and schemas to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_default_privileges -->
+| Field            | Type     | Meaning                                                                                             |
+|------------------|----------|-----------------------------------------------------------------------------------------------------|
+| `object_owner`   | [`text`] | Privileges described in this row will be granted on objects created by `object_owner`.              |
+| `database`       | [`text`] | Privileges described in this row will be granted only on objects created in `database` if non-null. |
+| `schema`         | [`text`] | Privileges described in this row will be granted only on objects created in `schema` if non-null.   |
+| `object_type`    | [`text`] | Privileges described in this row will be granted only on objects of type `object_type`.             |
+| `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
+| `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
+
+### `mz_show_object_privileges`
+
+The `mz_show_object_privileges` view contains a row for each object privilege granted
+in the system on user objects to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_object_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the object.                         |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_role_members`
+
+The `mz_show_role_members` view contains a row for each role membership in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_show_role_members -->
+| Field     | Type     | Meaning                                                 |
+|-----------|----------|---------------------------------------------------------|
+| `role`    | [`text`] | The role that `member` is a member of.                  |
+| `member`  | [`text`] | The role that is a member of `role`.                    |
+| `grantor` | [`text`] | The role that granted membership of `member` to `role`. |
+
+### `mz_show_schema_privileges`
+
+The `mz_show_schema_privileges` view contains a row for each schema privilege granted
+in the system on user schemas to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_schema_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the schema. |
+| `name`           | [`text`] | The name of the schema.                         |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_system_privileges`
+
+The `mz_show_system_privileges` view contains a row for each system privilege granted
+in the system on to user roles.
+
+<!-- RELATION_SPEC mz_internal.mz_show_system_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_all_my_privileges`
+
+The `mz_show_all_my_privileges` view is the same as
+[`mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_all_my_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the privilege target.               |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_my_cluster_privileges`
+
+The `mz_show_my_cluster_privileges` view is the same as
+[`mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_cluster_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the cluster.                    |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_my_database_privileges`
+
+The `mz_show_my_database_privileges` view is the same as
+[`mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_database_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `name`           | [`text`] | The name of the cluster.                    |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
+
+### `mz_show_my_default_privileges`
+
+The `mz_show_my_default_privileges` view is the same as
+[`mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_default_privileges -->
+| Field            | Type     | Meaning                                                                                             |
+|------------------|----------|-----------------------------------------------------------------------------------------------------|
+| `object_owner`   | [`text`] | Privileges described in this row will be granted on objects created by `object_owner`.              |
+| `database`       | [`text`] | Privileges described in this row will be granted only on objects created in `database` if non-null. |
+| `schema`         | [`text`] | Privileges described in this row will be granted only on objects created in `schema` if non-null.   |
+| `object_type`    | [`text`] | Privileges described in this row will be granted only on objects of type `object_type`.             |
+| `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
+| `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
+
+### `mz_show_my_object_privileges`
+
+The `mz_show_my_object_privileges` view is the same as
+[`mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_object_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the object. |
+| `schema`         | [`text`] | The name of the schema containing the object.   |
+| `name`           | [`text`] | The name of the object.                         |
+| `object_type`    | [`text`] | The type of object the privilege is granted on. |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_my_role_members`
+
+The `mz_show_my_role_members` view is the same as
+[`mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members), but
+only includes rows where the current role is a direct or indirect member of `member`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_role_members -->
+| Field     | Type     | Meaning                                                 |
+|-----------|----------|---------------------------------------------------------|
+| `role`    | [`text`] | The role that `member` is a member of.                  |
+| `member`  | [`text`] | The role that is a member of `role`.                    |
+| `grantor` | [`text`] | The role that granted membership of `member` to `role`. |
+
+### `mz_show_my_schema_privileges`
+
+The `mz_show_my_schema_privileges` view is the same as
+[`mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_schema_privileges -->
+| Field            | Type     | Meaning                                         |
+|------------------|----------|-------------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.            |
+| `grantee`        | [`text`] | The role that the privilege was granted to.     |
+| `database`       | [`text`] | The name of the database containing the schema. |
+| `name`           | [`text`] | The name of the schema.                         |
+| `privilege_type` | [`text`] | They type of privilege granted.                 |
+
+### `mz_show_my_system_privileges`
+
+The `mz_show_my_system_privileges` view is the same as
+[`mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges), but
+only includes rows where the current role is a direct or indirect member of `grantee`.
+
+<!-- RELATION_SPEC mz_internal.mz_show_my_system_privileges -->
+| Field            | Type     | Meaning                                     |
+|------------------|----------|---------------------------------------------|
+| `grantor`        | [`text`] | The role that granted the privilege.        |
+| `grantee`        | [`text`] | The role that the privilege was granted to. |
+| `privilege_type` | [`text`] | They type of privilege granted.             |
 
 ### `mz_sink_statistics`
 
@@ -313,6 +606,36 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
+
+<!--
+### `mz_statement_execution_history`
+
+The `mz_statement_execution_history` table contains a row for each
+statement executed, that the system decided to log. Entries older than
+thirty days may be removed.
+
+The system chooses to log statements randomly; the probability of
+logging an execution is controlled by the
+`statement_logging_sample_rate` session variable. A value of 0 means
+to log nothing; a value of 0.8 means to log approximately 80% of
+statement executions. If `statement_logging_sample_rate` is higher
+than `statement_logging_max_sample_rate` (which is set by Materialize
+and cannot be changed by users), the latter is used instead.
+
+| Field                   | Type                         | Meaning                                                                                                                                                                                                                                                                                                    |
+|-------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`                    | [`uuid`]                     | The ID of the execution event.                                                                                                                                                                                                                                                                             |
+| `prepared_statement_id` | [`uuid`]                     | The ID of the prepared statement being executed. Corresponds to [`mz_prepared_statement_history.id`](#mz_prepared_statement_history).                                                                                                                                                                      |
+| `sample_rate`           | [`double precision`]         | The sampling rate at the time the execution began.                                                                                                                                                                                                                                                         |
+| `params`                | [`text list`]                | The values of the prepared statement's parameters.                                                                                                                                                                                                                                                         |
+| `began_at`              | [`timestamp with time zone`] | The time at which execution began.                                                                                                                                                                                                                                                                         |
+| `finished_at`           | [`timestamp with time zone`] | The time at which execution ended.                                                                                                                                                                                                                                                                         |
+| `finished_status`       | [`text`]                     | `'success'`, `'error'`, `'canceled'`, or `'aborted'`. `'aborted'` means that the database restarted (e.g., due to a crash or planned maintenance) before the query finished.                                                                                                                               |
+| `error_message`         | [`text`]                     | The error returned when executing the statement, or `NULL` if it was successful, canceled or aborted.                                                                                                                                                                                                      |
+| `rows_returned`         | [`int8`]                     | The number of rows returned by the statement, if it finished successfully and was of a kind of statement that can return rows, or `NULL` otherwise.                                                                                                                                                        |
+| `execution_strategy`    | [`text`]                     | `'standard'`, `'fast-path'` `'constant'`, or `NULL`. `'standard'` means a dataflow was built on a cluster to compute the result. `'fast-path'` means a cluster read the result from an existing arrangement. `'constant'` means the result was computed in the serving layer, without involving a cluster. |
+-->
+
 
 ### `mz_subscriptions`
 
@@ -670,9 +993,12 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_foreign_keys -->

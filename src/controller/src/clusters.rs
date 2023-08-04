@@ -352,11 +352,13 @@ where
         drop(replica_stream);
 
         for (cluster_id, replicas) in replicas {
+            let last_replica = replicas.last().unwrap();
             // We only connect to the last replica (chosen arbitrarily)
             // for storage, until we support multi-replica storage objects
             self.storage.connect_replica(
                 cluster_id,
-                replicas.last().unwrap().storage_location.clone(),
+                last_replica.replica_id,
+                last_replica.storage_location.clone(),
             );
 
             for ReplicaInfo {
@@ -478,6 +480,7 @@ where
             ClusterRole::User => "user",
         };
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let secrets_args = self.secrets_args.to_flags();
         let service = self
             .orchestrator
             .ensure_service(
@@ -486,7 +489,7 @@ where
                     image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
-                        vec![
+                        let mut args = vec![
                             format!(
                                 "--storage-controller-listen-addr={}",
                                 assigned["storagectl"]
@@ -499,7 +502,17 @@ where
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
-                        ]
+                        ];
+                        if let Some(memory_limit) = location.allocation.memory_limit {
+                            args.push(format!(
+                                "--announce-memory-limit={}",
+                                memory_limit.0.as_u64()
+                            ));
+                        }
+
+                        args.extend(secrets_args.clone());
+
+                        args
                     },
                     ports: vec![
                         ServicePort {

@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use itertools::Itertools;
 use mz_sql_parser::ast::display::AstDisplay;
 
-use crate::ast::{Ident, QualifiedReplica, UnresolvedDatabaseName};
+use crate::ast::{Ident, UnresolvedDatabaseName};
 use crate::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
     ErrorMessageObjectDescription, ObjectType, SystemObjectType,
@@ -27,8 +27,7 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
-    ensure_cluster_is_not_managed, resolve_cluster, resolve_cluster_replica, resolve_database,
-    resolve_item, resolve_schema,
+    ensure_cluster_is_not_linked, resolve_cluster, resolve_database, resolve_item, resolve_schema,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -68,8 +67,8 @@ pub fn plan_alter_owner(
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
-            plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(_)) => {
+            bail_never_supported!("altering the owner of a cluster replica");
         }
         (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
             plan_alter_database_owner(scx, if_exists, name, new_owner.id)
@@ -109,46 +108,22 @@ fn plan_alter_cluster_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster(scx, &name, if_exists)? {
-        Some(cluster) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::Cluster(cluster.id()),
-            object_type: ObjectType::Cluster,
-            new_owner,
-        })),
-        None => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_ast_string(),
-                object_type: ObjectType::Cluster,
-            });
-            Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Cluster,
-            }))
-        }
-    }
-}
-
-fn plan_alter_cluster_replica_owner(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: QualifiedReplica,
-    new_owner: RoleId,
-) -> Result<Plan, PlanError> {
-    match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster, replica_id)) => {
-            ensure_cluster_is_not_managed(scx, cluster.id())?;
+        Some(cluster) => {
+            // Prevent changes to linked clusters.
+            ensure_cluster_is_not_linked(scx, cluster.id())?;
             Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::ClusterReplica((cluster.id(), replica_id)),
-                object_type: ObjectType::ClusterReplica,
+                id: ObjectId::Cluster(cluster.id()),
+                object_type: ObjectType::Cluster,
                 new_owner,
             }))
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: name.to_ast_string(),
-                object_type: ObjectType::ClusterReplica,
+                object_type: ObjectType::Cluster,
             });
-
             Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::ClusterReplica,
+                object_type: ObjectType::Cluster,
             }))
         }
     }
@@ -246,6 +221,12 @@ fn plan_alter_item_owner(
                     format!("{object_type}").to_lowercase(),
                 );
             }
+
+            // Sub-sources cannot be altered directly.
+            if item.is_subsource() {
+                sql_bail!("cannot ALTER this type of source");
+            }
+
             Ok(Plan::AlterOwner(AlterOwnerPlan {
                 id: ObjectId::Item(item.id()),
                 object_type,
@@ -681,7 +662,6 @@ pub fn plan_alter_default_privileges(
 
     let target_roles = match target_roles {
         TargetRoleSpecification::Roles(roles) => roles.into_iter().map(|role| role.id).collect(),
-        TargetRoleSpecification::CurrentRole => vec![*scx.catalog.active_role_id()],
         TargetRoleSpecification::AllRoles => vec![RoleId::Public],
     };
     let mut privilege_objects = Vec::with_capacity(target_roles.len() * target_objects.len());

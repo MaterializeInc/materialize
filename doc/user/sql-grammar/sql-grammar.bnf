@@ -6,11 +6,11 @@ alter_cluster_reset ::=
 alter_connection ::=
   'ALTER' 'CONNECTION' 'IF EXISTS'? name 'ROTATE' 'KEYS'
 alter_default_privileges ::=
-  'ALTER' 'DEFAULT' 'PRIVILEGES' ( 'FOR' ( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'FOR' 'ALL' 'ROLES' )? ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
+  'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
 abbreviated_grant ::=
-  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
 abbreviated_revoke ::=
-  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
 alter_owner ::=
   'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
 alter_rename ::=
@@ -24,7 +24,18 @@ alter_secret ::=
 alter_sink ::=
   'ALTER' 'SINK' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 alter_source ::=
-  'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
+  'ALTER' 'SOURCE' 'IF EXISTS'? name (
+    alter_source_add_clause
+    | alter_source_drop_clause
+    | alter_source_set_clause
+  )
+alter_source_add_clause ::=
+  'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
+alter_source_drop_clause ::=
+  'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
+alter_source_set_clause ::= 'SET' '(' 'SIZE' value ')'
+alter_set_cluster ::=
+  'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -126,7 +137,7 @@ create_source_load_generator ::=
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   (
     'FOR ALL TABLES' |
-    'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+    'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')?
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
@@ -303,6 +314,8 @@ reassign_owned ::=
   'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
 reset_session_variable ::=
   'RESET' variable_name
+reset_system_variable ::=
+  'RESET' variable_name
 revoke_privilege ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
@@ -326,6 +339,8 @@ simple_select_stmt ::=
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
 set_session_variable ::=
   'SET' ( 'SESSION' | 'LOCAL' )? variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
+set_system_variable ::=
+  'ALTER' 'SYSTEM' 'SET' variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=

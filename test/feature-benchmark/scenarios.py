@@ -23,6 +23,7 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
 
 
@@ -42,7 +43,7 @@ class FastPathFilterNoIndex(FastPath):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > CREATE DEFAULT INDEX ON v1;
 
@@ -72,7 +73,7 @@ class MFPPushdown(Scenario):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -891,7 +892,13 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRestart(Scenario):
+class KafkaRestart(ScenarioDisabled):
+    """This scenario dates from the pre-persistence era where the entire topic was re-ingested from scratch.
+    With presistence however, no reingestion takes place and the scenario exhibits extreme variability.
+    Instead of re-ingestion, we are measuring mostly the speed of COUNT(*), further obscured by
+    the one second timestamp granularity
+    """
+
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()

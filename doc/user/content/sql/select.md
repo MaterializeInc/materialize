@@ -242,11 +242,9 @@ knowledge.
 
 ## Privileges
 
-{{< private-preview />}}
-
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations in the query are contained in.
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
 - `SELECT` privileges on all relations in the query.
  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
    execute the view definition.

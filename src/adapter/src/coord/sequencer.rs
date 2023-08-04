@@ -15,24 +15,27 @@
 use inner::return_if_err;
 use mz_controller::clusters::ClusterId;
 use mz_expr::OptimizedMirRelationExpr;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, CreateSourcePlans,
-    FetchPlan, Plan, PlanKind, RaisePlan, RotateKeysPlan,
+    FetchPlan, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
 };
+use mz_sql_parser::ast::{Raw, Statement};
+use tokio::sync::oneshot;
 use tracing::{event, Level};
 
-use crate::command::ExecuteResponse;
+use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionStatus};
-use crate::util::send_immediate_rows;
-use crate::{rbac, ExecuteContext};
+use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::{rbac, ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -49,6 +52,7 @@ use crate::{rbac, ExecuteContext};
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
+mod alter_set_cluster;
 mod cluster;
 mod inner;
 mod linked_cluster;
@@ -62,7 +66,8 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
-        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        let mut responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
         let session_catalog = self.catalog.for_session(ctx.session());
@@ -319,6 +324,10 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::AlterSetCluster(plan) => {
+                let result = self.sequence_alter_set_cluster(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::AlterItemRename(plan) => {
                 let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
                 ctx.retire(result);
@@ -516,6 +525,66 @@ impl Coordinator {
                 });
             }
         }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn sequence_execute_single_statement_transaction(
+        &mut self,
+        ctx: ExecuteContext,
+        stmt: Statement<Raw>,
+        params: Params,
+    ) {
+        // Put the session into single statement implicit so anything can execute.
+        let (tx, internal_cmd_tx, mut session, extra) = ctx.into_parts();
+        assert!(matches!(session.transaction(), TransactionStatus::Default));
+        session.start_transaction_single_stmt(self.now_datetime());
+        let conn_id = session.conn_id().unhandled();
+
+        // Execute the saved statement in a temp transmitter so we can run COMMIT.
+        let (sub_tx, sub_rx) = oneshot::channel();
+        let sub_ct = ClientTransmitter::new(sub_tx, self.internal_cmd_tx.clone());
+        let sub_ctx = ExecuteContext::from_parts(sub_ct, internal_cmd_tx, session, extra);
+        self.handle_execute_inner(stmt, params, sub_ctx).await;
+
+        // The response can need off-thread processing. Wait for it elsewhere so the coordinator can
+        // continue processing.
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        mz_ore::task::spawn(
+            || format!("execute_single_statement:{conn_id}"),
+            async move {
+                let Ok(Response { result, session }) = sub_rx.await else {
+                    // Coordinator went away.
+                    return;
+                };
+                let (sub_tx, sub_rx) = oneshot::channel();
+                let _ = internal_cmd_tx.send(Message::Command(Command::Commit {
+                    action: EndTransactionAction::Commit,
+                    session,
+                    tx: sub_tx,
+                    otel_ctx: OpenTelemetryContext::obtain(),
+                }));
+                let Ok(commit_response) = sub_rx.await else {
+                    // Coordinator went away.
+                    return;
+                };
+                assert!(matches!(
+                    commit_response.session.transaction(),
+                    TransactionStatus::Default
+                ));
+                // The fake, generated response was already sent to the user and we don't need to
+                // ever send an `Ok(result)` to the user, because they are expecting a response from
+                // a `COMMIT`. So, always send the `COMMIT`'s result if the original statement
+                // succeeded. If it failed, we can send an error and don't need to wrap it or send a
+                // later COMMIT or ROLLBACK.
+                let result = match (result, commit_response.result) {
+                    (Ok(_), commit) => commit,
+                    (Err(result), _) => Err(result),
+                };
+                // We ignore the resp.result because it's not clear what to do if it failed since we
+                // can only send a single ExecuteResponse to tx.
+                tx.send(result, commit_response.session);
+            },
+        );
     }
 
     /// Creates a role during connection startup.

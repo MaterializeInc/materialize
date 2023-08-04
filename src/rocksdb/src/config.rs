@@ -59,6 +59,8 @@ pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) 
         compression_type,
         bottommost_compression_type,
         retry_max_duration: _,
+        stats_log_interval_seconds,
+        stats_persist_interval_seconds,
         dynamic: _,
     } = config;
 
@@ -96,4 +98,7 @@ pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) 
             .expect("More than 3 billion cores")
     };
     options.increase_parallelism(parallelism);
+
+    options.set_stats_dump_period_sec(*stats_log_interval_seconds);
+    options.set_stats_persist_period_sec(*stats_persist_interval_seconds);
 }

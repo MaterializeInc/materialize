@@ -47,7 +47,7 @@ pub enum PlanError {
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
         feature: String,
-        documentation_link: String,
+        documentation_link: Option<String>,
         details: Option<String>,
     },
     UnknownColumn {
@@ -208,6 +208,7 @@ pub enum PlanError {
     ShowCommandInView,
     WebhookValidationDoesNotUseColumns,
     WebhookValidationNonDeterministic,
+    PgSourceUserSpecifiedDetails,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -342,6 +343,7 @@ impl PlanError {
             }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
+            Self::PgSourceUserSpecifiedDetails => Some("If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option.".into()),
             _ => None,
         }
     }
@@ -358,7 +360,10 @@ impl fmt::Display for PlanError {
                 Ok(())
             }
             Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
-                write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
+                write!(f, "{feature} is not supported",)?;
+                if let Some(documentation_path) = documentation_path {
+                    write!(f, ", for more information consult the documentation at https://materialize.com/docs/{documentation_path}")?;
+                }
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(
@@ -551,10 +556,13 @@ impl fmt::Display for PlanError {
             ),
             Self::ShowCommandInView => f.write_str("SHOW commands are not allowed in views"),
             Self::WebhookValidationDoesNotUseColumns => f.write_str(
-                "expression provided in VALIDATE USING does not reference any columns"
+                "expression provided in CHECK does not reference any columns"
             ),
             Self::WebhookValidationNonDeterministic => f.write_str(
-                "expression provided in VALIDATE USING is not deterministic"
+                "expression provided in CHECK is not deterministic"
+            ),
+            Self::PgSourceUserSpecifiedDetails => f.write_str(
+                "must not specify DETAILS option in CREATE SOURCE"
             ),
         }
     }

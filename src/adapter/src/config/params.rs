@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_sql::session::vars::{SystemVars, VarInput};
+use mz_sql::session::vars::{SystemVars, Value, Var, VarInput, ENABLE_LAUNCHDARKLY};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {
@@ -60,7 +60,10 @@ impl SynchronizedParameters {
     }
 
     /// Return a vector of [ModifiedParameter] instances that need to be pushed
-    /// to the backend and reset this set to the empty set.
+    /// to the backend and reset this set to the empty set for future calls.
+    ///
+    /// The set will start growing again as soon as we modify a parameter from
+    /// the `synchronized` set with a [SynchronizedParameters::modify] call.
     pub fn modified(&mut self) -> Vec<ModifiedParameter> {
         let mut modified = BTreeSet::new();
         std::mem::swap(&mut self.modified, &mut modified);
@@ -93,43 +96,52 @@ impl SynchronizedParameters {
             .value()
     }
 
-    /// Try to modify the in-memory `value` for `name` backing this
-    /// [SynchronizedParameters] instace, calling `SystemVars::reset` iff
-    /// `value` is the default for this `name` and `SystemVars::set` otherwise.
+    /// Try to modify the in-memory entry for `name` in the SystemVars backing
+    /// this [SynchronizedParameters] instace.
+    ///
+    /// This will call `SystemVars::reset` iff `value` is the default for this
+    /// `name` and `SystemVars::set` otherwise.
+    ///
+    /// As a side effect, the modified set will be changed to contain `name` iff
+    /// the in-memory entry for `name` was modified **and** `name` is in the
+    /// `synchronized` set.
     ///
     /// Return `true` iff the backing in-memory value for this `name` has
     /// changed.
     pub fn modify(&mut self, name: &str, value: &str) -> bool {
-        // Resolve name to &'static str and assert that the system parameter can
-        // be indeed modified.
-        if let Some(name) = self.synchronized.get(name) {
-            // It's OK to call `unwrap_or(false)` here because for fixed `name`
-            // and `value` an error in `self.is_default(name, value)` implies
-            // the same error in `self.system_vars.set(name, value)`.
-            let value = VarInput::Flat(value);
-            let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
-                self.system_vars.reset(name)
-            } else {
-                self.system_vars.set(name, value)
-            };
-            match modified {
-                Ok(true) => {
-                    self.modified.insert(name);
-                    true
-                }
-                Ok(false) => {
-                    // The value was the same as the current one.
-                    false
-                }
-                Err(e) => {
-                    tracing::error!("cannot modify system parameter {}: {}", name, e);
-                    false
-                }
-            }
+        // It's OK to call `unwrap_or(false)` here because for fixed `name`
+        // and `value` an error in `self.is_default(name, value)` implies
+        // the same error in `self.system_vars.set(name, value)`.
+        let value = VarInput::Flat(value);
+        let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
+            self.system_vars.reset(name)
         } else {
-            tracing::error!("cannot modify unsynchronized system parameter {}", name);
-            false
+            self.system_vars.set(name, value)
+        };
+
+        match modified {
+            Ok(true) => {
+                // Track modified parameters from the "synchronized" set.
+                if let Some(name) = self.synchronized.get(name) {
+                    self.modified.insert(name);
+                }
+                true
+            }
+            Ok(false) => {
+                // The value was the same as the current one.
+                false
+            }
+            Err(e) => {
+                tracing::error!("cannot modify system parameter {}: {}", name, e);
+                false
+            }
         }
+    }
+
+    pub fn enable_launchdarkly(&self) -> bool {
+        let var_name = self.get(ENABLE_LAUNCHDARKLY.name());
+        let var_input = VarInput::Flat(&var_name);
+        bool::parse(&ENABLE_LAUNCHDARKLY, var_input).expect("This is known to be a bool")
     }
 }
 

@@ -75,6 +75,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
@@ -99,6 +100,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
+use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -112,10 +114,11 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
+use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Instrument, Level};
+use tracing::{info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -125,8 +128,9 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::config::SystemParameterFrontend;
+use crate::config::SystemParameterSyncConfig;
 use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
@@ -137,8 +141,9 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::{flags, AdapterNotice};
+use crate::{flags, AdapterNotice, TimestampProvider};
 
+pub(crate) mod dataflows;
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
@@ -147,7 +152,6 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
-mod dataflows;
 mod ddl;
 mod indexes;
 mod introspection;
@@ -189,7 +193,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate,
+    GroupCommitInitiate(Span),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -212,18 +216,25 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-
     // Like Command::Execute, but its context has already been allocated.
     Execute {
         portal_name: String,
         ctx: ExecuteContext,
         span: tracing::Span,
     },
-
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+    },
+    ExecuteSingleStatementTransaction {
+        ctx: ExecuteContext,
+        stmt: Statement<Raw>,
+        params: mz_sql::plan::Params,
+    },
+    PeekStageReady {
+        ctx: ExecuteContext,
+        stage: PeekStage,
     },
 }
 
@@ -323,7 +334,7 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    pub plan: mz_sql::plan::SelectPlan,
+    plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
 }
 
@@ -365,20 +376,20 @@ pub struct PeekStageTimestamp {
 #[derive(Debug)]
 pub struct PeekStageFinish {
     validity: PlanValidity,
-    pub finishing: RowSetFinishing,
-    pub copy_to: Option<CopyFormat>,
-    pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-    pub cluster_id: ClusterId,
-    pub id_bundle: Option<CollectionIdBundle>,
-    pub when: QueryWhen,
-    pub target_replica: Option<ReplicaId>,
-    pub view_id: GlobalId,
-    pub index_id: GlobalId,
-    pub timeline_context: TimelineContext,
-    pub source_ids: BTreeSet<GlobalId>,
-    pub real_time_recency_ts: Option<mz_repr::Timestamp>,
-    pub key: Vec<MirScalarExpr>,
-    pub typ: RelationType,
+    finishing: RowSetFinishing,
+    copy_to: Option<CopyFormat>,
+    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+    cluster_id: ClusterId,
+    id_bundle: Option<CollectionIdBundle>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    view_id: GlobalId,
+    index_id: GlobalId,
+    timeline_context: TimelineContext,
+    source_ids: BTreeSet<GlobalId>,
+    real_time_recency_ts: Option<mz_repr::Timestamp>,
+    key: Vec<MirScalarExpr>,
+    typ: RelationType,
 }
 
 /// An enum describing which cluster to run a statement on.
@@ -460,7 +471,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
@@ -474,8 +485,6 @@ pub struct ReplicaMetadata {
     pub last_heartbeat: Option<DateTime<Utc>>,
     /// The last known CPU and memory metrics
     pub metrics: Option<Vec<ServiceProcessMetrics>>,
-    /// Write frontiers of that replica.
-    pub write_frontiers: Vec<(GlobalId, mz_repr::Timestamp)>,
 }
 
 /// Metadata about an active connection.
@@ -830,6 +839,8 @@ pub struct Coordinator {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Arc<dyn SecretsController>,
+    /// A secrets reader than maintains an in-memory cache, where values have a set TTL.
+    caching_secrets_reader: CachingSecretsReader,
 
     /// Handle to a manager that can create and delete kubernetes resources
     /// (ie: VpcEndpoint objects)
@@ -1185,9 +1196,12 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        let dataflow = self
+                        let mut dataflow = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
+                        let as_of = self.bootstrap_index_as_of(&dataflow, idx.cluster_id);
+                        dataflow.set_as_of(as_of);
+
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
                         policy_entry
@@ -1221,9 +1235,11 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let internal_view_id = self.allocate_transient_id()?;
-                    let df = self
+                    let mut df = self
                         .dataflow_builder(mview.cluster_id)
                         .build_materialized_view_dataflow(entry.id(), internal_view_id)?;
+                    let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
+                    df.set_as_of(as_of);
                     self.must_ship_dataflow(df, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
@@ -1305,6 +1321,7 @@ impl Coordinator {
         if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
             // Clean up any extraneous VpcEndpoints that shouldn't exist.
             let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
+            let existing_vpc_endpoints = BTreeSet::from_iter(existing_vpc_endpoints.into_keys());
             let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();
             let vpc_endpoints_to_remove = existing_vpc_endpoints.difference(&desired_vpc_endpoints);
             for id in vpc_endpoints_to_remove {
@@ -1450,26 +1467,86 @@ impl Coordinator {
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        if let Ok(controller_secrets) = self.secrets_controller.list().await {
-            // Fetch all IDs from the catalog to future-proof against other
-            // things using secrets. Today, SECRET and CONNECTION objects use
-            // secrets_controller.ensure, but more things could in the future
-            // that would be easy to miss adding here.
-            let catalog_ids: BTreeSet<GlobalId> =
-                self.catalog().entries().map(|entry| entry.id()).collect();
-            let controller_secrets: BTreeSet<GlobalId> = controller_secrets.into_iter().collect();
-            let orphaned = controller_secrets.difference(&catalog_ids);
-            for id in orphaned {
-                info!("coordinator init: deleting orphaned secret {id}");
-                fail_point!("orphan_secrets");
-                if let Err(e) = self.secrets_controller.delete(*id).await {
-                    warn!("Dropping orphaned secret has encountered an error: {}", e);
+        match self.secrets_controller.list().await {
+            Ok(controller_secrets) => {
+                // Fetch all IDs from the catalog to future-proof against other
+                // things using secrets. Today, SECRET and CONNECTION objects use
+                // secrets_controller.ensure, but more things could in the future
+                // that would be easy to miss adding here.
+                let catalog_ids: BTreeSet<GlobalId> =
+                    self.catalog().entries().map(|entry| entry.id()).collect();
+                let controller_secrets: BTreeSet<GlobalId> =
+                    controller_secrets.into_iter().collect();
+                let orphaned = controller_secrets.difference(&catalog_ids);
+                for id in orphaned {
+                    info!("coordinator init: deleting orphaned secret {id}");
+                    fail_point!("orphan_secrets");
+                    if let Err(e) = self.secrets_controller.delete(*id).await {
+                        warn!("Dropping orphaned secret has encountered an error: {}", e);
+                    }
                 }
             }
+            Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
         }
 
         info!("coordinator init: bootstrap complete");
         Ok(())
+    }
+
+    /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
+    fn bootstrap_index_as_of(
+        &self,
+        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ComputeInstanceId,
+    ) -> Antichain<Timestamp> {
+        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
+        // the `since`s of all dependencies.
+        let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
+        let mut as_of = self.least_valid_read(&id_bundle);
+
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
+        // might still be installed on replicas, but ideally not much farther as that would just
+        // increase the wait time until the index becomes readable. We advance the `as_of` to the
+        // meet of the `upper`s of all dependencies, as we know that no replica can have produced
+        // output for that time, so we can assume that no replica `as_of` has been adanced beyond
+        // this time either.
+        let write_frontier = self.least_valid_write(&id_bundle);
+        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
+        if !write_frontier.is_empty() {
+            as_of.join_assign(&write_frontier);
+        }
+
+        as_of
+    }
+
+    /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
+    fn bootstrap_materialized_view_as_of(
+        &self,
+        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ComputeInstanceId,
+    ) -> Antichain<Timestamp> {
+        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
+        // the `since`s of all dependencies.
+        let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
+        let mut as_of = self.least_valid_read(&id_bundle);
+
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` as far as possible. If a storage collection for the MV already
+        // exists, we can advance to that collection's upper. This is the most we can advance the
+        // `as_of` without skipping times in the MV output.
+        let sink_id = dataflow
+            .sink_exports
+            .keys()
+            .exactly_one()
+            .expect("MV dataflow must export a sink");
+        let write_frontier = self.storage_write_frontier(*sink_id);
+        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
+        if !write_frontier.is_empty() {
+            as_of.join_assign(write_frontier);
+        }
+
+        as_of
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -1540,7 +1617,11 @@ impl Coordinator {
                 }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = self.advance_timelines_interval.tick() => Message::GroupCommitInitiate,
+                _ = self.advance_timelines_interval.tick() => {
+                    let span = info_span!(parent: None, "advance_timelines_interval");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span)
+                },
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
                 // `recv()` on `Receiver` is cancellation safe:
@@ -1636,7 +1717,7 @@ pub async fn serve(
         egress_ips,
         aws_account_id,
         aws_privatelink_availability_zones,
-        system_parameter_frontend,
+        system_parameter_sync_config,
         active_connection_count,
         tracing_handle,
     }: Config,
@@ -1694,7 +1775,7 @@ pub async fn serve(
             egress_ips,
             aws_principal_context,
             aws_privatelink_availability_zones,
-            system_parameter_frontend,
+            system_parameter_sync_config,
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
@@ -1734,6 +1815,7 @@ pub async fn serve(
                 ));
             }
 
+            let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
@@ -1757,6 +1839,7 @@ pub async fn serve(
                 pending_writes: Vec::new(),
                 advance_timelines_interval,
                 secrets_controller,
+                caching_secrets_reader,
                 cloud_resource_controller,
                 connection_context,
                 transient_replica_metadata: BTreeMap::new(),

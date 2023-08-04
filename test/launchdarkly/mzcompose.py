@@ -177,12 +177,22 @@ def workflow_default(c: Composition) -> None:
             )
 
         # Assert that we can turn off synchronization
+
+        # (1) The logs should report that the frontend was not stopped until now
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert "stopping system parameter frontend" not in logs.stdout
+        # (2) Turn the kill switch on
         sys("ALTER SYSTEM SET enable_launchdarkly=off")
+        sleep(10)
+        # (3) The logs should report that the frontend was stopped at least once
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert "stopping system parameter frontend" in logs.stdout
+        # (4) After that, it should be safe to alter a value directly.
+        #     The new value should not be replaced, even after 15 seconds
         sys("ALTER SYSTEM SET max_result_size=1234")
-        # The new value should not be replaced, even after 15 seconds
         sleep(15)
         c.testdrive("\n".join(["> SHOW max_result_size", "1234"]))
-        # The value should be reset after we turn the kill switch back off
+        # (5) The value should be reset after we turn the kill switch back off
         sys("ALTER SYSTEM SET enable_launchdarkly=on")
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 

@@ -1958,10 +1958,66 @@ fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row,
     datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
 }
 
+fn acl_explode<'a>(
+    acl_items: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let acl_items = acl_items.unwrap_array();
+    acl_items
+        .elements()
+        .iter()
+        .map(|acl_item| acl_item.unwrap_acl_item())
+        .flat_map(move |acl_item| {
+            acl_item
+                .acl_mode
+                .explode()
+                .into_iter()
+                .map(move |privilege| {
+                    [
+                        Datum::UInt32(acl_item.grantor.0),
+                        Datum::UInt32(acl_item.grantee.0),
+                        Datum::String(temp_storage.push_string(privilege.to_string())),
+                        // GRANT OPTION is not implemented, so we hardcode false.
+                        Datum::False,
+                    ]
+                })
+        })
+        .map(|row| (Row::pack_slice(&row), 1))
+}
+
+fn mz_acl_explode<'a>(
+    mz_acl_items: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let mz_acl_items = mz_acl_items.unwrap_array();
+    mz_acl_items
+        .elements()
+        .iter()
+        .map(|mz_acl_item| mz_acl_item.unwrap_mz_acl_item())
+        .flat_map(move |mz_acl_item| {
+            mz_acl_item
+                .acl_mode
+                .explode()
+                .into_iter()
+                .map(move |privilege| {
+                    [
+                        Datum::String(temp_storage.push_string(mz_acl_item.grantor.to_string())),
+                        Datum::String(temp_storage.push_string(mz_acl_item.grantee.to_string())),
+                        Datum::String(temp_storage.push_string(privilege.to_string())),
+                        // GRANT OPTION is not implemented, so we hardcode false.
+                        Datum::False,
+                    ]
+                })
+        })
+        .map(|row| (Row::pack_slice(&row), 1))
+}
+
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub enum TableFunc {
+    AclExplode,
+    MzAclExplode,
     JsonbEach {
         stringify: bool,
     },
@@ -2004,6 +2060,8 @@ impl RustType<ProtoTableFunc> for TableFunc {
 
         ProtoTableFunc {
             kind: Some(match self {
+                TableFunc::AclExplode => Kind::AclExplode(()),
+                TableFunc::MzAclExplode => Kind::MzAclExplode(()),
                 TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
                 TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
                 TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
@@ -2039,6 +2097,8 @@ impl RustType<ProtoTableFunc> for TableFunc {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
 
         Ok(match kind {
+            Kind::AclExplode(()) => TableFunc::AclExplode,
+            Kind::MzAclExplode(()) => TableFunc::MzAclExplode,
             Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
             Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
             Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
@@ -2080,6 +2140,8 @@ impl TableFunc {
             return Ok(Box::new(vec![].into_iter()));
         }
         match self {
+            TableFunc::AclExplode => Ok(Box::new(acl_explode(datums[0], temp_storage))),
+            TableFunc::MzAclExplode => Ok(Box::new(mz_acl_explode(datums[0], temp_storage))),
             TableFunc::JsonbEach { stringify } => {
                 Ok(Box::new(jsonb_each(datums[0], temp_storage, *stringify)))
             }
@@ -2147,6 +2209,26 @@ impl TableFunc {
 
     pub fn output_type(&self) -> RelationType {
         let (column_types, keys) = match self {
+            TableFunc::AclExplode => {
+                let column_types = vec![
+                    ScalarType::Oid.nullable(false),
+                    ScalarType::Oid.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Bool.nullable(false),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
+            TableFunc::MzAclExplode => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Bool.nullable(false),
+                ];
+                let keys = vec![];
+                (column_types, keys)
+            }
             TableFunc::JsonbEach { stringify: true } => {
                 let column_types = vec![
                     ScalarType::String.nullable(false),
@@ -2252,6 +2334,8 @@ impl TableFunc {
 
     pub fn output_arity(&self) -> usize {
         match self {
+            TableFunc::AclExplode => 4,
+            TableFunc::MzAclExplode => 4,
             TableFunc::JsonbEach { .. } => 2,
             TableFunc::JsonbObjectKeys => 1,
             TableFunc::JsonbArrayElements { .. } => 1,
@@ -2272,7 +2356,9 @@ impl TableFunc {
 
     pub fn empty_on_null_input(&self) -> bool {
         match self {
-            TableFunc::JsonbEach { .. }
+            TableFunc::AclExplode
+            | TableFunc::MzAclExplode
+            | TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
             | TableFunc::JsonbArrayElements { .. }
             | TableFunc::GenerateSeriesInt32
@@ -2295,6 +2381,8 @@ impl TableFunc {
         // Most variants preserve monotonicity, but all variants are enumerated to
         // ensure that added variants at least check that this is the case.
         match self {
+            TableFunc::AclExplode => false,
+            TableFunc::MzAclExplode => false,
             TableFunc::JsonbEach { .. } => true,
             TableFunc::JsonbObjectKeys => true,
             TableFunc::JsonbArrayElements { .. } => true,
@@ -2317,6 +2405,8 @@ impl TableFunc {
 impl fmt::Display for TableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            TableFunc::AclExplode => f.write_str("aclexplode"),
+            TableFunc::MzAclExplode => f.write_str("mz_aclexplode"),
             TableFunc::JsonbEach { .. } => f.write_str("jsonb_each"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),

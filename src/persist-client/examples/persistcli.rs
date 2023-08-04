@@ -85,6 +85,7 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle;
 use tracing::{info_span, Instrument};
@@ -126,10 +127,13 @@ fn main() {
         .expect("Failed building the Runtime");
 
     let _ = runtime
-        .block_on(args.tracing.configure_tracing(StaticTracingConfig {
-            service_name: "persist-open-loop",
-            build_info: BUILD_INFO,
-        }))
+        .block_on(args.tracing.configure_tracing(
+            StaticTracingConfig {
+                service_name: "persist-open-loop",
+                build_info: BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        ))
         .expect("failed to init tracing");
 
     let root_span = info_span!("persistcli");

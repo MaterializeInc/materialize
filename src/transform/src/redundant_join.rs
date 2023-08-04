@@ -26,7 +26,8 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::{all, TransformArgs};
@@ -63,9 +64,11 @@ impl crate::Transform for RedundantJoin {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, &mut BTreeMap::new()).map(|_| ());
+        let mut ctx = ProvInfoCtx::default();
+        ctx.extend_uses(relation);
+        let result = self.action(relation, &mut ctx);
         mz_repr::explain::trace_plan(&*relation);
-        result
+        result.map(|_| ())
     }
 }
 
@@ -86,20 +89,27 @@ impl RedundantJoin {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        lets: &mut BTreeMap<Id, Vec<ProvInfo>>,
+        ctx: &mut ProvInfoCtx,
     ) -> Result<Vec<ProvInfo>, crate::TransformError> {
-        let result = self.checked_recur(|_| {
+        let mut result = self.checked_recur(|_| {
             match relation {
                 MirRelationExpr::Let { id, value, body } => {
                     // Recursively determine provenance of the value.
-                    let value_prov = self.action(value, lets)?;
-                    let old = lets.insert(Id::Local(*id), value_prov);
-                    let result = self.action(body, lets)?;
-                    if let Some(old) = old {
-                        lets.insert(Id::Local(*id), old);
-                    } else {
-                        lets.remove(&Id::Local(*id));
-                    }
+                    let value_prov = self.action(value, ctx)?;
+                    // Clear uses from the just visited binding definition.
+                    ctx.remove_uses(value);
+
+                    // Extend the lets context with an entry for this binding.
+                    let prov_old = ctx.insert(*id, value_prov);
+                    assert!(prov_old.is_none(), "No shadowing");
+
+                    // Determine provenance of the body.
+                    let result = self.action(body, ctx)?;
+                    ctx.remove_uses(body);
+
+                    // Remove the lets entry for this binding from the context.
+                    ctx.remove(id);
+
                     Ok(result)
                 }
 
@@ -112,8 +122,8 @@ impl RedundantJoin {
                     // As a first approximation, we naively extend the `lets`
                     // context with the empty vec![] for each id.
                     for id in ids.iter() {
-                        let prov_old = lets.insert(Id::Local(*id), vec![]);
-                        assert!(prov_old.is_none());
+                        let prov_old = ctx.insert(*id, vec![]);
+                        assert!(prov_old.is_none(), "No shadowing");
                     }
 
                     // In other words, we don't attempt to derive additional
@@ -122,26 +132,38 @@ impl RedundantJoin {
                     // We descend into the values and the body with the naively
                     // extended context.
                     for value in values.iter_mut() {
-                        self.action(value, lets)?;
+                        self.action(value, ctx)?;
                     }
-                    let result = self.action(body, lets)?;
+                    // Clear uses from the just visited recursive binding
+                    // definitions.
+                    for value in values.iter_mut() {
+                        ctx.remove_uses(value);
+                    }
+                    let result = self.action(body, ctx)?;
+                    ctx.remove_uses(body);
 
                     // Remove the lets entries for all ids.
                     for id in ids.iter() {
-                        lets.remove(&Id::Local(*id));
+                        ctx.remove(id);
                     }
 
                     Ok(result)
                 }
 
                 MirRelationExpr::Get { id, typ } => {
-                    // Extract the value provenance, or an empty list if
-                    // unavailable (this should only be the case for GlobalId
-                    // references).
-                    let mut val_info = lets.get(id).cloned().unwrap_or_default();
-                    // Add information about being exactly this let binding too.
-                    val_info.push(ProvInfo::make_leaf(*id, typ.arity()));
-                    Ok(val_info)
+                    if let Id::Local(id) = id {
+                        // Extract the value provenance (this should always exist).
+                        let mut val_info = ctx.get(id).cloned().unwrap_or_else(|| {
+                            soft_panic_or_log!("no ctx entry for LocalId {id}");
+                            vec![]
+                        });
+                        // Add information about being exactly this let binding too.
+                        val_info.push(ProvInfo::make_leaf(Id::Local(*id), typ.arity()));
+                        Ok(val_info)
+                    } else {
+                        // Add information about being exactly this GlobalId reference.
+                        Ok(vec![ProvInfo::make_leaf(*id, typ.arity())])
+                    }
                 }
 
                 MirRelationExpr::Join {
@@ -158,7 +180,7 @@ impl RedundantJoin {
                     // Recursively apply transformation, and determine the provenance of inputs.
                     let mut input_prov = Vec::new();
                     for i in inputs.iter_mut() {
-                        input_prov.push(self.action(i, lets)?);
+                        input_prov.push(self.action(i, ctx)?);
                     }
 
                     // Determine useful information about the structure of the inputs.
@@ -184,6 +206,9 @@ impl RedundantJoin {
                         })
                         .next()
                     {
+                        // Clear uses from the removed input.
+                        ctx.remove_uses(&inputs[remove_input_idx]);
+
                         inputs.remove(remove_input_idx);
                         input_types.remove(remove_input_idx);
 
@@ -276,7 +301,7 @@ impl RedundantJoin {
 
                 MirRelationExpr::Filter { input, .. } => {
                     // Filter may drop records, and so we unset `exact`.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
                     }
@@ -284,7 +309,7 @@ impl RedundantJoin {
                 }
 
                 MirRelationExpr::Map { input, scalars } => {
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         for scalar in scalars.iter() {
                             let dereferenced_scalar = prov.strict_dereference(scalar);
@@ -295,9 +320,9 @@ impl RedundantJoin {
                 }
 
                 MirRelationExpr::Union { base, inputs } => {
-                    let mut prov = self.action(base, lets)?;
+                    let mut prov = self.action(base, ctx)?;
                     for input in inputs {
-                        let input_prov = self.action(input, lets)?;
+                        let input_prov = self.action(input, ctx)?;
                         // To merge a new list of provenances, we look at the cross
                         // produce of things we might know about each source.
                         // TODO(mcsherry): this can be optimized to use datastructures
@@ -308,7 +333,6 @@ impl RedundantJoin {
                         }
                         prov = new_prov;
                     }
-
                     Ok(prov)
                 }
 
@@ -322,7 +346,7 @@ impl RedundantJoin {
                 } => {
                     // Reduce yields its first few columns as a key, and produces
                     // all key tuples that were present in its input.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         let mut projection = group_key
                             .iter()
@@ -340,7 +364,7 @@ impl RedundantJoin {
 
                 MirRelationExpr::Threshold { input } => {
                     // Threshold may drop records, and so we unset `exact`.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
                     }
@@ -349,7 +373,7 @@ impl RedundantJoin {
 
                 MirRelationExpr::TopK { input, .. } => {
                     // TopK may drop records, and so we unset `exact`.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
                     }
@@ -359,7 +383,7 @@ impl RedundantJoin {
                 MirRelationExpr::Project { input, outputs } => {
                     // Projections re-order, drop, and duplicate columns,
                     // but they neither drop rows nor invent values.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         let projection = outputs
                             .iter()
@@ -372,7 +396,7 @@ impl RedundantJoin {
 
                 MirRelationExpr::FlatMap { input, func, .. } => {
                     // FlatMap may drop records, and so we unset `exact`.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
                         prov.dereferenced_projection
@@ -387,20 +411,24 @@ impl RedundantJoin {
                     // been a problem in `Union`, where we might report
                     // that the union of positive and negative records is
                     // "exact": cancellations would make this false.
-                    let mut result = self.action(input, lets)?;
+                    let mut result = self.action(input, ctx)?;
                     for prov in result.iter_mut() {
                         prov.exact = false;
                     }
                     Ok(result)
                 }
 
-                MirRelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
+                MirRelationExpr::ArrangeBy { input, .. } => self.action(input, ctx),
             }
         })?;
+        result.retain(|info| !info.is_trivial());
+
+        // Uncomment the following lines to trace the individual steps:
         // println!("{}", relation.pretty());
         // println!("result = {result:?}");
         // println!("lets: {lets:?}");
         // println!("---------------------");
+
         Ok(result)
     }
 }
@@ -532,6 +560,16 @@ impl ProvInfo {
         } else {
             None
         }
+    }
+
+    /// Check if all entries of the dereferenced projection are missing.
+    ///
+    /// If this is the case keeping the `ProvInfo` entry around is meaningless.
+    fn is_trivial(&self) -> bool {
+        all![
+            !self.dereferenced_projection.is_empty(),
+            self.dereferenced_projection.iter().all(|x| x.is_none()),
+        ]
     }
 }
 
@@ -731,5 +769,85 @@ fn try_build_expression_using_other(
                 },
             )
         }
+    }
+}
+
+/// A context of `ProvInfo` vectors associated with bindings that might still be
+/// referenced.
+#[derive(Debug, Default)]
+pub struct ProvInfoCtx {
+    /// [`LocalId`] references in the remaining subtree.
+    ///
+    /// Entries from the `lets` map that are no longer used can be pruned.
+    uses: BTreeMap<LocalId, usize>,
+    /// [`ProvInfo`] vectors associated with let binding in scope.
+    lets: BTreeMap<LocalId, Vec<ProvInfo>>,
+}
+
+impl ProvInfoCtx {
+    /// Extend the `uses` map by the `LocalId`s used in `expr`.
+    pub fn extend_uses(&mut self, expr: &MirRelationExpr) {
+        expr.visit_pre(&mut |expr: &MirRelationExpr| match expr {
+            MirRelationExpr::Get {
+                id: Id::Local(id),
+                typ: _,
+            } => {
+                let count = self.uses.entry(id.clone()).or_insert(0_usize);
+                *count += 1;
+            }
+            _ => (),
+        });
+    }
+
+    /// Decrement `uses` entries by the `LocalId`s used in `expr` and remove
+    /// `lets` entries for `uses` that reset to zero.
+    pub fn remove_uses(&mut self, expr: &MirRelationExpr) {
+        let mut worklist = vec![expr];
+        while let Some(expr) = worklist.pop() {
+            if let MirRelationExpr::Get {
+                id: Id::Local(id), ..
+            } = expr
+            {
+                if let Some(count) = self.uses.get_mut(id) {
+                    if *count > 0 {
+                        *count -= 1;
+                    }
+                    if *count == 0 {
+                        if self.lets.remove(id).is_none() {
+                            soft_panic_or_log!("ctx.lets[{id}] should exist");
+                        }
+                    }
+                } else {
+                    soft_panic_or_log!("ctx.uses[{id}] should exist");
+                }
+            }
+            match expr {
+                MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
+                    // When traversing the tree, don't descend into
+                    // `Let`/`LetRec` sub-terms in order to avoid double
+                    // counting (those are handled by remove_uses calls of
+                    // RedundantJoin::action on subterms that were already
+                    // visited because the action works bottom-up).
+                }
+                _ => {
+                    worklist.extend(expr.children().rev());
+                }
+            }
+        }
+    }
+
+    /// Get the `ProvInfo` vector for `id` from the context.
+    pub fn get(&self, id: &LocalId) -> Option<&Vec<ProvInfo>> {
+        self.lets.get(id)
+    }
+
+    /// Extend the context with the `id: prov_infos` entry.
+    pub fn insert(&mut self, id: LocalId, prov_infos: Vec<ProvInfo>) -> Option<Vec<ProvInfo>> {
+        self.lets.insert(id, prov_infos)
+    }
+
+    /// Remove the entry identified by `id` from the context.
+    pub fn remove(&mut self, id: &LocalId) -> Option<Vec<ProvInfo>> {
+        self.lets.remove(id)
     }
 }

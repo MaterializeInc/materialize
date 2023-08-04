@@ -18,7 +18,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::pg_legacy_name::NAME_MAX_BYTES;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -109,8 +109,12 @@ pub enum Value {
     MzTimestamp(mz_repr::Timestamp),
     /// A contiguous range of values along a domain.
     Range(Range<Box<Value>>),
-    /// A list of privileges granted to a role.
+    /// A list of privileges granted to a role, that uses [`mz_repr::role_id::RoleId`]s for role
+    /// references.
     MzAclItem(MzAclItem),
+    /// A list of privileges granted to a user that uses [`mz_repr::adt::system::Oid`]s for role
+    /// references. This type is used primarily for compatibility with PostgreSQL.
+    AclItem(AclItem),
 }
 
 impl Value {
@@ -139,6 +143,7 @@ impl Value {
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
             (Datum::MzTimestamp(t), ScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
             (Datum::MzAclItem(mai), ScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
+            (Datum::AclItem(ai), ScalarType::AclItem) => Some(Value::AclItem(ai)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -304,6 +309,7 @@ impl Value {
                 buf.make_datum(|packer| packer.push_range(range).unwrap())
             }
             Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
+            Value::AclItem(acl_item) => Datum::AclItem(acl_item),
         }
     }
 
@@ -387,6 +393,7 @@ impl Value {
             })
             .expect("provided closure never fails"),
             Value::MzAclItem(mz_acl_item) => strconv::format_mz_acl_item(buf, *mz_acl_item),
+            Value::AclItem(acl_item) => strconv::format_acl_item(buf, *acl_item),
         }
     }
 
@@ -524,6 +531,7 @@ impl Value {
                 buf.extend_from_slice(&mz_acl_item.encode_binary());
                 Ok(postgres_types::IsNull::No)
             }
+            Value::AclItem(_) => Err("aclitem has no binary encoding".into()),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -611,6 +619,7 @@ impl Value {
                 Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
             })?),
             Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
+            Type::AclItem => Value::AclItem(strconv::parse_acl_item(s)?),
         })
     }
 
@@ -680,6 +689,7 @@ impl Value {
                 let mz_acl_item = MzAclItem::decode_binary(raw)?;
                 Ok(Value::MzAclItem(mz_acl_item))
             }
+            Type::AclItem => Err("aclitem has no binary encoding".into()),
         }
     }
 }

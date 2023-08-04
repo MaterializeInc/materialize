@@ -41,9 +41,9 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
-    LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections, Upper,
-    WriterState,
+    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
+    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
+    Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -208,32 +208,11 @@ where
         (state, maintenance)
     }
 
-    pub async fn register_writer(
-        &mut self,
-        writer_id: &WriterId,
-        purpose: &str,
-        lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, WriterState<T>, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, (shard_upper, writer_state), maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
-                state.register_writer(
-                    &cfg.hostname,
-                    writer_id,
-                    purpose,
-                    lease_duration,
-                    heartbeat_timestamp_ms,
-                )
-            })
-            .await;
-        (shard_upper, writer_state, maintenance)
-    }
-
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
+        debug_info: &HandleDebugState,
         heartbeat_timestamp_ms: u64,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
         let idempotency_token = IdempotencyToken::new();
@@ -244,18 +223,20 @@ where
                     writer_id,
                     heartbeat_timestamp_ms,
                     &idempotency_token,
+                    debug_info,
                     None,
                 )
                 .await;
             match res {
                 Ok(x) => return Ok(x),
-                Err(_current_upper) => {
+                Err((seqno, _current_upper)) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
                     // method has found out that it advanced via some some
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
+                    self.applier.fetch_and_update_state(Some(seqno)).await;
                     let current_upper = self.applier.clone_upper();
 
                     // We tried to to a compare_and_append with the wrong
@@ -277,12 +258,20 @@ where
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
+        debug_info: &HandleDebugState,
         // Only exposed for testing. In prod, this always starts as None, but
         // making it a parameter allows us to simulate hitting an indeterminate
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
-    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+    ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
         let metrics = Arc::clone(&self.applier.metrics);
+        let lease_duration_ms = self
+            .applier
+            .cfg
+            .writer_lease_duration
+            .as_millis()
+            .try_into()
+            .expect("reasonable duration");
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
         // tricky (more discussion of this in #12797):
         //
@@ -371,15 +360,19 @@ where
             .retries
             .compare_and_append_idempotent
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut writer_was_present = false;
         loop {
             let cmd_res = self
                 .applier
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
+                    writer_was_present = state.writers.contains_key(writer_id);
                     state.compare_and_append(
                         batch,
                         writer_id,
                         heartbeat_timestamp_ms,
+                        lease_duration_ms,
                         idempotency_token,
+                        debug_info,
                     )
                 })
                 .await;
@@ -418,6 +411,10 @@ where
                         compaction: compact_reqs,
                     };
 
+                    if !writer_was_present {
+                        metrics.state.writer_added.inc();
+                    }
+
                     // Slightly unfortunate: as the only non-apply_unbatched_idempotent_cmd user,
                     // compare_and_append has to have its own check for maybe_become_tombstone.
                     if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
@@ -431,6 +428,9 @@ where
                     // and pass along the good news.
                     assert!(indeterminate.is_some());
                     self.applier.metrics.cmds.compare_and_append_noop.inc();
+                    if !writer_was_present {
+                        metrics.state.writer_added.inc();
+                    }
                     return Ok(Ok((seqno, WriterMaintenance::default())));
                 }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
@@ -459,14 +459,14 @@ where
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.
-                        return Err(Upper(shard_upper));
+                        return Err((seqno, Upper(shard_upper)));
                     }
                     if indeterminate.is_none() {
                         // No way this could have committed in some previous
                         // attempt of this loop: we never saw an indeterminate
                         // error (thus there was no previous iteration of the
                         // loop).
-                        return Err(Upper(shard_upper));
+                        return Err((seqno, Upper(shard_upper)));
                     }
                     // This is the bad case. We can't distinguish if some
                     // previous attempt that got an Indeterminate error
@@ -604,20 +604,6 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn heartbeat_writer(
-        &mut self,
-        writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, _, state| {
-                state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
-            })
-            .await;
-        (seqno, existed, maintenance)
-    }
-
     pub async fn expire_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
@@ -651,6 +637,7 @@ where
                 state.expire_writer(writer_id)
             })
             .await;
+        metrics.state.writer_removed.inc();
         (seqno, maintenance)
     }
 
@@ -944,57 +931,6 @@ where
             }
         })
     }
-
-    pub async fn start_writer_heartbeat_task(
-        self,
-        writer_id: WriterId,
-        gc: GarbageCollector<K, V, T, D>,
-    ) -> JoinHandle<()> {
-        let mut machine = self;
-        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
-        let name = format!(
-            "persist::heartbeat_write({},{})",
-            machine.shard_id(),
-            writer_id
-        );
-        isolated_runtime.spawn_named(|| name, async move {
-            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) went {}s between heartbeats",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
-                    .await;
-                maintenance.start_performing(&machine, &gc);
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) heartbeat call took {}s",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
-    }
 }
 
 pub const INFO_MIN_ATTEMPTS: usize = 3;
@@ -1095,7 +1031,7 @@ pub mod datadriven {
     use crate::batch::{
         validate_truncate_batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
-    use crate::fetch::fetch_batch_part;
+    use crate::fetch::{fetch_batch_part, Cursor};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
@@ -1443,7 +1379,7 @@ pub mod datadriven {
                     continue;
                 }
             };
-            let mut part = fetch_batch_part(
+            let part = fetch_batch_part(
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
@@ -1454,7 +1390,8 @@ pub mod datadriven {
             )
             .await
             .expect("invalid batch part");
-            while let Some((k, _v, t, d)) = part.next() {
+            let mut cursor = Cursor::default();
+            while let Some((k, _v, t, d)) = cursor.pop(&part) {
                 let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
                 write!(s, "{k} {t} {d}\n");
             }
@@ -1620,7 +1557,7 @@ pub mod datadriven {
         let mut updates = Vec::new();
         for batch in snapshot {
             for part in batch.parts {
-                let mut part = fetch_batch_part(
+                let part = fetch_batch_part(
                     &datadriven.shard_id,
                     datadriven.client.blob.as_ref(),
                     datadriven.client.metrics.as_ref(),
@@ -1631,7 +1568,8 @@ pub mod datadriven {
                 )
                 .await
                 .expect("invalid batch part");
-                while let Some((k, _v, mut t, d)) = part.next() {
+                let mut cursor = Cursor::default();
+                while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
                     t.advance_by(as_of.borrow());
                     updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
                 }
@@ -1737,28 +1675,6 @@ pub mod datadriven {
         ))
     }
 
-    pub async fn register_writer(
-        datadriven: &mut MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let writer_id = args.expect("writer_id");
-        let (upper, _state, maintenance) = datadriven
-            .machine
-            .register_writer(
-                &writer_id,
-                "tests",
-                datadriven.client.cfg.writer_lease_duration,
-                (datadriven.client.cfg.now)(),
-            )
-            .await;
-        datadriven.routine.push(maintenance);
-        Ok(format!(
-            "{} {:?}\n",
-            datadriven.machine.seqno(),
-            upper.0.elements()
-        ))
-    }
-
     pub async fn heartbeat_leased_reader(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1767,18 +1683,6 @@ pub mod datadriven {
         let _ = datadriven
             .machine
             .heartbeat_leased_reader(&reader_id, (datadriven.client.cfg.now)())
-            .await;
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
-    }
-
-    pub async fn heartbeat_writer(
-        datadriven: &mut MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let writer_id = args.expect("writer_id");
-        let _ = datadriven
-            .machine
-            .heartbeat_writer(&writer_id, (datadriven.client.cfg.now)())
             .await;
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
@@ -1831,9 +1735,16 @@ pub mod datadriven {
         let now = (datadriven.client.cfg.now)();
         let (_, maintenance) = datadriven
             .machine
-            .compare_and_append_idempotent(&batch, &writer_id, now, &token, indeterminate)
+            .compare_and_append_idempotent(
+                &batch,
+                &writer_id,
+                now,
+                &token,
+                &HandleDebugState::default(),
+                indeterminate,
+            )
             .await
-            .map_err(|err| anyhow!("{:?}", err))?
+            .map_err(|(_seqno, upper)| anyhow!("{:?}", upper))?
             .expect("invalid usage");
         // TODO: Don't throw away writer maintenance. It's slightly tricky
         // because we need a WriterId for Compactor.
@@ -1891,6 +1802,7 @@ pub mod datadriven {
 pub mod tests {
     use std::sync::Arc;
 
+    use crate::cache::StateCache;
     use mz_ore::cast::CastFrom;
     use mz_ore::task::spawn;
     use mz_persist::intercept::{InterceptBlob, InterceptHandle};
@@ -1898,6 +1810,7 @@ pub mod tests {
     use timely::progress::Antichain;
 
     use crate::internal::gc::{GarbageCollector, GcReq};
+    use crate::internal::state::HandleDebugState;
     use crate::tests::new_test_client;
     use crate::ShardId;
 
@@ -1925,6 +1838,7 @@ pub mod tests {
                 .compare_and_append(
                     &batch.into_hollow_batch(),
                     &write.writer_id,
+                    &HandleDebugState::default(),
                     (write.cfg.now)(),
                 )
                 .await
@@ -2001,5 +1915,40 @@ pub mod tests {
             new_seqno_since,
         };
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
+    }
+
+    // A regression test for #20776, where a bug meant that compare_and_append
+    // would not fetch the latest state after an upper mismatch. This meant that
+    // a write that could succeed if retried on the latest state would instead
+    // return an UpperMismatch.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
+    async fn regression_update_state_after_upper_mismatch() {
+        let client = new_test_client().await;
+        let mut client2 = client.clone();
+
+        // The bug can only happen if the two WriteHandles have separate copies
+        // of state, so make sure that each is given its own StateCache.
+        let new_state_cache = Arc::new(StateCache::new_no_metrics());
+        client2.shared_states = new_state_cache;
+
+        let shard_id = ShardId::new();
+        let (mut write1, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        let (mut write2, _) = client2.expect_open::<String, (), u64, i64>(shard_id).await;
+
+        let data = vec![
+            (("1".to_owned(), ()), 1, 1),
+            (("2".to_owned(), ()), 2, 1),
+            (("3".to_owned(), ()), 3, 1),
+            (("4".to_owned(), ()), 4, 1),
+            (("5".to_owned(), ()), 5, 1),
+        ];
+
+        write1.expect_compare_and_append(&data[..1], 0, 2).await;
+        // quick check: each handle should have its own copy of state
+        assert!(write1.machine.seqno() > write2.machine.seqno());
+        // this handle's upper now lags behind. if compare_and_append fails to update
+        // state after an upper mismatch then this call would (incorrectly) fail
+        write2.expect_compare_and_append(&data[1..2], 2, 3).await;
     }
 }

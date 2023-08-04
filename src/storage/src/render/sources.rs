@@ -17,12 +17,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
+use mz_ore::cast::CastLossy;
+use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::metrics::BackpressureMetrics;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
+use mz_storage_client::types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
@@ -368,30 +372,83 @@ where
                     let (upsert, health_update) = scope.scoped(
                         &format!("upsert_rehydration_backpressure({})", id),
                         |scope| {
-                            let (previous, previous_token, feedback_handle) =
+                            let (previous, previous_token, feedback_handle, backpressure_metrics) =
                                 if Timestamp::minimum() < upper_ts {
                                     let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                                    let (feedback_handle, flow_control) =
-                                        if let Some(storage_dataflow_max_inflight_bytes) =
-                                            storage_state
+                                    let backpressure_max_inflight_bytes =
+                                        get_backpressure_max_inflight_bytes(
+                                            &storage_state
                                                 .dataflow_parameters
-                                                .storage_dataflow_max_inflight_bytes
-                                        {
-                                            let (feedback_handle, feedback_data) =
-                                                scope.feedback(Default::default());
+                                                .storage_dataflow_max_inflight_bytes_config,
+                                            &storage_state.instance_context.cluster_memory_limit,
+                                        );
 
-                                            (
-                                                Some(feedback_handle),
-                                                Some(persist_source::FlowControl {
-                                                    progress_stream: feedback_data,
-                                                    max_inflight_bytes:
-                                                        storage_dataflow_max_inflight_bytes,
-                                                    summary: (Default::default(), 1),
-                                                }),
-                                            )
+                                    let (feedback_handle, flow_control, backpressure_metrics) =
+                                        if let Some(storage_dataflow_max_inflight_bytes) =
+                                            backpressure_max_inflight_bytes
+                                        {
+                                            if !storage_state
+                                                .dataflow_parameters
+                                                .storage_dataflow_max_inflight_bytes_config
+                                                .disk_only
+                                                || storage_state
+                                                    .instance_context
+                                                    .scratch_directory
+                                                    .is_some()
+                                            {
+                                                let (feedback_handle, feedback_data) =
+                                                    scope.feedback(Default::default());
+
+                                                let backpressure_metrics =
+                                                    Some(BackpressureMetrics {
+                                                        emitted_bytes: Arc::new(
+                                                            base_source_config
+                                                                .base_metrics
+                                                                .upsert_backpressure_specific
+                                                                .emitted_bytes
+                                                                .get_delete_on_drop_counter(vec![
+                                                                    id.to_string(),
+                                                                    scope.index().to_string(),
+                                                                ]),
+                                                        ),
+                                                        last_backpressured_bytes: Arc::new(
+                                                            base_source_config
+                                                                .base_metrics
+                                                                .upsert_backpressure_specific
+                                                                .last_backpressured_bytes
+                                                                .get_delete_on_drop_gauge(vec![
+                                                                    id.to_string(),
+                                                                    scope.index().to_string(),
+                                                                ]),
+                                                        ),
+                                                        retired_bytes: Arc::new(
+                                                            base_source_config
+                                                                .base_metrics
+                                                                .upsert_backpressure_specific
+                                                                .retired_bytes
+                                                                .get_delete_on_drop_counter(vec![
+                                                                    id.to_string(),
+                                                                    scope.index().to_string(),
+                                                                ]),
+                                                        ),
+                                                    });
+                                                (
+                                                    Some(feedback_handle),
+                                                    Some(persist_source::FlowControl {
+                                                        progress_stream: feedback_data,
+                                                        max_inflight_bytes:
+                                                            storage_dataflow_max_inflight_bytes,
+                                                        summary: (Default::default(), 1),
+                                                        metrics: backpressure_metrics.clone(),
+                                                    }),
+                                                    backpressure_metrics,
+                                                )
+                                            } else {
+                                                (None, None, None)
+                                            }
                                         } else {
-                                            (None, None)
+                                            (None, None, None)
                                         };
                                     let (stream, tok) = persist_source::persist_source_core(
                                         scope,
@@ -405,9 +462,14 @@ where
                                         // Copy the logic in DeltaJoin/Get/Join to start.
                                         |_timer, count| count > 1_000_000,
                                     );
-                                    (stream.as_collection(), Some(tok), feedback_handle)
+                                    (
+                                        stream.as_collection(),
+                                        Some(tok),
+                                        feedback_handle,
+                                        backpressure_metrics,
+                                    )
                                 } else {
-                                    (Collection::new(empty(scope)), None, None)
+                                    (Collection::new(empty(scope)), None, None, None)
                                 };
                             let (upsert, health_update) = crate::render::upsert::upsert(
                                 &upsert_input.enter(scope),
@@ -418,6 +480,7 @@ where
                                 base_source_config,
                                 &storage_state.instance_context,
                                 &storage_state.dataflow_parameters,
+                                backpressure_metrics,
                             );
 
                             // If backpressure is enabled, we probe the upsert operator's
@@ -490,6 +553,33 @@ where
 
     // Return the collections and any needed tokens.
     (collection, err_collection, needed_tokens, health)
+}
+
+// Returns the maximum limit of inflight bytes for backpressure based on given config
+// and the current cluster size
+fn get_backpressure_max_inflight_bytes(
+    inflight_bytes_config: &StorageMaxInflightBytesConfig,
+    cluster_memory_limit: &Option<usize>,
+) -> Option<usize> {
+    let StorageMaxInflightBytesConfig {
+        max_inflight_bytes_default,
+        max_inflight_bytes_cluster_size_percent,
+        disk_only: _,
+    } = inflight_bytes_config;
+
+    // Will use backpressure only if the default inflight value is provided
+    if max_inflight_bytes_default.is_some() {
+        let current_cluster_max_bytes_limit =
+            cluster_memory_limit.as_ref().and_then(|cluster_memory| {
+                max_inflight_bytes_cluster_size_percent.map(|percent| {
+                    // We just need close the correct % of bytes here, so we just use lossy casts.
+                    usize::cast_lossy(f64::cast_lossy(*cluster_memory) * percent / 100.0)
+                })
+            });
+        current_cluster_max_bytes_limit.or(*max_inflight_bytes_default)
+    } else {
+        None
+    }
 }
 
 // TODO: Maybe we should finally move this to some central place and re-use. There seem to be
@@ -663,5 +753,57 @@ fn raise_key_value_errors(
         _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
             "Value not present for message".to_string(),
         )))),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_no_default() {
+        let config = StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: None,
+            max_inflight_bytes_cluster_size_percent: Some(50.0),
+            disk_only: false,
+        };
+        let memory_limit = Some(1000);
+
+        let backpressure_inflight_bytes_limit =
+            get_backpressure_max_inflight_bytes(&config, &memory_limit);
+
+        assert_eq!(backpressure_inflight_bytes_limit, None)
+    }
+
+    #[mz_ore::test]
+    fn test_no_matching_size() {
+        let config = StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: Some(10000),
+            max_inflight_bytes_cluster_size_percent: Some(50.0),
+            disk_only: false,
+        };
+
+        let backpressure_inflight_bytes_limit = get_backpressure_max_inflight_bytes(&config, &None);
+
+        assert_eq!(
+            backpressure_inflight_bytes_limit,
+            config.max_inflight_bytes_default
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_calculated_cluster_limit() {
+        let config = StorageMaxInflightBytesConfig {
+            max_inflight_bytes_default: Some(10000),
+            max_inflight_bytes_cluster_size_percent: Some(50.0),
+            disk_only: false,
+        };
+        let memory_limit = Some(2000);
+
+        let backpressure_inflight_bytes_limit =
+            get_backpressure_max_inflight_bytes(&config, &memory_limit);
+
+        // the limit should be 50% of 2000 i.e. 1000
+        assert_eq!(backpressure_inflight_bytes_limit, Some(1000));
     }
 }

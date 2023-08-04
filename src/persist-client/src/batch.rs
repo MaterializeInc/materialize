@@ -879,6 +879,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_builder_flushing() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -971,6 +972,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_builder_keys() {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
@@ -1012,6 +1014,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_builder_partial_order() {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part

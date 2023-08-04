@@ -18,6 +18,7 @@ import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "cluster-client/src/client.proto";
+import "service/src/params.proto";
 import "storage-client/src/client.proto";
 import "storage-client/src/types/parameters.proto";
 import "tracing/src/params.proto";
@@ -68,4 +69,5 @@ message ProtoComputeParameters {
     optional uint64 dataflow_max_inflight_bytes = 3;
     optional bool enable_mz_join_core = 4;
     mz_tracing.params.ProtoTracingParameters tracing = 5;
+    mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
 }

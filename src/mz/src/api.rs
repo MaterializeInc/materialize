@@ -63,21 +63,21 @@ impl FromStr for CloudProviderRegion {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Region {
-    pub environment_controller_url: String,
+pub struct RegionInfo {
+    pub sql_address: String,
+    pub http_address: String,
+    pub resolvable: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Environment {
-    pub environmentd_pgwire_address: String,
-    pub environmentd_https_address: String,
-    pub resolvable: bool,
+pub struct Region {
+    pub region_info: Option<RegionInfo>,
 }
 
-impl Environment {
+impl RegionInfo {
     pub fn sql_url(&self, profile: &ValidProfile) -> Url {
-        let mut url = Url::parse(&format!("postgres://{}", &self.environmentd_pgwire_address))
+        let mut url = Url::parse(&format!("postgres://{}", &self.sql_address))
             .expect("url known to be valid");
         url.set_username(profile.profile.get_email()).unwrap();
         url.set_path("materialize");
@@ -103,7 +103,7 @@ pub struct CloudProviderResponse {
 pub struct CloudProvider {
     pub id: String,
     pub name: String,
-    pub api_url: String,
+    pub url: String,
     pub cloud_provider: String,
 }
 
@@ -113,7 +113,7 @@ pub struct CloudProviderAndRegion {
 }
 
 /// Enables a particular cloud provider's region
-pub async fn enable_region_environment(
+pub async fn enable_region(
     client: &Client,
     cloud_provider: &CloudProvider,
     version: Option<String>,
@@ -138,7 +138,7 @@ pub async fn enable_region_environment(
     };
 
     client
-        .post(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
+        .patch(format!("{:}/api/region", cloud_provider.url).as_str())
         .authenticate(&valid_profile.frontegg_auth)
         .json(&body)
         .send()
@@ -148,7 +148,7 @@ pub async fn enable_region_environment(
 }
 
 /// Disables a particular cloud provider's region.
-pub async fn disable_region_environment(
+pub async fn disable_region(
     client: &Client,
     cloud_provider: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
@@ -158,7 +158,7 @@ pub async fn disable_region_environment(
         .max_duration(Duration::from_secs(30))
         .retry_async(|_| async {
             client
-                .delete(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
+                .delete(format!("{:}/api/region", cloud_provider.url).as_str())
                 .authenticate(&valid_profile.frontegg_auth)
                 .send()
                 .await?
@@ -169,48 +169,32 @@ pub async fn disable_region_environment(
 }
 
 //// Get a cloud provider's regions
-pub async fn get_cloud_provider_region_details(
+pub async fn get_region(
     client: &Client,
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
-) -> Result<Vec<Region>, anyhow::Error> {
-    let mut region_api_url = cloud_provider_region.api_url.clone();
-    region_api_url.push_str("/api/environmentassignment");
+) -> Result<Region, anyhow::Error> {
+    // Help us decode API responses that may be empty
+    #[derive(Debug, Deserialize, Clone)]
+    #[serde(untagged)]
+    enum APIResponse {
+        Empty,
+        Region(Region),
+    }
+
+    let mut region_api_url = cloud_provider_region.url.clone();
+    region_api_url.push_str("/api/region");
 
     let response = client
         .get(region_api_url)
         .authenticate(&valid_profile.frontegg_auth)
         .send()
         .await?;
+
     ensure!(response.status().is_success());
-    Ok(response.json::<Vec<Region>>().await?)
-}
-
-//// Get a cloud provider's region's environment
-pub async fn region_environment_details(
-    client: &Client,
-    region: &Region,
-    valid_profile: &ValidProfile<'_>,
-) -> Result<Option<Vec<Environment>>, Error> {
-    let mut region_api_url = region.environment_controller_url
-        [0..region.environment_controller_url.len() - 4]
-        .to_string();
-    region_api_url.push_str("/api/environment");
-
-    let response = client
-        .get(region_api_url)
-        .authenticate(&valid_profile.frontegg_auth)
-        .send()
-        .await?;
-    match response.content_length() {
-        Some(length) => {
-            if length > 0 {
-                Ok(Some(response.json::<Vec<Environment>>().await?))
-            } else {
-                Ok(None)
-            }
-        }
-        None => Ok(None),
+    match response.json::<APIResponse>().await? {
+        APIResponse::Empty => bail!("The region is empty"),
+        APIResponse::Region(region) => Ok(region),
     }
 }
 
@@ -224,16 +208,15 @@ pub async fn list_regions(
     let mut cloud_providers_and_regions: Vec<CloudProviderAndRegion> = Vec::new();
 
     for cloud_provider in cloud_providers {
-        let cloud_provider_region_details =
-            get_cloud_provider_region_details(client, cloud_provider, valid_profile)
-                .await
-                .with_context(|| "Retrieving region details.")?;
-        match cloud_provider_region_details.get(0) {
-            Some(region) => cloud_providers_and_regions.push(CloudProviderAndRegion {
+        let possible_region = get_region(client, cloud_provider, valid_profile)
+            .await
+            .with_context(|| "Retrieving region details.");
+        match possible_region {
+            Ok(region) => cloud_providers_and_regions.push(CloudProviderAndRegion {
                 cloud_provider: cloud_provider.clone(),
                 region: Some(region.to_owned()),
             }),
-            None => cloud_providers_and_regions.push(CloudProviderAndRegion {
+            _ => cloud_providers_and_regions.push(CloudProviderAndRegion {
                 cloud_provider: cloud_provider.clone(),
                 region: None,
             }),
@@ -259,7 +242,7 @@ pub async fn list_cloud_providers(
         .await
 }
 
-pub async fn get_provider_by_region_name(
+pub async fn get_cloud_provider(
     client: &Client,
     valid_profile: &ValidProfile<'_>,
     cloud_provider_region: &CloudProviderRegion,
@@ -278,55 +261,20 @@ pub async fn get_provider_by_region_name(
     Ok(cloud_provider)
 }
 
-pub async fn get_provider_region(
+pub async fn get_region_info_by_cloud_provider(
     client: &Client,
     valid_profile: &ValidProfile<'_>,
     cloud_provider_region: &CloudProviderRegion,
-) -> Result<Region> {
-    let cloud_provider = get_provider_by_region_name(client, valid_profile, cloud_provider_region)
+) -> Result<RegionInfo> {
+    let cloud_provider = get_cloud_provider(client, valid_profile, cloud_provider_region)
         .await
         .with_context(|| "Retrieving cloud provider.")?;
 
-    let cloud_provider_region_details =
-        get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
-            .await
-            .with_context(|| "Retrieving region details.")?;
-
-    let region = cloud_provider_region_details
-        .get(0)
-        .with_context(|| "Region unavailable")?;
-
-    Ok(region.to_owned())
-}
-
-pub async fn get_region_environment(
-    client: &Client,
-    valid_profile: &ValidProfile<'_>,
-    region: &Region,
-) -> Result<Environment> {
-    let environment_details = region_environment_details(client, region, valid_profile)
+    let region = get_region(client, &cloud_provider, valid_profile)
         .await
-        .with_context(|| "Environment unavailable")?;
-    let environment_list = environment_details.with_context(|| "Environment unlisted")?;
-    let environment = environment_list
-        .get(0)
-        .with_context(|| "Missing environment")?;
+        .with_context(|| "Retrieving region.")?;
 
-    Ok(environment.to_owned())
-}
-
-pub async fn get_provider_region_environment(
-    client: &Client,
-    valid_profile: &ValidProfile<'_>,
-    cloud_provider_region: &CloudProviderRegion,
-) -> Result<Environment> {
-    let region = get_provider_region(client, valid_profile, cloud_provider_region)
-        .await
-        .with_context(|| "Retrieving region data.")?;
-
-    let environment = get_region_environment(client, valid_profile, &region)
-        .await
-        .with_context(|| "Retrieving environment data")?;
-
-    Ok(environment)
+    region
+        .region_info
+        .with_context(|| "Retrieving region info.")
 }

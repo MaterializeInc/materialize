@@ -16,12 +16,6 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     """Test that a SIZE N cluster indeed creates N clusterd instances."""
     SIZE = 2
 
-    mz.environmentd.sql(
-        "ALTER SYSTEM SET enable_managed_clusters = true",
-        port="internal",
-        user="mz_system",
-    )
-
     mz.environmentd.sql(f"CREATE CLUSTER sized1 SIZE '{SIZE}-1', REPLICATION FACTOR 2")
     cluster_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_clusters WHERE name = 'sized1'"

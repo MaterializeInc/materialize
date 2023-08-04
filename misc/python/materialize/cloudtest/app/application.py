@@ -12,6 +12,7 @@ from textwrap import dedent
 from typing import List, Optional
 
 from materialize import ui
+from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
 from materialize.cloudtest.k8s import K8sResource
 
 
@@ -22,7 +23,7 @@ class Application:
     aws_region: Optional[str]
 
     def __init__(self) -> None:
-        self.create()
+        pass
 
     def create(self) -> None:
         self.acquire_images()
@@ -54,4 +55,7 @@ class Application:
             raise e
 
     def context(self) -> str:
-        return "kind-cloudtest"
+        return DEFAULT_K8S_CONTEXT_NAME
+
+    def cluster_name(self) -> str:
+        return DEFAULT_K8S_CLUSTER_NAME

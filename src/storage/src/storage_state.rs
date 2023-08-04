@@ -327,14 +327,21 @@ pub struct StorageInstanceContext {
     /// across sources!). This `Env` lets us control some resources (like background threads)
     /// process-wide.
     pub rocksdb_env: rocksdb::Env,
+    /// The memory limit of the materialize cluster replica. This will
+    /// be used to calculate and configure the maximum inflight bytes for backpressure
+    pub cluster_memory_limit: Option<usize>,
 }
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        scratch_directory: Option<PathBuf>,
+        cluster_memory_limit: Option<usize>,
+    ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
             rocksdb_env: rocksdb::Env::new()?,
+            cluster_memory_limit,
         })
     }
 
@@ -343,6 +350,7 @@ impl StorageInstanceContext {
         Self {
             scratch_directory: None,
             rocksdb_env,
+            cluster_memory_limit: None,
         }
     }
 }
@@ -850,13 +858,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             InternalStorageCommand::UpdateConfiguration {
                 pg,
                 rocksdb,
-                storage_dataflow_max_inflight_bytes,
+                storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
             } => self.storage_state.dataflow_parameters.update(
                 pg,
                 rocksdb,
                 auto_spill_config,
-                storage_dataflow_max_inflight_bytes,
+                storage_dataflow_max_inflight_bytes_config,
             ),
         }
     }
@@ -1169,8 +1177,8 @@ impl StorageState {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
                         pg: params.pg_replication_timeouts,
                         rocksdb: params.upsert_rocksdb_tuning_config,
-                        storage_dataflow_max_inflight_bytes: params
-                            .storage_dataflow_max_inflight_bytes,
+                        storage_dataflow_max_inflight_bytes_config: params
+                            .storage_dataflow_max_inflight_bytes_config,
                         auto_spill_config: params.upsert_auto_spill_config,
                     })
                 }
