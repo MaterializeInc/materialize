@@ -1035,7 +1035,7 @@ pub mod datadriven {
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
-    use crate::internal::gc::GcReq;
+    use crate::internal::gc::{GcReq, GcSpanFields};
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state::TypedState;
     use crate::read::{Listen, ListenEvent};
@@ -1519,8 +1519,12 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             new_seqno_since,
         };
-        let (maintenance, stats) =
-            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        let (maintenance, stats) = GarbageCollector::gc_and_truncate(
+            &mut datadriven.machine,
+            req,
+            GcSpanFields::default(),
+        )
+        .await;
         datadriven.routine.push(maintenance);
 
         Ok(format!(
@@ -1809,7 +1813,7 @@ pub mod tests {
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
-    use crate::internal::gc::{GarbageCollector, GcReq};
+    use crate::internal::gc::{GarbageCollector, GcReq, GcSpanFields};
     use crate::internal::state::HandleDebugState;
     use crate::tests::new_test_client;
     use crate::ShardId;
@@ -1901,7 +1905,7 @@ pub mod tests {
                 shard_id: machine.shard_id(),
                 new_seqno_since,
             };
-            GarbageCollector::gc_and_truncate(&mut machine, req).await
+            GarbageCollector::gc_and_truncate(&mut machine, req, GcSpanFields::default()).await
         });
         // Wait for gc to either panic (regression case) or finish (good case)
         // because it happens to not call blob delete.
@@ -1914,7 +1918,12 @@ pub mod tests {
             shard_id: read.machine.shard_id(),
             new_seqno_since,
         };
-        let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
+        let _ = GarbageCollector::gc_and_truncate(
+            &mut read.machine,
+            req.clone(),
+            GcSpanFields::default(),
+        )
+        .await;
     }
 
     // A regression test for #20776, where a bug meant that compare_and_append

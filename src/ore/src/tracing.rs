@@ -621,6 +621,79 @@ impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
     }
 }
 
+/// Generates a helper struct for managing span fields.
+///
+/// The recommended usage is to destructure the generated struct as an input into any
+/// instrumented function or new span. This ensures that compilation errors occur if
+/// any fields are renamed or always unset, and avoids brittle string typing between
+/// macro invocation and usage.
+///
+/// Note that even with this helper, it is not currently possible to force a compilation
+/// error if the registered fields inside the `tracing::{instrument, info_span, debug_span, trace_span}`
+/// macro do not match 1:1 with the fields of `span_field_struct`, so it is still
+/// necessarily to verify that all fields are referenced in the macro invocation.
+///
+/// # Examples
+///
+/// Instrument a function's span with two fields, "foo" and "bar" whose values are
+/// recorded after the span is opened:
+///
+/// ```
+/// use tracing::{instrument, Span};
+/// use mz_ore::span_field_struct;
+/// span_field_struct!(MySpanFields, foo, bar);
+///
+/// #[tracing::instrument(skip_all, fields(foo, bar))] // NB: typos or omissions of foo, bar here won't result in a compile error!
+/// pub fn my_instrumented_func(_foo: u64, MySpanFields { foo: _, bar: _, recorder }: MySpanFields) {
+///     let span = Span::current();
+///     // do useful things...
+///     // Now, record values for "foo" and "bar" into our span
+///     recorder.foo(&span, 123);
+///     recorder.bar(&span, true);
+/// }
+///
+/// my_instrumented_func(123, MySpanFields::default());
+/// ```
+#[macro_export]
+macro_rules! span_field_struct {
+    ($struct_name:ident, $($field:ident),+ $(,)?) => {
+        paste::paste! {
+            #[derive(Debug)]
+            pub struct [<$struct_name Recorder>] {}
+
+            impl [<$struct_name Recorder>] {
+                $(
+                    pub fn $field<V: tracing::field::Value, F: FnOnce() -> V>(&self, span: &tracing::Span, value: F) {
+                        if span.is_disabled() {
+                            return;
+                        }
+                        span.record(stringify!($field), &value());
+                    }
+                )*
+            }
+
+            #[derive(Debug)]
+            pub struct $struct_name {
+                $(
+                    pub $field: tracing::field::Empty,
+                )*
+                pub recorder: [<$struct_name Recorder>],
+            }
+
+            impl Default for $struct_name {
+                fn default() -> Self {
+                    Self {
+                        $(
+                            $field: tracing::field::Empty,
+                        )*
+                        recorder: [<$struct_name Recorder>] {},
+                    }
+                }
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
