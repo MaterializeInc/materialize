@@ -515,6 +515,14 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
+pub const MAX_IDENTIFIER_LENGTH: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_identifier_length"),
+    // 1 GiB
+    value: &255,
+    description: "The maximum length of object identifiers in bytes (PostgreSQL).",
+    internal: false,
+};
+
 /// The logical compaction window for builtin tables and sources that have the
 /// `retained_metrics_relation` flag set.
 ///
@@ -1403,6 +1411,7 @@ impl SessionVars {
                 &ENABLE_CARDINALITY_ESTIMATES,
             )
             .with_var(&MAX_QUERY_RESULT_SIZE)
+            .with_var(&MAX_IDENTIFIER_LENGTH)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
