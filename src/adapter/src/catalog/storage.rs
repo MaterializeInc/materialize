@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{Display, Formatter, Write};
 use std::hash::Hash;
 use std::iter::once;
 use std::sync::Arc;
@@ -1733,13 +1734,17 @@ impl<'a> Transaction<'a> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub(crate) fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
+    pub(crate) fn upsert_system_config(
+        &mut self,
+        name: &str,
+        value: String,
+    ) -> Result<Option<ServerConfigurationValue>, Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
         let value = ServerConfigurationValue { value };
-        self.system_configurations.set(key, Some(value))?;
-        Ok(())
+        let prev = self.system_configurations.set(key, Some(value))?;
+        Ok(prev)
     }
 
     /// Removes persisted system configuration `name`.
@@ -2108,6 +2113,12 @@ pub struct ServerConfigurationKey {
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ServerConfigurationValue {
     value: String,
+}
+
+impl Display for ServerConfigurationValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.value)
+    }
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

@@ -7097,7 +7097,18 @@ impl Catalog {
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
                     let var = state.get_system_configuration(&name)?;
-                    tx.upsert_system_config(&name, var.value())?;
+                    let prev = tx.upsert_system_config(&name, var.value())?;
+                    // WIP: this is transactional, we don't know if it's committed yet.
+                    // we'd need to plumb it out like audit log events
+                    let prev = prev
+                        .map(|x| x.to_string())
+                        .unwrap_or_else(|| "none".to_string());
+                    info!(
+                        annotation_type = "system_configuration",
+                        system_configuration.var = name,
+                        system_configuration.prev = prev,
+                        system_configuration.new = var.value(),
+                    );
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
