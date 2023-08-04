@@ -579,6 +579,7 @@ fn test_pgtest_mz() {
         &[
             "enable_raise_statement",
             "enable_unmanaged_cluster_replicas",
+            "enable_dangerous_functions",
         ],
     );
 }
