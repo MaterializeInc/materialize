@@ -330,8 +330,19 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 };
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Union { inputs } => {
-                writeln!(f, "{}Union", ctx.indent)?;
+            Union {
+                inputs,
+                consolidate_output,
+            } => {
+                if *consolidate_output {
+                    writeln!(
+                        f,
+                        "{}Union consolidate_output={}",
+                        ctx.indent, consolidate_output
+                    )?;
+                } else {
+                    writeln!(f, "{}Union", ctx.indent)?;
+                }
                 ctx.indented(|ctx| {
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;

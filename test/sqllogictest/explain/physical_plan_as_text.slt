@@ -222,7 +222,7 @@ Explained Query:
     ArrangeBy
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      Union
+      Union consolidate_output=true
         Get::Arrangement materialize.public.t
           project=(#0)
           key=#0
@@ -267,7 +267,7 @@ Explained Query:
         ArrangeBy
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=() }
-          Union
+          Union consolidate_output=true
             Get::Arrangement materialize.public.t
               project=(#0)
               key=#0
@@ -300,7 +300,7 @@ Explained Query:
       ArrangeBy
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        Union
+        Union consolidate_output=true
           Join::Linear
             linear_stage[0]
               closure
@@ -415,7 +415,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, 0)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -510,7 +510,7 @@ materialize.public.hierarchical_global:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -557,7 +557,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -637,7 +637,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -751,7 +751,7 @@ materialize.public.collated_global:
       Mfp
         project=(#0..=#5)
         map=(0, null, null, null, null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -807,7 +807,7 @@ Explained Query:
       Mfp
         project=(#0..=#5)
         map=(0, null, null, null, null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()

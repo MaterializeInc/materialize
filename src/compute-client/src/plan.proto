@@ -133,6 +133,7 @@ message ProtoPlan {
 
    message ProtoPlanUnion {
         repeated ProtoPlan inputs = 1;
+        bool consolidate_output = 2;
    }
 
    message ProtoPlanArrangeBy {

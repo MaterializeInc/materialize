@@ -168,7 +168,7 @@ Explained Query:
       Mfp
         project=(#0)
         map=(0)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()

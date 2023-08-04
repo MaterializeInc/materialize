@@ -887,7 +887,10 @@ where
                 let input = self.render_plan(*input);
                 self.render_threshold(input, threshold_plan)
             }
-            Plan::Union { inputs } => {
+            Plan::Union {
+                inputs,
+                consolidate_output,
+            } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
@@ -895,7 +898,10 @@ where
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                if consolidate_output {
+                    oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("UnionConsolidation")
+                }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
