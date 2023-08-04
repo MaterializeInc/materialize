@@ -65,3 +65,14 @@ CREATE VIEW tooloooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
 
 statement error db error: ERROR: identifier length exceeds 255 bytes
 CREATE VIEW v AS SELECT 1 AS tooloooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong
+
+query T
+SHOW max_identifier_length
+----
+255
+
+statement error
+SET max_identifier_length = 42
+
+statement error
+SET max_identifier_length = 1024
