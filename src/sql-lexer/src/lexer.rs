@@ -271,6 +271,7 @@ fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), LexerError> {
 
 fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     buf.prev();
+    let pos: usize = buf.pos();
     let word = buf.take_while(
         |ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '$' | '_' | '\u{80}'..=char::MAX),
     );
@@ -278,7 +279,6 @@ fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
         Ok(kw) => Ok(Token::Keyword(kw)),
         Err(_) => {
             if word.len() > MAX_IDENTIFIER_LENGTH {
-                let pos = buf.pos() - 1;
                 bail!(
                     pos,
                     "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
@@ -302,7 +302,6 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
         }
     }
     if s.len() > MAX_IDENTIFIER_LENGTH {
-        let pos = buf.pos() - 1;
         bail!(
             pos,
             "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
