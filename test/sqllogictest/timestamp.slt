@@ -210,8 +210,8 @@ COMPLETE 0
 query T
 SELECT * FROM date_bin_hopping('45s', '1m', '2001-01-01 00:01:20');
 ----
-2001-01-01 00:00:30+00
 2001-01-01 00:01:15+00
+2001-01-01 00:00:30+00
 
 statement ok
 CREATE TABLE t (ts timestamp, v int);

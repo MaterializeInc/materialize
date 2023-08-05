@@ -15,7 +15,7 @@ use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 use std::str;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
@@ -406,6 +406,12 @@ enum Tag {
     Range,
     MzAclItem,
     AclItem,
+    // leap seconds, or beyond the range
+    // of i64 nanoseconds.
+    ExoticTimestamp,
+    // leap seconds, or beyond the range
+    // of i64 nanoseconds.
+    ExoticTimestampTz,
 }
 
 // --------------------------------------------------------------------------------
@@ -538,6 +544,27 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Date => Datum::Date(read_date(data, offset)),
         Tag::Time => Datum::Time(read_time(data, offset)),
         Tag::Timestamp => {
+            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let secs = ts.div_euclid(1_000_000_000);
+            let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
+            let ndt = NaiveDateTime::from_timestamp_opt(secs, nsecs)
+                .expect("We only write round-trippable timestamps");
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(ndt).expect("unexpected timestamp"),
+            )
+        }
+        Tag::TimestampTz => {
+            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let secs = ts.div_euclid(1_000_000_000);
+            let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
+            let ndt = NaiveDateTime::from_timestamp_opt(secs, nsecs)
+                .expect("We only write round-trippable timestamps");
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(ndt, Utc))
+                    .expect("unexpected timestamp"),
+            )
+        }
+        Tag::ExoticTimestamp => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::Timestamp(
@@ -545,7 +572,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                     .expect("unexpected timestamp"),
             )
         }
-        Tag::TimestampTz => {
+        Tag::ExoticTimestampTz => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::TimestampTz(
@@ -737,6 +764,23 @@ where
     data.extend_from_slice(&u32::to_le_bytes(time.nanosecond()));
 }
 
+/// Returns an i64 representing a `NaiveDateTime`, if
+/// said i64 can be round-tripped back to a `NaiveDateTime`.
+///
+/// The only exotic NDTs for which this can't happen are those that
+/// are hundreds of years in the future or past, or those that represent a
+/// leap second.
+// This function is inspired by `NaiveDateTime::timestamp_nanos`,
+// with extra checking.
+fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
+    let subsec_nanos = dt.timestamp_subsec_nanos();
+    if subsec_nanos >= 1_000_000_000 {
+        return None;
+    }
+    let as_ns = dt.timestamp().checked_mul(1_000_000_000)?;
+    as_ns.checked_add(i64::from(subsec_nanos))
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -790,16 +834,26 @@ where
             push_time(data, t);
         }
         Datum::Timestamp(t) => {
-            data.push(Tag::Timestamp.into());
             let datetime = t.to_naive();
-            push_naive_date(data, datetime.date());
-            push_time(data, datetime.time());
+            if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                data.push(Tag::Timestamp.into());
+                data.extend_from_slice(&nanos.to_le_bytes());
+            } else {
+                data.push(Tag::ExoticTimestamp.into());
+                push_naive_date(data, datetime.date());
+                push_time(data, datetime.time());
+            }
         }
         Datum::TimestampTz(t) => {
-            data.push(Tag::TimestampTz.into());
             let datetime = t.to_naive();
-            push_naive_date(data, datetime.date());
-            push_time(data, datetime.time());
+            if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                data.push(Tag::TimestampTz.into());
+                data.extend_from_slice(&nanos.to_le_bytes());
+            } else {
+                data.push(Tag::ExoticTimestampTz.into());
+                push_naive_date(data, datetime.date());
+                push_time(data, datetime.time());
+            }
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval.into());
@@ -960,8 +1014,20 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Float64(_) => 1 + size_of::<f64>(),
         Datum::Date(_) => 1 + size_of::<i32>(),
         Datum::Time(_) => 1 + 8,
-        Datum::Timestamp(_) => 1 + 16,
-        Datum::TimestampTz(_) => 1 + 16,
+        Datum::Timestamp(t) => {
+            1 + if checked_timestamp_nanos(t.to_naive()).is_some() {
+                8
+            } else {
+                16
+            }
+        }
+        Datum::TimestampTz(t) => {
+            1 + if checked_timestamp_nanos(t.naive_utc()).is_some() {
+                8
+            } else {
+                16
+            }
+        }
         Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i32>() + size_of::<i64>(),
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
