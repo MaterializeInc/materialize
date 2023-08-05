@@ -59,7 +59,7 @@ static ALLOCATOR: LockedAllocator<FreeListAllocator> =
 const LEX_TS_DEF: &'static str = r#"export function lex(query: string): PosToken[];"#;
 
 // Maximum allowed identifier length in bytes.
-const MAX_IDENTIFIER_LENGTH: usize = 255;
+pub const MAX_IDENTIFIER_LENGTH: usize = 255;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LexerError {

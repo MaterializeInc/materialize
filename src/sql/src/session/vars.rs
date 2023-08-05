@@ -515,10 +515,9 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
-pub const MAX_IDENTIFIER_LENGTH: ServerVar<u32> = ServerVar {
+pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("max_identifier_length"),
-    // 1 GiB
-    value: &255,
+    value: &mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
     description: "The maximum length of object identifiers in bytes (PostgreSQL).",
     internal: false,
 };
