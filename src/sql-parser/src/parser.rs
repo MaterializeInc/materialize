@@ -5990,7 +5990,10 @@ impl<'a> Parser<'a> {
                 }
                 ObjectType::Table => ShowObjectType::Table,
                 ObjectType::View => ShowObjectType::View,
-                ObjectType::Source => ShowObjectType::Source,
+                ObjectType::Source => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Source { in_cluster }
+                },
                 ObjectType::Subsource => {
                     let on_source = if self.parse_one_of_keywords(&[ON]).is_some() {
                         Some(self.parse_raw_name()?)

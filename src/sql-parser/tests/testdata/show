@@ -107,14 +107,23 @@ SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Source { in_cluster: None }, from: None, filter: None }))
 
 parse-statement
 SHOW SOURCES FROM foo.bar
 ----
 SHOW SOURCES FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Source { in_cluster: None }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
+
+parse-statement
+SHOW SOURCES IN CLUSTER baz
+----
+SHOW SOURCES IN CLUSTER baz
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Source { in_cluster: Some(Unresolved(Ident("baz"))) }, from: None, filter: None }))
+
+
 
 parse-statement
 SHOW VIEWS
@@ -212,7 +221,7 @@ SHOW SOURCES
 ----
 SHOW SOURCES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Source, from: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Source { in_cluster: None }, from: None, filter: None }))
 
 parse-statement
 SHOW VIEWS FROM foo LIKE '%foo%'
