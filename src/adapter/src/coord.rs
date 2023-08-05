@@ -986,6 +986,9 @@ pub struct Coordinator {
 
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
+
+    /// Whether to start replicas with the new variable-length row encoding scheme.
+    variable_length_row_encoding: bool,
 }
 
 impl Coordinator {
@@ -1029,6 +1032,7 @@ impl Coordinator {
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
                 },
+                self.variable_length_row_encoding,
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let role = instance.role();
@@ -2044,6 +2048,7 @@ pub async fn serve(
             }
 
             let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+            let variable_length_row_encoding = catalog.system_config().variable_length_row_encoding_DANGEROUS();
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
@@ -2077,6 +2082,7 @@ pub async fn serve(
                 metrics,
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
+                variable_length_row_encoding,
             };
             let bootstrap = handle.block_on(async {
                 coord

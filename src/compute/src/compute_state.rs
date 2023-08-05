@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 use std::time::Instant;
 
 use bytesize::ByteSize;
@@ -172,7 +172,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
-            CreateInstance(logging) => self.handle_create_instance(logging),
+            CreateInstance {
+                logging_config,
+                variable_length_row_encoding,
+            } => self.handle_create_instance(logging_config, variable_length_row_encoding),
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(params),
             CreateDataflow(dataflow) => self.handle_create_dataflow(dataflow),
@@ -185,7 +188,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_create_instance(&mut self, logging: LoggingConfig) {
+    fn handle_create_instance(
+        &mut self,
+        logging: LoggingConfig,
+        variable_length_row_encoding: bool,
+    ) {
+        println!("[btv] setting vlre to {variable_length_row_encoding}");
+        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
         self.initialize_logging(&logging);
     }
 
