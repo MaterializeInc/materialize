@@ -371,7 +371,7 @@ fn show_sources<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, size, clusters.name as cluster
+        "SELECT sources.name, sources.type, sources.size, clusters.name as cluster
         FROM mz_catalog.mz_sources AS sources
         JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id
         WHERE {where_clause}"
