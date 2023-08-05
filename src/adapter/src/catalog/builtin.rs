@@ -2553,6 +2553,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     6 as encoding,
     -- Materialize doesn't support database cloning.
     FALSE AS datistemplate,
+    TRUE AS datallowconn,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
