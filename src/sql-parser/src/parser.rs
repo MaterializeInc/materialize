@@ -5993,7 +5993,7 @@ impl<'a> Parser<'a> {
                 ObjectType::Source => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Source { in_cluster }
-                },
+                }
                 ObjectType::Subsource => {
                     let on_source = if self.parse_one_of_keywords(&[ON]).is_some() {
                         Some(self.parse_raw_name()?)
@@ -6014,7 +6014,7 @@ impl<'a> Parser<'a> {
                 ObjectType::Sink => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Sink { in_cluster }
-                },
+                }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,

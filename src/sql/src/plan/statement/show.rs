@@ -293,14 +293,10 @@ pub fn show_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     match object_type {
         ShowObjectType::Table => show_tables(scx, from, filter),
-        ShowObjectType::Source { in_cluster } => {
-            show_sources(scx, from, in_cluster, filter)
-        }
+        ShowObjectType::Source { in_cluster } => show_sources(scx, from, in_cluster, filter),
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
-        ShowObjectType::Sink { in_cluster} => {
-            show_sinks(scx, from, in_cluster, filter)
-        },
+        ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => bail_unsupported!("SHOW ROLES"),
@@ -380,7 +376,13 @@ fn show_sources<'a>(
         WHERE {where_clause}"
     );
 
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "type", "size", "cluster"]),
+    )
 }
 
 fn show_subsources<'a>(
@@ -489,7 +491,13 @@ fn show_sinks<'a>(
          FROM mz_catalog.mz_sinks AS sinks
          WHERE {where_clause}",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "type", "size", "cluster"]),
+    )
 }
 
 fn show_types<'a>(

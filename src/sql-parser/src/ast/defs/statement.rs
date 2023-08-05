@@ -2337,8 +2337,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         match &self.object_type {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
-            | ShowObjectType::Sink {in_cluster} 
-            | ShowObjectType::Source { in_cluster }=> {
+            | ShowObjectType::Sink { in_cluster }
+            | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
