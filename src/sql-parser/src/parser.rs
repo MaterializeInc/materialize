@@ -6008,7 +6008,10 @@ impl<'a> Parser<'a> {
 
                     ShowObjectType::Subsource { on_source }
                 }
-                ObjectType::Sink => ShowObjectType::Sink,
+                ObjectType::Sink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Sink { in_cluster }
+                },
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,

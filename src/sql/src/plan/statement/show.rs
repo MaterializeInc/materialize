@@ -296,7 +296,9 @@ pub fn show_objects<'a>(
         ShowObjectType::Source => show_sources(scx, from, filter),
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
-        ShowObjectType::Sink => show_sinks(scx, from, filter),
+        ShowObjectType::Sink { in_cluster} => {
+            show_sinks(scx, from, in_cluster, filter)
+        },
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => bail_unsupported!("SHOW ROLES"),
@@ -455,6 +457,7 @@ fn show_materialized_views<'a>(
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
@@ -462,12 +465,20 @@ fn show_sinks<'a>(
     } else {
         scx.resolve_active_schema()?.to_string()
     };
+
+    let mut where_clause = format!("schema_id = '{schema_spec}'");
+
+    if let Some(cluster) = in_cluster {
+        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
+            .expect("write on string cannot fail");
+    }
+
     let query = format!(
         "SELECT sinks.name, sinks.type, sinks.size
          FROM mz_catalog.mz_sinks AS sinks
-         WHERE schema_id = '{schema_spec}'",
+         WHERE {where_clause}",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size", "cluster"]))
 }
 
 fn show_types<'a>(
