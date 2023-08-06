@@ -385,9 +385,9 @@ show_variable ::=
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'SINKS' ('FROM' schema_name)?
+   'SHOW' 'SINKS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_sources ::=
-  'SHOW' 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'SOURCES' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_subsources ::=
   'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
 show_tables ::=

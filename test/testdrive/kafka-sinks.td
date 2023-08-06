@@ -50,8 +50,8 @@ goofus,gallant
 contains:Expected one of SIZE or SNAPSHOT
 
 > SHOW SINKS
-name               type   size
-------------------------------
+name               type   size  cluster
+---------------------------------------
 
 # # We should refuse to create a sink with an invalid schema registry URL.
 #
@@ -86,8 +86,8 @@ name               type   size
 # contains:v2 is a view, which cannot be exported as a sink
 
 > SHOW SINKS
-name               type   size
-------------------------------
+name               type   size  cluster
+---------------------------------------
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
@@ -108,11 +108,11 @@ name               type   size
   ENVELOPE DEBEZIUM
 
 > SHOW SINKS
-name               type   size
-------------------------------
-snk1             kafka  ${arg.default-storage-size}
-snk2             kafka  ${arg.default-storage-size}
-snk3             kafka  ${arg.default-storage-size}
+name               type   size  cluster
+---------------------------------------
+snk1             kafka  ${arg.default-storage-size}  default
+snk2             kafka  ${arg.default-storage-size}  default
+snk3             kafka  ${arg.default-storage-size}  default
 
 $ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -202,17 +202,17 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW SINKS
-name               type   size
-------------------------------
-snk1             kafka  ${arg.default-storage-size}
-snk2             kafka  ${arg.default-storage-size}
-snk3             kafka  ${arg.default-storage-size}
-snk4             kafka  ${arg.default-storage-size}
-snk5             kafka  ${arg.default-storage-size}
-snk6             kafka  ${arg.default-storage-size}
-snk7             kafka  ${arg.default-storage-size}
-snk8             kafka  ${arg.default-storage-size}
-snk_unsigned       kafka  ${arg.default-storage-size}
+name               type   size  cluster
+---------------------------------------
+snk1             kafka  ${arg.default-storage-size}  cluster
+snk2             kafka  ${arg.default-storage-size}  cluster
+snk3             kafka  ${arg.default-storage-size}  cluster
+snk4             kafka  ${arg.default-storage-size}  cluster
+snk5             kafka  ${arg.default-storage-size}  cluster
+snk6             kafka  ${arg.default-storage-size}  cluster
+snk7             kafka  ${arg.default-storage-size}  cluster
+snk8             kafka  ${arg.default-storage-size}  cluster
+snk_unsigned     kafka  ${arg.default-storage-size}  cluster
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
@@ -284,23 +284,23 @@ $ kafka-create-topic topic=snk15 partitions=4
 
 # Check that SHOW SINKS shows the size correctly
 > SHOW SINKS
-name               type   size
-------------------------------
-snk1               kafka  ${arg.default-storage-size}
-snk2               kafka  ${arg.default-storage-size}
-snk3               kafka  ${arg.default-storage-size}
-snk4               kafka  ${arg.default-storage-size}
-snk5               kafka  ${arg.default-storage-size}
-snk6               kafka  ${arg.default-storage-size}
-snk7               kafka  ${arg.default-storage-size}
-snk8               kafka  ${arg.default-storage-size}
-snk9               kafka  ${arg.default-storage-size}
-snk10              kafka  ${arg.default-storage-size}
-snk11              kafka  ${arg.default-storage-size}
-snk12              kafka  ${arg.default-storage-size}
-snk13              kafka  ${arg.default-storage-size}
-snk14              kafka  ${arg.default-storage-size}
-snk15              kafka  ${arg.default-storage-size}
-sink_with_size     kafka  2
-sink_with_options  kafka  2
-snk_unsigned       kafka  ${arg.default-storage-size}
+name               type   size  cluster
+---------------------------------------
+snk1               kafka  ${arg.default-storage-size}  cluster
+snk2               kafka  ${arg.default-storage-size}  cluster
+snk3               kafka  ${arg.default-storage-size}  cluster
+snk4               kafka  ${arg.default-storage-size}  cluster
+snk5               kafka  ${arg.default-storage-size}  cluster
+snk6               kafka  ${arg.default-storage-size}  cluster
+snk7               kafka  ${arg.default-storage-size}  cluster
+snk8               kafka  ${arg.default-storage-size}  cluster
+snk9               kafka  ${arg.default-storage-size}  cluster
+snk10              kafka  ${arg.default-storage-size}  cluster
+snk11              kafka  ${arg.default-storage-size}  cluster
+snk12              kafka  ${arg.default-storage-size}  cluster
+snk13              kafka  ${arg.default-storage-size}  cluster
+snk14              kafka  ${arg.default-storage-size}  cluster
+snk15              kafka  ${arg.default-storage-size}  cluster
+sink_with_size     kafka  2                            cluster
+sink_with_options  kafka  2                            cluster
+snk_unsigned       kafka  ${arg.default-storage-size}  cluster

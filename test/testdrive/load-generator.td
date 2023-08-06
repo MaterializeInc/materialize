@@ -10,35 +10,35 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts                subsource      <null>
-auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  progress       <null>
-auctions                subsource      <null>
-bids                    subsource      <null>
-organizations           subsource      <null>
-users                   subsource      <null>
+accounts                subsource      <null>                         default
+auction_house           load-generator ${arg.default-storage-size}    default
+auction_house_progress  progress       <null>                         default
+auctions                subsource      <null>                         default
+bids                    subsource      <null>                         default
+organizations           subsource      <null>                         default
+users                   subsource      <null>                         default
 
 # Adding test to check for tables() work
 > CREATE SCHEMA a;
 > CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids);
 
 > SHOW SOURCES FROM a;
-auction_bids            load-generator ${arg.default-storage-size}
-auction_bids_progress   progress       <null>
-bids                    subsource      <null>
+auction_bids            load-generator ${arg.default-storage-size}  default
+auction_bids_progress   progress       <null>                       default
+bids                    subsource      <null>                       default
 
 # For Tables with mentioned schema should work
 > CREATE SCHEMA another;
 > CREATE SOURCE another.auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES FROM another;
-accounts                subsource      <null>
-auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  progress       <null>
-auctions                subsource      <null>
-bids                    subsource      <null>
-organizations           subsource      <null>
-users                   subsource      <null>
+accounts                subsource      <null>                       default
+auction_house           load-generator ${arg.default-storage-size}  default
+auction_house_progress  progress       <null>                       default
+auctions                subsource      <null>                       default
+bids                    subsource      <null>                       default
+organizations           subsource      <null>                       default
+users                   subsource      <null>                       default
 
 # Subsources should be created in source schema if no schema is provided
 > CREATE SCHEMA foo;
@@ -48,12 +48,12 @@ users                   subsource      <null>
   FOR TABLES (bids as foo_bids, users as bar.bar_users);
 
 > SHOW SOURCES FROM foo;
-auction_subset            load-generator ${arg.default-storage-size}
-auction_subset_progress   progress       <null>
-foo_bids                  subsource      <null>
+auction_subset            load-generator ${arg.default-storage-size}  default
+auction_subset_progress   progress       <null>                       default
+foo_bids                  subsource      <null>                       default
 
 > SHOW SOURCES FROM bar;
-bar_users                 subsource      <null>
+bar_users                 subsource      <null>                       default
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 

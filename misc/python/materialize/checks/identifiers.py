@@ -272,9 +272,9 @@ class Identifiers(Check):
         {dq_print(self.ident["schema"])}
 
         > SHOW SINKS FROM {dq(self.ident["schema"])};
-        {dq_print(self.ident["sink0"])} kafka ${{arg.default-storage-size}}
-        {dq_print(self.ident["sink1"])} kafka ${{arg.default-storage-size}}
-        {dq_print(self.ident["sink2"])} kafka ${{arg.default-storage-size}}
+        {dq_print(self.ident["sink0"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"])}_{dq_print(self.ident["schema"])}_{dq_print(self.ident["sink0"])}
+        {dq_print(self.ident["sink1"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"])}_{dq_print(self.ident["schema"])}_{dq_print(self.ident["sink1"])}
+        {dq_print(self.ident["sink2"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"])}_{dq_print(self.ident["schema"])}_{dq_print(self.ident["sink2"])}
 
         > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])};
         3

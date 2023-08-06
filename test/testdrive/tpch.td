@@ -26,18 +26,18 @@ $ set-from-sql var=source-size
 SELECT size FROM mz_sources WHERE name = 'gen'
 
 > SHOW SOURCES
-name         type       size
---------------------------------
- customer  subsource       <null>
- gen       load-generator  ${source-size}
- gen_progress  progress        <null>
- lineitem  subsource       <null>
- nation    subsource       <null>
- orders    subsource       <null>
- part      subsource       <null>
- partsupp  subsource       <null>
- region    subsource       <null>
- supplier  subsource       <null>
+name         type       size    cluster
+---------------------------------------
+ customer  subsource       <null>   default
+ gen       load-generator  ${source-size}   default
+ gen_progress  progress        <null>   default
+ lineitem  subsource       <null>   default
+ nation    subsource       <null>   default
+ orders    subsource       <null>   default
+ part      subsource       <null>   default
+ partsupp  subsource       <null>   default
+ region    subsource       <null>   default
+ supplier  subsource       <null>   default
 
 # SF * 150,000
 > SELECT count(*) FROM customer

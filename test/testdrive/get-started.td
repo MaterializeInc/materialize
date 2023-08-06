@@ -12,15 +12,15 @@
 > CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
 > SHOW SOURCES
-name          type           size
-----------------------------------
-demo          load-generator ${arg.default-storage-size}
-demo_progress progress       <null>
-accounts      subsource      <null>
-auctions      subsource      <null>
-bids          subsource      <null>
-organizations subsource      <null>
-users         subsource      <null>
+name          type           size                         cluster
+-----------------------------------------------------------------
+demo          load-generator ${arg.default-storage-size}  materialize_public_demo
+demo_progress progress       <null>                       default
+accounts      subsource      <null>                       default
+auctions      subsource      <null>                       default
+bids          subsource      <null>                       default
+organizations subsource      <null>                       default
+users         subsource      <null>                       default
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone"
