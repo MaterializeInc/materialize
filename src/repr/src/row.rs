@@ -412,6 +412,34 @@ enum Tag {
     // leap seconds, or beyond the range
     // of i64 nanoseconds.
     ExoticTimestampTz,
+    Int16_8,
+    Int32_8,
+    Int32_16,
+    Int32_24,
+    Int64_8,
+    Int64_16,
+    Int64_24,
+    Int64_32,
+    Int64_40,
+    Int64_48,
+    Int64_56,
+}
+
+impl Tag {
+    fn actual_int_length(self) -> usize {
+        use Tag::*;
+        match self {
+            Int16_8 | Int32_8 | Int64_8 => 1,
+            Int16 | Int32_16 | Int64_16 => 2,
+            Int32_24 | Int64_24 => 3,
+            Int32 | Int64_32 => 4,
+            Int64_40 => 5,
+            Int64_48 => 6,
+            Int64_56 => 7,
+            Int64 => 8,
+            _ => panic!(),
+        }
+    }
 }
 
 // --------------------------------------------------------------------------------
@@ -467,6 +495,22 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
     byte
 }
 
+fn read_byte_array_sign_extending<const N: usize>(
+    data: &[u8],
+    offset: &mut usize,
+    length: usize,
+) -> [u8; N] {
+    let mut raw = [0; N];
+    std::io::Write::write(&mut &mut raw[0..length], &data[*offset..*offset + length]).unwrap();
+    *offset += length;
+    // This is little-endian, so the sign bit is in the last
+    // element.
+    let is_negative = (raw[length - 1] & 0xF0) != 0;
+    let fill_val = if is_negative { 1 } else { 0 };
+    (&mut raw[length..N]).fill(fill_val);
+    raw
+}
+
 fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
     let mut raw = [0; N];
     raw.copy_from_slice(&data[*offset..*offset + N]);
@@ -505,16 +549,35 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
-        Tag::Int16 => {
-            let i = i16::from_le_bytes(read_byte_array(data, offset));
+        Tag::Int16 | Tag::Int16_8 => {
+            let i = i16::from_le_bytes(read_byte_array_sign_extending(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
             Datum::Int16(i)
         }
-        Tag::Int32 => {
-            let i = i32::from_le_bytes(read_byte_array(data, offset));
+        Tag::Int32 | Tag::Int32_8 | Tag::Int32_16 | Tag::Int32_24 => {
+            let i = i32::from_le_bytes(read_byte_array_sign_extending(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
             Datum::Int32(i)
         }
-        Tag::Int64 => {
-            let i = i64::from_le_bytes(read_byte_array(data, offset));
+        Tag::Int64
+        | Tag::Int64_8
+        | Tag::Int64_16
+        | Tag::Int64_24
+        | Tag::Int64_32
+        | Tag::Int64_40
+        | Tag::Int64_48
+        | Tag::Int64_56 => {
+            let i = i64::from_le_bytes(read_byte_array_sign_extending(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
             Datum::Int64(i)
         }
         Tag::UInt8 => {
@@ -781,6 +844,20 @@ fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
     as_ns.checked_add(i64::from(subsec_nanos))
 }
 
+#[inline(always)]
+fn min_bits_signed<T>(i: T) -> usize
+where
+    T: Into<i64>,
+{
+    let i: i64 = i.into();
+    let leading_sign_bits = usize::cast_from(if i.is_negative() {
+        i.leading_ones()
+    } else {
+        i.leading_zeros()
+    });
+    64 - leading_sign_bits
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -790,16 +867,58 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            data.push(Tag::Int16.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbs = min_bits_signed(i);
+            if mbs <= 8 {
+                data.push(Tag::Int16_8.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..1]);
+            } else {
+                data.push(Tag::Int16.into());
+                data.extend_from_slice(&i.to_le_bytes());
+            }
         }
         Datum::Int32(i) => {
-            data.push(Tag::Int32.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbs = min_bits_signed(i);
+            if mbs <= 8 {
+                data.push(Tag::Int32_8.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..1]);
+            } else if mbs <= 16 {
+                data.push(Tag::Int32_16.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..2]);
+            } else if mbs <= 24 {
+                data.push(Tag::Int32_24.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..3]);
+            } else {
+                data.push(Tag::Int32.into());
+                data.extend_from_slice(&i.to_le_bytes());
+            }
         }
         Datum::Int64(i) => {
-            data.push(Tag::Int64.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbs = min_bits_signed(i);
+            if mbs <= 8 {
+                data.push(Tag::Int64_8.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..1]);
+            } else if mbs <= 16 {
+                data.push(Tag::Int64_16.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..2]);
+            } else if mbs <= 24 {
+                data.push(Tag::Int64_24.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..3]);
+            } else if mbs <= 32 {
+                data.push(Tag::Int64_32.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..4]);
+            } else if mbs <= 40 {
+                data.push(Tag::Int64_40.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..5]);
+            } else if mbs <= 48 {
+                data.push(Tag::Int64_48.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..6]);
+            } else if mbs <= 56 {
+                data.push(Tag::Int64_56.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..7]);
+            } else {
+                data.push(Tag::Int64.into());
+                data.extend_from_slice(&i.to_le_bytes());
+            }
         }
         Datum::UInt8(i) => {
             data.push(Tag::UInt8.into());
