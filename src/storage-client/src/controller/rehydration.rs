@@ -244,7 +244,7 @@ where
                         _ => {}
                     }
                 }
-                Some(RehydrationCommand::Reset { .. }) => {}
+                Some(RehydrationCommand::Reset) => {}
             }
         }
     }
@@ -273,9 +273,7 @@ where
                     Ok(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
                     }
-                    Ok(RehydrationCommand::Reset { .. }) => {
-                        return RehydrationTaskState::AwaitAddress
-                    }
+                    Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
                     Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
                     Err(TryRecvError::Empty) => break,
                 }
