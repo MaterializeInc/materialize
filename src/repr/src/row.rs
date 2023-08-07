@@ -862,7 +862,7 @@ where
     // We can improve this, at the cost of doubling the number of extra tags,
     // by encoding whether the number is positive or negative in the tag.
     // We could then replace all instances of `7F` with `FF` below.
-    if i.is_positive() {
+    if i == 0 || i.is_positive() {
         if (i & !0x7F) == 0 {
             1
         } else if (i & !0x7FFF) == 0 {
