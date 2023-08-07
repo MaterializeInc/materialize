@@ -51,6 +51,10 @@ class Testdrive(K8sPod):
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
         default_timeout: str = "300s",
+        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
+        materialize_internal_url: str = "postgres://materialize:materialize@environmentd:6877/materialize",
+        kafka_addr: str = "redpanda:9092",
+        schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
         wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
@@ -59,10 +63,10 @@ class Testdrive(K8sPod):
             "testdrive",
             "--",
             "testdrive",
-            "--materialize-url=postgres://materialize:materialize@environmentd:6875/materialize",
-            "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
-            "--kafka-addr=redpanda:9092",
-            "--schema-registry-url=http://redpanda:8081",
+            f"--materialize-url={materialize_url}",
+            f"--materialize-internal-url={materialize_internal_url}",
+            f"--kafka-addr={kafka_addr}",
+            f"--schema-registry-url={schema_registry_url}",
             f"--default-timeout={default_timeout}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
