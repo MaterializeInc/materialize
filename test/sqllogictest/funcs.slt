@@ -1517,12 +1517,12 @@ NULL
 query IIII
 SELECT pg_column_size(1::int4), pg_column_size(2::int8), pg_column_size('a'), pg_column_size('ab')
 ----
-5 9 3 4
+2 2 3 4
 
 query I
 SELECT pg_column_size((1, 2))
 ----
-19
+13
 
 statement ok
 CREATE TABLE col_size (a INT, b INT, c TEXT)
