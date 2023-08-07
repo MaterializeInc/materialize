@@ -95,5 +95,8 @@ pub async fn register_metrics_into(_: &MetricsRegistry) {
 /// allocators that support metrics.
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
 pub async fn register_metrics_into(registry: &MetricsRegistry) {
+
+    
     mz_prof::jemalloc::JemallocMetrics::register_into(registry).await;
+    
 }
