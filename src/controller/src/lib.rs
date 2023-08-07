@@ -189,9 +189,6 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
                 ControllerResponse::ComputeReplicaHeartbeat(id, when)
             }
-            ComputeControllerResponse::ReplicaMetrics(id, metrics) => {
-                ControllerResponse::ComputeReplicaMetrics(id, metrics)
-            }
         }
     }
 }
