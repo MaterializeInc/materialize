@@ -500,7 +500,7 @@ fn read_byte_array_sign_extending<const N: usize>(
     offset: &mut usize,
     length: usize,
 ) -> [u8; N] {
-    assert!(length <= N);
+    debug_assert!(length <= N);
     let mut raw = [0; N];
     if length > 0 {
         std::io::Write::write(&mut &mut raw[0..length], &data[*offset..*offset + length]).unwrap();
