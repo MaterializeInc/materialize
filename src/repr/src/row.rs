@@ -505,7 +505,7 @@ fn read_byte_array_sign_extending<const N: usize>(
     *offset += length;
     // This is little-endian, so the sign bit is in the last
     // element.
-    let is_negative = (raw[length - 1] & 0xF0) != 0;
+    let is_negative = (raw[length - 1] & 0x80) != 0;
     let fill_val = if is_negative { 1 } else { 0 };
     (&mut raw[length..N]).fill(fill_val);
     raw
