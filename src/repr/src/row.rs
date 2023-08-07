@@ -848,21 +848,57 @@ fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
 }
 
 #[inline(always)]
-fn min_bits_signed<T>(i: T) -> usize
+fn min_bytes_signed<T>(i: T) -> usize
 where
     T: Into<i64>,
 {
     let i: i64 = i.into();
-    let leading_sign_bits = usize::cast_from(if i.is_negative() {
-        i.leading_ones()
-    } else {
-        i.leading_zeros()
-    });
-    // Add one here because we need one leading zero or one, to
-    // indicate the sign.
+
+    // To fit in n bytes, we require that
+    // everything but the leading sign bits fits in n*8 - 1
+    // bits. Why the -1? Because we still need one sign bit
+    // in the encoded data.
     //
-    // We can improve this, at the cost of doubling the number of extra tags.
-    64 - leading_sign_bits + 1
+    // We can improve this, at the cost of doubling the number of extra tags,
+    // by encoding whether the number is positive or negative in the tag.
+    // We could then replace all instances of `7F` with `FF` below.
+    if i.is_positive() {
+        if (i & !0x7F) == 0 {
+            1
+        } else if (i & !0x7FFF) == 0 {
+            2
+        } else if (i & !0x7FFFFF) == 0 {
+            3
+        } else if (i & !0x7FFFFFFF) == 0 {
+            4
+        } else if (i & !0x7FFFFFFFFF) == 0 {
+            5
+        } else if (i & !0x7FFFFFFFFFFF) == 0 {
+            6
+        } else if (i & !0x7FFFFFFFFFFFFF) == 0 {
+            7
+        } else {
+            8
+        }
+    } else {
+        if (i | 0x7F) == -1 {
+            1
+        } else if (i | 0x7FFF) == -1 {
+            2
+        } else if (i | 0x7FFFFF) == -1 {
+            3
+        } else if (i | 0x7FFFFFFF) == -1 {
+            4
+        } else if (i | 0x7FFFFFFFFF) == -1 {
+            5
+        } else if (i | 0x7FFFFFFFFFFF) == -1 {
+            6
+        } else if (i | 0x7FFFFFFFFFFFFF) == -1 {
+            7
+        } else {
+            8
+        }
+    }
 }
 
 fn push_datum<D>(data: &mut D, datum: Datum)
@@ -874,58 +910,39 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            let mbs = min_bits_signed(i);
-            if mbs <= 8 {
-                data.push(Tag::Int16_8.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..1]);
-            } else {
-                data.push(Tag::Int16.into());
-                data.extend_from_slice(&i.to_le_bytes());
-            }
+            let mbs = min_bytes_signed(i);
+            let tag = match mbs {
+                1 => Tag::Int16_8,
+                _ => Tag::Int16,
+            };
+            data.push(tag.into());
+            data.extend_from_slice(&i.to_le_bytes()[0..mbs]);
         }
         Datum::Int32(i) => {
-            let mbs = min_bits_signed(i);
-            if mbs <= 8 {
-                data.push(Tag::Int32_8.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..1]);
-            } else if mbs <= 16 {
-                data.push(Tag::Int32_16.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..2]);
-            } else if mbs <= 24 {
-                data.push(Tag::Int32_24.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..3]);
-            } else {
-                data.push(Tag::Int32.into());
-                data.extend_from_slice(&i.to_le_bytes());
-            }
+            let mbs = min_bytes_signed(i);
+            let tag = match mbs {
+                1 => Tag::Int32_8,
+                2 => Tag::Int32_16,
+                3 => Tag::Int32_24,
+                _ => Tag::Int32,
+            };
+            data.push(tag.into());
+            data.extend_from_slice(&i.to_le_bytes()[0..mbs]);
         }
         Datum::Int64(i) => {
-            let mbs = min_bits_signed(i);
-            if mbs <= 8 {
-                data.push(Tag::Int64_8.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..1]);
-            } else if mbs <= 16 {
-                data.push(Tag::Int64_16.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..2]);
-            } else if mbs <= 24 {
-                data.push(Tag::Int64_24.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..3]);
-            } else if mbs <= 32 {
-                data.push(Tag::Int64_32.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..4]);
-            } else if mbs <= 40 {
-                data.push(Tag::Int64_40.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..5]);
-            } else if mbs <= 48 {
-                data.push(Tag::Int64_48.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..6]);
-            } else if mbs <= 56 {
-                data.push(Tag::Int64_56.into());
-                data.extend_from_slice(&i.to_le_bytes()[0..7]);
-            } else {
-                data.push(Tag::Int64.into());
-                data.extend_from_slice(&i.to_le_bytes());
-            }
+            let mbs = min_bytes_signed(i);
+            let tag = match mbs {
+                1 => Tag::Int64_8,
+                2 => Tag::Int64_16,
+                3 => Tag::Int64_24,
+                4 => Tag::Int64_32,
+                5 => Tag::Int64_40,
+                6 => Tag::Int64_48,
+                7 => Tag::Int64_56,
+                _ => Tag::Int64,
+            };
+            data.push(tag.into());
+            data.extend_from_slice(&i.to_le_bytes()[0..mbs]);
         }
         Datum::UInt8(i) => {
             data.push(Tag::UInt8.into());
@@ -1129,9 +1146,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Null => 1,
         Datum::False => 1,
         Datum::True => 1,
-        Datum::Int16(i) => 1 + (min_bits_signed(*i) + 7) / 8,
-        Datum::Int32(i) => 1 + (min_bits_signed(*i) + 7) / 8,
-        Datum::Int64(i) => 1 + (min_bits_signed(*i) + 7) / 8,
+        Datum::Int16(i) => 1 + min_bytes_signed(*i),
+        Datum::Int32(i) => 1 + min_bytes_signed(*i),
+        Datum::Int64(i) => 1 + min_bytes_signed(*i),
         Datum::UInt8(_) => 1 + size_of::<u8>(),
         Datum::UInt16(_) => 1 + size_of::<u16>(),
         Datum::UInt32(_) => 1 + size_of::<u32>(),
