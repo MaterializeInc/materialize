@@ -33,7 +33,7 @@ use crate::cache::StateCache;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
-use crate::internal::gc::{GarbageCollector, GcReq, GcSpanFields};
+use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -452,7 +452,7 @@ async fn force_gc(
         new_seqno_since: machine.applier.seqno_since(),
     };
     let (maintenance, _stats) =
-        GarbageCollector::gc_and_truncate(&mut machine, gc_req, GcSpanFields::default()).await;
+        GarbageCollector::gc_and_truncate(&mut machine, gc_req, Default::default()).await;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }

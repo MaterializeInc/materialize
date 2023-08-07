@@ -631,7 +631,7 @@ impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
 /// Note that even with this helper, it is not currently possible to force a compilation
 /// error if the registered fields inside the `tracing::{instrument, info_span, debug_span, trace_span}`
 /// macro do not match 1:1 with the fields of `span_field_struct`, so it is still
-/// necessarily to verify that all fields are referenced in the macro invocation.
+/// necessary to verify that all fields are referenced in the macro invocation.
 ///
 /// # Examples
 ///
@@ -641,18 +641,18 @@ impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
 /// ```
 /// use tracing::{instrument, Span};
 /// use mz_ore::span_field_struct;
+///
 /// span_field_struct!(MySpanFields, foo, bar);
 ///
 /// #[tracing::instrument(skip_all, fields(foo, bar))] // NB: typos or omissions of foo, bar here won't result in a compile error!
 /// pub fn my_instrumented_func(_foo: u64, MySpanFields { foo: _, bar: _, recorder }: MySpanFields) {
-///     let span = Span::current();
 ///     // do useful things...
 ///     // Now, record values for "foo" and "bar" into our span
-///     recorder.foo(&span, 123);
-///     recorder.bar(&span, true);
+///     recorder.foo(123);
+///     recorder.bar(true);
 /// }
 ///
-/// my_instrumented_func(123, MySpanFields::default());
+/// my_instrumented_func(123, Default::default());
 /// ```
 #[macro_export]
 macro_rules! span_field_struct {
@@ -663,7 +663,8 @@ macro_rules! span_field_struct {
 
             impl [<$struct_name Recorder>] {
                 $(
-                    pub fn $field<V: tracing::field::Value, F: FnOnce() -> V>(&self, span: &tracing::Span, value: F) {
+                    pub fn $field<V: tracing::field::Value, F: FnOnce() -> V>(&self, value: F) {
+                        let span = Span::current();
                         if span.is_disabled() {
                             return;
                         }

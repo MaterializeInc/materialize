@@ -159,7 +159,7 @@ where
                             Self::gc_and_truncate(
                                 &mut machine,
                                 consolidated_req,
-                                GcSpanFields::default(),
+                                Default::default(),
                             )
                             .await
                         })
@@ -240,8 +240,6 @@ where
             recorder,
         }: GcSpanFields,
     ) -> (RoutineMaintenance, GcResults) {
-        let span = Span::current();
-
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {
             let now = Instant::now();
@@ -276,9 +274,9 @@ where
 
         let mut gc_results = GcResults::default();
 
-        recorder.gc_current_state_seqno(&span, || machine.seqno().0);
-        recorder.gc_req_seqno_since(&span, || req.new_seqno_since.0);
-        recorder.gc_rollups_to_remove_count(&span, || rollups_to_remove_from_state.len());
+        recorder.gc_current_state_seqno(|| machine.seqno().0);
+        recorder.gc_req_seqno_since(|| req.new_seqno_since.0);
+        recorder.gc_rollups_to_remove_count(|| rollups_to_remove_from_state.len());
 
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
@@ -413,10 +411,9 @@ where
                 .post_gc_calculations_seconds,
         );
 
-        recorder.gc_rollups_deleted_from_blob_count(&span, || gc_results.rollups_deleted_from_blob);
-        recorder.gc_batch_parts_deleted_from_blob_count(&span, || {
-            gc_results.batch_parts_deleted_from_blob
-        });
+        recorder.gc_rollups_deleted_from_blob_count(|| gc_results.rollups_deleted_from_blob);
+        recorder
+            .gc_batch_parts_deleted_from_blob_count(|| gc_results.batch_parts_deleted_from_blob);
 
         (maintenance, gc_results)
     }
