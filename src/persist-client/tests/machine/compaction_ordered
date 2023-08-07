@@ -34,8 +34,8 @@ parts=1 len=2
 fetch-batch input=b0_advanced
 ----
 <part 0>
-a 257 -1
 a 2 1
+a 257 -1
 <run 0>
 part 0
 
@@ -67,5 +67,4 @@ a 2 1
 a 257 -1
 <run 0>
 part 0
-<run 1>
 part 1

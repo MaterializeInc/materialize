@@ -304,9 +304,9 @@ where
     _schemas: Schemas<K, V>,
     consolidate: bool,
 
-    buffer: BatchBuffer<D>,
+    buffer: BatchBuffer<T, D>,
 
-    max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, Vec<u8>)>,
+    max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, T)>,
     runs: Vec<usize>,
     parts_written: usize,
 
@@ -458,7 +458,7 @@ where
 
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
-        match self.buffer.push(key, val, ts, diff.clone()) {
+        match self.buffer.push(key, val, ts.clone(), diff.clone()) {
             Some(part_to_flush) => {
                 self.flush_part(stats_schemas, part_to_flush).await;
                 Ok(Added::RecordAndParts)
@@ -487,16 +487,16 @@ where
             // appropriately determine runs of ordered parts
             let ((min_part_k, min_part_v), min_part_t, _d) =
                 columnar.get(0).expect("num updates is greater than zero");
+            let min_part_t = T::decode(min_part_t);
             let ((max_part_k, max_part_v), max_part_t, _d) = columnar
                 .get(num_updates.saturating_sub(1))
                 .expect("num updates is greater than zero");
+            let max_part_t = T::decode(max_part_t);
 
             if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
                 // start a new run if our part contains an update that exists in the
                 // range already covered by the existing parts of the current run
-                if (min_part_k, min_part_v, min_part_t.as_slice())
-                    < (max_run_k, max_run_v, max_run_t)
-                {
+                if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
                     self.runs.push(self.parts_written);
                 }
 
@@ -504,16 +504,11 @@ where
                 // started a new one, this part contains the greatest KVT in the run
                 max_run_k.clear();
                 max_run_v.clear();
-                max_run_t.clear();
                 max_run_k.extend_from_slice(max_part_k);
                 max_run_v.extend_from_slice(max_part_v);
-                max_run_t.extend_from_slice(&max_part_t);
+                *max_run_t = max_part_t;
             } else {
-                self.max_kvt_in_run = Some((
-                    max_part_k.to_vec(),
-                    max_part_v.to_vec(),
-                    max_part_t.to_vec(),
-                ));
+                self.max_kvt_in_run = Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));
             }
         } else {
             // if our parts are not consolidated, we simply say each part is its own run.
@@ -544,7 +539,7 @@ where
 }
 
 #[derive(Debug)]
-struct BatchBuffer<D> {
+struct BatchBuffer<T, D> {
     metrics: Arc<Metrics>,
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
@@ -553,14 +548,15 @@ struct BatchBuffer<D> {
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
 
-    current_part: Vec<((Range<usize>, Range<usize>), [u8; 8], D)>,
+    current_part: Vec<((Range<usize>, Range<usize>), T, D)>,
     current_part_total_bytes: usize,
     current_part_key_bytes: usize,
     current_part_value_bytes: usize,
 }
 
-impl<D> BatchBuffer<D>
+impl<T, D> BatchBuffer<T, D>
 where
+    T: Ord + Codec64,
     D: Semigroup + Codec64,
 {
     fn new(
@@ -583,11 +579,11 @@ where
         }
     }
 
-    fn push<K: Codec, V: Codec, T: Codec64>(
+    fn push<K: Codec, V: Codec>(
         &mut self,
         key: &K,
         val: &V,
-        ts: &T,
+        ts: T,
         diff: D,
     ) -> Option<ColumnarRecords> {
         let initial_key_buf_len = self.key_buf.len();
@@ -603,7 +599,6 @@ where
         let k_range = initial_key_buf_len..self.key_buf.len();
         let v_range = initial_val_buf_len..self.val_buf.len();
         let size = ColumnarRecordsBuilder::columnar_record_size(k_range.len(), v_range.len());
-        let ts = T::encode(ts);
 
         self.current_part_total_bytes += size;
         self.current_part_key_bytes += k_range.len();
@@ -649,7 +644,7 @@ where
             // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
             // The limits are big, so this is a pretty extreme case that we intentionally don't handle
             // right now.
-            assert!(builder.push(((k, v), t, D::encode(&d))));
+            assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
         }
         let columnar = builder.finish();
         self.batch_write_metrics
