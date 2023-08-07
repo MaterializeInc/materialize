@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType, Diff};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use once_cell::sync::Lazy;
 
 use crate::controller::{CollectionManager, IntrospectionType};

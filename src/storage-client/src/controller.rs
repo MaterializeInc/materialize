@@ -1114,7 +1114,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
 
         let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
             collection_manager.clone(),
-            introspection_ids.clone(),
+            Arc::clone(&introspection_ids),
         );
 
         Self {
@@ -2321,7 +2321,7 @@ where
                 }
             }
             Some(StorageResponse::StatusUpdates(updates)) => {
-                self.record_status_updates(updates).await;
+                self.record_status_updates(updates);
             }
         }
 
@@ -3450,56 +3450,62 @@ where
     /// status relation
     async fn record_status_updates(&self, updates: Vec<ObjectStatusUpdate<T>>) {
         let mut sink_status_updates = vec![];
-                let mut source_status_updates = vec![];
+        let mut source_status_updates = vec![];
 
-                for update in updates.iter() {
-                    match update {
-                        ObjectStatusUpdate::Sink(SinkStatusUpdate {
-                            id,
-                            status,
-                            error,
-                            hint,
-                            timestamp,
-                        }) => {
-                            let update = healthcheck::RawStatusUpdate {
-                                collection_id: *id,
-                                status_name: status.as_str(),
-                                error: error.as_deref(),
-                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
-                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
-                                // will always be. Since this timestamp always refers to the row representation,
-                                // is there a need to make it generic?
-                                ts: <u64 as Codec64>::decode(timestamp.encode()),
-                                hint: hint.as_deref(),
-                            };
-                            sink_status_updates.push(update);
-                        }
-                        ObjectStatusUpdate::Source(SourceStatusUpdate {
-                            id,
-                            status,
-                            error,
-                            hint,
-                            timestamp,
-                        }) => {
-                            let update = healthcheck::RawStatusUpdate {
-                                collection_id: *id,
-                                status_name: status.as_str(),
-                                error: error.as_deref(),
-                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
-                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
-                                // will always be. Since this timestamp always refers to the row representation,
-                                // is there a need to make it generic?
-                                ts: <u64 as Codec64>::decode(timestamp.encode()),
-                                hint: hint.as_deref(),
-                            };
-
-                            source_status_updates.push(update);
-                        }
-                    }
+        for update in updates.iter() {
+            match update {
+                ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                    id,
+                    status,
+                    error,
+                    hint,
+                    timestamp,
+                }) => {
+                    let update = healthcheck::RawStatusUpdate {
+                        collection_id: *id,
+                        status_name: status.as_str(),
+                        error: error.as_deref(),
+                        // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
+                        // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
+                        // will always be. Since this timestamp always refers to the row representation,
+                        // is there a need to make it generic?
+                        ts: <u64 as Codec64>::decode(timestamp.encode()),
+                        hint: hint.as_deref(),
+                    };
+                    sink_status_updates.push(update);
                 }
+                ObjectStatusUpdate::Source(SourceStatusUpdate {
+                    id,
+                    status,
+                    error,
+                    hint,
+                    timestamp,
+                }) => {
+                    let update = healthcheck::RawStatusUpdate {
+                        collection_id: *id,
+                        status_name: status.as_str(),
+                        error: error.as_deref(),
+                        // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
+                        // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
+                        // will always be. Since this timestamp always refers to the row representation,
+                        // is there a need to make it generic?
+                        ts: <u64 as Codec64>::decode(timestamp.encode()),
+                        hint: hint.as_deref(),
+                    };
 
-                self.state.collection_status_manager.append_source_updates(source_status_updates).await;
-                self.state.collection_status_manager.append_source_updates(sink_status_updates).await;
+                    source_status_updates.push(update);
+                }
+            }
+        }
+
+        self.state
+            .collection_status_manager
+            .append_source_updates(source_status_updates)
+            .await;
+        self.state
+            .collection_status_manager
+            .append_source_updates(sink_status_updates)
+            .await;
     }
 }
 
