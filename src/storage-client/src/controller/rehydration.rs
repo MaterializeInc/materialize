@@ -18,7 +18,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -45,11 +44,10 @@ use crate::client::{
     CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
-use crate::controller::IntrospectionType;
 use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 
-use super::collection_mgmt::CollectionManager;
+use crate::healthcheck::{CollectionStatusManager, RawStatusUpdate};
 
 /// A storage client that replays the command stream on failure.
 ///
@@ -75,8 +73,7 @@ where
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
         grpc_client_params: GrpcClientParameters,
-        collection_manager: CollectionManager,
-        introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+        collection_status_manager: CollectionStatusManager,
         now: NowFn,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
@@ -94,8 +91,7 @@ where
             config: Default::default(),
             metrics,
             grpc_client_params,
-            collection_manager,
-            introspection_ids,
+            collection_status_manager,
             now,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
@@ -177,10 +173,8 @@ struct RehydrationTask<T> {
     grpc_client_params: GrpcClientParameters,
     /// A function that returns the current time.
     now: NowFn,
-    /// Interface for managed collections
-    collection_manager: CollectionManager,
-    /// A list of introspection IDs
-    introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+    /// Interface for appending source/sinks statuses
+    collection_status_manager: CollectionStatusManager,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -398,50 +392,31 @@ where
 
     /// Sets the internal collection status for sources/sinks this task manages
     async fn set_internal_collection_statuses(&self, status: InternalCollectionStatus) {
-        let (source_status_history_id, sink_status_history_id) = {
-            let introspection_ids = self.introspection_ids.lock().expect("poisoned lock");
-
-            (
-                introspection_ids[&IntrospectionType::SourceStatusHistory],
-                introspection_ids[&IntrospectionType::SinkStatusHistory],
-            )
-        };
-
-        self.collection_manager
-            .append_to_collection(
-                source_status_history_id,
+        self.collection_status_manager
+            .append_source_updates(
                 self.sources
                     .keys()
-                    .map(|id| {
-                        let row = crate::healthcheck::pack_status_row(
-                            *id,
-                            status.name(),
-                            status.error_details(),
-                            (self.now)(),
-                            None,
-                        );
-
-                        (row, 1)
+                    .map(|id| RawStatusUpdate {
+                        collection_id: *id,
+                        status_name: status.name(),
+                        error: status.error_details(),
+                        ts: (self.now)(),
+                        hint: None,
                     })
                     .collect(),
             )
             .await;
 
-        self.collection_manager
-            .append_to_collection(
-                sink_status_history_id,
+        self.collection_status_manager
+            .append_sink_updates(
                 self.sinks
                     .keys()
-                    .map(|id| {
-                        let row = crate::healthcheck::pack_status_row(
-                            *id,
-                            status.name(),
-                            status.error_details(),
-                            (self.now)(),
-                            None,
-                        );
-
-                        (row, 1)
+                    .map(|id| RawStatusUpdate {
+                        collection_id: *id,
+                        status_name: status.name(),
+                        error: status.error_details(),
+                        ts: (self.now)(),
+                        hint: None,
                     })
                     .collect(),
             )
