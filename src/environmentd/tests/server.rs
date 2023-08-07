@@ -383,10 +383,10 @@ fn test_http_sql() {
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
             let fixtimestamp = tc.args.get("fixtimestamp").is_some();
-            ws.write_message(msg).unwrap();
+            ws.send(msg).unwrap();
             let mut responses = String::new();
             loop {
-                let resp = ws.read_message().unwrap();
+                let resp = ws.read().unwrap();
                 match resp {
                     Message::Text(mut msg) => {
                         if fixtimestamp {
@@ -1059,10 +1059,10 @@ fn test_max_request_size() {
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string())).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
-        let err = ws.read_message().unwrap_err();
+        let err = ws.read().unwrap_err();
         assert!(matches!(
             err,
             Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
@@ -1126,9 +1126,9 @@ fn test_max_statement_batch_size() {
         util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string())).unwrap();
 
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
         match msg {
@@ -1180,10 +1180,10 @@ fn test_ws_passes_options() {
     // set from the options map we passed with the auth.
     let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
@@ -1222,7 +1222,7 @@ fn test_ws_notifies_for_bad_options() {
     util::auth_with_ws(&mut ws, options).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
@@ -1408,24 +1408,24 @@ fn test_max_connections_on_all_interfaces() {
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     // The specific error isn't forwarded to the client, the connection is just closed.
-    match ws.read_message() {
+    match ws.read() {
         Ok(Message::Text(msg)) => {
             assert_eq!(
                 msg,
                 r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#
             );
             assert_eq!(
-                ws.read_message().unwrap(),
+                ws.read().unwrap(),
                 Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
             );
             assert_eq!(
-                ws.read_message().unwrap(),
+                ws.read().unwrap(),
                 Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
             );
-            tracing::info!("data: {:?}", ws.read_message().unwrap());
+            tracing::info!("data: {:?}", ws.read().unwrap());
         }
         Ok(msg) => panic!("unexpected msg: {msg:?}"),
         Err(e) => panic!("{e}"),
@@ -1697,10 +1697,10 @@ fn test_cancel_ws() {
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     loop {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         if let Ok(msg) = msg.into_text() {
             if msg.contains("query canceled") {
                 break;
@@ -1975,10 +1975,10 @@ fn test_github_20262() {
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-    ws.write_message(Message::Text(subscribe)).unwrap();
+    ws.send(Message::Text(subscribe)).unwrap();
     cancel();
-    ws.write_message(Message::Text(commit)).unwrap();
-    ws.write_message(Message::Text(select)).unwrap();
+    ws.send(Message::Text(commit)).unwrap();
+    ws.send(Message::Text(select)).unwrap();
 
     let mut expect = VecDeque::from([
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
@@ -1997,7 +1997,7 @@ fn test_github_20262() {
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
     ]);
     while !expect.is_empty() {
-        if let Message::Text(text) = ws.read_message().unwrap() {
+        if let Message::Text(text) = ws.read().unwrap() {
             let next = expect.pop_front().unwrap();
             assert_eq!(text, next);
         }
