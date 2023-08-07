@@ -856,11 +856,13 @@ where
     let leading_sign_bits = usize::cast_from(if i.is_negative() {
         i.leading_ones()
     } else {
-        // Subtract one here because we need one leading zero, to
-        // indicate that the number is positive.
-        i.leading_zeros() - 1
+        i.leading_zeros()
     });
-    64 - leading_sign_bits
+    // Add one here because we need one leading zero or one, to
+    // indicate the sign.
+    //
+    // We can improve this, at the cost of doubling the number of extra tags.
+    64 - leading_sign_bits + 1
 }
 
 fn push_datum<D>(data: &mut D, datum: Datum)
