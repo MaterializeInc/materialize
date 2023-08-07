@@ -2358,3 +2358,53 @@ fn webhook_concurrency_limit() {
     // rate limited to reduce test flakiness.
     assert!(rate_limited >= 3);
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_too_large_request() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_bytes",
+        server.inner.http_local_addr(),
+    );
+
+    // Send an event with a body larger that is exactly our max size.
+    let two_mb = usize::cast_from(bytesize::mb(2u64));
+    let body = vec![42u8; two_mb];
+    let resp = http_client
+        .post(&webhook_url)
+        .body(body)
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+
+    // Send an event that is one larger than our max size.
+    let body = vec![42u8; two_mb + 1];
+    let resp = http_client
+        .post(&webhook_url)
+        .body(body)
+        .send()
+        .expect("failed to POST event");
+
+    // Note: If this changes then we need to update our docs.
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
