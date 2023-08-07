@@ -28,7 +28,7 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
 
 ## Step 1. Create Role
 
-1. A role is a collection of privileges you can apply to users. First we will create a role resource in Terraform.
+1. A role is a collection of privileges you can apply to users. First, we will create a role resource in Terraform.
 
     ```hcl
     resource "materialize_role" "dev_role" {
