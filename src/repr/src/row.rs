@@ -500,14 +500,17 @@ fn read_byte_array_sign_extending<const N: usize>(
     offset: &mut usize,
     length: usize,
 ) -> [u8; N] {
+    assert!(length <= N);
     let mut raw = [0; N];
-    std::io::Write::write(&mut &mut raw[0..length], &data[*offset..*offset + length]).unwrap();
-    *offset += length;
-    // This is little-endian, so the sign bit is in the last
-    // element.
-    let is_negative = (raw[length - 1] & 0x80) != 0;
-    let fill_val = if is_negative { 255 } else { 0 };
-    (&mut raw[length..N]).fill(fill_val);
+    if length > 0 {
+        std::io::Write::write(&mut &mut raw[0..length], &data[*offset..*offset + length]).unwrap();
+        *offset += length;
+        // This is little-endian, so the sign bit is in the last
+        // element.
+        let is_negative = (raw[length - 1] & 0x80) != 0;
+        let fill_val = if is_negative { 255 } else { 0 };
+        raw[length..N].fill(fill_val);
+    }
     raw
 }
 
