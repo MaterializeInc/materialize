@@ -82,7 +82,7 @@ mod persist_handles;
 mod rehydration;
 mod statistics;
 
-pub use collection_mgmt::MonotonicAppender;
+pub use collection_mgmt::{CollectionManager, MonotonicAppender};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -828,6 +828,10 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
 
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
+
+    /// Facility for appending status updates for sources/sinks
+    pub(super) collection_status_manager: healthcheck::CollectionStatusManager,
+
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(super) introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
@@ -1106,6 +1110,13 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         let collection_manager =
             collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
 
+        let introspection_ids = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+
+        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+            collection_manager.clone(),
+            introspection_ids.clone(),
+        );
+
         Self {
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
@@ -1115,7 +1126,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            introspection_ids: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            introspection_ids,
+            collection_status_manager,
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
@@ -1191,8 +1203,7 @@ where
             self.metrics.for_instance(id),
             self.state.envd_epoch,
             self.state.config.grpc_client.clone(),
-            self.state.collection_manager.clone(),
-            Arc::clone(&self.state.introspection_ids),
+            self.state.collection_status_manager.clone(),
             self.state.now.clone(),
         );
         if self.state.initialized {
@@ -2310,70 +2321,7 @@ where
                 }
             }
             Some(StorageResponse::StatusUpdates(updates)) => {
-                let mut sink_status_updates = vec![];
-                let mut source_status_updates = vec![];
-
-                for update in updates.into_iter() {
-                    match update {
-                        ObjectStatusUpdate::Sink(SinkStatusUpdate {
-                            id,
-                            status,
-                            error,
-                            hint,
-                            timestamp,
-                        }) => {
-                            let row = crate::healthcheck::pack_status_row(
-                                id,
-                                status.as_str(),
-                                error.as_deref(),
-                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
-                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
-                                // will always be. Since this timestamp always refers to the row representation,
-                                // is there a need to make it generic?
-                                <u64 as Codec64>::decode(timestamp.encode()),
-                                hint.as_deref(),
-                            );
-
-                            sink_status_updates.push((row, 1));
-                        }
-                        ObjectStatusUpdate::Source(SourceStatusUpdate {
-                            id,
-                            status,
-                            error,
-                            hint,
-                            timestamp,
-                        }) => {
-                            let row = crate::healthcheck::pack_status_row(
-                                id,
-                                status.as_str(),
-                                error.as_deref(),
-                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
-                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
-                                // will always be. Since this timestamp always refers to the row representation,
-                                // is there a need to make it generic?
-                                <u64 as Codec64>::decode(timestamp.encode()),
-                                hint.as_deref(),
-                            );
-
-                            source_status_updates.push((row, 1));
-                        }
-                    }
-                }
-
-                let (source_status_history_id, sink_status_history_id) = {
-                    let introspection_ids =
-                        self.state.introspection_ids.lock().expect("poisoned lock");
-
-                    (
-                        introspection_ids[&IntrospectionType::SourceStatusHistory],
-                        introspection_ids[&IntrospectionType::SinkStatusHistory],
-                    )
-                };
-
-                self.append_to_managed_collection(source_status_history_id, source_status_updates)
-                    .await;
-                self.append_to_managed_collection(sink_status_history_id, sink_status_updates)
-                    .await;
+                self.record_status_updates(updates).await;
             }
         }
 
@@ -3496,6 +3444,62 @@ where
             instance_id: ingestion.instance_id,
             remap_collection_id: ingestion.remap_collection_id,
         })
+    }
+
+    /// Handles writing of status updates for sources/sinks to the appropriate
+    /// status relation
+    async fn record_status_updates(&self, updates: Vec<ObjectStatusUpdate<T>>) {
+        let mut sink_status_updates = vec![];
+                let mut source_status_updates = vec![];
+
+                for update in updates.iter() {
+                    match update {
+                        ObjectStatusUpdate::Sink(SinkStatusUpdate {
+                            id,
+                            status,
+                            error,
+                            hint,
+                            timestamp,
+                        }) => {
+                            let update = healthcheck::RawStatusUpdate {
+                                collection_id: *id,
+                                status_name: status.as_str(),
+                                error: error.as_deref(),
+                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
+                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
+                                // will always be. Since this timestamp always refers to the row representation,
+                                // is there a need to make it generic?
+                                ts: <u64 as Codec64>::decode(timestamp.encode()),
+                                hint: hint.as_deref(),
+                            };
+                            sink_status_updates.push(update);
+                        }
+                        ObjectStatusUpdate::Source(SourceStatusUpdate {
+                            id,
+                            status,
+                            error,
+                            hint,
+                            timestamp,
+                        }) => {
+                            let update = healthcheck::RawStatusUpdate {
+                                collection_id: *id,
+                                status_name: status.as_str(),
+                                error: error.as_deref(),
+                                // TODO(rkrishn7): Figure out a better way to extract the timestamp here. We know
+                                // that currently `timestamp` must be a `u64`, but the compiler can't assume that it
+                                // will always be. Since this timestamp always refers to the row representation,
+                                // is there a need to make it generic?
+                                ts: <u64 as Codec64>::decode(timestamp.encode()),
+                                hint: hint.as_deref(),
+                            };
+
+                            source_status_updates.push(update);
+                        }
+                    }
+                }
+
+                self.state.collection_status_manager.append_source_updates(source_status_updates).await;
+                self.state.collection_status_manager.append_source_updates(sink_status_updates).await;
     }
 }
 
