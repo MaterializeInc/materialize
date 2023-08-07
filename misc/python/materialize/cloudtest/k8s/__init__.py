@@ -33,6 +33,8 @@ from pg8000 import Connection, Cursor
 from materialize import ROOT, mzbuild, ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 
+DEFAULT_K8S_NAMESPACE = "default"
+
 
 class K8sResource:
     def kubectl(self, *args: str, input: Optional[str] = None) -> str:
@@ -69,7 +71,7 @@ class K8sResource:
         return DEFAULT_K8S_CONTEXT_NAME
 
     def namespace(self) -> str:
-        return "default"
+        return DEFAULT_K8S_NAMESPACE
 
     def kind(self) -> str:
         assert False
