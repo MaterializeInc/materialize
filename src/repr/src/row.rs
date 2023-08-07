@@ -853,7 +853,9 @@ where
     let leading_sign_bits = usize::cast_from(if i.is_negative() {
         i.leading_ones()
     } else {
-        i.leading_zeros()
+        // Subtract one here because we need one leading zero, to
+        // indicate that the number is positive.
+        i.leading_zeros() - 1
     });
     64 - leading_sign_bits
 }
