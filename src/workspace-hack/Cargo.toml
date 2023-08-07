@@ -53,10 +53,10 @@ hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features 
 hyper = { version = "0.14.25", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
-k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
-kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
-kube-client = { version = "0.77.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
-kube-core = { version = "0.77.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
+k8s-openapi = { version = "0.19.0", features = ["v1_25"] }
+kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
+kube-client = { version = "0.85.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-core = { version = "0.85.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1" }
@@ -154,10 +154,10 @@ hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features 
 hyper = { version = "0.14.25", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
-k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
-kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
-kube-client = { version = "0.77.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
-kube-core = { version = "0.77.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
+k8s-openapi = { version = "0.19.0", features = ["v1_25"] }
+kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
+kube-client = { version = "0.85.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-core = { version = "0.85.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1" }
