@@ -2174,6 +2174,15 @@ mod tests {
                 ))
                 .unwrap(),
             ),
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
+                        .unwrap()
+                        .and_hms_milli_opt(14, 32, 11, 1234) // leap
+                        .unwrap(),
+                )
+                .unwrap(),
+            ),
             Datum::Interval(Interval {
                 months: 312,
                 ..Default::default()
