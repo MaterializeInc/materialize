@@ -149,6 +149,12 @@ test_relation_name_length = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
+test_relation_name_length_fail = """
+{{ config(tags='fail',materialized='materializedview') }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
+"""
+
 test_hooks = {
     "models": {
         "test": {
