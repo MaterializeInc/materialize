@@ -286,7 +286,7 @@ impl CollectionManager {
     /// - If there is contention to write to the collection identified by
     ///   `id`.
     /// - If the collection closed.
-    pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if !updates.is_empty() {
             let (tx, _rx) = oneshot::channel();
             self.tx.send((id, updates, tx)).await.expect("rx hung up");
