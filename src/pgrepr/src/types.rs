@@ -273,6 +273,10 @@ impl TypeConstraint for TimePrecision {
                 "exceeds maximum time precision {MAX_TIME_PRECISION}"
             ))
         } else if typmod >= 0 {
+
+
+
+            
             Ok(Some(TimePrecision(typmod)))
         } else {
             Ok(None)
