@@ -426,6 +426,16 @@ impl Coordinator {
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.
         self.advance_timelines_interval.reset();
+
+
+
+
+
+
+
+
+
+        
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting
