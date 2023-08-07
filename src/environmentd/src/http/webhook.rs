@@ -170,7 +170,9 @@ impl From<StorageError> for WebhookError {
     fn from(err: StorageError) -> Self {
         match err {
             // TODO(parkmycar): Maybe map this to a HTTP 410 Gone instead of 404?
-            StorageError::IdentifierMissing(id) => WebhookError::NotFound(id.to_string()),
+            StorageError::IdentifierMissing(id) | StorageError::IdentifierInvalid(id) => {
+                WebhookError::NotFound(id.to_string())
+            }
             e => WebhookError::InternalStorageError(e),
         }
     }
