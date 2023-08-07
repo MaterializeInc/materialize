@@ -93,7 +93,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName, Statement};
 use mz_sql_parser::parser::{
     self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
 };
@@ -130,12 +130,27 @@ fn datadriven() {
                     return "expected exactly one statement\n".to_string();
                 }
                 let stmt = s.into_element().ast;
-                let parsed = match parser::parse_statements(&stmt.to_string()) {
-                    Ok(parsed) => parsed.into_element().ast,
-                    Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
-                };
-                if parsed != stmt {
-                    panic!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
+                for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
+                    let mut parsed = match parser::parse_statements(&printed) {
+                        Ok(parsed) => parsed.into_element().ast,
+                        Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
+                    };
+                    match (&mut parsed, &stmt) {
+                        // DECLARE remembers the original SQL. Erase that here so it can differ if
+                        // needed (for example, quoting identifiers vs not). This is ok because we
+                        // still compare that the resulting ASTs are identical, and it's valid for
+                        // those to come from different original strings.
+                        (Statement::Declare(parsed), Statement::Declare(stmt)) => {
+                            parsed.sql = stmt.sql.clone();
+                        }
+                        _ => {}
+                    }
+                    if parsed != stmt {
+                        panic!(
+                            "reparse comparison failed:\n{:?}\n!=\n{:?}\n{printed}\n",
+                            stmt, parsed
+                        );
+                    }
                 }
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", stmt)
