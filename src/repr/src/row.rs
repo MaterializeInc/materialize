@@ -406,12 +406,12 @@ enum Tag {
     Range,
     MzAclItem,
     AclItem,
-    // leap seconds, or beyond the range
-    // of i64 nanoseconds.
-    ExoticTimestamp,
-    // leap seconds, or beyond the range
-    // of i64 nanoseconds.
-    ExoticTimestampTz,
+    // Everything except leap seconds and times beyond the range of
+    // i64 nanoseconds.
+    CheapTimestamp,
+    // Everything except leap seconds and times beyond the range of
+    // i64 nanoseconds.
+    CheapTimestampTz,
     Int16_8,
     Int32_8,
     Int32_16,
@@ -609,7 +609,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::Date => Datum::Date(read_date(data, offset)),
         Tag::Time => Datum::Time(read_time(data, offset)),
-        Tag::Timestamp => {
+        Tag::CheapTimestamp => {
             let ts = i64::from_le_bytes(read_byte_array(data, offset));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
@@ -619,7 +619,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                 CheckedTimestamp::from_timestamplike(ndt).expect("unexpected timestamp"),
             )
         }
-        Tag::TimestampTz => {
+        Tag::CheapTimestampTz => {
             let ts = i64::from_le_bytes(read_byte_array(data, offset));
             let secs = ts.div_euclid(1_000_000_000);
             let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
@@ -630,7 +630,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                     .expect("unexpected timestamp"),
             )
         }
-        Tag::ExoticTimestamp => {
+        Tag::Timestamp => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::Timestamp(
@@ -638,7 +638,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                     .expect("unexpected timestamp"),
             )
         }
-        Tag::ExoticTimestampTz => {
+        Tag::TimestampTz => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::TimestampTz(
@@ -960,10 +960,10 @@ where
         Datum::Timestamp(t) => {
             let datetime = t.to_naive();
             if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::Timestamp.into());
+                data.push(Tag::CheapTimestamp.into());
                 data.extend_from_slice(&nanos.to_le_bytes());
             } else {
-                data.push(Tag::ExoticTimestamp.into());
+                data.push(Tag::Timestamp.into());
                 push_naive_date(data, datetime.date());
                 push_time(data, datetime.time());
             }
@@ -971,10 +971,10 @@ where
         Datum::TimestampTz(t) => {
             let datetime = t.to_naive();
             if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::TimestampTz.into());
+                data.push(Tag::CheapTimestampTz.into());
                 data.extend_from_slice(&nanos.to_le_bytes());
             } else {
-                data.push(Tag::ExoticTimestampTz.into());
+                data.push(Tag::TimestampTz.into());
                 push_naive_date(data, datetime.date());
                 push_time(data, datetime.time());
             }
