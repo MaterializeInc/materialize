@@ -329,3 +329,5 @@ mz_sink_statistics_ind                                      mz_sink_statistics  
 mz_source_statistics_ind                                    mz_source_statistics                         mz_introspection    {id}
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}
+mz_sink_statuses_ind                                        mz_sink_statuses                             mz_introspection    {id}
+mz_sink_status_history_ind                                  mz_sink_status_history                       mz_introspection    {sink_id}

@@ -4287,12 +4287,30 @@ ON mz_internal.mz_source_statuses (id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SINK_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_statuses (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_source_status_history_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_source_status_history (source_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_status_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_status_history_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4716,6 +4734,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTERS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
+        Builtin::Index(&MZ_SINK_STATUSES_IND),
+        Builtin::Index(&MZ_SINK_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
         Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),

@@ -697,73 +697,80 @@ ReduceMinsMaxes
 > SET CLUSTER TO mz_introspection
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-AccumulableErrorCheck
-ArrangeAccumulable
+"AccumulableErrorCheck"
+"ArrangeAccumulable"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3)]]"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3)]]-errors"
 "ArrangeBy[[Column(0), Column(2)]]"
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
+"ArrangeBy[[Column(0)]]-errors"
 "ArrangeBy[[Column(1), Column(0)]]"
 "ArrangeBy[[Column(1), Column(3)]]"
 "ArrangeBy[[Column(1), Column(3)]]"
-ArrangeBy[[Column(1)]]
-ArrangeBy[[Column(1)]]
-ArrangeBy[[Column(1)]]
-ArrangeBy[[Column(1)]]-errors
-ArrangeBy[[Column(1)]]-errors
+"ArrangeBy[[Column(1)]]"
+"ArrangeBy[[Column(1)]]"
+"ArrangeBy[[Column(1)]]"
+"ArrangeBy[[Column(1)]]"
+"ArrangeBy[[Column(1)]]"
+"ArrangeBy[[Column(1)]]-errors"
+"ArrangeBy[[Column(1)]]-errors"
+"ArrangeBy[[Column(1)]]-errors"
 "ArrangeBy[[Column(2), Column(3)]]"
 "ArrangeBy[[Column(2), Column(3)]]-errors"
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(2)]]-errors
-ArrangeBy[[Column(3)]]
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(2)]]-errors"
+"ArrangeBy[[Column(3)]]"
 "ArrangeBy[[Column(4), Column(5), Column(6)]]"
 "ArrangeBy[[Column(4), Column(5), Column(6)]]-errors"
 "Arranged DistinctBy"
@@ -776,13 +783,29 @@ ArrangeBy[[Column(3)]]
 "Arranged TopK input"
 "Arranged TopK input"
 "Arranged TopK input"
-DistinctBy
-DistinctByErrorCheck
-JoinStage
-JoinStage
-ReduceAccumulable
-ReduceInaccumulable
+"Arranged TopK input"
+"Arranged TopK input"
+"Arranged TopK input"
+"Arranged TopK input"
+"Arranged TopK input"
+"Arranged TopK input"
+"Arranged TopK input"
+"Arranged TopK input"
+"DistinctBy"
+"DistinctByErrorCheck"
+"JoinStage"
+"JoinStage"
+"ReduceAccumulable"
+"ReduceInaccumulable"
 "ReduceInaccumulable Error Check"
+"Reduced TopK input"
+"Reduced TopK input"
+"Reduced TopK input"
+"Reduced TopK input"
+"Reduced TopK input"
+"Reduced TopK input"
+"Reduced TopK input"
+"Reduced TopK input"
 "Reduced TopK input"
 "Reduced TopK input"
 "Reduced TopK input"
