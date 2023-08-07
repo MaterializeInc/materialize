@@ -39,7 +39,6 @@ use futures::{future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
-use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
@@ -90,8 +89,6 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-    /// A notification that new resource usage metrics are available for a given replica.
-    ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
 }
 
 /// Replica configuration
@@ -138,7 +135,6 @@ pub struct ComputeController<T> {
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
-    replica_metrics: BTreeMap<ReplicaId, Vec<ServiceProcessMetrics>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
@@ -159,7 +155,6 @@ impl<T> ComputeController<T> {
             config: Default::default(),
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
-            replica_metrics: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
         }
@@ -554,14 +549,6 @@ where
         if let Some((replica_id, when)) = self.compute.replica_heartbeats.pop_first() {
             return Some(ComputeControllerResponse::ReplicaHeartbeat(
                 replica_id, when,
-            ));
-        }
-
-        // Process pending replica metrics responses
-        // TODO(guswynn): remove the `replica_metrics`, field, its unused.
-        if let Some((replica_id, metrics)) = self.compute.replica_metrics.pop_first() {
-            return Some(ComputeControllerResponse::ReplicaMetrics(
-                replica_id, metrics,
             ));
         }
 
