@@ -379,6 +379,7 @@ impl<T> HealthState<T> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
+    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     primary_source_id: GlobalId,
     health_stream: &Stream<G, (OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
@@ -430,18 +431,20 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         // Write the initial starting state to the status shard for all managed sources
         if is_active_worker {
             for state in health_states.values_mut() {
-                let status = HealthStatus::Starting;
-                let timestamp: mz_repr::Timestamp = now().into();
-                object_status_updates.borrow_mut().push(mz_storage_client::client::ObjectStatusUpdate::Source(SourceStatusUpdate {
-                    id: state.source_id,
-                    status: status.name().to_string(),
-                    error: status.error().map(|e| e.to_string()),
-                    hint: status.hint().map(|e| e.to_string()),
-                    timestamp,
-                }));
+                if !resume_uppers[&state.source_id].is_empty() {
+                    let status = HealthStatus::Starting;
+                    let timestamp: mz_repr::Timestamp = now().into();
+                    object_status_updates.borrow_mut().push(mz_storage_client::client::ObjectStatusUpdate::Source(SourceStatusUpdate {
+                        id: state.source_id,
+                        status: status.name().to_string(),
+                        error: status.error().map(|e| e.to_string()),
+                        hint: status.hint().map(|e| e.to_string()),
+                        timestamp,
+                    }));
 
-                state.last_reported_status = Some(status);
-                state.last_status_occurred_at = Some(timestamp);
+                    state.last_reported_status = Some(status);
+                    state.last_status_occurred_at = Some(timestamp);
+                }
             }
         }
 

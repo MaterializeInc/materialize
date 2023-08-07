@@ -304,6 +304,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let health_token = crate::source::health_operator(
                 into_time_scope,
                 storage_state,
+                resume_uppers,
                 primary_source_id,
                 &health_stream,
                 health_configs,
