@@ -209,6 +209,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             metrics_registry.clone(),
         )
         .await?;
+    println!("HELLO");
 
     if args.tracing.log_filter.is_some() {
         halt!(
