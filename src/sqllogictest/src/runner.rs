@@ -1697,6 +1697,10 @@ pub struct RunConfig<'a> {
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Persist state is handled specially because:
+    /// - Persist background workers do not necessarily shut down immediately once the server is
+    ///   shut down, and may panic if their storage is delete out from under them.
+    /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
 }
 
