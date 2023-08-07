@@ -7104,6 +7104,8 @@ impl Catalog {
                         .map(|x| x.to_string())
                         .unwrap_or_else(|| "none".to_string());
                     let new = var.value();
+                    // WIP: structured type for these annotateable events
+                    // WIP: add releases, or envd takeovers to these
                     if prev != new {
                         info!(
                             annotation_type = "system_configuration",
