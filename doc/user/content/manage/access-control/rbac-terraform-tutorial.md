@@ -16,7 +16,7 @@ This tutorial walks you through managing roles in Materialize with [Terraform](h
 * Assign a role to a user
 * Modify and remove privileges on roles
 
-In this scenario, you are an DevOps engineer responsible for managing your Materialize account with code. You recently hired a new developer who needs privileges in a non-production cluster. You will create specific privileges for the new role that align with your business needs and restrict the developer role from having access to your production cluster.
+In this scenario, you are a DevOps engineer responsible for managing your Materialize account with code. You recently hired a new developer who needs privileges in a non-production cluster. You will create specific privileges for the new role that align with your business needs and restrict the developer role from having access to your production cluster.
 
 ## Before you begin
 
