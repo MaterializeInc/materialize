@@ -1533,7 +1533,7 @@ INSERT INTO col_size VALUES (1, 2, 'some string longer than 32 chars.'), (NULL, 
 query IIIIII
 SELECT a, b, pg_column_size(col_size.*), pg_column_size(col_size.a), pg_column_size(col_size.b), pg_column_size(col_size.c) FROM col_size ORDER BY a
 ----
-1  2  54  5  5  35
+1  2  48  2  2  35
 NULL  NULL  12  NULL  NULL  NULL
 
 statement error mz_row_size requires a record type
@@ -1549,12 +1549,12 @@ NULL
 query III
 SELECT mz_row_size((1, 2)), mz_row_size((1, 2, 3, 4)), mz_row_size((1, 2, 3, 4, 5))
 ----
-32  32  57
+32  32  32
 
 query III
 SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 ----
-1  2  77
+1  2  71
 NULL  NULL  32
 
 query error mz_errored
