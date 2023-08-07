@@ -1026,7 +1026,6 @@ where
                     // in bind. We don't do it in bind because I'm not sure what purpose it would
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
-                    println!("[btv] Portal state: NotStarted");
                     self.start_transaction(Some(1));
                     match self
                         .adapter_client
@@ -1116,7 +1115,6 @@ where
                 // we must remember the number of rows that were returned. Use this tag to
                 // remember that information and return it.
                 PortalState::Completed(Some(tag)) => {
-                    println!("[btv] Portal state: Completed with tag {tag}");
                     let tag = tag.to_string();
                     if let Some(outer_ctx_extra) = outer_ctx_extra {
                         self.adapter_client.retire_execute(
