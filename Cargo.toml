@@ -128,11 +128,6 @@ timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git"
 differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
-# Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
-# which depends on ahash v0.8 instead of v0.7. In the meantime we've
-# backported the ahash v0.8 bump into hashbrown v0.12.
-hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
-
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -155,10 +150,6 @@ tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
 # upstream.
 tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
 
-# Waiting on https://github.com/tokio-rs/console/pull/388.
-console-api = { git = "https://github.com/MaterializeInc/tokio-console.git" }
-console-subscriber = { git = "https://github.com/MaterializeInc/tokio-console.git" }
-
 # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
 # it into a release.
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
@@ -174,6 +165,13 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
 # a release.
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
+
+# Waiting for a new release of kube-client compatible with base64 0.21.0
+kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git" }
+kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git" }
+
+# Waiting on `lru` dep to update to `0.11.0`
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
