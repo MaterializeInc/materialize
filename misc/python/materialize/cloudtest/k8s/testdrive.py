@@ -13,15 +13,21 @@ from typing import Optional
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
-from materialize.cloudtest.k8s import K8sPod
+from materialize.cloudtest.k8s import DEFAULT_K8S_NAMESPACE, K8sPod
 from materialize.cloudtest.wait import wait
 
 
 class Testdrive(K8sPod):
-    def __init__(self, release_mode: bool, aws_region: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        release_mode: bool,
+        aws_region: Optional[str] = None,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+    ) -> None:
         self.aws_region = aws_region
+        self.selected_namespace = namespace
 
-        metadata = V1ObjectMeta(name="testdrive")
+        metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
         # Pass through AWS credentials from the host
         env = [
@@ -82,3 +88,6 @@ class Testdrive(K8sPod):
             *args,
             input=input,
         )
+
+    def namespace(self) -> str:
+        return self.selected_namespace
