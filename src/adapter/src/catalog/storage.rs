@@ -61,7 +61,7 @@ pub use stash::{
 };
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
-pub const MZ_INTROSPECTION_ROLE_ID: RoleId = RoleId::System(2);
+pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
 
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";

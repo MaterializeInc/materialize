@@ -70,7 +70,7 @@ use mz_sql::plan::{
     Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookValidation,
 };
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
@@ -1910,7 +1910,7 @@ impl Cluster {
         // them without talking to the cloud or observability groups.
         if self.name == SYSTEM_USER.name {
             ClusterRole::SystemCritical
-        } else if self.name == INTROSPECTION_USER.name {
+        } else if self.name == SUPPORT_USER.name {
             ClusterRole::System
         } else {
             ClusterRole::User
@@ -4958,7 +4958,7 @@ impl Catalog {
         // be very easy for a code path to accidentally avoid this check by
         // calling `resolve_cluster(session.vars().cluster())`.
         if session.user().name != SYSTEM_USER.name
-            && session.user().name != INTROSPECTION_USER.name
+            && session.user().name != SUPPORT_USER.name
             && session.vars().cluster() == SYSTEM_USER.name
         {
             coord_bail!(

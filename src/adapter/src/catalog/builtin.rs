@@ -36,13 +36,13 @@ use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, ObjectType, RoleAttributes,
     TypeReference,
 };
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 use crate::rbac;
 
@@ -4373,8 +4373,8 @@ pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     attributes: RoleAttributes::new().with_all(),
 });
 
-pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*INTROSPECTION_USER.name,
+pub static MZ_SUPPORT_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*SUPPORT_USER.name,
     attributes: RoleAttributes::new(),
 });
 
@@ -4382,7 +4382,7 @@ pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster
     name: &*SYSTEM_USER.name,
     privileges: vec![
         MzAclItem {
-            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE,
         },
@@ -4397,7 +4397,7 @@ pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
     });
 
 pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
-    name: &*INTROSPECTION_USER.name,
+    name: "mz_introspection",
     privileges: vec![
         MzAclItem {
             grantee: RoleId::Public,
@@ -4405,7 +4405,7 @@ pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| Builtin
             acl_mode: AclMode::USAGE,
         },
         MzAclItem {
-            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE.union(AclMode::CREATE),
         },
@@ -4747,7 +4747,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     builtins
 });
 pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
+    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_SUPPORT_ROLE]);
 pub static BUILTIN_CLUSTERS: Lazy<Vec<&BuiltinCluster>> =
     Lazy::new(|| vec![&*MZ_SYSTEM_CLUSTER, &*MZ_INTROSPECTION_CLUSTER]);
 pub static BUILTIN_CLUSTER_REPLICAS: Lazy<Vec<&BuiltinClusterReplica>> = Lazy::new(|| {
