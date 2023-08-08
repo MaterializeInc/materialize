@@ -92,7 +92,7 @@ impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
     }
 }
 
-/// A type that provides write and read timestamps, reads observe exactly their preceding writes..
+/// A type that provides write and read timestamps, reads observe exactly their preceding writes.
 ///
 /// Specifically, all read timestamps will be greater or equal to all previously reported completed
 /// write timestamps, and strictly less than all subsequently emitted write timestamps.
@@ -100,13 +100,13 @@ impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
 /// A timeline can perform reads and writes. Reads happen at the read timestamp
 /// and writes happen at the write timestamp. After the write has completed, but before a response
 /// is sent, the read timestamp must be updated to a value greater than or equal to `self.write_ts`.
-struct TimestampOracle<T> {
+struct InMemoryTimestampOracle<T> {
     read_ts: T,
     write_ts: T,
     next: Box<dyn Fn() -> T>,
 }
 
-impl<T: TimestampManipulation> TimestampOracle<T> {
+impl<T: TimestampManipulation> InMemoryTimestampOracle<T> {
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and can
     /// retreat from previous invocations.
@@ -238,7 +238,7 @@ pub fn monotonic_now(now: NowFn, previous_now: Timestamp) -> Timestamp {
 ///
 /// See [`TimestampOracle`] for more details on the properties of the timestamps.
 pub struct DurableTimestampOracle<T> {
-    timestamp_oracle: TimestampOracle<T>,
+    timestamp_oracle: InMemoryTimestampOracle<T>,
     durable_timestamp: T,
     persist_interval: T,
 }
@@ -260,7 +260,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
         Fut: Future<Output = Result<(), crate::catalog::Error>>,
     {
         let mut oracle = Self {
-            timestamp_oracle: TimestampOracle::new(initially.clone(), next),
+            timestamp_oracle: InMemoryTimestampOracle::new(initially.clone(), next),
             durable_timestamp: initially.clone(),
             persist_interval,
         };
