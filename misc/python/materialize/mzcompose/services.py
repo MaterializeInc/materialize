@@ -378,7 +378,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v23.1.9",
+        version: str = "v23.2.4",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
