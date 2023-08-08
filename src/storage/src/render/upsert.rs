@@ -133,6 +133,46 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
+use std::convert::Infallible;
+use timely::dataflow::channels::pact::Pipeline;
+
+/// This leaf operator drops `token` after the input reaches the `resume_upper`.
+/// This is useful to take coordinated actions across all workers, after the `upsert`
+/// operator has rehydrated.
+pub fn rehydration_finished<G, T>(
+    scope: G,
+    source_config: &crate::source::RawSourceCreationConfig,
+    // A token that we can drop to signal we are finished rehydrating.
+    token: impl std::any::Any + 'static,
+    resume_upper: Antichain<T>,
+    input: &Stream<G, Infallible>,
+) where
+    G: Scope<Timestamp = T>,
+    T: Timestamp,
+{
+    let worker_id = source_config.worker_id;
+    let id = source_config.id;
+    let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
+    let mut input = builder.new_input(input, Pipeline);
+
+    builder.build(move |_capabilities| async move {
+        loop {
+            if let Some(AsyncEvent::Progress(frontier)) = input.next().await {
+                if PartialOrder::less_equal(&resume_upper, &frontier) {
+                    tracing::info!(
+                        "timely-{} source {} reached the resume upper ({:?}) across all workers",
+                        worker_id,
+                        id,
+                        resume_upper
+                    );
+                    drop(token);
+                    break;
+                }
+            }
+        }
+    });
+}
+
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
 /// Returns a tuple of
@@ -161,6 +201,10 @@ where
         source_config.worker_id,
         backpressure_metrics,
     );
+
+    // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
+    // this, to prevent unnecessary work.
+    let wait_for_input_resumption = dataflow_paramters.delay_sources_past_rehydration;
 
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
@@ -207,6 +251,7 @@ where
                         rocksdb_in_use_metric,
                     )
                 },
+                wait_for_input_resumption,
             )
         } else {
             upsert_inner(
@@ -232,6 +277,7 @@ where
                         .unwrap(),
                     )
                 },
+                wait_for_input_resumption,
             )
         }
     } else {
@@ -249,6 +295,7 @@ where
             upsert_metrics,
             source_config,
             || async { InMemoryHashMap::default() },
+            wait_for_input_resumption,
         )
     }
 }
@@ -283,6 +330,9 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
+    // Whether or not to wait for the `input` to reach the `resumption_frontier`
+    // before we finalize `rehydration`.
+    wait_for_input_resumption: bool,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
@@ -338,12 +388,14 @@ where
         let mut stash = vec![];
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
-        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
+            || (wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
+        {
             let previous_event = tokio::select! {
                 // Note that these are both cancel-safe. The reason we drain the `input` is to
                 // ensure the `output_frontier` (and therefore flow control on `previous`) make
                 // progress.
-                previous_event = previous.next_mut() => {
+                previous_event = previous.next_mut(), if !PartialOrder::less_equal(&resume_upper, &snapshot_upper) => {
                     previous_event
                 }
                 input_event = input.next_mut() => {
@@ -436,6 +488,12 @@ where
         if let Some(ts) = resume_upper.as_option() {
             output_cap.downgrade(ts);
         }
+
+        tracing::info!(
+            "timely-{} upsert source {} finished rehydration",
+            source_config.worker_id,
+            source_config.id
+        );
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.

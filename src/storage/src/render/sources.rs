@@ -134,6 +134,17 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         remap_collection_id: description.remap_collection_id.clone(),
     };
 
+    // A set of channels (1 per worker) used to signal rehydration being finished
+    // to raw sources. These are channels and not timely streams because they
+    // have to cross a scope boundary.
+    //
+    // Note that these will be entirely subsumed by full `hydration` backpressure,
+    // once that is implemented.
+    let (starter, mut start_signal) = tokio::sync::mpsc::channel::<()>(1);
+    let start_signal = async move {
+        let _ = start_signal.recv().await;
+    };
+
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (streams, mut health, capability) = match connection {
@@ -144,6 +155,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
+                start_signal,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -158,6 +170,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
+                start_signal,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -172,6 +185,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
+                start_signal,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -186,6 +200,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
+                start_signal,
             );
             let streams: Vec<_> = streams
                 .into_iter()
@@ -216,6 +231,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             error_collections,
             storage_state,
             base_source_config.clone(),
+            starter.clone(),
         );
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
@@ -237,6 +253,7 @@ fn render_source_stream<G>(
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
+    rehydrated_token: impl std::any::Any + 'static,
 ) -> (
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
@@ -483,29 +500,47 @@ where
                                 refine_antichain(&resume_upper),
                                 previous,
                                 previous_token,
-                                base_source_config,
+                                base_source_config.clone(),
                                 &storage_state.instance_context,
                                 &storage_state.dataflow_parameters,
                                 backpressure_metrics,
                             );
 
+                            use mz_timely_util::probe::ProbeNotify;
+                            let handle = mz_timely_util::probe::Handle::default();
+                            let upsert = upsert.inner.probe_notify_with(vec![handle.clone()]);
+                            let probe = mz_timely_util::probe::source(
+                                scope.clone(),
+                                format!("upsert_probe({id})"),
+                                handle,
+                            );
+
+                            // If configured, delay raw sources until we rehydrate the upsert
+                            // source. Otherwise, drop the token, unblocking the sources at the
+                            // end rendering.
+                            if storage_state
+                                .dataflow_parameters
+                                .delay_sources_past_rehydration
+                            {
+                                crate::render::upsert::rehydration_finished(
+                                    scope.clone(),
+                                    &base_source_config,
+                                    rehydrated_token,
+                                    refine_antichain(&resume_upper),
+                                    &probe,
+                                );
+                            } else {
+                                drop(rehydrated_token)
+                            };
+
                             // If backpressure is enabled, we probe the upsert operator's
                             // output, which is the easiest way to extract frontier information.
                             let upsert = match feedback_handle {
                                 Some(feedback_handle) => {
-                                    use mz_timely_util::probe::ProbeNotify;
-                                    let handle = mz_timely_util::probe::Handle::default();
-                                    let upsert =
-                                        upsert.inner.probe_notify_with(vec![handle.clone()]);
-                                    mz_timely_util::probe::source(
-                                        scope.clone(),
-                                        format!("upsert_probe({id})"),
-                                        handle,
-                                    )
-                                    .connect_loop(feedback_handle);
+                                    probe.connect_loop(feedback_handle);
                                     upsert.as_collection()
                                 }
-                                None => upsert,
+                                None => upsert.as_collection(),
                             };
 
                             (upsert.leave(), health_update.leave())

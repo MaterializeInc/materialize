@@ -903,6 +903,16 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
     internal: true,
 };
 
+/// Whether or not to delay sources producing values in some scenarios
+/// (namely, upsert) till after rehydration is finished.
+const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_delay_sources_past_rehydration"),
+    value: &true,
+    description: "Whether or not to delay sources producing values in some scenarios \
+                  (namely, upsert) till after rehydration is finished",
+    internal: true,
+};
+
 /// The fraction of the cluster replica size to be used as the maximum number of
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
@@ -2064,6 +2074,7 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+            .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2559,6 +2570,11 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_fraction` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_fraction(&self) -> Option<Numeric> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
+    pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
+        *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -4082,6 +4098,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
+        || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)

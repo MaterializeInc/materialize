@@ -182,6 +182,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
+    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
@@ -224,6 +225,7 @@ where
                 source_connection,
                 connection_context,
                 reclocked_resume_stream,
+                start_signal,
             );
 
             // The use of an _unbounded_ queue here is justified as it matches the unbounded
@@ -256,6 +258,7 @@ fn source_render_operator<G, C>(
     source_connection: C,
     connection_context: ConnectionContext,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
+    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Collection<
         G,
@@ -282,8 +285,13 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (data, progress, health, token) =
-        source_connection.render(scope, config, connection_context, resume_uppers);
+    let (data, progress, health, token) = source_connection.render(
+        scope,
+        config,
+        connection_context,
+        resume_uppers,
+        start_signal,
+    );
 
     let name = format!("SourceStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());

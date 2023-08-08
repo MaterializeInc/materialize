@@ -98,6 +98,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             disk_only: config.storage_dataflow_max_inflight_bytes_disk_only(),
         },
         grpc_client: grpc_client_config(config),
+        delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
     }
 }
 
