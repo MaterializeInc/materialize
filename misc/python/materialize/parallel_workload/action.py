@@ -241,7 +241,7 @@ class CreateIndexAction(Action):
         table = self.rng.choice(tables_views)
         columns = self.rng.sample(table.columns, len(table.columns))
         columns_str = "_".join(column.name() for column in columns)
-        # columns_str may exceed 255 characters, so it is converted to a positive in with hash
+        # columns_str may exceed 255 characters, so it is converted to a positive number with hash
         index_name = f"idx_{table}_{abs(hash(columns_str))}"
         index_elems = []
         for i, column in enumerate(columns):
