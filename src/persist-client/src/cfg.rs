@@ -129,7 +129,7 @@ impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tuning.
     pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
         // Escape hatch in case we need to disable compaction.
-        let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
+        let compaction_disabled = true;
         Self {
             build_version: build_info.semver_version(),
             now,

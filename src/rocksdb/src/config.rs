@@ -99,6 +99,8 @@ pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) 
     };
     options.increase_parallelism(parallelism);
 
+    options.optimize_for_point_lookup(16);
+
     options.set_stats_dump_period_sec(*stats_log_interval_seconds);
     options.set_stats_persist_period_sec(*stats_persist_interval_seconds);
 }
