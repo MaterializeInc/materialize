@@ -33,7 +33,6 @@ use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
 use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
@@ -42,6 +41,7 @@ use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::{CollectionMetrics, ComputeMetrics};
 use crate::render::LinearJoinImpl;
+use crate::server::ResponseSender;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -138,13 +138,13 @@ impl ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub struct ActiveComputeState<'a, A: Allocate> {
+pub(crate) struct ActiveComputeState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
-    pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
+    pub response_tx: &'a mut ResponseSender,
 }
 
 /// A token that keeps a sink alive.

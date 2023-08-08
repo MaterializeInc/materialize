@@ -23,6 +23,7 @@ use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tracing::{debug, info, trace, warn};
 
 use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
@@ -160,7 +161,7 @@ where
             metrics,
         } = self;
 
-        tracing::info!("starting replica task for {replica_id}");
+        info!(replica = ?replica_id, "starting replica task");
 
         let addrs = config.location.ctl_addrs;
         let timely_config = TimelyConfig {
@@ -188,8 +189,8 @@ where
         .await;
 
         match result {
-            Ok(()) => tracing::info!("stopped replica task for {replica_id}"),
-            Err(error) => tracing::warn!("replica task for {replica_id} failed: {error}"),
+            Ok(()) => info!(replica = ?replica_id, "stopped replica task"),
+            Err(error) => warn!(replica = ?replica_id, "replica task failed: {error}"),
         }
     }
 }
@@ -231,13 +232,15 @@ where
                     Ok(client) => Ok(client),
                     Err(e) => {
                         if state.i >= mz_service::retry::INFO_MIN_RETRIES {
-                            tracing::info!(
-                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                            info!(
+                                replica = ?replica_id,
+                                "error connecting to replica, retrying in {:?}: {e}",
                                 state.next_backoff.unwrap()
                             );
                         } else {
-                            tracing::debug!(
-                                "error connecting to replica {replica_id}, retrying in {:?}: {e}",
+                            debug!(
+                                replica = ?replica_id,
+                                "error connecting to replica, retrying in {:?}: {e}",
                                 state.next_backoff.unwrap()
                             );
                         }
@@ -260,6 +263,12 @@ where
 
                 metrics.inner.command_queue_size.dec();
                 cmd_spec.specialize_command(&mut command);
+
+                trace!(
+                    replica = ?replica_id,
+                    command = ?command,
+                    "sending command to replica",
+                );
                 client.send(command).await?;
             },
             // Response from replica to forward to controller.
@@ -267,6 +276,11 @@ where
                 let Some(response) = response? else {
                     bail!("replica unexpectedly gracefully terminated connection");
                 };
+                trace!(
+                    replica = ?replica_id,
+                    response = ?response,
+                    "received response from replica",
+                );
 
                 if response_tx.send(response).is_ok() {
                     metrics.inner.response_queue_size.inc();
