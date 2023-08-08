@@ -407,10 +407,12 @@ enum Tag {
     MzAclItem,
     AclItem,
     // Everything except leap seconds and times beyond the range of
-    // i64 nanoseconds.
+    // i64 nanoseconds. (Note that Materialize does not support leap
+    // seconds, but this module does).
     CheapTimestamp,
     // Everything except leap seconds and times beyond the range of
-    // i64 nanoseconds.
+    // i64 nanoseconds. (Note that Materialize does not support leap
+    // seconds, but this module does).
     CheapTimestampTz,
     Int16_8,
     Int32_8,
@@ -834,8 +836,9 @@ where
 /// said i64 can be round-tripped back to a `NaiveDateTime`.
 ///
 /// The only exotic NDTs for which this can't happen are those that
-/// are hundreds of years in the future or past, or those that represent a
-/// leap second.
+/// are hundreds of years in the future or past, or those that
+/// represent a leap second. (Note that Materialize does not support
+/// leap seconds, but this module does).
 // This function is inspired by `NaiveDateTime::timestamp_nanos`,
 // with extra checking.
 fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
