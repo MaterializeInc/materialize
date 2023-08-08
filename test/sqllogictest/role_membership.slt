@@ -910,8 +910,8 @@ r2
 r3
 r4
 mz_system
-materialize
 mz_support
+materialize
 COMPLETE 7
 
 statement ok
