@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
-from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class Application:

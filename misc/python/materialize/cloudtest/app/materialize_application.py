@@ -17,7 +17,7 @@ from pg8000.exceptions import InterfaceError
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
-from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
