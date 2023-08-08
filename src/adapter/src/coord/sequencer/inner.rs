@@ -36,7 +36,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, Explainee};
+use mz_repr::explain::{ExplainFormat, Explainee, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -2749,7 +2749,7 @@ impl Coordinator {
                 if no_errors {
                     tracing::error!("error while handling EXPLAIN statement: {}", err);
 
-                    let used_indexes: Vec<GlobalId> = vec![];
+                    let used_indexes = UsedIndexes::default();
                     let fast_path_plan: Option<FastPathPlan> = None;
 
                     (used_indexes, fast_path_plan)
@@ -2815,7 +2815,7 @@ impl Coordinator {
         no_errors: bool,
         cluster_id: mz_storage_client::types::instances::StorageInstanceId,
         session: &mut Session,
-    ) -> Result<(Vec<GlobalId>, Option<FastPathPlan>), AdapterError> {
+    ) -> Result<(UsedIndexes, Option<FastPathPlan>), AdapterError> {
         use mz_repr::explain::trace_plan;
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
@@ -2929,14 +2929,24 @@ impl Coordinator {
             )
         })?;
 
-        // Calculate indexes used by the dataflow at this point
-        let used_indexes = dataflow
-            .index_imports
-            .keys()
-            .cloned()
-            .collect::<Vec<GlobalId>>();
+        // Save the list of indexes used by the dataflow at this point
+        let used_indexes = UsedIndexes::new(
+            dataflow
+                .index_imports
+                .iter()
+                .map(|(id, index_import)| {
+                    (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
+                })
+                .collect(),
+        );
 
-        // Determine if fast path plan will be used for this explainee
+        // Determine if fast path plan will be used for this explainee.
+        //
+        // TODO: If we switch to a fast path plan here, that will currently use the same index
+        // in the same way as the slow path plan, so it's ok that we continue using the
+        // `used_indexes` that we saved above. But this still sounds a bit dangerous, so we should
+        // maybe recreate `used_indexes` here based on the `FastPathPlan` to avoid getting out of
+        // sync.
         let fast_path_plan = match explainee {
             Explainee::Query => {
                 dataflow.set_as_of(query_as_of);

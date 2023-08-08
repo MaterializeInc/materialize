@@ -109,6 +109,7 @@ pub mod url;
 
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
+pub use crate::explain::ProtoIndexUsageType;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,

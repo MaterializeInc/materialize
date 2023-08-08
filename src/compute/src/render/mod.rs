@@ -295,7 +295,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let export_ids = dataflow.export_ids().collect();
-                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
+                    context.import_index(
+                        compute_state,
+                        &mut tokens,
+                        export_ids,
+                        *idx_id,
+                        &idx.desc,
+                    );
                 }
 
                 // Build declared objects.
@@ -351,7 +357,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let export_ids = dataflow.export_ids().collect();
-                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
+                    context.import_index(
+                        compute_state,
+                        &mut tokens,
+                        export_ids,
+                        *idx_id,
+                        &idx.desc,
+                    );
                 }
 
                 // Build declared objects.

@@ -51,7 +51,7 @@ Explained Query:
       Get materialize.public.t // { cardinality: "materialize.public.t" }
 
 Used Indexes:
-  - materialize.public.t_x
+  - materialize.public.t_x (*** full scan ***)
 
 EOF
 
@@ -66,7 +66,7 @@ Explained Query:
       Get materialize.public.t // { cardinality: "materialize.public.t" }
 
 Used Indexes:
-  - materialize.public.t_x
+  - materialize.public.t_x (*** full scan ***)
 
 EOF
 
@@ -87,8 +87,8 @@ Explained Query:
           Get materialize.public.states // { cardinality: "materialize.public.states" }
 
 Used Indexes:
-  - materialize.public.cities_state
-  - materialize.public.state_state
+  - materialize.public.cities_state (differential join)
+  - materialize.public.state_state (differential join)
 
 EOF
 
@@ -119,8 +119,8 @@ Explained Query:
               Get materialize.public.t2 // { cardinality: "materialize.public.t2" }
 
 Used Indexes:
-  - materialize.public.t_x
-  - materialize.public.tt_x
+  - materialize.public.t_x (differential join)
+  - materialize.public.tt_x (differential join)
 
 EOF
 
@@ -136,7 +136,7 @@ Explained Query:
       Get materialize.public.cities // { cardinality: "materialize.public.cities" }
 
 Used Indexes:
-  - materialize.public.cities_name
+  - materialize.public.cities_name (*** full scan ***)
 
 EOF
 
@@ -170,7 +170,7 @@ Explained Query:
         Get materialize.public.t
 
 Used Indexes:
-  - materialize.public.t_x
+  - materialize.public.t_x (differential join, differential join)
 
 EOF
 
@@ -191,8 +191,8 @@ Explained Query:
         Get materialize.public.t2
 
 Used Indexes:
-  - materialize.public.t_x
-  - materialize.public.tt_x
+  - materialize.public.t_x (differential join)
+  - materialize.public.tt_x (differential join)
 
 EOF
 
@@ -320,6 +320,6 @@ Explained Query:
         Get materialize.public.person_knows_person
 
 Used Indexes:
-  - materialize.public.person_knows_person_person1id_person2id
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
 
 EOF

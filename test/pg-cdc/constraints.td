@@ -71,14 +71,14 @@ ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 #
 # Unique converted to keys
 > EXPLAIN SELECT DISTINCT f1, f2 FROM pk
-"Explained Query (fast path):\n  Project (#0, #1)\n    ReadExistingIndex materialize.public.pk_primary_idx\n\nUsed Indexes:\n  - materialize.public.pk_primary_idx\n"
+"Explained Query (fast path):\n  Project (#0, #1)\n    ReadExistingIndex materialize.public.pk_primary_idx\n\nUsed Indexes:\n  - materialize.public.pk_primary_idx (*** full scan ***)\n"
 
 #
 # Unique converted to keys
 > EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
-"Explained Query (fast path):\n  Project (#0, #1)\n    ReadExistingIndex materialize.public.unique_not_null_primary_idx\n\nUsed Indexes:\n  - materialize.public.unique_not_null_primary_idx\n"
+"Explained Query (fast path):\n  Project (#0, #1)\n    ReadExistingIndex materialize.public.unique_not_null_primary_idx\n\nUsed Indexes:\n  - materialize.public.unique_not_null_primary_idx (*** full scan ***)\n"
 
 #
 # Unique NOT converted to keys because values are nullable
 > EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
-"Explained Query:\n  Distinct group_by=[#0, #1]\n    Project (#0, #1)\n      Get materialize.public.unique_nullable\n\nUsed Indexes:\n  - materialize.public.unique_nullable_primary_idx\n"
+"Explained Query:\n  Distinct group_by=[#0, #1]\n    Project (#0, #1)\n      Get materialize.public.unique_nullable\n\nUsed Indexes:\n  - materialize.public.unique_nullable_primary_idx (*** full scan ***)\n"

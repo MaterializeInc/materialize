@@ -43,7 +43,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 

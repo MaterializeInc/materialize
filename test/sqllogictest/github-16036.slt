@@ -59,8 +59,8 @@ Explained Query:
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
 
 Used Indexes:
-  - materialize.public.i1
-  - materialize.public.i2
-  - materialize.public.i3
+  - materialize.public.i1 (differential join)
+  - materialize.public.i2 (differential join)
+  - materialize.public.i3 (differential join)
 
 EOF
