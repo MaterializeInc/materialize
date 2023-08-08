@@ -12,7 +12,7 @@ mode cockroach
 reset-server
 
 # Verify initial roles.
-query TTB
+query TTB rowsort
 SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%'
 ----
 s1 mz_system true
@@ -57,7 +57,7 @@ CREATE ROLE rj
 statement error CREATE USER is not supported, for more information consult the documentation at
 CREATE USER fms
 
-query TB
+query TB rowsort
 SELECT name, inherit FROM mz_roles
 ----
 rj  true
@@ -70,7 +70,7 @@ mz_introspection  true
 statement error unknown role 'bad'
 DROP ROLE rj, bad
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
 rj
@@ -82,7 +82,7 @@ mz_introspection
 statement ok
 DROP ROLE IF EXISTS rj, bad
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
 mz_system
@@ -93,7 +93,7 @@ mz_introspection
 statement ok
 CREATE ROLE nlb
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
 nlb
@@ -133,7 +133,7 @@ CREATE ROLE mz_foo
 statement ok
 CREATE ROLE foo
 
-query TB
+query TB rowsort
 SELECT name, inherit FROM mz_roles WHERE name = 'foo'
 ----
 foo true
