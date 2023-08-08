@@ -24,6 +24,7 @@ def wait(
     context: str = DEFAULT_K8S_CONTEXT_NAME,
     *,
     label: Optional[str] = None,
+    namespace: Optional[str] = None,
 ) -> None:
     cmd = [
         "kubectl",
@@ -39,6 +40,9 @@ def wait(
 
     if label is not None:
         cmd.extend(["--selector", label])
+
+    if namespace is not None:
+        cmd.extend(["--namespace", namespace])
 
     ui.progress(f'waiting for {" ".join(cmd)} ... ')
 
