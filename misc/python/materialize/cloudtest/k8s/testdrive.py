@@ -25,8 +25,8 @@ class Testdrive(K8sPod):
         aws_region: Optional[str] = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
     ) -> None:
+        super().__init__(namespace)
         self.aws_region = aws_region
-        self.selected_namespace = namespace
 
         metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
@@ -89,6 +89,3 @@ class Testdrive(K8sPod):
             *args,
             input=input,
         )
-
-    def namespace(self) -> str:
-        return self.selected_namespace
