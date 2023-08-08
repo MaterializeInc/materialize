@@ -13,6 +13,7 @@ use std::iter::once;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
@@ -32,7 +33,7 @@ use mz_sql::names::{
 };
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
-use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_stash::{AppendBatch, Stash, StashError, StashFactory, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
@@ -50,6 +51,7 @@ use crate::coord::timeline;
 
 pub mod objects;
 pub mod stash;
+mod stash_impl;
 
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
@@ -71,85 +73,6 @@ const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
-
-fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-) -> Result<(), catalog::error::Error> {
-    let cluster_names: BTreeSet<_> = txn
-        .clusters
-        .items()
-        .into_values()
-        .map(|value| value.name)
-        .collect();
-
-    for builtin_cluster in &*BUILTIN_CLUSTERS {
-        assert!(
-            is_reserved_name(builtin_cluster.name),
-            "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
-            BUILTIN_PREFIXES.join(", ")
-        );
-        if !cluster_names.contains(builtin_cluster.name) {
-            let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
-            let id = ClusterId::System(id);
-            txn.insert_system_cluster(
-                id,
-                builtin_cluster.name,
-                &vec![],
-                builtin_cluster.privileges.clone(),
-                ClusterConfig {
-                    // TODO: Should builtin clusters be managed or unmanaged?
-                    variant: ClusterVariant::Unmanaged,
-                },
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn add_new_builtin_cluster_replicas_migration(
-    txn: &mut Transaction<'_>,
-    bootstrap_args: &BootstrapArgs,
-) -> Result<(), catalog::error::Error> {
-    let cluster_lookup: BTreeMap<_, _> = txn
-        .clusters
-        .items()
-        .into_iter()
-        .map(|(key, value)| (value.name, key.id))
-        .collect();
-
-    let replicas: BTreeMap<_, _> =
-        txn.cluster_replicas
-            .items()
-            .into_values()
-            .fold(BTreeMap::new(), |mut acc, value| {
-                acc.entry(value.cluster_id)
-                    .or_insert_with(BTreeSet::new)
-                    .insert(value.name);
-                acc
-            });
-
-    for builtin_replica in &*BUILTIN_CLUSTER_REPLICAS {
-        let cluster_id = cluster_lookup
-            .get(builtin_replica.cluster_name)
-            .expect("builtin cluster replica references non-existent cluster");
-
-        let replica_names = replicas.get(cluster_id);
-        if matches!(replica_names, None)
-            || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
-        {
-            let replica_id = txn.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
-            let config = builtin_cluster_replica_config(bootstrap_args);
-            txn.insert_cluster_replica(
-                *cluster_id,
-                replica_id,
-                builtin_replica.name,
-                &config,
-                MZ_SYSTEM_ROLE_ID,
-            )?;
-        }
-    }
-    Ok(())
-}
 
 fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedReplicaConfig {
     SerializedReplicaConfig {
@@ -252,9 +175,9 @@ impl Connection {
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            let mut txn = transaction(&mut conn.stash).await?;
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
+            let mut txn = Transaction::new(&mut conn.stash).await?;
+            txn.add_new_builtin_clusters_migration()?;
+            txn.add_new_builtin_cluster_replicas_migration(bootstrap_args)?;
             txn.commit().await?;
         }
 
@@ -784,7 +707,7 @@ impl Connection {
 
     /// Creates a new [`Transaction`].
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
-        transaction(&mut self.stash).await
+        Transaction::new(&mut self.stash).await
     }
 
     /// Confirms that this [`Connection`] is connected as the stash leader.
@@ -814,83 +737,6 @@ where
     Ok(val.map(|v| v.ts))
 }
 
-#[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
-    let (
-        databases,
-        schemas,
-        roles,
-        items,
-        clusters,
-        cluster_replicas,
-        introspection_sources,
-        id_allocator,
-        configs,
-        settings,
-        timestamps,
-        system_gid_mapping,
-        system_configurations,
-        default_privileges,
-        system_privileges,
-    ) = stash
-        .with_transaction(|tx| {
-            Box::pin(async move {
-                // Peek the catalog collections in any order and a single transaction.
-                futures::try_join!(
-                    tx.peek_one(tx.collection(DATABASES_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
-                    tx.peek_one(
-                        tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
-                            .await?,
-                    ),
-                    tx.peek_one(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CONFIG_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SETTING_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
-                    tx.peek_one(
-                        tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
-                            .await?
-                    ),
-                    tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
-                )
-            })
-        })
-        .await?;
-
-    Ok(Transaction {
-        stash,
-        databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
-        schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
-            a.database_id == b.database_id && a.name == b.name
-        })?,
-        items: TableTransaction::new(items, |a: &ItemValue, b| {
-            a.schema_id == b.schema_id && a.name == b.name
-        })?,
-        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.role.name == b.role.name)?,
-        clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
-        cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
-            a.cluster_id == b.cluster_id && a.name == b.name
-        })?,
-        introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
-        id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
-        configs: TableTransaction::new(configs, |_a, _b| false)?,
-        settings: TableTransaction::new(settings, |_a, _b| false)?,
-        timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
-        system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
-        system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
-        default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
-        system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
-        audit_log_updates: Vec::new(),
-        storage_usage_updates: Vec::new(),
-    })
-}
-
 /// A [`Transaction`] batches multiple [`Connection`] operations together and commits them
 /// atomically.
 pub struct Transaction<'a> {
@@ -918,6 +764,83 @@ pub struct Transaction<'a> {
 }
 
 impl<'a> Transaction<'a> {
+    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    async fn new(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
+        let (
+            databases,
+            schemas,
+            roles,
+            items,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        ) = stash
+            .with_transaction(|tx| {
+                Box::pin(async move {
+                    // Peek the catalog collections in any order and a single transaction.
+                    futures::try_join!(
+                        tx.peek_one(tx.collection(DATABASES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
+                        tx.peek_one(
+                            tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
+                                .await?,
+                        ),
+                        tx.peek_one(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CONFIG_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SETTING_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
+                        tx.peek_one(
+                            tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
+                                .await?
+                        ),
+                        tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
+                    )
+                })
+            })
+            .await?;
+        Ok(Transaction {
+            stash,
+            databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
+            schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
+                a.database_id == b.database_id && a.name == b.name
+            })?,
+            items: TableTransaction::new(items, |a: &ItemValue, b| {
+                a.schema_id == b.schema_id && a.name == b.name
+            })?,
+            roles: TableTransaction::new(roles, |a: &RoleValue, b| a.role.name == b.role.name)?,
+            clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
+            cluster_replicas: TableTransaction::new(
+                cluster_replicas,
+                |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
+            )?,
+            introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
+            id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
+            configs: TableTransaction::new(configs, |_a, _b| false)?,
+            settings: TableTransaction::new(settings, |_a, _b| false)?,
+            timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
+            system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
+            system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
+            default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
+            system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
+            audit_log_updates: Vec::new(),
+            storage_usage_updates: Vec::new(),
+        })
+    }
+
     pub(crate) fn loaded_items(&self) -> Vec<Item> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
@@ -1200,6 +1123,83 @@ impl<'a> Transaction<'a> {
                 cluster.name.to_string(),
             )));
         };
+        Ok(())
+    }
+
+    fn add_new_builtin_clusters_migration(&mut self) -> Result<(), Error> {
+        let cluster_names: BTreeSet<_> = self
+            .clusters
+            .items()
+            .into_values()
+            .map(|value| value.name)
+            .collect();
+
+        for builtin_cluster in &*BUILTIN_CLUSTERS {
+            assert!(
+                is_reserved_name(builtin_cluster.name),
+                "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+            if !cluster_names.contains(builtin_cluster.name) {
+                let id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
+                let id = ClusterId::System(id);
+                self.insert_system_cluster(
+                    id,
+                    builtin_cluster.name,
+                    &vec![],
+                    builtin_cluster.privileges.clone(),
+                    ClusterConfig {
+                        // TODO: Should builtin clusters be managed or unmanaged?
+                        variant: ClusterVariant::Unmanaged,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_new_builtin_cluster_replicas_migration(
+        &mut self,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<(), Error> {
+        let cluster_lookup: BTreeMap<_, _> = self
+            .clusters
+            .items()
+            .into_iter()
+            .map(|(key, value)| (value.name, key.id))
+            .collect();
+
+        let replicas: BTreeMap<_, _> =
+            self.cluster_replicas
+                .items()
+                .into_values()
+                .fold(BTreeMap::new(), |mut acc, value| {
+                    acc.entry(value.cluster_id)
+                        .or_insert_with(BTreeSet::new)
+                        .insert(value.name);
+                    acc
+                });
+
+        for builtin_replica in &*BUILTIN_CLUSTER_REPLICAS {
+            let cluster_id = cluster_lookup
+                .get(builtin_replica.cluster_name)
+                .expect("builtin cluster replica references non-existent cluster");
+
+            let replica_names = replicas.get(cluster_id);
+            if matches!(replica_names, None)
+                || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
+            {
+                let replica_id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
+                let config = builtin_cluster_replica_config(bootstrap_args);
+                self.insert_cluster_replica(
+                    *cluster_id,
+                    replica_id,
+                    builtin_replica.name,
+                    &config,
+                    MZ_SYSTEM_ROLE_ID,
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -2147,4 +2147,100 @@ mod test {
             prop_assert_eq!(value, round);
         }
     }
+}
+
+// TODO(jkosh44) Name??
+#[async_trait]
+pub(crate) trait DurableCoordState {
+    async fn connect(
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+        // TODO(jkosh44) Create some type of config object for these
+        stash_factory: StashFactory,
+        stash_url: String,
+    ) -> Result<Box<Self>, Error>;
+
+    async fn check_open(&self) -> Result<(), Error>;
+
+    async fn open(&mut self) -> Result<(), Error>;
+
+    async fn set_connect_timeout(&mut self, connect_timeout: Duration);
+
+    fn boot_ts(&self) -> mz_repr::Timestamp;
+
+    async fn fetch_and_prune_storage_usage(
+        &mut self,
+        retention_period: Option<Duration>,
+    ) -> Result<Vec<VersionedStorageUsage>, Error>;
+
+    async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error>;
+
+    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error>;
+
+    async fn get_databases(&mut self) -> Result<Vec<Database>, Error>;
+
+    async fn get_schemas(&mut self) -> Result<Vec<Schema>, Error>;
+
+    async fn get_roles(&mut self) -> Result<Vec<Role>, Error>;
+
+    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, Error>;
+
+    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error>;
+
+    async fn set_cluster_replicas(
+        &mut self,
+        replica_id: ReplicaId,
+        cluster_id: ClusterId,
+        name: String,
+        config: &ReplicaConfig,
+        owner_id: RoleId,
+    ) -> Result<(), Error>;
+
+    async fn get_audit_log(&mut self) -> Result<Vec<VersionedEvent>, Error>;
+
+    async fn get_system_gids(
+        &mut self,
+    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error>;
+
+    async fn set_system_gids(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error>;
+
+    async fn get_introspection_source_index_gids(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> Result<BTreeMap<String, GlobalId>, Error>;
+
+    async fn set_introspection_source_index_gids(
+        &mut self,
+        mappings: Vec<(ClusterId, &str, GlobalId)>,
+    ) -> Result<(), Error>;
+
+    async fn get_default_privileges(
+        &mut self,
+    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error>;
+
+    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error>;
+
+    async fn get_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error>;
+
+    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error>;
+
+    async fn set_timestamps(
+        &mut self,
+        timestamps: Vec<(Timeline, mz_repr::Timestamp)>,
+    ) -> Result<(), Error>;
+
+    async fn get_deploy_generation(&mut self) -> Result<u64, Error>;
+
+    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error>;
+
+    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error>;
+
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error>;
+
+    async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error>;
+
+    async fn commit_transaction(&mut self, tx: Transaction) -> Result<(), Error>;
+
+    async fn confirm_leadership(&mut self) -> Result<(), Error>;
 }
