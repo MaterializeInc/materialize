@@ -4932,6 +4932,7 @@ dependencies = [
  "mz-repr",
  "mz-rocksdb-types",
  "mz-secrets",
+ "mz-sql-lexer",
  "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
