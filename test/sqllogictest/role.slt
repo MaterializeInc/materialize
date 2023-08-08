@@ -15,8 +15,8 @@ reset-server
 query TTB rowsort
 SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%'
 ----
-s1 mz_system true
-s2 mz_introspection true
+s1  mz_system  true
+s2  mz_support  true
 
 query TB
 SELECT name, inherit FROM mz_roles WHERE id LIKE 'u%'
@@ -60,10 +60,10 @@ CREATE USER fms
 query TB rowsort
 SELECT name, inherit FROM mz_roles
 ----
-rj  true
-mz_system  true
 materialize  true
-mz_introspection  true
+mz_support  true
+mz_system  true
+rj  true
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
@@ -73,10 +73,10 @@ DROP ROLE rj, bad
 query T rowsort
 SELECT name FROM mz_roles
 ----
-rj
-mz_system
 materialize
-mz_introspection
+mz_support
+mz_system
+rj
 
 # ...unless IF EXISTS is specified.
 statement ok
@@ -85,9 +85,9 @@ DROP ROLE IF EXISTS rj, bad
 query T rowsort
 SELECT name FROM mz_roles
 ----
-mz_system
 materialize
-mz_introspection
+mz_support
+mz_system
 
 # Verify that the single name version of DROP ROLE works too.
 statement ok
@@ -96,10 +96,10 @@ CREATE ROLE nlb
 query T rowsort
 SELECT name FROM mz_roles
 ----
-nlb
-mz_system
 materialize
-mz_introspection
+mz_support
+mz_system
+nlb
 
 statement ok
 DROP ROLE nlb
@@ -108,8 +108,8 @@ query T
 SELECT name FROM mz_roles
 ----
 mz_system
+mz_support
 materialize
-mz_introspection
 
 statement ok
 DROP ROLE IF EXISTS nlb
