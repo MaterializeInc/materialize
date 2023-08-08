@@ -31,9 +31,7 @@ from kubernetes.config import new_client_from_config  # type: ignore
 from pg8000 import Connection, Cursor
 
 from materialize import ROOT, mzbuild, ui
-from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
-
-DEFAULT_K8S_NAMESPACE = "default"
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
 
 
 class K8sResource:
