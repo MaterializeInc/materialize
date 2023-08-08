@@ -52,7 +52,7 @@ SELECT name FROM mz_roles;
 ```nofmt
  db_reader
  mz_system
- mz_introspection
+ mz_support
 ```
 
 ## Privileges
