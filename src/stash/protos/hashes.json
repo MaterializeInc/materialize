@@ -69,6 +69,10 @@
   },
   {
     "name": "objects_v31.proto",
-    "md5": "34baa16c7f580d9332f1959ad94ecf9f"
+    "md5": "e78e005dc9ddef0dd00cd5a580d222c6"
+  },
+  {
+    "name": "objects_v32.proto",
+    "md5": "c1b9e15840cc3f0733009207bc78103e"
   }
 ]
