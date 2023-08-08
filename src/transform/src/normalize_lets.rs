@@ -709,6 +709,11 @@ mod inlining {
                             &expr
                         };
                         match stripped_value {
+                            // One could imagine CSEing multiple occurrences of a global Get to make
+                            // us read from Persist only once. However, it's currently important
+                            // that we don't try to CSE a global Get to be behind local Gets:
+                            // `optimize_dataflow_index_imports` relies on this when collecting
+                            // ArrangeBys on top of global Gets by not looking behind a local Get.
                             MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                             _ => false,
                         }
