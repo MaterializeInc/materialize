@@ -61,7 +61,7 @@ materialize  mz_system=UC/mz_system
 materialize  materialize=UC/mz_system
 materialize  mz_support=U/mz_system
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges ORDER BY name, privilege
 ----
 information_schema  =U/mz_system
@@ -81,7 +81,7 @@ public              mz_system=UC/mz_system
 public              materialize=UC/mz_system
 public              mz_support=U/mz_system
 
-query TT
+query TT rowsort
 SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
 default           =U/mz_system
@@ -201,7 +201,7 @@ SELECT * FROM database_privileges WHERE name = 'd'
 d  materialize=UC/materialize
 d  mz_support=U/materialize
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY name, privilege
 ----
 public  =U/mz_system

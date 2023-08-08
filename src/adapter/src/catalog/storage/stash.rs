@@ -211,7 +211,7 @@ pub async fn initialize(
         .await?;
 
     let default_privileges = vec![
-        // mz_introspection needs USAGE privileges on all clusters, databases, and schemas for
+        // mz_support needs USAGE privileges on all clusters, databases, and schemas for
         // debugging.
         (
             DefaultPrivilegesKey {
