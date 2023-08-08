@@ -388,6 +388,12 @@ where
                                         if let Some(storage_dataflow_max_inflight_bytes) =
                                             backpressure_max_inflight_bytes
                                         {
+                                            tracing::info!(
+                                                ?backpressure_max_inflight_bytes,
+                                                "timely-{} using backpressure in upsert for source {}",
+                                                base_source_config.worker_id,
+                                                id
+                                            );
                                             if !storage_state
                                                 .dataflow_parameters
                                                 .storage_dataflow_max_inflight_bytes_config
