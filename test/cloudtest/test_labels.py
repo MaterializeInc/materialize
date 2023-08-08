@@ -31,6 +31,7 @@ def test_roles(mz: MaterializeApplication) -> None:
     )
     n_replica_pods = 0
     for (name, role) in names_roles:
+        print(f"saw {name=} and {role=}")
         if name.startswith("cluster-s1"):
             assert role == "system-critical"
             n_replica_pods += 1
