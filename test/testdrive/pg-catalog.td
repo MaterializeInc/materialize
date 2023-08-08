@@ -48,6 +48,7 @@ name         nullable  type
  datdba         false     oid
  encoding       false     integer
  datistemplate  false     boolean
+ datallowconn   false     boolean
  datcollate     false     text
  datctype       false     text
  datacl         true      text[]

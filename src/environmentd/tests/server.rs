@@ -2141,6 +2141,7 @@ fn webhook_concurrent_actions() {
     }
 
     // Create a webhook source.
+    let src_name = "webhook_json";
     client
         .execute(
             "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
@@ -2149,7 +2150,7 @@ fn webhook_concurrent_actions() {
         .expect("failed to create cluster");
     client
         .execute(
-            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON",
+            &format!("CREATE SOURCE {src_name} IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON"),
             &[],
         )
         .expect("failed to create source");
@@ -2164,12 +2165,12 @@ fn webhook_concurrent_actions() {
     // Flag that lets us shutdown our threads.
     let keep_sending = Arc::new(AtomicBool::new(true));
     // Track how many requests were resolved before we dropped the collection.
-    let expected_success = Arc::new(AtomicUsize::new(0));
+    let num_requests_before_drop = Arc::new(AtomicUsize::new(0));
 
     // Spin up a thread that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
     let runtime_handle = Arc::clone(&server.runtime);
-    let expected_success_ = Arc::clone(&expected_success);
+    let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
     let addr = server.inner.http_local_addr();
 
     let poster = std::thread::spawn(move || {
@@ -2186,7 +2187,7 @@ fn webhook_concurrent_actions() {
             );
 
             let http_client_ = http_client.clone();
-            let expected_success__ = Arc::clone(&expected_success_);
+            let num_requests_before_drop__ = Arc::clone(&num_requests_before_drop_);
             let handle =
                 runtime_handle.spawn_named(|| "webhook_concurrent_actions-appender", async move {
                     // Create an event.
@@ -2203,7 +2204,7 @@ fn webhook_concurrent_actions() {
                         .send()
                         .await
                         .expect("failed to POST event");
-                    expected_success__.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    num_requests_before_drop__.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                     resp
                 });
@@ -2223,10 +2224,11 @@ fn webhook_concurrent_actions() {
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     // We should see at least this many successes.
-    let expected_success = expected_success.load(std::sync::atomic::Ordering::Relaxed);
+    let num_requests_before_drop =
+        num_requests_before_drop.load(std::sync::atomic::Ordering::Relaxed);
     // Drop the source
     client
-        .execute("DROP SOURCE webhook_json;", &[])
+        .execute(&format!("DROP SOURCE {src_name};"), &[])
         .expect("failed to drop source");
 
     // Keep sending for a bit.
@@ -2240,21 +2242,40 @@ fn webhook_concurrent_actions() {
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .expect("no join failures")
-        .into_iter()
-        .map(|r| r.status());
+        .into_iter();
 
-    // We should see at least "expected_success" number of successes, because this was the total
-    // count before we dropped the source.
-    for _ in 0..expected_success {
-        let status = results.next().expect("element");
-        // Note it's possible we get rate limited as we append so we allow that here.
+    for _ in 0..num_requests_before_drop {
+        let response = results.next().expect("element");
+        let status = response.status();
+
+        // We expect the following response codes:
+        //
+        // 1. 200 - Successfully append data.
+        // 2. 429 - Rate limited.
+        // 3. 404 - Collection not found. Due to the artificial latency we add to appending, we
+        //    could send a request, it gets queued, we drop the source, pull all requests from the
+        //    queue, find our source is missing. This should cause a 404 Not Found, not a 500.
+        //
         assert!(
-            status.is_success() || status == StatusCode::TOO_MANY_REQUESTS,
-            "status: {status:?}"
+            status.is_success()
+                || status == StatusCode::TOO_MANY_REQUESTS
+                || status == StatusCode::NOT_FOUND,
+            "response: {response:?}"
         )
     }
-    // We should have seen at least 100 successes.
-    assert!(expected_success > 100);
+    // We should have seen at least 100 requests before dropping the source.
+    assert!(num_requests_before_drop > 100);
+
+    // Make sure the source got dropped.
+    //
+    // Note: this doubles as a check to make sure nothing internally panicked.
+    let sources: Vec<String> = client
+        .query("SELECT name FROM mz_sources", &[])
+        .expect("success")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(!sources.iter().any(|name| name == src_name));
 
     // Best effort cleanup.
     let _ = client.execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[]);
@@ -2336,4 +2357,54 @@ fn webhook_concurrency_limit() {
     // We send 5 more requests than our limit, but we assert only at least 3 get
     // rate limited to reduce test flakiness.
     assert!(rate_limited >= 3);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_too_large_request() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_bytes",
+        server.inner.http_local_addr(),
+    );
+
+    // Send an event with a body larger that is exactly our max size.
+    let two_mb = usize::cast_from(bytesize::mb(2u64));
+    let body = vec![42u8; two_mb];
+    let resp = http_client
+        .post(&webhook_url)
+        .body(body)
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+
+    // Send an event that is one larger than our max size.
+    let body = vec![42u8; two_mb + 1];
+    let resp = http_client
+        .post(&webhook_url)
+        .body(body)
+        .send()
+        .expect("failed to POST event");
+
+    // Note: If this changes then we need to update our docs.
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

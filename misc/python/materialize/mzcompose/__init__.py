@@ -137,6 +137,15 @@ class Composition:
             {
                 "mzdata": None,
                 "pgdata": None,
+                # Used for certain pg-cdc scenarios. The memory will not be
+                # allocated for compositions that do not require this volume.
+                "pgdata_512Mb": {
+                    "driver_opts": {
+                        "device": "tmpfs",
+                        "type": "tmpfs",
+                        "o": "size=512m",
+                    }
+                },
                 "mydata": None,
                 "tmp": None,
                 "secrets": None,

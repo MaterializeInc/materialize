@@ -918,10 +918,9 @@ impl<'a> RunnerInner<'a> {
             });
             client
                 .batch_execute(
-                    "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
-                     DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
+                    "DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
-                     CREATE SCHEMA sqllogictest_consensus;
+                     CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
                 )
@@ -970,7 +969,10 @@ impl<'a> RunnerInner<'a> {
                 clusterd_image: "clusterd".into(),
                 init_container_image: None,
                 persist_location: PersistLocation {
-                    blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                    blob_uri: format!(
+                        "file://{}/persist/blob",
+                        config.persist_dir.path().display()
+                    ),
                     consensus_uri,
                 },
                 persist_clients,
@@ -1695,6 +1697,11 @@ pub struct RunConfig<'a> {
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Persist state is handled specially because:
+    /// - Persist background workers do not necessarily shut down immediately once the server is
+    ///   shut down, and may panic if their storage is delete out from under them.
+    /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
+    pub persist_dir: TempDir,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

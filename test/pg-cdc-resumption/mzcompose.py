@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
+
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Postgres, Testdrive, Toxiproxy
 
@@ -24,6 +26,14 @@ def workflow_default(c: Composition) -> None:
     """
 
     # TODO: most of these should likely be converted to cluster tests
+
+    for scenario in [pg_out_of_disk_space]:
+        with (c.override(Postgres(volumes=["pgdata_512Mb:/var/lib/postgresql/data"]))):
+            print(f"--- Running scenario {scenario.__name__} with limited disk")
+            initialize(c)
+            scenario(c)
+            end(c)
+
     for scenario in [
         disconnect_pg_during_snapshot,
         disconnect_pg_during_replication,
@@ -64,8 +74,8 @@ def restart_mz(c: Composition) -> None:
 
 
 def end(c: Composition) -> None:
-    """Validate the data at the end and reset Toxiproxy"""
-    c.run("testdrive", "verify-data.td", "toxiproxy-remove.td")
+    """Validate the data at the end."""
+    c.run("testdrive", "verify-data.td")
 
 
 def disconnect_pg_during_snapshot(c: Composition) -> None:
@@ -168,3 +178,24 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
         "alter-table.td",
         "alter-mz.td",
     )
+
+
+def pg_out_of_disk_space(c: Composition) -> None:
+    c.run(
+        "testdrive",
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    fill_file = "/var/lib/postgresql/data/fill_file"
+    c.exec(
+        "postgres",
+        "bash",
+        "-c",
+        f"dd if=/dev/zero of={fill_file} bs=1024 count=$[1024*512] || true",
+    )
+    print("Sleeping for 30 seconds ...")
+    time.sleep(30)
+    c.exec("postgres", "bash", "-c", f"rm {fill_file}")
+
+    c.run("testdrive", "delete-rows-t2.td", "alter-table.td", "alter-mz.td")
