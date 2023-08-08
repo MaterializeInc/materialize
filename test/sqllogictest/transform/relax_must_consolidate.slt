@@ -13,11 +13,6 @@
 # PR https://github.com/MaterializeInc/materialize/pull/19680
 #
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t (a int, b int);
 

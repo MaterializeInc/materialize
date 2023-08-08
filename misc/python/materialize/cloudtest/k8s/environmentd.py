@@ -112,11 +112,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             # TODO: these should be the same as in mzcompose
             V1EnvVar(
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value="enable_envelope_upsert_in_subscribe=true",
-            ),
-            V1EnvVar(
-                name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value="enable_disk_cluster_replicas=true",
+                value=(
+                    "enable_envelope_upsert_in_subscribe=true;"
+                    "enable_disk_cluster_replicas=true;"
+                    "enable_with_mutually_recursive=true"
+                ),
             ),
         ]
 
