@@ -431,7 +431,7 @@ Explained Query:
         arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
 
 Used Indexes:
-  - materialize.public.t_idx
+  - materialize.public.t_idx (differential join, differential join)
 
 EOF
 

@@ -159,8 +159,8 @@ Explained Query:
           Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.bar_idx (differential join)
 
 EOF
 
@@ -207,9 +207,9 @@ Explained Query:
           Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx
-  - materialize.public.baz_idx
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.bar_idx (differential join)
+  - materialize.public.baz_idx (differential join)
 
 EOF
 
@@ -248,8 +248,8 @@ Explained Query:
           Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx2
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx2 (differential join)
+  - materialize.public.bar_idx2 (differential join)
 
 EOF
 
@@ -293,9 +293,9 @@ Explained Query:
           Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.baz_idx
-  - materialize.public.bar_idx3
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.baz_idx (differential join)
+  - materialize.public.bar_idx3 (differential join)
 
 EOF
 
@@ -328,8 +328,8 @@ Explained Query:
         Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx (*** full scan ***)
+  - materialize.public.bar_idx2 (*** full scan ***)
 
 EOF
 
@@ -359,8 +359,8 @@ Explained Query:
         Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx (*** full scan ***)
+  - materialize.public.bar_idx2 (*** full scan ***)
 
 EOF
 
@@ -404,8 +404,8 @@ Source materialize.public.baz
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.bar_idx2 (*** full scan ***)
 
 EOF
 
@@ -636,17 +636,17 @@ Explained Query:
           Get materialize.public.big // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a
-  - materialize.public.big_idx_b
-  - materialize.public.big_idx_c
-  - materialize.public.big_idx_d
-  - materialize.public.big_idx_e
-  - materialize.public.big_idx_f
-  - materialize.public.big_idx_g
-  - materialize.public.big_idx_h
-  - materialize.public.big_idx_i
-  - materialize.public.big_idx_j
-  - materialize.public.big_idx_k
+  - materialize.public.big_idx_a (delta join 1st input)
+  - materialize.public.big_idx_b (delta join)
+  - materialize.public.big_idx_c (delta join)
+  - materialize.public.big_idx_d (delta join)
+  - materialize.public.big_idx_e (delta join)
+  - materialize.public.big_idx_f (delta join)
+  - materialize.public.big_idx_g (delta join)
+  - materialize.public.big_idx_h (delta join)
+  - materialize.public.big_idx_i (delta join)
+  - materialize.public.big_idx_j (delta join)
+  - materialize.public.big_idx_k (delta join)
 
 EOF
 
@@ -678,9 +678,9 @@ Explained Query:
           Get materialize.public.big // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a
-  - materialize.public.big_idx_c
-  - materialize.public.big_idx_y
+  - materialize.public.big_idx_a (delta join 1st input)
+  - materialize.public.big_idx_c (delta join)
+  - materialize.public.big_idx_y (lookup)
 
 EOF
 
@@ -727,6 +727,6 @@ Explained Query:
       ReadExistingIndex materialize.public.big lookup_value=(5) // { arity: 15 }
 
 Used Indexes:
-  - materialize.public.big_idx_a
+  - materialize.public.big_idx_a (lookup)
 
 EOF

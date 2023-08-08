@@ -329,8 +329,8 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t1_f1_ind
-  - materialize.public.t2_f1_ind
+  - materialize.public.t1_f1_ind (differential join)
+  - materialize.public.t2_f1_ind (differential join)
 
 EOF
 
@@ -390,8 +390,8 @@ Source mz_catalog.mz_materialized_views
   filter=(true)
 
 Used Indexes:
-  - mz_internal.mz_show_schemas_ind
-  - mz_internal.mz_show_views_ind
+  - mz_internal.mz_show_schemas_ind (*** full scan ***)
+  - mz_internal.mz_show_views_ind (*** full scan ***)
 
 EOF
 

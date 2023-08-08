@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use mz_ore::str::{Indent, IndentLike};
+use mz_ore::str::{separated, Indent, IndentLike};
 
 use crate::explain::{
     CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes,
@@ -71,12 +71,18 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
         *ctx.as_mut() += 1;
-        for id in &self.0 {
+        for (id, usage_types) in &self.0 {
             let index_name = ctx
                 .as_ref()
                 .humanize_id(*id)
                 .unwrap_or_else(|| id.to_string());
-            writeln!(f, "{}- {}", ctx.as_mut(), index_name)?;
+            writeln!(
+                f,
+                "{}- {} ({})",
+                ctx.as_mut(),
+                index_name,
+                separated(", ", usage_types)
+            )?;
         }
         *ctx.as_mut() -= 1;
         Ok(())

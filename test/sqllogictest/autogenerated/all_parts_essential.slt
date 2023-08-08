@@ -204,8 +204,8 @@ Explained Query:
           Get materialize.public.orders // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_orders_orderkey (differential join)
+  - materialize.public.fk_lineitem_orderkey (differential join)
 
 EOF
 
@@ -253,10 +253,10 @@ Explained Query:
           Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join 1st input)
 
 EOF
 
@@ -314,10 +314,10 @@ Explained Query:
               Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join 1st input)
 
 EOF
 
@@ -374,9 +374,9 @@ Explained Query:
             Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_customer_custkey (differential join)
+  - materialize.public.fk_orders_custkey (differential join)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -442,8 +442,8 @@ Explained Query:
               Get materialize.public.orders // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -489,9 +489,9 @@ Explained Query:
               Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (differential join)
+  - materialize.public.fk_lineitem_orderkey (differential join)
 
 EOF
 
@@ -540,10 +540,10 @@ Explained Query:
             Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join 1st input)
 
 EOF
 
@@ -597,9 +597,9 @@ Explained Query:
               Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_customer_custkey (differential join)
+  - materialize.public.fk_orders_custkey (differential join)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -648,10 +648,10 @@ Explained Query:
             Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join 1st input)
 
 EOF
 
@@ -699,8 +699,8 @@ Explained Query:
               Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (differential join)
+  - materialize.public.fk_lineitem_orderkey (differential join)
 
 EOF
