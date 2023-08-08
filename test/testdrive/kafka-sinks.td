@@ -286,9 +286,9 @@ $ kafka-create-topic topic=snk15 partitions=4
 > SHOW SINKS
 name               type   size  cluster
 ---------------------------------------
-snk1               kafka  ${arg.default-storage-size}  cluster
-snk2               kafka  ${arg.default-storage-size}  cluster
-snk3               kafka  ${arg.default-storage-size}  cluster
+snk1               kafka  ${arg.default-storage-size}  materialize_public_snk1
+snk2               kafka  ${arg.default-storage-size}  materialize_public_snk2
+snk3               kafka  ${arg.default-storage-size}  materialize_public_snk3
 snk4               kafka  ${arg.default-storage-size}  cluster
 snk5               kafka  ${arg.default-storage-size}  cluster
 snk6               kafka  ${arg.default-storage-size}  cluster
