@@ -83,3 +83,10 @@ class K8sResource:
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]
             return rimage.spec()
+
+    def wait(
+        self,
+        condition: str,
+        resource: str,
+    ) -> None:
+        wait(condition=condition, resource=resource, namespace=self.selected_namespace)

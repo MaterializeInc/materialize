@@ -15,7 +15,6 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
-from materialize.cloudtest.util.wait import wait
 
 
 class Testdrive(K8sPod):
@@ -63,7 +62,7 @@ class Testdrive(K8sPod):
         kafka_addr: str = "redpanda:9092",
         schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
-        wait(condition="condition=Ready", resource="pod/testdrive")
+        self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
             "exec",
             "-it",

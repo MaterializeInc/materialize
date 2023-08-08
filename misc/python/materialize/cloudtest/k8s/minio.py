@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
-from materialize.cloudtest.util.wait import wait
 
 
 class Minio(K8sResource):
@@ -32,7 +31,7 @@ class Minio(K8sResource):
                 f"https://raw.githubusercontent.com/kubernetes/examples/master/staging/storage/minio/{yaml}.yaml",
             )
 
-        wait(
+        self.wait(
             resource="deployment.apps/minio-deployment",
             condition="condition=Available=True",
         )
@@ -58,7 +57,7 @@ class Minio(K8sResource):
             ),
         )
 
-        wait(
+        self.wait(
             resource="pod/minio",
             condition="jsonpath={.status.containerStatuses[0].state.terminated.reason}=Completed",
         )
