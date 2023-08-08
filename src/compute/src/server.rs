@@ -35,6 +35,8 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
+use tracing::trace;
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
@@ -77,9 +79,43 @@ pub fn serve(
     Ok((timely_container, client_builder))
 }
 
-type CommandReceiver = crossbeam_channel::Receiver<ComputeCommand>;
-type ResponseSender = mpsc::UnboundedSender<ComputeResponse>;
 type ActivatorSender = crossbeam_channel::Sender<SyncActivator>;
+
+/// Endpoint used by workers to receive compute commands.
+struct CommandReceiver {
+    inner: crossbeam_channel::Receiver<ComputeCommand>,
+    worker_id: usize,
+}
+
+impl CommandReceiver {
+    fn new(inner: crossbeam_channel::Receiver<ComputeCommand>, worker_id: usize) -> Self {
+        Self { inner, worker_id }
+    }
+
+    fn try_recv(&self) -> Result<ComputeCommand, TryRecvError> {
+        self.inner.try_recv().map(|cmd| {
+            trace!(worker = ?self.worker_id, command = ?cmd, "received command");
+            cmd
+        })
+    }
+}
+
+/// Endpoint used by workers to send sending compute responses.
+pub(crate) struct ResponseSender {
+    inner: mpsc::UnboundedSender<ComputeResponse>,
+    worker_id: usize,
+}
+
+impl ResponseSender {
+    fn new(inner: mpsc::UnboundedSender<ComputeResponse>, worker_id: usize) -> Self {
+        Self { inner, worker_id }
+    }
+
+    pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
+        trace!(worker = ?self.worker_id, response = ?response, "sending response");
+        self.inner.send(response)
+    }
+}
 
 struct CommandReceiverQueue {
     queue: Rc<RefCell<VecDeque<Result<ComputeCommand, TryRecvError>>>>,
@@ -101,15 +137,10 @@ impl CommandReceiverQueue {
         while self.is_empty() {
             worker.timely_worker.step_or_park(None);
         }
-        match self
-            .queue
-            .borrow_mut()
-            .pop_front()
-            .expect("Must contain element")
-        {
+        match self.try_recv() {
             Ok(cmd) => Ok(cmd),
             Err(TryRecvError::Disconnected) => Err(RecvError),
-            Err(TryRecvError::Empty) => panic!("Must not be empty"),
+            Err(TryRecvError::Empty) => unreachable!("checked above"),
         }
     }
 
@@ -127,7 +158,11 @@ struct Worker<'w, A: Allocate> {
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender, ActivatorSender)>,
+    client_rx: crossbeam_channel::Receiver<(
+        crossbeam_channel::Receiver<ComputeCommand>,
+        mpsc::UnboundedSender<ComputeResponse>,
+        ActivatorSender,
+    )>,
     compute_state: Option<ComputeState>,
     /// Compute metrics.
     metrics: ComputeMetrics,
@@ -227,20 +262,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     fn setup_channel_and_run_client(
         &mut self,
-        command_rx: CommandReceiver,
-        response_tx: ResponseSender,
+        command_rx: crossbeam_channel::Receiver<ComputeCommand>,
+        response_tx: mpsc::UnboundedSender<ComputeResponse>,
         activator_tx: ActivatorSender,
     ) {
         let cmd_queue = Rc::new(RefCell::new(
             VecDeque::<Result<ComputeCommand, TryRecvError>>::new(),
         ));
         let peers = self.timely_worker.peers();
-        let idx = self.timely_worker.index();
+        let worker_id = self.timely_worker.index();
 
-        {
+        let command_rx = CommandReceiver::new(command_rx, worker_id);
+        let response_tx = ResponseSender::new(response_tx, worker_id);
+
+        self.timely_worker.dataflow::<u64, _, _>({
             let cmd_queue = Rc::clone(&cmd_queue);
 
-            self.timely_worker.dataflow::<u64, _, _>(move |scope| {
+            move |scope| {
                 source(scope, "CmdSource", |capability, info| {
                     // Send activator for this operator back
                     let activator = scope.sync_activator_for(&info.address[..]);
@@ -250,7 +288,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     let mut cap_opt = Some(capability);
                     // Drop capability if we are not the leader, as our queue will
                     // be empty and we will never use nor importantly downgrade it.
-                    if idx != 0 {
+                    if worker_id != 0 {
                         cap_opt = None;
                     }
 
@@ -266,7 +304,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                         // Commands must never be sent to another worker. This
                                         // implementation does not guarantee an ordering of events
                                         // sent to different workers.
-                                        assert_eq!(idx, 0);
+                                        assert_eq!(worker_id, 0);
                                         session.give_iterator(
                                             Self::split_command(cmd, peers).into_iter().enumerate(),
                                         );
@@ -307,8 +345,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     },
                 );
-            });
-        }
+            }
+        });
 
         self.run_client(
             CommandReceiverQueue {
