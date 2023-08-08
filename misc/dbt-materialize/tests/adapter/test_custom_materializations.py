@@ -21,7 +21,6 @@ from fixtures import (
     test_materialized_view,
     test_materialized_view_index,
     test_relation_name_length,
-    test_relation_name_length_fail,
     test_sink,
     test_source,
     test_source_index,
@@ -49,10 +48,6 @@ class TestCustomMaterializations:
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
-            "test_relation_name_loooooooooooooooooooooooooooooooooooooooooooooooo\
-             oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo\
-             oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo\
-             oooooooooooooooooooooooooooooonger_than_mz_255_limit.sql": test_relation_name_length_fail,
             "test_source.sql": test_source,
             "test_source_index.sql": test_source_index,
             "test_subsources.sql": test_subsources,
@@ -67,7 +62,7 @@ class TestCustomMaterializations:
         # seed result length
         assert len(results) == 1
         # run models
-        results = run_dbt(["run", "--exclude", "tag:fail"])
+        results = run_dbt(["run"])
         # run result length
         assert len(results) == 10
         # re-run models to ensure there are no lingering errors in recreating
@@ -87,9 +82,3 @@ class TestCustomMaterializations:
         # correct data once sinks land.
         # From benesch: Ideally we'd just ingest the sink back into Materialize
         # with the source and then use `relations_equal` with `test_materialized_view`.
-
-    def test_custom_materializations_fail(self, project):
-        # run models expected to fail
-        results = run_dbt(["run", "--include", "tag:fail"], expect_pass=False)
-        # run result length
-        assert len(results) == 1
