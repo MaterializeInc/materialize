@@ -46,6 +46,8 @@ pub struct StorageParameters {
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
     /// gRPC client parameters.
     pub grpc_client: GrpcClientParameters,
+    /// Configuration for basic hydration backpressure.
+    pub delay_sources_past_rehydration: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -127,6 +129,7 @@ impl StorageParameters {
             upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
             grpc_client,
+            delay_sources_past_rehydration,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -141,6 +144,7 @@ impl StorageParameters {
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.grpc_client.update(grpc_client);
+        self.delay_sources_past_rehydration = delay_sources_past_rehydration;
     }
 }
 
@@ -163,6 +167,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.storage_dataflow_max_inflight_bytes_config.into_proto(),
             ),
             grpc_client: Some(self.grpc_client.into_proto()),
+            storage_dataflow_delay_sources_past_rehydration: self.delay_sources_past_rehydration,
         }
     }
 
@@ -198,6 +203,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             grpc_client: proto
                 .grpc_client
                 .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
+            delay_sources_past_rehydration: proto.storage_dataflow_delay_sources_past_rehydration,
         })
     }
 }

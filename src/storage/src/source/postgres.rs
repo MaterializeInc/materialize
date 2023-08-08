@@ -123,6 +123,7 @@ impl SourceRender for PostgresSourceConnection {
         config: RawSourceCreationConfig,
         context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,

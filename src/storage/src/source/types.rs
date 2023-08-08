@@ -73,6 +73,7 @@ pub trait SourceRender {
         config: RawSourceCreationConfig,
         connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<
             G,
