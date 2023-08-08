@@ -610,7 +610,8 @@ SELECT
 FROM
     mz_catalog.mz_clusters mc
         JOIN mz_catalog.mz_cluster_replicas mcr ON mc.id = mcr.cluster_id
-GROUP BY mc.name".to_string();
+GROUP BY mc.name"
+        .to_string();
     ShowSelect::new(scx, query, filter, None, Some(&["name", "replicas"]))
 }
 
