@@ -155,7 +155,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
-    storage: Arc<tokio::sync::Mutex<storage::Connection>>,
+    storage: Arc<tokio::sync::Mutex<Box<dyn storage::DurableCoordState>>>,
     transient_revision: u64,
 }
 
@@ -3260,7 +3260,7 @@ impl Catalog {
 
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
-        let databases = catalog.storage().await.load_databases().await?;
+        let databases = catalog.storage().await.get_databases().await?;
         for storage::Database {
             id,
             name,
@@ -3287,7 +3287,7 @@ impl Catalog {
                 .insert(name.clone(), id.clone());
         }
 
-        let schemas = catalog.storage().await.load_schemas().await?;
+        let schemas = catalog.storage().await.get_schemas().await?;
         for storage::Schema {
             id,
             name,
@@ -3334,7 +3334,7 @@ impl Catalog {
             schemas_by_name.insert(name.clone(), id);
         }
 
-        let roles = catalog.storage().await.load_roles().await?;
+        let roles = catalog.storage().await.get_roles().await?;
         for storage::Role {
             id,
             name,
@@ -3356,7 +3356,7 @@ impl Catalog {
             );
         }
 
-        let default_privileges = catalog.storage().await.load_default_privileges().await?;
+        let default_privileges = catalog.storage().await.get_default_privileges().await?;
         for (default_privilege_object, default_privilege) in default_privileges {
             catalog
                 .state
@@ -3364,7 +3364,7 @@ impl Catalog {
                 .grant(default_privilege_object, default_privilege);
         }
 
-        let system_privileges = catalog.storage().await.load_system_privileges().await?;
+        let system_privileges = catalog.storage().await.get_system_privileges().await?;
         catalog.state.system_privileges.grant_all(system_privileges);
 
         catalog
@@ -3384,7 +3384,7 @@ impl Catalog {
 
         catalog.load_builtin_types().await?;
 
-        let persisted_builtin_ids = catalog.storage().await.load_system_gids().await?;
+        let persisted_builtin_ids = catalog.storage().await.get_system_gids().await?;
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
@@ -3572,7 +3572,7 @@ impl Catalog {
             }
         }
 
-        let clusters = catalog.storage().await.load_clusters().await?;
+        let clusters = catalog.storage().await.get_clusters().await?;
         for storage::Cluster {
             id,
             name,
@@ -3585,7 +3585,7 @@ impl Catalog {
             let introspection_source_index_gids = catalog
                 .storage()
                 .await
-                .load_introspection_source_index_gids(id)
+                .get_introspection_source_index_gids(id)
                 .await?;
 
             let AllocatedBuiltinSystemIds {
@@ -3624,7 +3624,7 @@ impl Catalog {
             );
         }
 
-        let replicas = catalog.storage().await.load_cluster_replicas().await?;
+        let replicas = catalog.storage().await.get_cluster_replicas().await?;
         for storage::ClusterReplica {
             cluster_id,
             replica_id,
@@ -3650,7 +3650,7 @@ impl Catalog {
             catalog
                 .storage()
                 .await
-                .set_replica_config(replica_id, cluster_id, name.clone(), &config, owner_id)
+                .set_cluster_replicas(replica_id, cluster_id, name.clone(), &config, owner_id)
                 .await?;
 
             catalog
@@ -3725,7 +3725,7 @@ impl Catalog {
         catalog
             .storage()
             .await
-            .set_system_object_mapping(new_system_id_mappings)
+            .set_system_gids(new_system_id_mappings)
             .await?;
 
         let last_seen_version = catalog
@@ -3756,7 +3756,7 @@ impl Catalog {
             let mut storage = catalog.storage().await;
             let mut tx = storage.transaction().await?;
             let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
-            tx.commit().await?;
+            storage.commit_transaction(tx).await?;
             catalog
         };
 
@@ -3881,7 +3881,7 @@ impl Catalog {
                 _ => unreachable!("all operators must be scalar functions"),
             }
         }
-        let audit_logs = catalog.storage().await.load_audit_log().await?;
+        let audit_logs = catalog.storage().await.get_audit_log().await?;
         for event in audit_logs {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
@@ -3935,7 +3935,7 @@ impl Catalog {
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
             let mut storage = self.storage().await;
-            let system_config = storage.load_system_configuration().await?;
+            let system_config = storage.get_system_configuration().await?;
             let boot_ts = storage.boot_ts();
             (system_config, boot_ts)
         };
@@ -4050,7 +4050,7 @@ impl Catalog {
     /// resolve all references.
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_builtin_types(&mut self) -> Result<(), Error> {
-        let persisted_builtin_ids = self.storage().await.load_system_gids().await?;
+        let persisted_builtin_ids = self.storage().await.get_system_gids().await?;
 
         let AllocatedBuiltinSystemIds {
             all_builtins,
@@ -4133,7 +4133,7 @@ impl Catalog {
             .collect();
         self.storage()
             .await
-            .set_system_object_mapping(new_system_id_mappings)
+            .set_system_gids(new_system_id_mappings)
             .await?;
 
         Ok(())
@@ -4456,7 +4456,7 @@ impl Catalog {
                 }),
         )?;
 
-        tx.commit().await?;
+        storage.commit_transaction(tx).await?;
 
         Ok(())
     }
@@ -4478,8 +4478,8 @@ impl Catalog {
     ///
     /// TODO(justin): it might be nice if these were two different types.
     #[tracing::instrument(level = "info", skip_all)]
-    pub fn load_catalog_items<'a>(
-        tx: &mut storage::Transaction<'a>,
+    pub fn load_catalog_items(
+        tx: &mut storage::Transaction,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
@@ -4647,18 +4647,8 @@ impl Catalog {
     /// Opens a debug catalog from a stash.
     pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(
-            stash,
-            now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
-                builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
-                bootstrap_role: None,
-            },
-            None,
-        )
-        .await?;
+        // TODO(jkosh44) Should not be ignoring the stash.
+        let storage = storage::debug_coord_state(now.clone()).await?;
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _, _) = Catalog::open(Config {
@@ -4743,7 +4733,7 @@ impl Catalog {
         Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, Box<dyn storage::DurableCoordState>> {
         self.storage.lock().await
     }
 
@@ -4830,7 +4820,7 @@ impl Catalog {
     pub async fn get_all_persisted_timestamps(
         &self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        self.storage().await.get_all_persisted_timestamps().await
+        self.storage().await.get_timestamps().await
     }
 
     /// Get the next user ID without allocating it.
@@ -4851,7 +4841,7 @@ impl Catalog {
     ) -> Result<(), Error> {
         self.storage()
             .await
-            .persist_timestamp(timeline, timestamp)
+            .set_timestamps(vec![(timeline.clone(), timestamp)])
             .await
     }
 
@@ -5382,7 +5372,8 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate stash state, which we only reconcile during catalog
         // init.
-        tx.commit()
+        storage
+            .commit_transaction(tx)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
@@ -5407,7 +5398,7 @@ impl Catalog {
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &mut CatalogState,
         // Provide all of the IDs that are being dropped in this transaction so we can provide
         // stronger invariants about when we change items' dependencies.

@@ -1078,6 +1078,14 @@ impl Stash {
         matches!(self.txn_mode, TransactionMode::Readonly)
     }
 
+    pub fn is_savepoint(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Savepoint)
+    }
+
+    pub fn is_writeable(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Writeable)
+    }
+
     pub fn epoch(&self) -> Option<NonZeroI64> {
         self.epoch
     }
@@ -1369,6 +1377,20 @@ impl DebugStashFactory {
         self.try_open_debug()
             .await
             .expect("unable to open debug stash")
+    }
+
+    // TODO(jkosh44) Get rid of theses
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn tls(&self) -> &MakeTlsConnector {
+        &self.tls
+    }
+
+    pub fn factory(&self) -> &StashFactory {
+        &self.stash_factory
     }
 }
 

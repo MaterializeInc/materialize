@@ -452,7 +452,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection,
+    pub storage: Box<dyn storage::DurableCoordState>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,

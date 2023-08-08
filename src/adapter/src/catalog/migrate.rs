@@ -22,13 +22,13 @@ use crate::catalog::storage::Transaction;
 use crate::catalog::{storage, Catalog, ConnCatalog, SerializedCatalogItem};
 
 async fn rewrite_items<F>(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     cat: Option<&ConnCatalog<'_>>,
     mut f: F,
 ) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
-        &'a mut Transaction<'_>,
+        &'a mut Transaction,
         &'a Option<&ConnCatalog<'_>>,
         &'a mut mz_sql::ast::Statement<Raw>,
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
@@ -87,7 +87,7 @@ pub(crate) async fn migrate(
     })
     .await?;
 
-    tx.commit().await?;
+    storage.commit_transaction(tx).await?;
     info!(
         "migration from catalog version {:?} complete",
         catalog_version

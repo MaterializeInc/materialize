@@ -32,7 +32,7 @@ use crate::config::SystemParameterSyncConfig;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: storage::Connection,
+    pub storage: Box<dyn storage::DurableCoordState>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.

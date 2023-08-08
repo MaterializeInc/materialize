@@ -99,6 +99,7 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
 use once_cell::sync::Lazy;
+use postgres_openssl::MakeTlsConnector;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -197,12 +198,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             cluster_replica_sizes,
         } => {
             // upgrade needs fake writes, so use a savepoint.
-            let stash = factory.open_savepoint(args.postgres_url, tls).await?;
             let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(stash, usage, cluster_replica_sizes).await
+            upgrade_check(
+                factory,
+                args.postgres_url,
+                tls,
+                usage,
+                cluster_replica_sizes,
+            )
+            .await
         }
     }
 }
@@ -235,11 +242,15 @@ async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<
     Ok(())
 }
 async fn upgrade_check(
-    stash: Stash,
+    stash_factory: StashFactory,
+    stash_url: String,
+    tls: MakeTlsConnector,
     usage: Usage,
     cluster_replica_sizes: ClusterReplicaSizeMap,
 ) -> Result<(), anyhow::Error> {
-    let msg = usage.upgrade_check(stash, cluster_replica_sizes).await?;
+    let msg = usage
+        .upgrade_check(stash_factory, stash_url, tls, cluster_replica_sizes)
+        .await?;
     println!("{msg}");
     Ok(())
 }
@@ -457,7 +468,9 @@ impl Usage {
 
     async fn upgrade_check(
         &self,
-        stash: Stash,
+        stash_factory: StashFactory,
+        stash_url: String,
+        tls: MakeTlsConnector,
         cluster_replica_sizes: ClusterReplicaSizeMap,
     ) -> Result<String, anyhow::Error> {
         if !matches!(self, Self::Catalog) {
@@ -466,18 +479,25 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let storage = mz_adapter::catalog::storage::Connection::open(
-            stash,
+        let mut storage = mz_adapter::catalog::storage::stash_backed_coord_state(
             now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
-                builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
-                bootstrap_role: None,
-            },
-            None,
+            stash_factory,
+            stash_url,
+            tls,
         )
         .await?;
+
+        storage
+            .check_open(
+                &BootstrapArgs {
+                    default_cluster_replica_size: "1".into(),
+                    builtin_cluster_replica_size: "1".into(),
+                    default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
+                    bootstrap_role: None,
+                },
+                None,
+            )
+            .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
 
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {

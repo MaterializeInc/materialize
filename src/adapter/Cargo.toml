@@ -52,6 +52,7 @@ mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-cloud-resources = { path = "../cloud-resources" }
 opentelemetry = { version = "0.19.0", features = ["rt-tokio", "trace"] }
+postgres-openssl = { version = "0.5.0" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}

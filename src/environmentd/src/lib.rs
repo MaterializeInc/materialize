@@ -90,7 +90,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_adapter::catalog::storage::{stash, BootstrapArgs};
+use mz_adapter::catalog::storage::{stash, BootstrapArgs, DurableCoordState};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_build_info::{build_info, BuildInfo};
@@ -360,50 +360,43 @@ impl Listeners {
             server::serve(internal_http_conns, internal_http_server)
         });
 
+        let mut adapter_storage = mz_adapter::catalog::storage::stash_backed_coord_state(
+            config.now.clone(),
+            config.controller.postgres_factory.clone(),
+            config.adapter_stash_url.clone(),
+            tls.clone(),
+        )
+        .await?;
+
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else { break 'leader_promotion };
             tracing::info!("Requested deploy generation {deploy_generation}");
-            let mut stash = match config
-                .controller
-                .postgres_factory
-                .open_savepoint(config.adapter_stash_url.clone(), tls.clone())
-                .await
-            {
-                Ok(stash) => stash,
-                Err(e) => {
-                    if e.can_recover_with_write_mode() {
-                        tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
-                        break 'leader_promotion;
-                    } else {
-                        return Err(e.into());
-                    }
-                }
-            };
+            if !adapter_storage.is_initialized().await? {
+                tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                break 'leader_promotion;
+            }
+            // TODO(jkosh44) name?
             // TODO: once all stashes have a deploy_generation, don't need to handle the Option
-            let stash_generation = stash
-                .with_transaction(move |tx| {
-                    Box::pin(async move { stash::deploy_generation(&tx).await })
-                })
-                .await?;
+            let stash_generation = adapter_storage.get_deploy_generation().await?;
+
             tracing::info!("Found stash generation {stash_generation:?}");
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = mz_adapter::catalog::storage::Connection::open(
-                    stash,
-                    config.now.clone(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: config
-                            .bootstrap_default_cluster_replica_size
-                            .clone(),
-                        builtin_cluster_replica_size: config
-                            .bootstrap_builtin_cluster_replica_size
-                            .clone(),
-                        default_availability_zone: mz_adapter::DUMMY_AVAILABILITY_ZONE.into(),
-                        bootstrap_role: config.bootstrap_role.clone(),
-                    },
-                    None,
-                )
-                .await
+                if let Err(e) = adapter_storage
+                    .check_open(
+                        &BootstrapArgs {
+                            default_cluster_replica_size: config
+                                .bootstrap_default_cluster_replica_size
+                                .clone(),
+                            builtin_cluster_replica_size: config
+                                .bootstrap_builtin_cluster_replica_size
+                                .clone(),
+                            default_availability_zone: mz_adapter::DUMMY_AVAILABILITY_ZONE.into(),
+                            bootstrap_role: config.bootstrap_role.clone(),
+                        },
+                        None,
+                    )
+                    .await
                 {
                     return Err(
                         anyhow!(e).context("Stash upgrade would have failed with this error")
@@ -429,12 +422,6 @@ impl Listeners {
             }
         }
 
-        let stash = config
-            .controller
-            .postgres_factory
-            .open(config.adapter_stash_url.clone(), None, tls)
-            .await?;
-
         // Load the adapter catalog from disk.
         if !config
             .cluster_replica_sizes
@@ -443,28 +430,29 @@ impl Listeners {
         {
             bail!("bootstrap default cluster replica size is unknown");
         }
-        let envd_epoch = stash
+
+        adapter_storage
+            .open(
+                &BootstrapArgs {
+                    default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
+                    builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
+                    // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
+                    // shipped to cloud since all clusters will have had a default
+                    // availability zone installed.
+                    default_availability_zone: config
+                        .availability_zones
+                        .choose(&mut rand::thread_rng())
+                        .cloned()
+                        .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
+                    bootstrap_role: config.bootstrap_role,
+                },
+                config.deploy_generation,
+            )
+            .await?;
+
+        let envd_epoch = adapter_storage
             .epoch()
             .expect("a real environmentd should always have an epoch number");
-        let adapter_storage = mz_adapter::catalog::storage::Connection::open(
-            stash,
-            config.now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
-                builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
-                // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
-                // shipped to cloud since all clusters will have had a default
-                // availability zone installed.
-                default_availability_zone: config
-                    .availability_zones
-                    .choose(&mut rand::thread_rng())
-                    .cloned()
-                    .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
-                bootstrap_role: config.bootstrap_role,
-            },
-            config.deploy_generation,
-        )
-        .await?;
 
         // Initialize storage usage client.
         let storage_usage_client = StorageUsageClient::open(

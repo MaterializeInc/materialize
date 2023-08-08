@@ -8,12 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::once;
+use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use derivative::Derivative;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
@@ -22,7 +25,7 @@ use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
     CatalogSchema, ObjectType, RoleAttributes,
@@ -33,8 +36,12 @@ use mz_sql::names::{
 };
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
-use mz_stash::{AppendBatch, Stash, StashError, StashFactory, TableTransaction, TypedCollection};
+use mz_stash::{
+    AppendBatch, DebugStashFactory, Stash, StashError, StashFactory, TableTransaction,
+    TypedCollection,
+};
 use mz_storage_client::types::sources::Timeline;
+use postgres_openssl::MakeTlsConnector;
 use proptest_derive::Arbitrary;
 
 use crate::catalog::builtin::{
@@ -51,7 +58,6 @@ use crate::coord::timeline;
 
 pub mod objects;
 pub mod stash;
-mod stash_impl;
 
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
@@ -108,84 +114,74 @@ pub struct BootstrapArgs {
 ///
 /// The [`super::Catalog`] should never interact directly through the stash, instead it should
 /// always interact through a [`Connection`].
-#[derive(Debug)]
-pub struct Connection {
-    stash: Stash,
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct Connection {
+    // TODO(jkosh44) Come up with a better solution to uninitialized stash's than Option.
+    stash: Option<Stash>,
+    stash_factory: StashFactory,
+    stash_url: String,
+    #[derivative(Debug = "ignore")]
+    tls: MakeTlsConnector,
     boot_ts: mz_repr::Timestamp,
 }
 
 impl Connection {
     /// Opens a new [`Connection`] to the stash. Optionally initialize the stash if it has not
     /// been initialized and perform any migrations needed.
-    #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
-    pub async fn open(
-        mut stash: Stash,
-        now: NowFn,
+    async fn open_inner(
+        &mut self,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, Error> {
-        // Initialize the Stash if it hasn't been already
-        let mut conn = if !stash.is_initialized().await? {
-            // Get the current timestamp so we can record when we booted.
-            let previous_now = mz_repr::Timestamp::MIN;
-            let boot_ts = timeline::monotonic_now(now, previous_now);
-
-            // Initialize the Stash
-            let args = bootstrap_args.clone();
-            stash
+    ) -> Result<(), Error> {
+        // Initialize the Stash
+        let args = bootstrap_args.clone();
+        if !self.stash()?.is_initialized().await? {
+            let boot_ts = self.boot_ts.into();
+            self.stash()?
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
-                        stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
+                        stash::initialize(&mut tx, &args, boot_ts, deploy_generation).await
                     })
                 })
                 .await?;
-
-            Connection { stash, boot_ts }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
-            if !stash.is_readonly() {
-                stash.upgrade().await?;
-            }
-
-            // Choose a time at which to boot. This is the time at which we will run
-            // internal migrations, and is also exposed upwards in case higher
-            // layers want to run their own migrations at the same timestamp.
-            //
-            // This time is usually the current system time, but with protection
-            // against backwards time jumps, even across restarts.
-            let previous = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
-                .await?
-                .unwrap_or(mz_repr::Timestamp::MIN);
-            let boot_ts = timeline::monotonic_now(now, previous);
-
-            let mut conn = Connection { stash, boot_ts };
-
-            if !conn.stash.is_readonly() {
+            if !self.stash()?.is_readonly() {
+                self.stash()?.upgrade().await?;
                 // IMPORTANT: we durably record the new timestamp before using it.
-                conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                self.set_timestamps(vec![(Timeline::EpochMilliseconds, self.boot_ts)])
                     .await?;
                 if let Some(deploy_generation) = deploy_generation {
-                    conn.persist_deploy_generation(deploy_generation).await?;
+                    self.set_deploy_generation(deploy_generation).await?;
                 }
             }
-
-            conn
-        };
-
-        // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
-        if !conn.stash.is_readonly() {
-            let mut txn = Transaction::new(&mut conn.stash).await?;
-            txn.add_new_builtin_clusters_migration()?;
-            txn.add_new_builtin_cluster_replicas_migration(bootstrap_args)?;
-            txn.commit().await?;
         }
 
-        Ok(conn)
+        // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
+        if !self.stash()?.is_readonly() {
+            let mut txn = self.transaction().await?;
+            txn.add_new_builtin_clusters_migration()?;
+            txn.add_new_builtin_cluster_replicas_migration(bootstrap_args)?;
+            self.commit_transaction(txn).await?;
+        }
+
+        Ok(())
     }
 
-    pub(crate) async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
-        self.stash.set_connect_timeout(connect_timeout).await;
+    async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+        self.stash()
+            .expect("TODO(jkosh44)")
+            .set_connect_timeout(connect_timeout)
+            .await;
+    }
+
+    fn stash(&mut self) -> Result<&mut Stash, Error> {
+        match &mut self.stash {
+            Some(stash) => Ok(stash),
+            None => Err(Error::new(ErrorKind::UnexpectedStashState)),
+        }
     }
 
     /// Returns the timestamp at which the storage layer booted.
@@ -197,14 +193,14 @@ impl Connection {
     /// The boot timestamp is derived from the durable timestamp oracle and is
     /// guaranteed to never go backwards, even in the face of backwards time
     /// jumps across restarts.
-    pub fn boot_ts(&self) -> mz_repr::Timestamp {
+    fn boot_ts(&self) -> mz_repr::Timestamp {
         self.boot_ts
     }
 
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
         let v = SETTING_COLLECTION
             .peek_key_one(
-                &mut self.stash,
+                self.stash()?,
                 proto::SettingKey {
                     name: key.to_string(),
                 },
@@ -221,23 +217,14 @@ impl Connection {
             value: value.into(),
         };
         SETTING_COLLECTION
-            .upsert(&mut self.stash, once((key, value)))
+            .upsert(self.stash()?, once((key, value)))
             .await
             .map_err(|e| e.into())
     }
 
-    pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
-        self.get_setting("catalog_content_version").await
-    }
-
-    pub async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
-        self.set_setting("catalog_content_version", new_version)
-            .await
-    }
-
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_databases(&mut self) -> Result<Vec<Database>, Error> {
-        let entries = DATABASES_COLLECTION.peek_one(&mut self.stash).await?;
+    async fn load_databases(&mut self) -> Result<Vec<Database>, Error> {
+        let entries = DATABASES_COLLECTION.peek_one(self.stash()?).await?;
         let databases = entries
             .into_iter()
             .map(RustType::from_proto)
@@ -253,8 +240,8 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_schemas(&mut self) -> Result<Vec<Schema>, Error> {
-        let entries = SCHEMAS_COLLECTION.peek_one(&mut self.stash).await?;
+    async fn load_schemas(&mut self) -> Result<Vec<Schema>, Error> {
+        let entries = SCHEMAS_COLLECTION.peek_one(self.stash()?).await?;
         let schemas = entries
             .into_iter()
             .map(RustType::from_proto)
@@ -271,8 +258,8 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_roles(&mut self) -> Result<Vec<Role>, Error> {
-        let entries = ROLES_COLLECTION.peek_one(&mut self.stash).await?;
+    async fn load_roles(&mut self) -> Result<Vec<Role>, Error> {
+        let entries = ROLES_COLLECTION.peek_one(self.stash()?).await?;
         let roles = entries
             .into_iter()
             .map(RustType::from_proto)
@@ -288,8 +275,8 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
-        let entries = CLUSTER_COLLECTION.peek_one(&mut self.stash).await?;
+    async fn load_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
+        let entries = CLUSTER_COLLECTION.peek_one(self.stash()?).await?;
         let clusters = entries
             .into_iter()
             .map(RustType::from_proto)
@@ -307,8 +294,8 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
-        let entries = CLUSTER_REPLICA_COLLECTION.peek_one(&mut self.stash).await?;
+    async fn load_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
+        let entries = CLUSTER_REPLICA_COLLECTION.peek_one(self.stash()?).await?;
         let replicas = entries
             .into_iter()
             .map(RustType::from_proto)
@@ -327,8 +314,8 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
-        let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
+    async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
+        let entries = AUDIT_LOG_COLLECTION.peek_one(self.stash()?).await?;
         let logs: Vec<_> = entries
             .into_keys()
             .map(AuditLogKey::from_proto)
@@ -341,7 +328,7 @@ impl Connection {
     /// Loads storage usage events and permanently deletes from the stash those
     /// that happened more than the retention period ago from boot_ts.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn fetch_and_prune_storage_usage(
+    async fn fetch_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
     ) -> Result<Vec<VersionedStorageUsage>, Error> {
@@ -352,7 +339,7 @@ impl Connection {
             Some(period) => u128::from(self.boot_ts).saturating_sub(period.as_millis()),
         };
         Ok(self
-            .stash
+            .stash()?
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let collection = STORAGE_USAGE_COLLECTION.from_tx(&tx).await?;
@@ -381,11 +368,11 @@ impl Connection {
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_system_gids(
+    async fn load_system_gids(
         &mut self,
     ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error> {
         let entries = SYSTEM_GID_MAPPING_COLLECTION
-            .peek_one(&mut self.stash)
+            .peek_one(self.stash()?)
             .await?;
         let system_gid_mappings = entries
             .into_iter()
@@ -402,12 +389,12 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_introspection_source_index_gids(
+    async fn load_introspection_source_index_gids(
         &mut self,
         cluster_id: ClusterId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
         let entries = CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
-            .peek_one(&mut self.stash)
+            .peek_one(self.stash()?)
             .await?;
         let sources = entries
             .into_iter()
@@ -431,11 +418,11 @@ impl Connection {
 
     /// Load the persisted default privileges.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_default_privileges(
+    async fn load_default_privileges(
         &mut self,
     ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
         Ok(DEFAULT_PRIVILEGES_COLLECTION
-            .peek_one(&mut self.stash)
+            .peek_one(self.stash()?)
             .await?
             .into_iter()
             .map(RustType::from_proto)
@@ -455,9 +442,9 @@ impl Connection {
 
     /// Load the persisted system privileges.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+    async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
         Ok(SYSTEM_PRIVILEGES_COLLECTION
-            .peek_one(&mut self.stash)
+            .peek_one(self.stash()?)
             .await?
             .into_iter()
             .map(RustType::from_proto)
@@ -473,9 +460,9 @@ impl Connection {
 
     /// Load the persisted server configurations.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
+    async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
         SYSTEM_CONFIGURATION_COLLECTION
-            .peek_one(&mut self.stash)
+            .peek_one(self.stash()?)
             .await?
             .into_iter()
             .map(|(k, v)| Ok((k.name, v.value)))
@@ -485,7 +472,7 @@ impl Connection {
     /// Persist mapping from system objects to global IDs and fingerprints.
     ///
     /// Panics if provided id is not a system id.
-    pub async fn set_system_object_mapping(
+    async fn set_system_object_mapping(
         &mut self,
         mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), Error> {
@@ -515,13 +502,13 @@ impl Connection {
             })
             .map(|e| RustType::into_proto(&e));
         SYSTEM_GID_MAPPING_COLLECTION
-            .upsert(&mut self.stash, mappings)
+            .upsert(self.stash()?, mappings)
             .await
             .map_err(|e| e.into())
     }
 
     /// Panics if provided id is not a system id
-    pub async fn set_introspection_source_index_gids(
+    async fn set_introspection_source_index_gids(
         &mut self,
         mappings: Vec<(ClusterId, &str, GlobalId)>,
     ) -> Result<(), Error> {
@@ -547,14 +534,14 @@ impl Connection {
             })
             .map(|e| RustType::into_proto(&e));
         CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
-            .upsert(&mut self.stash, mappings)
+            .upsert(self.stash()?, mappings)
             .await
             .map_err(|e| e.into())
     }
 
     /// Set the configuration of a replica.
     /// This accepts only one item, as we currently use this only for the default cluster
-    pub async fn set_replica_config(
+    async fn set_replica_config(
         &mut self,
         replica_id: ReplicaId,
         cluster_id: ClusterId,
@@ -571,54 +558,15 @@ impl Connection {
         }
         .into_proto();
         CLUSTER_REPLICA_COLLECTION
-            .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
+            .upsert_key(self.stash()?, key, |_| Ok::<_, Error>(val))
             .await??;
         Ok(())
-    }
-
-    pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
-        let id = self.allocate_id("system", amount).await?;
-
-        Ok(id.into_iter().map(GlobalId::System).collect())
-    }
-
-    pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
-        let id = self.allocate_id("user", 1).await?;
-        let id = id.into_element();
-        Ok(GlobalId::User(id))
-    }
-
-    pub async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, Error> {
-        let id = self.allocate_id(SYSTEM_CLUSTER_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ClusterId::System(id))
-    }
-
-    pub async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
-        let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ClusterId::User(id))
-    }
-
-    pub async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
-        let id = self.allocate_id(REPLICA_ID_ALLOC_KEY, 1).await?;
-        Ok(id.into_element())
-    }
-
-    /// Get the next user id without allocating it.
-    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
-        self.get_next_id("user").await.map(GlobalId::User)
-    }
-
-    /// Get the next replica id without allocating it.
-    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
-        self.get_next_id(REPLICA_ID_ALLOC_KEY).await
     }
 
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
         ID_ALLOCATOR_COLLECTION
             .peek_key_one(
-                &mut self.stash,
+                self.stash()?,
                 IdAllocKey {
                     name: id_type.to_string(),
                 }
@@ -639,7 +587,7 @@ impl Connection {
         }
         .into_proto();
         let (prev, next) = ID_ALLOCATOR_COLLECTION
-            .upsert_key(&mut self.stash, key, move |prev| {
+            .upsert_key(self.stash()?, key, move |prev| {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
                     Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }.into_proto()),
@@ -652,10 +600,10 @@ impl Connection {
     }
 
     /// Get all global timestamps that has been persisted to disk.
-    pub async fn get_all_persisted_timestamps(
+    async fn get_all_persisted_timestamps(
         &mut self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
+        let entries = TIMESTAMP_COLLECTION.peek_one(self.stash()?).await?;
         let timestamps = entries
             .into_iter()
             .map(RustType::from_proto)
@@ -669,7 +617,7 @@ impl Connection {
 
     /// Persist new global timestamp for a timeline to disk.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn persist_timestamp(
+    async fn persist_timestamp(
         &mut self,
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
@@ -678,7 +626,7 @@ impl Connection {
             id: timeline.to_string(),
         };
         let (prev, next) = TIMESTAMP_COLLECTION
-            .upsert_key(&mut self.stash, key, move |_| {
+            .upsert_key(self.stash()?, key, move |_| {
                 Ok::<_, Error>(TimestampValue { ts: timestamp }.into_proto())
             })
             .await??;
@@ -688,10 +636,10 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn persist_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
+    async fn persist_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
         CONFIG_COLLECTION
             .upsert_key(
-                &mut self.stash,
+                self.stash()?,
                 proto::ConfigKey {
                     key: DEPLOY_GENERATION.into(),
                 },
@@ -706,66 +654,8 @@ impl Connection {
     }
 
     /// Creates a new [`Transaction`].
-    pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
-        Transaction::new(&mut self.stash).await
-    }
-
-    /// Confirms that this [`Connection`] is connected as the stash leader.
-    pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
-        Ok(self.stash.confirm_leadership().await?)
-    }
-}
-
-/// Gets a global timestamp for a timeline that has been persisted to disk.
-///
-/// Returns `None` if no persisted timestamp for the specified timeline exists.
-async fn try_get_persisted_timestamp(
-    stash: &mut Stash,
-    timeline: &Timeline,
-) -> Result<Option<mz_repr::Timestamp>, Error>
-where
-{
-    let key = proto::TimestampKey {
-        id: timeline.to_string(),
-    };
-    let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
-        .peek_key_one(stash, key)
-        .await?
-        .map(RustType::from_proto)
-        .transpose()?;
-
-    Ok(val.map(|v| v.ts))
-}
-
-/// A [`Transaction`] batches multiple [`Connection`] operations together and commits them
-/// atomically.
-pub struct Transaction<'a> {
-    stash: &'a mut Stash,
-    databases: TableTransaction<DatabaseKey, DatabaseValue>,
-    schemas: TableTransaction<SchemaKey, SchemaValue>,
-    items: TableTransaction<ItemKey, ItemValue>,
-    roles: TableTransaction<RoleKey, RoleValue>,
-    clusters: TableTransaction<ClusterKey, ClusterValue>,
-    cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
-    introspection_sources:
-        TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
-    id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
-    configs: TableTransaction<ConfigKey, ConfigValue>,
-    settings: TableTransaction<SettingKey, SettingValue>,
-    timestamps: TableTransaction<TimestampKey, TimestampValue>,
-    system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
-    system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
-    default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
-    system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
-    // Don't make this a table transaction so that it's not read into the stash
-    // memory cache.
-    audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
-    storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
-}
-
-impl<'a> Transaction<'a> {
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-    async fn new(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
+    async fn transaction(&mut self) -> Result<Transaction, Error> {
         let (
             databases,
             schemas,
@@ -782,7 +672,8 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
-        ) = stash
+        ) = self
+            .stash()?
             .with_transaction(|tx| {
                 Box::pin(async move {
                     // Peek the catalog collections in any order and a single transaction.
@@ -813,7 +704,6 @@ impl<'a> Transaction<'a> {
             })
             .await?;
         Ok(Transaction {
-            stash,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
             schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
                 a.database_id == b.database_id && a.name == b.name
@@ -841,6 +731,60 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    /// Confirms that this [`Connection`] is connected as the stash leader.
+    async fn confirm_leadership(&mut self) -> Result<(), Error> {
+        Ok(self.stash()?.confirm_leadership().await?)
+    }
+}
+
+/// Gets a global timestamp for a timeline that has been persisted to disk.
+///
+/// Returns `None` if no persisted timestamp for the specified timeline exists.
+async fn try_get_persisted_timestamp(
+    stash: &mut Stash,
+    timeline: &Timeline,
+) -> Result<Option<mz_repr::Timestamp>, Error>
+where
+{
+    let key = proto::TimestampKey {
+        id: timeline.to_string(),
+    };
+    let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
+        .peek_key_one(stash, key)
+        .await?
+        .map(RustType::from_proto)
+        .transpose()?;
+
+    Ok(val.map(|v| v.ts))
+}
+
+/// A [`Transaction`] batches multiple [`Connection`] operations together and commits them
+/// atomically.
+pub struct Transaction {
+    // TODO(jkosh44) How can we prevent multiple transactions at once.
+    databases: TableTransaction<DatabaseKey, DatabaseValue>,
+    schemas: TableTransaction<SchemaKey, SchemaValue>,
+    items: TableTransaction<ItemKey, ItemValue>,
+    roles: TableTransaction<RoleKey, RoleValue>,
+    clusters: TableTransaction<ClusterKey, ClusterValue>,
+    cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
+    introspection_sources:
+        TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
+    id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
+    configs: TableTransaction<ConfigKey, ConfigValue>,
+    settings: TableTransaction<SettingKey, SettingValue>,
+    timestamps: TableTransaction<TimestampKey, TimestampValue>,
+    system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
+    system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
+    default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
+    system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
+    // Don't make this a table transaction so that it's not read into the stash
+    // memory cache.
+    audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
+    storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
+}
+
+impl Transaction {
     pub(crate) fn loaded_items(&self) -> Vec<Item> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
@@ -1695,137 +1639,6 @@ impl<'a> Transaction<'a> {
             .expect("cannot have uniqueness violation");
         assert!(prev.is_some());
     }
-
-    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
-    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
-    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
-    /// that errors can bubble up during initialization.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn commit(self) -> Result<(), Error> {
-        self.commit_inner().await
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn commit_inner(self) -> Result<(), Error> {
-        async fn add_batch<'tx, K, V>(
-            tx: &'tx mz_stash::Transaction<'tx>,
-            batches: &mut Vec<AppendBatch>,
-            typed: &'tx TypedCollection<K, V>,
-            changes: &[(K, V, mz_stash::Diff)],
-        ) -> Result<(), StashError>
-        where
-            K: mz_stash::Data + 'tx,
-            V: mz_stash::Data + 'tx,
-        {
-            if changes.is_empty() {
-                return Ok(());
-            }
-            let collection = typed.from_tx(tx).await?;
-            let mut batch = collection.make_batch_tx(tx).await?;
-            for (k, v, diff) in changes {
-                collection.append_to_batch(&mut batch, k, v, *diff);
-            }
-            batches.push(batch);
-            Ok(())
-        }
-
-        // The with_transaction fn below requires a Fn that can be cloned,
-        // meaning anything it closes over must be Clone. The .pending() here
-        // return Vecs. Thus, the Arcs here aren't strictly necessary because
-        // Vecs are Clone. However, using an Arc means that we never clone the
-        // Vec (which would happen at least one time when the txn starts), and
-        // instead only clone the Arc.
-        let databases = Arc::new(self.databases.pending());
-        let schemas = Arc::new(self.schemas.pending());
-        let items = Arc::new(self.items.pending());
-        let roles = Arc::new(self.roles.pending());
-        let clusters = Arc::new(self.clusters.pending());
-        let cluster_replicas = Arc::new(self.cluster_replicas.pending());
-        let introspection_sources = Arc::new(self.introspection_sources.pending());
-        let id_allocator = Arc::new(self.id_allocator.pending());
-        let configs = Arc::new(self.configs.pending());
-        let settings = Arc::new(self.settings.pending());
-        let timestamps = Arc::new(self.timestamps.pending());
-        let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
-        let system_configurations = Arc::new(self.system_configurations.pending());
-        let default_privileges = Arc::new(self.default_privileges.pending());
-        let system_privileges = Arc::new(self.system_privileges.pending());
-        let audit_log_updates = Arc::new(self.audit_log_updates);
-        let storage_usage_updates = Arc::new(self.storage_usage_updates);
-
-        self.stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let mut batches = Vec::new();
-
-                    add_batch(&tx, &mut batches, &DATABASES_COLLECTION, &databases).await?;
-                    add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &schemas).await?;
-                    add_batch(&tx, &mut batches, &ITEM_COLLECTION, &items).await?;
-                    add_batch(&tx, &mut batches, &ROLES_COLLECTION, &roles).await?;
-                    add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &clusters).await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_REPLICA_COLLECTION,
-                        &cluster_replicas,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-                        &introspection_sources,
-                    )
-                    .await?;
-                    add_batch(&tx, &mut batches, &ID_ALLOCATOR_COLLECTION, &id_allocator).await?;
-                    add_batch(&tx, &mut batches, &CONFIG_COLLECTION, &configs).await?;
-                    add_batch(&tx, &mut batches, &SETTING_COLLECTION, &settings).await?;
-                    add_batch(&tx, &mut batches, &TIMESTAMP_COLLECTION, &timestamps).await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_GID_MAPPING_COLLECTION,
-                        &system_gid_mapping,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_CONFIGURATION_COLLECTION,
-                        &system_configurations,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &DEFAULT_PRIVILEGES_COLLECTION,
-                        &default_privileges,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_PRIVILEGES_COLLECTION,
-                        &system_privileges,
-                    )
-                    .await?;
-                    add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &STORAGE_USAGE_COLLECTION,
-                        &storage_usage_updates,
-                    )
-                    .await?;
-                    tx.append(batches).await?;
-
-                    Ok(())
-                })
-            })
-            .await?;
-
-        Ok(())
-    }
 }
 
 // Structs used to pass information to outside modules.
@@ -2150,20 +1963,24 @@ mod test {
 }
 
 // TODO(jkosh44) Name??
+// TODO(jkosh44) pub??
 #[async_trait]
-pub(crate) trait DurableCoordState {
-    async fn connect(
-        now: NowFn,
+pub trait DurableCoordState: Debug + Send {
+    async fn is_initialized(&mut self) -> Result<bool, Error>;
+
+    async fn check_open(
+        &mut self,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-        // TODO(jkosh44) Create some type of config object for these
-        stash_factory: StashFactory,
-        stash_url: String,
-    ) -> Result<Box<Self>, Error>;
+    ) -> Result<(), Error>;
 
-    async fn check_open(&self) -> Result<(), Error>;
+    async fn open(
+        &mut self,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<(), Error>;
 
-    async fn open(&mut self) -> Result<(), Error>;
+    fn epoch(&mut self) -> Option<NonZeroI64>;
 
     async fn set_connect_timeout(&mut self, connect_timeout: Duration);
 
@@ -2177,6 +1994,15 @@ pub(crate) trait DurableCoordState {
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error>;
 
     async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error>;
+
+    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
+        self.get_setting("catalog_content_version").await
+    }
+
+    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
+        self.set_setting("catalog_content_version", new_version)
+            .await
+    }
 
     async fn get_databases(&mut self) -> Result<Vec<Database>, Error>;
 
@@ -2230,7 +2056,7 @@ pub(crate) trait DurableCoordState {
         timestamps: Vec<(Timeline, mz_repr::Timestamp)>,
     ) -> Result<(), Error>;
 
-    async fn get_deploy_generation(&mut self) -> Result<u64, Error>;
+    async fn get_deploy_generation(&mut self) -> Result<Option<u64>, Error>;
 
     async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error>;
 
@@ -2238,9 +2064,429 @@ pub(crate) trait DurableCoordState {
 
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error>;
 
-    async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error>;
+    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+        let id = self.allocate_id("system", amount).await?;
+
+        Ok(id.into_iter().map(GlobalId::System).collect())
+    }
+
+    async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+        let id = self.allocate_id("user", 1).await?;
+        let id = id.into_element();
+        Ok(GlobalId::User(id))
+    }
+
+    async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, Error> {
+        let id = self.allocate_id(SYSTEM_CLUSTER_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ClusterId::System(id))
+    }
+
+    async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
+        let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ClusterId::User(id))
+    }
+
+    async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        let id = self.allocate_id(REPLICA_ID_ALLOC_KEY, 1).await?;
+        Ok(id.into_element())
+    }
+
+    /// Get the next user id without allocating it.
+    async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
+        self.get_next_id("user").await.map(GlobalId::User)
+    }
+
+    /// Get the next replica id without allocating it.
+    async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        self.get_next_id(REPLICA_ID_ALLOC_KEY).await
+    }
+
+    async fn transaction(&mut self) -> Result<Transaction, Error>;
 
     async fn commit_transaction(&mut self, tx: Transaction) -> Result<(), Error>;
 
     async fn confirm_leadership(&mut self) -> Result<(), Error>;
+}
+
+// TODO(jkosh44) Get rid of duplicate methods in impl Connection. I just didn't want a larger diff.
+#[async_trait]
+impl DurableCoordState for Connection {
+    async fn is_initialized(&mut self) -> Result<bool, Error> {
+        let Ok(stash) = self.stash() else {
+            return Ok(false);
+        };
+        Ok(stash.is_initialized().await?)
+    }
+
+    async fn check_open(
+        &mut self,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<(), Error> {
+        if self.stash.is_none() || !self.stash()?.is_savepoint() {
+            self.stash = self
+                .stash_factory
+                .open_savepoint(self.stash_url.clone(), self.tls.clone())
+                .await
+                .ok();
+        }
+
+        self.open_inner(bootstrap_args, deploy_generation).await
+    }
+
+    async fn open(
+        &mut self,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<(), Error> {
+        if self.stash.is_none() || !self.stash()?.is_writeable() {
+            self.stash = Some(
+                self.stash_factory
+                    .open(self.stash_url.clone(), None, self.tls.clone())
+                    .await?,
+            );
+        }
+
+        self.open_inner(bootstrap_args, deploy_generation).await
+    }
+
+    fn epoch(&mut self) -> Option<NonZeroI64> {
+        self.stash().ok().and_then(|stash| stash.epoch())
+    }
+
+    async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+        Connection::set_connect_timeout(self, connect_timeout).await
+    }
+
+    fn boot_ts(&self) -> Timestamp {
+        Connection::boot_ts(self)
+    }
+
+    async fn fetch_and_prune_storage_usage(
+        &mut self,
+        retention_period: Option<Duration>,
+    ) -> Result<Vec<VersionedStorageUsage>, Error> {
+        Connection::fetch_and_prune_storage_usage(self, retention_period).await
+    }
+
+    async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
+        Connection::get_setting(self, key).await
+    }
+
+    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
+        Connection::set_setting(self, key, value).await
+    }
+
+    async fn get_databases(&mut self) -> Result<Vec<Database>, Error> {
+        self.load_databases().await
+    }
+
+    async fn get_schemas(&mut self) -> Result<Vec<Schema>, Error> {
+        self.load_schemas().await
+    }
+
+    async fn get_roles(&mut self) -> Result<Vec<Role>, Error> {
+        self.load_roles().await
+    }
+
+    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
+        self.load_clusters().await
+    }
+
+    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
+        self.load_cluster_replicas().await
+    }
+
+    async fn set_cluster_replicas(
+        &mut self,
+        replica_id: ReplicaId,
+        cluster_id: ClusterId,
+        name: String,
+        config: &ReplicaConfig,
+        owner_id: RoleId,
+    ) -> Result<(), Error> {
+        self.set_replica_config(replica_id, cluster_id, name, config, owner_id)
+            .await
+    }
+
+    async fn get_audit_log(&mut self) -> Result<Vec<VersionedEvent>, Error> {
+        Ok(self.load_audit_log().await?.collect())
+    }
+
+    async fn get_system_gids(
+        &mut self,
+    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error> {
+        self.load_system_gids().await
+    }
+
+    async fn set_system_gids(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error> {
+        self.set_system_object_mapping(mappings).await
+    }
+
+    async fn get_introspection_source_index_gids(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> Result<BTreeMap<String, GlobalId>, Error> {
+        self.load_introspection_source_index_gids(cluster_id).await
+    }
+
+    async fn set_introspection_source_index_gids(
+        &mut self,
+        mappings: Vec<(ClusterId, &str, GlobalId)>,
+    ) -> Result<(), Error> {
+        self.set_introspection_source_index_gids(mappings).await
+    }
+
+    async fn get_default_privileges(
+        &mut self,
+    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+        self.load_default_privileges().await
+    }
+
+    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+        self.load_system_privileges().await
+    }
+
+    async fn get_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
+        self.load_system_configuration().await
+    }
+
+    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, Timestamp>, Error> {
+        self.get_all_persisted_timestamps().await
+    }
+
+    async fn set_timestamps(
+        &mut self,
+        timestamps: Vec<(Timeline, Timestamp)>,
+    ) -> Result<(), Error> {
+        // TODO(jkosh44) temp inefficient and incorrect impl. This is not currently atomic.
+        for (timeline, timestamp) in timestamps {
+            self.persist_timestamp(&timeline, timestamp).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn get_deploy_generation(&mut self) -> Result<Option<u64>, Error> {
+        Ok(CONFIG_COLLECTION
+            .peek_key_one(
+                self.stash()?,
+                proto::ConfigKey {
+                    key: DEPLOY_GENERATION.into(),
+                },
+            )
+            .await?
+            .map(|config_value| config_value.value))
+    }
+
+    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
+        self.persist_deploy_generation(deploy_generation).await
+    }
+
+    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
+        Connection::get_next_id(self, id_type).await
+    }
+
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+        Connection::allocate_id(self, id_type, amount).await
+    }
+
+    async fn transaction(&mut self) -> Result<Transaction, Error> {
+        Connection::transaction(self).await
+    }
+
+    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
+    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
+    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
+    /// that errors can bubble up during initialization.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn commit_transaction(&mut self, txn: Transaction) -> Result<(), Error> {
+        async fn add_batch<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
+            batches: &mut Vec<AppendBatch>,
+            typed: &'tx TypedCollection<K, V>,
+            changes: &[(K, V, mz_stash::Diff)],
+        ) -> Result<(), StashError>
+        where
+            K: mz_stash::Data + 'tx,
+            V: mz_stash::Data + 'tx,
+        {
+            if changes.is_empty() {
+                return Ok(());
+            }
+            let collection = typed.from_tx(tx).await?;
+            let mut batch = collection.make_batch_tx(tx).await?;
+            for (k, v, diff) in changes {
+                collection.append_to_batch(&mut batch, k, v, *diff);
+            }
+            batches.push(batch);
+            Ok(())
+        }
+
+        // The with_transaction fn below requires a Fn that can be cloned,
+        // meaning anything it closes over must be Clone. The .pending() here
+        // return Vecs. Thus, the Arcs here aren't strictly necessary because
+        // Vecs are Clone. However, using an Arc means that we never clone the
+        // Vec (which would happen at least one time when the txn starts), and
+        // instead only clone the Arc.
+        let databases = Arc::new(txn.databases.pending());
+        let schemas = Arc::new(txn.schemas.pending());
+        let items = Arc::new(txn.items.pending());
+        let roles = Arc::new(txn.roles.pending());
+        let clusters = Arc::new(txn.clusters.pending());
+        let cluster_replicas = Arc::new(txn.cluster_replicas.pending());
+        let introspection_sources = Arc::new(txn.introspection_sources.pending());
+        let id_allocator = Arc::new(txn.id_allocator.pending());
+        let configs = Arc::new(txn.configs.pending());
+        let settings = Arc::new(txn.settings.pending());
+        let timestamps = Arc::new(txn.timestamps.pending());
+        let system_gid_mapping = Arc::new(txn.system_gid_mapping.pending());
+        let system_configurations = Arc::new(txn.system_configurations.pending());
+        let default_privileges = Arc::new(txn.default_privileges.pending());
+        let system_privileges = Arc::new(txn.system_privileges.pending());
+        let audit_log_updates = Arc::new(txn.audit_log_updates);
+        let storage_usage_updates = Arc::new(txn.storage_usage_updates);
+
+        self.stash()?
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let mut batches = Vec::new();
+
+                    add_batch(&tx, &mut batches, &DATABASES_COLLECTION, &databases).await?;
+                    add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &schemas).await?;
+                    add_batch(&tx, &mut batches, &ITEM_COLLECTION, &items).await?;
+                    add_batch(&tx, &mut batches, &ROLES_COLLECTION, &roles).await?;
+                    add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &clusters).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &CLUSTER_REPLICA_COLLECTION,
+                        &cluster_replicas,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
+                        &introspection_sources,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &ID_ALLOCATOR_COLLECTION, &id_allocator).await?;
+                    add_batch(&tx, &mut batches, &CONFIG_COLLECTION, &configs).await?;
+                    add_batch(&tx, &mut batches, &SETTING_COLLECTION, &settings).await?;
+                    add_batch(&tx, &mut batches, &TIMESTAMP_COLLECTION, &timestamps).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_GID_MAPPING_COLLECTION,
+                        &system_gid_mapping,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_CONFIGURATION_COLLECTION,
+                        &system_configurations,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &DEFAULT_PRIVILEGES_COLLECTION,
+                        &default_privileges,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_PRIVILEGES_COLLECTION,
+                        &system_privileges,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &STORAGE_USAGE_COLLECTION,
+                        &storage_usage_updates,
+                    )
+                    .await?;
+                    tx.append(batches).await?;
+
+                    Ok(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn confirm_leadership(&mut self) -> Result<(), Error> {
+        Connection::confirm_leadership(self).await
+    }
+}
+
+pub async fn stash_backed_coord_state(
+    now: NowFn,
+    // TODO(jkosh44) Create some type of config object for these
+    stash_factory: StashFactory,
+    stash_url: String,
+    tls: MakeTlsConnector,
+) -> Result<Box<dyn DurableCoordState>, Error> {
+    // TODO(jkosh44) Savepoint or Readonly?
+    // TODO(jkosh44) on a fresh installation this will retry a lot before giving up.
+    let mut stash = stash_factory
+        // TODO(jkosh44) Is None correct?
+        .open_readonly(stash_url.clone(), None, tls.clone())
+        .await
+        .ok();
+
+    // Get the current timestamp so we can record when we booted.
+    let previous = match &mut stash {
+        Some(stash) => {
+            if !stash.is_initialized().await? {
+                mz_repr::Timestamp::MIN
+            } else {
+                try_get_persisted_timestamp(stash, &Timeline::EpochMilliseconds)
+                    .await?
+                    .unwrap_or(mz_repr::Timestamp::MIN)
+            }
+        }
+        None => mz_repr::Timestamp::MIN,
+    };
+    let boot_ts = timeline::monotonic_now(now, previous);
+
+    Ok(Box::new(Connection {
+        stash,
+        stash_factory,
+        stash_url,
+        tls,
+        boot_ts,
+    }))
+}
+
+// TODO(jkosh44) This is wrong, the type of stash depends on the caller. For a PoC it's probably fine.
+pub async fn debug_coord_state(now: NowFn) -> Result<Box<dyn DurableCoordState>, Error> {
+    let debug_stash_factory = DebugStashFactory::new().await;
+    let mut stash = debug_stash_factory.open_debug().await;
+
+    // Get the current timestamp so we can record when we booted.
+    let previous = if !stash.is_initialized().await? {
+        mz_repr::Timestamp::MIN
+    } else {
+        try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
+            .await?
+            .unwrap_or(mz_repr::Timestamp::MIN)
+    };
+    let boot_ts = timeline::monotonic_now(now, previous);
+
+    Ok(Box::new(Connection {
+        stash: Some(stash),
+        stash_factory: debug_stash_factory.factory().clone(),
+        stash_url: debug_stash_factory.url().to_string(),
+        tls: debug_stash_factory.tls().clone(),
+        boot_ts,
+    }))
 }
