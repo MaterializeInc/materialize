@@ -23,14 +23,16 @@ class K8sResource:
     def __init__(self, namespace: str):
         self.selected_namespace = namespace
 
-    def kubectl(
-        self, *args: str, input: Optional[str] = None, namespace: Optional[str] = None
-    ) -> str:
+    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
         try:
-            cmd = ["kubectl", "--context", self.context(), *args]
-
-            if namespace is not None:
-                cmd.extend(["--namespace", namespace])
+            cmd = [
+                "kubectl",
+                "--context",
+                self.context(),
+                "--namespace",
+                self.namespace(),
+                *args,
+            ]
 
             return subprocess.check_output(cmd, text=True, input=input)
         except subprocess.CalledProcessError as e:
