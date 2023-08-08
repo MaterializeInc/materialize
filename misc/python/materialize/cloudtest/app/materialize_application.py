@@ -33,7 +33,7 @@ from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.util.wait import wait
 
 
 class MaterializeApplication(Application):

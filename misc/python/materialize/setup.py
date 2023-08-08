@@ -27,6 +27,7 @@ if __name__ == "__main__":
             "materialize.cloudtest",
             "materialize.cloudtest.app",
             "materialize.cloudtest.k8s",
+            "materialize.cloudtest.util",
             "materialize.mzcompose",
         ],
         package_dir={"materialize": "."},

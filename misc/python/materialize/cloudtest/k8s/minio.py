@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from materialize.cloudtest.k8s import K8sResource
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.util.wait import wait
 
 
 class Minio(K8sResource):

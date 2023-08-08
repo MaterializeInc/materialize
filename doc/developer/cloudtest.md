@@ -151,7 +151,7 @@ is instantiated once per `pytest` invocation
 ## Waiting for a resource to reach a particular state
 
 ```
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.util.wait import wait
 
 wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
 ```

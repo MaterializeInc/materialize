@@ -14,7 +14,7 @@ from typing import Optional
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest.k8s import DEFAULT_K8S_NAMESPACE, K8sPod
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.util.wait import wait
 
 
 class Testdrive(K8sPod):
