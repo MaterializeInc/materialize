@@ -894,16 +894,16 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
     internal: true,
 };
 
-/// The percentage of the cluster replica size to be used as the maximum number of
+/// The fraction of the cluster replica size to be used as the maximum number of
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Option<Numeric>> =
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: ServerVar<Option<Numeric>> =
     ServerVar {
-        name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_percent"),
+        name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
         value: &None,
         description:
-            "The percentage of the cluster replica size to be used as the maximum number of \
+            "The fraction of the cluster replica size to be used as the maximum number of \
     in-flight bytes emitted by persist_sources feeding storage dataflows. \
     If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
         internal: true,
@@ -1953,7 +1953,7 @@ impl SystemVars {
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
-            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -2433,9 +2433,9 @@ impl SystemVars {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
-    /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_percent` configuration parameter.
-    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<Numeric> {
-        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+    /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_fraction` configuration parameter.
+    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_fraction(&self) -> Option<Numeric> {
+        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -3921,7 +3921,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT.name()
+        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)

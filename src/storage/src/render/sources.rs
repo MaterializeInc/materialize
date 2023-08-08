@@ -563,7 +563,7 @@ fn get_backpressure_max_inflight_bytes(
 ) -> Option<usize> {
     let StorageMaxInflightBytesConfig {
         max_inflight_bytes_default,
-        max_inflight_bytes_cluster_size_percent,
+        max_inflight_bytes_cluster_size_fraction,
         disk_only: _,
     } = inflight_bytes_config;
 
@@ -571,9 +571,9 @@ fn get_backpressure_max_inflight_bytes(
     if max_inflight_bytes_default.is_some() {
         let current_cluster_max_bytes_limit =
             cluster_memory_limit.as_ref().and_then(|cluster_memory| {
-                max_inflight_bytes_cluster_size_percent.map(|percent| {
+                max_inflight_bytes_cluster_size_fraction.map(|fraction| {
                     // We just need close the correct % of bytes here, so we just use lossy casts.
-                    usize::cast_lossy(f64::cast_lossy(*cluster_memory) * percent / 100.0)
+                    usize::cast_lossy(f64::cast_lossy(*cluster_memory) * fraction)
                 })
             });
         current_cluster_max_bytes_limit.or(*max_inflight_bytes_default)
@@ -764,7 +764,7 @@ mod test {
     fn test_no_default() {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: None,
-            max_inflight_bytes_cluster_size_percent: Some(50.0),
+            max_inflight_bytes_cluster_size_fraction: Some(0.5),
             disk_only: false,
         };
         let memory_limit = Some(1000);
@@ -779,7 +779,7 @@ mod test {
     fn test_no_matching_size() {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: Some(10000),
-            max_inflight_bytes_cluster_size_percent: Some(50.0),
+            max_inflight_bytes_cluster_size_fraction: Some(0.5),
             disk_only: false,
         };
 
@@ -795,7 +795,7 @@ mod test {
     fn test_calculated_cluster_limit() {
         let config = StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: Some(10000),
-            max_inflight_bytes_cluster_size_percent: Some(50.0),
+            max_inflight_bytes_cluster_size_fraction: Some(0.5),
             disk_only: false,
         };
         let memory_limit = Some(2000);
