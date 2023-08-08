@@ -307,6 +307,7 @@ mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
+mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_introspection    {id,object_type}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_introspection    {id,worker_id}
 mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_introspection    {worker_id,slept_for_ns,requested_ns}
