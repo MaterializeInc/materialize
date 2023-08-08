@@ -9,22 +9,37 @@
 
 
 import subprocess
+from typing import Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 from materialize.ui import UIError
 
 
-def exists(resource: str, context: str = DEFAULT_K8S_CONTEXT_NAME) -> None:
-    _exists(resource, True, context)
+def exists(
+    resource: str,
+    context: str = DEFAULT_K8S_CONTEXT_NAME,
+    namespace: Optional[str] = None,
+) -> None:
+    _exists(resource, True, context, namespace)
 
 
-def not_exists(resource: str, context: str = DEFAULT_K8S_CONTEXT_NAME) -> None:
-    _exists(resource, False, context)
+def not_exists(
+    resource: str,
+    context: str = DEFAULT_K8S_CONTEXT_NAME,
+    namespace: Optional[str] = None,
+) -> None:
+    _exists(resource, False, context, namespace)
 
 
-def _exists(resource: str, should_exist: bool, context: str) -> None:
+def _exists(
+    resource: str, should_exist: bool, context: str, namespace: Optional[str]
+) -> None:
     cmd = ["kubectl", "get", "--output", "name", resource, "--context", context]
+
+    if namespace is not None:
+        cmd.extend(["--namespace", namespace])
+
     ui.progress(f'running {" ".join(cmd)} ... ')
 
     try:
