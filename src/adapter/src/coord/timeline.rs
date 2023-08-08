@@ -92,20 +92,17 @@ impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
     }
 }
 
-/// A timeline can perform reads and writes. Reads happen at the read timestamp
-/// and writes happen at the write timestamp. After the write has completed, but before a response
-/// is sent, the read timestamp must be updated to a value greater than or equal to `self.write_ts`.
-struct TimestampOracleState<T> {
-    read_ts: T,
-    write_ts: T,
-}
-
 /// A type that provides write and read timestamps, reads observe exactly their preceding writes..
 ///
 /// Specifically, all read timestamps will be greater or equal to all previously reported completed
 /// write timestamps, and strictly less than all subsequently emitted write timestamps.
+///
+/// A timeline can perform reads and writes. Reads happen at the read timestamp
+/// and writes happen at the write timestamp. After the write has completed, but before a response
+/// is sent, the read timestamp must be updated to a value greater than or equal to `self.write_ts`.
 struct TimestampOracle<T> {
-    state: TimestampOracleState<T>,
+    read_ts: T,
+    write_ts: T,
     next: Box<dyn Fn() -> T>,
 }
 
@@ -118,10 +115,8 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
         F: Fn() -> T + 'static,
     {
         Self {
-            state: TimestampOracleState {
-                read_ts: initially.clone(),
-                write_ts: initially,
-            },
+            read_ts: initially.clone(),
+            write_ts: initially,
             next: Box::new(next),
         }
     }
@@ -132,13 +127,13 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
     /// `self.read_ts()` and `self.write_ts()`.
     fn write_ts(&mut self) -> WriteTimestamp<T> {
         let mut next = (self.next)();
-        if next.less_equal(&self.state.write_ts) {
-            next = self.state.write_ts.step_forward();
+        if next.less_equal(&self.write_ts) {
+            next = self.write_ts.step_forward();
         }
-        assert!(self.state.read_ts.less_than(&next));
-        assert!(self.state.write_ts.less_than(&next));
-        self.state.write_ts = next.clone();
-        assert!(self.state.read_ts.less_equal(&self.state.write_ts));
+        assert!(self.read_ts.less_than(&next));
+        assert!(self.write_ts.less_than(&next));
+        self.write_ts = next.clone();
+        assert!(self.read_ts.less_equal(&self.write_ts));
         let advance_to = next.step_forward();
         WriteTimestamp {
             timestamp: next,
@@ -148,7 +143,7 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
 
     /// Peek the current write timestamp.
     fn peek_write_ts(&self) -> T {
-        self.state.write_ts.clone()
+        self.write_ts.clone()
     }
 
     /// Acquire a new timestamp for reading.
@@ -156,21 +151,21 @@ impl<T: TimestampManipulation> TimestampOracle<T> {
     /// This timestamp will be greater or equal to all prior values of `self.apply_write(write_ts)`,
     /// and strictly less than all subsequent values of `self.write_ts()`.
     fn read_ts(&self) -> T {
-        self.state.read_ts.clone()
+        self.read_ts.clone()
     }
 
     /// Mark a write at `write_ts` completed.
     ///
     /// All subsequent values of `self.read_ts()` will be greater or equal to `write_ts`.
     fn apply_write(&mut self, write_ts: T) {
-        if self.state.read_ts.less_than(&write_ts) {
-            self.state.read_ts = write_ts;
+        if self.read_ts.less_than(&write_ts) {
+            self.read_ts = write_ts;
 
-            if self.state.write_ts.less_than(&self.state.read_ts) {
-                self.state.write_ts = self.state.read_ts.clone();
+            if self.write_ts.less_than(&self.read_ts) {
+                self.write_ts = self.read_ts.clone();
             }
         }
-        assert!(self.state.read_ts.less_equal(&self.state.write_ts));
+        assert!(self.read_ts.less_equal(&self.write_ts));
     }
 }
 
