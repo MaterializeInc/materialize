@@ -11,7 +11,7 @@ import pytest
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.k8s import cluster_pod_name, cluster_service_name
+from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.util.exists import exists, not_exists
 from materialize.cloudtest.util.wait import wait
 

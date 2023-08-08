@@ -12,7 +12,7 @@ import time
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.k8s import cluster_pod_name
+from materialize.cloudtest.util.cluster import cluster_pod_name
 
 CLUSTER_SIZE = 8
 NUM_SOURCES = 4

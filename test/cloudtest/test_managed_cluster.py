@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.k8s import cluster_pod_name
+from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
