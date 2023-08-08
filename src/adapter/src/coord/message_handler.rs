@@ -34,7 +34,7 @@ use crate::coord::{
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
     SinkConnectionReady,
 };
-use crate::util::ResultExt;
+use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
@@ -260,6 +260,11 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
+                        let csid = ComputeSinkId {
+                            cluster_id: active_subscribe.cluster_id,
+                            global_id: sink_id,
+                        };
+                        self.drop_compute_sinks([csid]);
                         self.remove_active_subscribe(sink_id).await;
                     }
                 }

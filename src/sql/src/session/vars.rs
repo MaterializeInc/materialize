@@ -515,6 +515,13 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
+pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("max_identifier_length"),
+    value: &mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
+    description: "The maximum length of object identifiers in bytes (PostgreSQL).",
+    internal: false,
+};
+
 /// The logical compaction window for builtin tables and sources that have the
 /// `retained_metrics_relation` flag set.
 ///
@@ -1414,6 +1421,7 @@ impl SessionVars {
                 &ENABLE_CARDINALITY_ESTIMATES,
             )
             .with_var(&MAX_QUERY_RESULT_SIZE)
+            .with_var(&MAX_IDENTIFIER_LENGTH)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1571,6 +1579,10 @@ impl SessionVars {
             Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
+        } else if name == MAX_IDENTIFIER_LENGTH.name {
+            Err(VarError::ReadOnlyParameter(
+                MAX_IDENTIFIER_LENGTH.name.as_str(),
+            ))
         } else {
             self.vars
                 .get_mut(name)
