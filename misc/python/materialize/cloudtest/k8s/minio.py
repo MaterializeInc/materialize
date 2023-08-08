@@ -7,10 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class Minio(K8sResource):
+    def __init__(
+        self,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+    ) -> None:
+        super().__init__(namespace)
+
     def create(self) -> None:
         self.kubectl(
             "delete",
