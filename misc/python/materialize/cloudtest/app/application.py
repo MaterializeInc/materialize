@@ -36,11 +36,14 @@ class Application:
     def acquire_images(self) -> None:
         raise NotImplementedError
 
-    def kubectl(self, *args: str) -> str:
+    def kubectl(self, *args: str, namespace: Optional[str] = None) -> str:
         try:
-            return subprocess.check_output(
-                ["kubectl", "--context", self.context(), *args], text=True
-            )
+            cmd = ["kubectl", "--context", self.context(), *args]
+
+            if namespace is not None:
+                cmd.extend(["--namespace", namespace])
+
+            return subprocess.check_output(cmd, text=True)
         except subprocess.CalledProcessError as e:
             print(
                 dedent(

@@ -37,11 +37,16 @@ DEFAULT_K8S_NAMESPACE = "default"
 
 
 class K8sResource:
-    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
+    def kubectl(
+        self, *args: str, input: Optional[str] = None, namespace: Optional[str] = None
+    ) -> str:
         try:
-            return subprocess.check_output(
-                ["kubectl", "--context", self.context(), *args], text=True, input=input
-            )
+            cmd = ["kubectl", "--context", self.context(), *args]
+
+            if namespace is not None:
+                cmd.extend(["--namespace", namespace])
+
+            return subprocess.check_output(cmd, text=True, input=input)
         except subprocess.CalledProcessError as e:
             print(
                 dedent(

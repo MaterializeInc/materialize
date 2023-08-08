@@ -62,7 +62,11 @@ class Testdrive(K8sPod):
         kafka_addr: str = "redpanda:9092",
         schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
-        wait(condition="condition=Ready", resource="pod/testdrive")
+        wait(
+            condition="condition=Ready",
+            resource="pod/testdrive",
+            namespace=self.namespace(),
+        )
         self.kubectl(
             "exec",
             "-it",
@@ -87,6 +91,7 @@ class Testdrive(K8sPod):
             *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
             *args,
             input=input,
+            namespace=self.namespace(),
         )
 
     def namespace(self) -> str:
