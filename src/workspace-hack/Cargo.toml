@@ -21,7 +21,7 @@ aws-sdk-sts = { version = "0.26.0", default-features = false, features = ["nativ
 aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign-eventstream"] }
 aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
-axum = { version = "0.6.7", features = ["headers", "ws"] }
+axum = { version = "0.6.18", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
@@ -40,7 +40,6 @@ digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 frunk_core = { version = "0.4.0", default-features = false, features = ["std"] }
-futures = { version = "0.3.25" }
 futures-channel = { version = "0.3.25", features = ["sink"] }
 futures-core = { version = "0.3.25" }
 futures-executor = { version = "0.3.25" }
@@ -70,7 +69,6 @@ num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde"] }
-parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
@@ -121,7 +119,7 @@ aws-sdk-sts = { version = "0.26.0", default-features = false, features = ["nativ
 aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign-eventstream"] }
 aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
-axum = { version = "0.6.7", features = ["headers", "ws"] }
+axum = { version = "0.6.18", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
@@ -141,7 +139,6 @@ digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 frunk_core = { version = "0.4.0", default-features = false, features = ["std"] }
-futures = { version = "0.3.25" }
 futures-channel = { version = "0.3.25", features = ["sink"] }
 futures-core = { version = "0.3.25" }
 futures-executor = { version = "0.3.25" }
@@ -171,7 +168,6 @@ num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde"] }
-parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
