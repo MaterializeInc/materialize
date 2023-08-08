@@ -911,7 +911,7 @@ r3
 r4
 mz_system
 materialize
-mz_introspection
+mz_support
 COMPLETE 7
 
 statement ok
