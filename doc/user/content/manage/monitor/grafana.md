@@ -15,7 +15,7 @@ To make Materialize metadata available to Grafana, you must configure and run
 the following additional services:
 
 * A Prometheus SQL Exporter.
-* A [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent).
+* A [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud users, or [Prometheus](https://prometheus.io/download/) for the self-managed version.
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
@@ -101,20 +101,21 @@ which has been tried and tested in production environments.
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
    to run the service using the configuration file from the previous step.
 
-## Step 2. Set up a Grafana Agent
+## Step 2. Set up a scraper
 
 To scrape the metrics available in the Prometheus SQL Exporter endpoint, you
-must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent), check
-configured to scrape the OpenMetrics format.
+must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud, or [Prometheus](https://prometheus.io/download/) for the self-managed version:
+
+{{< tabs >}}
+{{< tab "Cloud">}}
 
 1. Follow the [instructions to install and run a Grafana Agent](https://grafana.com/docs/agent/latest/static/set-up/install/)
    in your host.
 
-2. To configure a [Prometheus check](https://grafana.com/docs/grafana-cloud/monitor-infrastructure/metrics/metrics-prometheus/)
-   for the Grafana Agent installed in the previous step, edit the
-   `<AGENT_PATH>/config.yml` file at the root of the installation directory.
+2. To configure a [Prometheus scrape](https://grafana.com/docs/grafana-cloud/monitor-infrastructure/metrics/metrics-prometheus/)
+   for the Grafana Agent installed in the previous step, create and edit the [agent configuration file.](https://grafana.com/docs/agent/latest/static/configuration/create-config-file/)
 
-   **Filename**: conf.yaml
+   **Filename:** agent.yaml
    ```yaml
       ...
       remote_write:
@@ -124,10 +125,45 @@ configured to scrape the OpenMetrics format.
             password: <PASSWORD>
    ```
 
-  **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/cloud/agent.yml)
-  for all available configuration options.
+   **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/cloud/agent.yml)
+   for all available configuration options.
 
-For more details on how to configure, run and troubleshoot Grafana Agents, see the [Grafana documentation](https://grafana.com/docs/agent/latest/).
+   For more details on how to configure, run and troubleshoot Grafana Agents, see the [Grafana documentation](https://grafana.com/docs/agent/latest/).
+
+   <br/>
+   <details><summary>Video for generating configuration values for the first time.</summary>
+
+   ![Gif](https://github.com/MaterializeInc/demos/assets/11491779/e512a95f-e3c6-433d-bc8f-6f5138b08115)
+
+   </details>
+
+{{< /tab >}}
+{{< tab "Self-serve">}}
+1. Follow the [instructions to install and run Prometheus](https://prometheus.io/docs/prometheus/latest/installation/)
+   in your host.
+
+2. To configure a [Prometheus scrape](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config) edit the
+   `prometheus.yml` file as follows:
+
+   **Filename**: prometheus.yml
+   ```yaml
+      ...
+      - job_name: sql_exporter
+         scrape_interval: 15s
+         static_configs:
+            - targets: ['sql-exporter:9237']
+            labels:
+               instance: sql_exporter
+   ```
+
+     **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/local/prometheus.yml) for all available configuration options.
+
+3. Add **Prometheus** as a new source to Grafana.
+
+
+For more details on how to configure, run and troubleshoot Prometheus, see the [Prometheus documentation](https://prometheus.io/docs/introduction/overview/).
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Step 3. Build a monitoring dashboard
 
