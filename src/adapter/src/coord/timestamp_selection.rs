@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
@@ -106,10 +107,11 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 }
 
+#[async_trait(?Send)]
 impl TimestampProvider for Coordinator {
-    fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
+    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
         let timestamp_oracle = self.get_timestamp_oracle(timeline);
-        Some(timestamp_oracle.read_ts())
+        Some(timestamp_oracle.read_ts().await)
     }
 
     /// Reports a collection's current read frontier.
@@ -182,6 +184,7 @@ impl TimestampProvider for Coordinator {
     }
 }
 
+#[async_trait(?Send)]
 pub trait TimestampProvider {
     fn compute_read_frontier<'a>(
         &'a self,
@@ -203,7 +206,7 @@ pub trait TimestampProvider {
     fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
     fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
 
-    fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
+    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
 
     /// Determines the timestamp for a query.
     ///
@@ -212,7 +215,7 @@ pub trait TimestampProvider {
     /// after `since` and sure to be available not after `upper`.
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
-    fn determine_timestamp_for(
+    async fn determine_timestamp_for(
         &self,
         catalog: &CatalogState,
         session: &Session,
@@ -257,7 +260,7 @@ pub trait TimestampProvider {
                     || (when.can_advance_to_timeline_ts()
                         && isolation_level == &IsolationLevel::StrictSerializable) =>
             {
-                self.oracle_read_ts(timeline)
+                self.oracle_read_ts(timeline).await
             }
             _ => None,
         };
@@ -422,7 +425,7 @@ pub trait TimestampProvider {
 
 impl Coordinator {
     /// Determines the timestamp for a query.
-    pub(crate) fn determine_timestamp(
+    pub(crate) async fn determine_timestamp(
         &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -432,16 +435,18 @@ impl Coordinator {
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
-        let det = self.determine_timestamp_for(
-            self.catalog().state(),
-            session,
-            id_bundle,
-            when,
-            compute_instance,
-            timeline_context,
-            real_time_recency_ts,
-            isolation_level,
-        )?;
+        let det = self
+            .determine_timestamp_for(
+                self.catalog().state(),
+                session,
+                id_bundle,
+                when,
+                compute_instance,
+                timeline_context,
+                real_time_recency_ts,
+                isolation_level,
+            )
+            .await?;
         self.metrics
             .determine_timestamp
             .with_label_values(&[
@@ -458,16 +463,18 @@ impl Coordinator {
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {
-                let serializable_det = self.determine_timestamp_for(
-                    self.catalog().state(),
-                    session,
-                    id_bundle,
-                    when,
-                    compute_instance,
-                    timeline_context,
-                    real_time_recency_ts,
-                    &IsolationLevel::Serializable,
-                )?;
+                let serializable_det = self
+                    .determine_timestamp_for(
+                        self.catalog().state(),
+                        session,
+                        id_bundle,
+                        when,
+                        compute_instance,
+                        timeline_context,
+                        real_time_recency_ts,
+                        &IsolationLevel::Serializable,
+                    )
+                    .await?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms

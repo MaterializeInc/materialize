@@ -290,7 +290,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     }
 
     /// Peek current write timestamp.
-    fn peek_write_ts(&self) -> T {
+    async fn peek_write_ts(&self) -> T {
         self.timestamp_oracle.peek_write_ts()
     }
 
@@ -298,7 +298,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// persisted to disk.
     ///
     /// See [`TimestampOracle::read_ts`] for more details.
-    pub fn read_ts(&self) -> T {
+    pub async fn read_ts(&self) -> T {
         let ts = self.timestamp_oracle.read_ts();
         assert!(
             ts.less_than(&self.durable_timestamp),
@@ -373,8 +373,8 @@ impl Coordinator {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
-    pub(crate) fn get_local_read_ts(&self) -> Timestamp {
-        self.get_local_timestamp_oracle().read_ts()
+    pub(crate) async fn get_local_read_ts(&self) -> Timestamp {
+        self.get_local_timestamp_oracle().read_ts().await
     }
 
     /// Assign a timestamp for a write to a local input and increase the local ts.
@@ -395,8 +395,8 @@ impl Coordinator {
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
-    pub(crate) fn peek_local_write_ts(&self) -> Timestamp {
-        self.get_local_timestamp_oracle().peek_write_ts()
+    pub(crate) async fn peek_local_write_ts(&self) -> Timestamp {
+        self.get_local_timestamp_oracle().peek_write_ts().await
     }
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
@@ -894,7 +894,7 @@ impl Coordinator {
                     .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))
                     .await;
             };
-            let read_ts = oracle.read_ts();
+            let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
                 read_holds = self.update_read_hold(read_holds, read_ts);
             }
