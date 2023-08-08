@@ -98,7 +98,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
-use mz_service::grpc::GrpcServer;
+use mz_service::grpc::{GrpcServer, MAX_GRPC_MESSAGE_SIZE};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
@@ -342,7 +342,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             storage_client,
-            ProtoStorageServer::new,
+            |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 
@@ -363,7 +363,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             compute_client,
-            ProtoComputeServer::new,
+            |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 

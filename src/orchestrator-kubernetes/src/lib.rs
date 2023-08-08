@@ -351,9 +351,9 @@ impl k8s_openapi::Metadata for MetricValueList {
 }
 
 impl NamespacedKubernetesOrchestrator {
-    /// Return a `ListParams` instance that limits results to the namespace
+    /// Return a `wather::Config` instance that limits results to the namespace
     /// assigned to this orchestrator.
-    fn list_pod_params(&self) -> watcher::Config {
+    fn watch_pod_params(&self) -> watcher::Config {
         let ns_selector = format!(
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
@@ -1317,7 +1317,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let stream = watcher(self.pod_api.clone(), self.list_pod_params())
+        let stream = watcher(self.pod_api.clone(), self.watch_pod_params())
             .touched_objects()
             .filter_map(|object| async move {
                 match object {
