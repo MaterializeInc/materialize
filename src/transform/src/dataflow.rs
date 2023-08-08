@@ -19,7 +19,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_compute_client::types::dataflows::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
-use tracing::warn;
 
 use crate::monotonic::MonotonicFlag;
 use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformArgs, TransformError};
@@ -435,7 +434,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 
 /// Restricts the indexes imported by `dataflow` to only the ones it needs.
 ///
-/// The input `dataflow` should import all indexes belonging to all views it
+/// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
 #[tracing::instrument(
     target = "optimizer",
@@ -447,19 +446,24 @@ fn optimize_dataflow_index_imports(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
-    // Generate (a mapping of views used by exports and objects to build) ->
-    // (indexes from that view that have been explicitly chosen to be used)
-    let mut indexes_by_view = BTreeMap::new();
-    for sink_desc in dataflow.sink_exports.iter() {
-        indexes_by_view
-            .entry(sink_desc.1.from)
+    // Generate a mapping of
+    // (ids used by exports and objects to build) ->
+    // (arrangement keys on that id that have been explicitly requested by the MIR plans)
+    let mut index_reqs_by_id = BTreeMap::new();
+    // First, insert `sink_exports` and `index_exports` into `index_reqs_by_id` to account for the
+    // (currently only theoretical) possibility that we are using an index that we are also building
+    // ourselves.
+    for (_id, sink_desc) in dataflow.sink_exports.iter() {
+        index_reqs_by_id
+            .entry(sink_desc.from)
             .or_insert_with(BTreeSet::new);
     }
-    for (_, (index_desc, _)) in dataflow.index_exports.iter() {
-        indexes_by_view
+    for (_id, (index_desc, _)) in dataflow.index_exports.iter() {
+        index_reqs_by_id
             .entry(index_desc.on_id)
             .or_insert_with(BTreeSet::new);
     }
+    // Go through `objects_to_build` and collect which arrangements are requested by the MIR plans.
     for build_desc in dataflow.objects_to_build.iter_mut() {
         build_desc
             .plan
@@ -468,8 +472,13 @@ fn optimize_dataflow_index_imports(
                 MirRelationExpr::Get {
                     id: Id::Global(id), ..
                 } => {
-                    indexes_by_view.entry(*id).or_insert_with(BTreeSet::new);
+                    index_reqs_by_id.entry(*id).or_insert_with(BTreeSet::new);
                 }
+                // The following pattern match critically relies on the fact that `inline_lets_core`
+                // doesn't CSE away multiple occurrences of a global Get, because that could
+                // separate an ArrangeBy from its global Get, and thus would necessitate making
+                // this traversal collect state across let bindings.
+                // (Note: an ArrangeBy on top of a global Get CSEd _together_ is ok.)
                 MirRelationExpr::ArrangeBy { input, keys } => {
                     if let MirRelationExpr::Get {
                         id: Id::Global(id), ..
@@ -477,7 +486,7 @@ fn optimize_dataflow_index_imports(
                     {
                         for key in keys {
                             if indexes.indexes_on(*id).find(|k| k == &key).is_some() {
-                                indexes_by_view.get_mut(id).unwrap().insert(key.clone());
+                                index_reqs_by_id.get_mut(id).unwrap().insert(key.clone());
                             }
                         }
                     }
@@ -485,19 +494,19 @@ fn optimize_dataflow_index_imports(
                 _ => {}
             })?;
     }
-    for (id, keys) in indexes_by_view.iter_mut() {
-        if keys.is_empty() {
-            // If a dataflow uses a view that has indexes, but it has not
-            // chosen to use any specific index of that view, pick an arbitrary
+    for (id, keys_requested) in index_reqs_by_id.iter_mut() {
+        if keys_requested.is_empty() {
+            // If a dataflow uses an id that has indexes, but it has not
+            // chosen to use any specific index on that id, pick an arbitrary
             // index to read from.
             if let Some(key) = indexes.indexes_on(*id).next() {
-                keys.insert(key.to_owned());
+                keys_requested.insert(key.to_owned());
             }
         }
     }
     dataflow.index_imports.retain(|_, (index_desc, _, _)| {
-        if let Some(keys) = indexes_by_view.get(&index_desc.on_id) {
-            keys.contains(&index_desc.key)
+        if let Some(keys_requested) = index_reqs_by_id.get(&index_desc.on_id) {
+            keys_requested.contains(&index_desc.key)
         } else {
             false
         }
