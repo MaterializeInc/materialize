@@ -3972,7 +3972,7 @@ sch  r2=U/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA sch
@@ -3989,7 +3989,7 @@ sch  r4=C/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d1.sch
@@ -4006,7 +4006,7 @@ sch  r4=C/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d2.sch
@@ -4021,7 +4021,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r8=C/r6
 sch  r6=UC/r6
-sch  mz_introspection=U/r6
+sch  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP SCHEMA materialize.sch
@@ -4038,7 +4038,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r8=C/r7
 sch  r7=UC/r7
-sch  mz_introspection=U/r7
+sch  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP SCHEMA materialize.sch
@@ -4055,7 +4055,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r10=C/r9
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d1.sch
@@ -4072,7 +4072,7 @@ SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r10=C/r9
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d2.sch
@@ -4174,7 +4174,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA sch
@@ -4186,7 +4186,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d1.sch
@@ -4198,7 +4198,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d2.sch
@@ -4212,7 +4212,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r6=UC/r6
-sch  mz_introspection=U/r6
+sch  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP SCHEMA materialize.sch
@@ -4228,7 +4228,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r7=UC/r7
-sch  mz_introspection=U/r7
+sch  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP SCHEMA materialize.sch
@@ -4244,7 +4244,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d1.sch
@@ -4260,7 +4260,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d2.sch
@@ -4344,7 +4344,7 @@ d  r2=U/materialize
 d  r1=UC/materialize
 d  r3=UC/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 statement ok
 DROP DATABASE d
@@ -4359,7 +4359,7 @@ SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r8=C/r6
 d  r6=UC/r6
-d  mz_introspection=U/r6
+d  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP DATABASE d
@@ -4376,7 +4376,7 @@ SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r8=C/r7
 d  r7=UC/r7
-d  mz_introspection=U/r7
+d  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP DATABASE d
@@ -4392,7 +4392,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r9=UC/r9
-d  mz_introspection=U/r9
+d  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP DATABASE d
@@ -4460,7 +4460,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 statement ok
 DROP DATABASE d
@@ -4474,7 +4474,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r6=UC/r6
-d  mz_introspection=U/r6
+d  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP DATABASE d
@@ -4490,7 +4490,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r7=UC/r7
-d  mz_introspection=U/r7
+d  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP DATABASE d
@@ -4506,7 +4506,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r9=UC/r9
-d  mz_introspection=U/r9
+d  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP DATABASE d
@@ -4590,7 +4590,7 @@ c  r2=U/materialize
 c  r1=UC/materialize
 c  r3=UC/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4605,7 +4605,7 @@ SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r6
 c  r6=UC/r6
-c  mz_introspection=U/r6
+c  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4622,7 +4622,7 @@ SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r7
 c  r7=UC/r7
-c  mz_introspection=U/r7
+c  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4638,7 +4638,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
-c  mz_introspection=U/r9
+c  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -4706,7 +4706,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4720,7 +4720,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r6=UC/r6
-c  mz_introspection=U/r6
+c  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4736,7 +4736,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r7=UC/r7
-c  mz_introspection=U/r7
+c  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4752,7 +4752,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
-c  mz_introspection=U/r9
+c  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
