@@ -2113,6 +2113,8 @@ impl Default for RowArena {
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
+    use crate::ScalarType;
+
     use super::*;
 
     #[mz_ore::test]
@@ -2167,6 +2169,12 @@ mod tests {
         }
 
         round_trip(vec![]);
+        round_trip(
+            ScalarType::enumerate()
+                .iter()
+                .flat_map(|r#type| r#type.interesting_datums())
+                .collect(),
+        );
         round_trip(vec![
             Datum::Null,
             Datum::Null,
@@ -2192,15 +2200,6 @@ mod tests {
                     NaiveDateTime::from_timestamp_opt(61, 0).unwrap(),
                     Utc,
                 ))
-                .unwrap(),
-            ),
-            Datum::Timestamp(
-                CheckedTimestamp::from_timestamplike(
-                    NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
-                        .unwrap()
-                        .and_hms_milli_opt(14, 32, 11, 1234) // leap
-                        .unwrap(),
-                )
                 .unwrap(),
             ),
             Datum::Interval(Interval {
