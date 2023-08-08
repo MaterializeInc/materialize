@@ -23,7 +23,7 @@ use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace, trace_span, warn};
 
 use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
@@ -264,10 +264,12 @@ where
                 metrics.inner.command_queue_size.dec();
                 cmd_spec.specialize_command(&mut command);
 
-                trace!(
-                    replica = ?replica_id,
-                    command = ?command,
-                    "sending command to replica",
+                trace_span!("compute_rpc", role = "controller").in_scope(||
+                    trace!(
+                        replica = ?replica_id,
+                        command = ?command,
+                        "sending command to replica",
+                    )
                 );
                 client.send(command).await?;
             },
@@ -276,10 +278,12 @@ where
                 let Some(response) = response? else {
                     bail!("replica unexpectedly gracefully terminated connection");
                 };
-                trace!(
-                    replica = ?replica_id,
-                    response = ?response,
-                    "received response from replica",
+                trace_span!("compute_rpc", role = "controller").in_scope(||
+                    trace!(
+                        replica = ?replica_id,
+                        response = ?response,
+                        "received response from replica",
+                    )
                 );
 
                 if response_tx.send(response).is_ok() {

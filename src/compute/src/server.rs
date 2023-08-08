@@ -36,7 +36,7 @@ use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
-use tracing::trace;
+use tracing::{trace, trace_span};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
@@ -94,7 +94,8 @@ impl CommandReceiver {
 
     fn try_recv(&self) -> Result<ComputeCommand, TryRecvError> {
         self.inner.try_recv().map(|cmd| {
-            trace!(worker = ?self.worker_id, command = ?cmd, "received command");
+            trace_span!("compute_rpc", role = "replica")
+                .in_scope(|| trace!(worker = ?self.worker_id, command = ?cmd, "received command"));
             cmd
         })
     }
@@ -112,7 +113,9 @@ impl ResponseSender {
     }
 
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
-        trace!(worker = ?self.worker_id, response = ?response, "sending response");
+        trace_span!("compute_rpc", role = "replica").in_scope(
+            || trace!(worker = ?self.worker_id, response = ?response, "sending response"),
+        );
         self.inner.send(response)
     }
 }
