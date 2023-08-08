@@ -28,12 +28,10 @@ pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
 });
 
 pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    let mut names: BTreeSet<String> = [&SYSTEM_USER, &SUPPORT_USER]
+    [&SYSTEM_USER, &SUPPORT_USER, &INTROSPECTION_USER]
         .into_iter()
         .map(|user| user.name.clone())
-        .collect();
-    names.insert("mz_introspection".to_string()); // TODO: remove
-    names
+        .collect()
 });
 
 pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>> =

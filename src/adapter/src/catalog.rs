@@ -99,7 +99,7 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
-    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
@@ -1908,9 +1908,9 @@ impl Cluster {
     pub fn role(&self) -> ClusterRole {
         // NOTE - These roles power monitoring systems. Do not change
         // them without talking to the cloud or observability groups.
-        if self.name == SYSTEM_USER.name {
+        if self.name == MZ_SYSTEM_CLUSTER.name {
             ClusterRole::SystemCritical
-        } else if self.name == SUPPORT_USER.name {
+        } else if self.name == MZ_INTROSPECTION_CLUSTER.name {
             ClusterRole::System
         } else {
             ClusterRole::User
