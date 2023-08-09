@@ -43,6 +43,7 @@ from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 
 class EnvironmentdService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
@@ -62,6 +63,7 @@ class MaterializedAliasService(K8sService):
     """Some testdrive tests expect that Mz is accessible as 'materialized'"""
 
     def __init__(self) -> None:
+        super().__init__()
         self.service = V1Service(
             api_version="v1",
             kind="Service",

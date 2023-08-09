@@ -28,6 +28,7 @@ from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 class SshDeployment(K8sDeployment):
     def __init__(self) -> None:
+        super().__init__()
         env = [
             V1EnvVar(name="SSH_USERS", value="mz:1000:1000"),
             V1EnvVar(name="TCP_FORWARDING", value="true"),
@@ -59,6 +60,7 @@ class SshDeployment(K8sDeployment):
 
 class SshService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         ports = [
             V1ServicePort(name="ssh", port=22),
         ]

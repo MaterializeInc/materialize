@@ -37,6 +37,7 @@ from materialize.mzcompose.services import Cockroach
 
 class CockroachConfigMap(K8sConfigMap):
     def __init__(self) -> None:
+        super().__init__()
         self.config_map = V1ConfigMap(
             metadata=V1ObjectMeta(
                 name="cockroach-init",
@@ -51,6 +52,7 @@ class CockroachConfigMap(K8sConfigMap):
 
 class CockroachService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         service_port = V1ServicePort(name="sql", port=26257)
 
         self.service = V1Service(

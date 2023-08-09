@@ -14,6 +14,7 @@ from materialize.cloudtest.k8s.api.k8s_role_binding import K8sRoleBinding
 
 class AdminRoleBinding(K8sRoleBinding):
     def __init__(self) -> None:
+        super().__init__()
         metadata = V1ObjectMeta(name="admin-binding")
         role_ref = V1RoleRef(
             api_group="rbac.authorization.k8s.io", kind="ClusterRole", name="admin"
