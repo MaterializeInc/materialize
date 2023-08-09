@@ -246,6 +246,12 @@ impl CatalogState {
                 allocation: _,
                 disk,
             }) => (Some(&**size), Some(*disk), Some(az.as_str())),
+            ReplicaLocation::Managed(ManagedReplicaLocation {
+                size,
+                availability_zones: _,
+                allocation: _,
+                disk,
+            }) => (Some(&**size), Some(*disk), None),
             _ => (None, None, None),
         };
 
