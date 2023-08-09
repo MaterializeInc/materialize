@@ -137,7 +137,9 @@ use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
+use crate::coord::timeline::{
+    CatalogTimestampPersistence, TimelineContext, TimelineState, WriteTimestamp,
+};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -2149,13 +2151,18 @@ pub async fn serve(
         .stack_size(3 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
+            let catalog = Arc::new(catalog);
+
             let mut timestamp_oracles = BTreeMap::new();
             for (timeline, initial_timestamp) in initial_timestamps {
+                let persistence =
+                    CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
+
                 handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
                     coord_now.clone(),
-                    |ts| catalog.persist_timestamp(&timeline, ts),
+                    persistence,
                     &mut timestamp_oracles,
                 ));
             }
@@ -2171,7 +2178,7 @@ pub async fn serve(
                 view_optimizer: Optimizer::logical_optimizer(
                     &mz_transform::typecheck::empty_context(),
                 ),
-                catalog: Arc::new(catalog),
+                catalog,
                 internal_cmd_tx,
                 group_commit_tx,
                 strict_serializable_reads_tx,

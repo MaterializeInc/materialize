@@ -10,7 +10,7 @@
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, fmt, thread};
 
@@ -28,7 +28,7 @@ use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::error;
 
-use crate::catalog::CatalogItem;
+use crate::catalog::{Catalog, CatalogItem, Error};
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
@@ -241,6 +241,7 @@ pub struct DurableTimestampOracle<T> {
     timestamp_oracle: InMemoryTimestampOracle<T>,
     durable_timestamp: T,
     persist_interval: T,
+    timestamp_persistence: Box<dyn TimestampPersistence<T>>,
 }
 
 impl<T: TimestampManipulation> DurableTimestampOracle<T> {
@@ -249,24 +250,23 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// needs to be persisted to disk.
     ///
     /// See [`TimestampOracle::new`] for more details.
-    pub(crate) async fn new<F, Fut>(
+    pub(crate) async fn new<F, P>(
         initially: T,
         next: F,
         persist_interval: T,
-        persist_fn: impl FnOnce(T) -> Fut,
+        timestamp_persistence: P,
     ) -> Self
     where
         F: Fn() -> T + 'static,
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
+        P: TimestampPersistence<T> + 'static,
     {
         let mut oracle = Self {
             timestamp_oracle: InMemoryTimestampOracle::new(initially.clone(), next),
             durable_timestamp: initially.clone(),
             persist_interval,
+            timestamp_persistence: Box::new(timestamp_persistence),
         };
-        oracle
-            .maybe_allocate_new_timestamps(&initially, persist_fn)
-            .await;
+        oracle.maybe_allocate_new_timestamps(&initially).await;
         oracle
     }
 
@@ -274,13 +274,9 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// persisted to disk.
     ///
     /// See [`TimestampOracle::write_ts`] for more details.
-    async fn write_ts<Fut>(&mut self, persist_fn: impl FnOnce(T) -> Fut) -> WriteTimestamp<T>
-    where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
+    async fn write_ts(&mut self) -> WriteTimestamp<T> {
         let ts = self.timestamp_oracle.write_ts();
-        self.maybe_allocate_new_timestamps(&ts.timestamp, persist_fn)
-            .await;
+        self.maybe_allocate_new_timestamps(&ts.timestamp).await;
         ts
     }
 
@@ -311,13 +307,9 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// Mark a write at `write_ts` completed.
     ///
     /// See [`TimestampOracle::apply_write`] for more details.
-    pub async fn apply_write<Fut>(&mut self, lower_bound: T, persist_fn: impl FnOnce(T) -> Fut)
-    where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
+    pub async fn apply_write(&mut self, lower_bound: T) {
         self.timestamp_oracle.apply_write(lower_bound.clone());
-        self.maybe_allocate_new_timestamps(&lower_bound, persist_fn)
-            .await;
+        self.maybe_allocate_new_timestamps(&lower_bound).await;
     }
 
     /// Checks to see if we can serve the timestamp from memory, or if we need to durably store
@@ -325,23 +317,48 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     ///
     /// If `ts` is less than the persisted timestamp then we can serve `ts` from memory,
     /// otherwise we need to durably store some timestamp greater than `ts`.
-    async fn maybe_allocate_new_timestamps<Fut>(
-        &mut self,
-        ts: &T,
-        persist_fn: impl FnOnce(T) -> Fut,
-    ) where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
+    async fn maybe_allocate_new_timestamps(&mut self, ts: &T) {
         if self.durable_timestamp.less_equal(ts)
             // Since the timestamp is at its max value, we know that no other Coord can
             // allocate a higher value.
             && self.durable_timestamp.less_than(&T::maximum())
         {
             self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
-            persist_fn(self.durable_timestamp.clone())
-                .await
-                .unwrap_or_terminate("can't persist timestamp");
+            let res = self
+                .timestamp_persistence
+                .persist_timestamp(self.durable_timestamp.clone())
+                .await;
+
+            res.unwrap_or_terminate("can't persist timestamp");
         }
+    }
+}
+
+/// Provides persistence of timestamps for [`DurableTimestampOracle`].
+#[async_trait::async_trait]
+pub trait TimestampPersistence<T> {
+    /// Persist new global timestamp to disk.
+    async fn persist_timestamp(&self, timestamp: T) -> Result<(), Error>;
+}
+
+/// A [`TimestampPersistence`] that is backed by a [`Catalog`].
+pub struct CatalogTimestampPersistence {
+    timeline: Timeline,
+    catalog: Arc<Catalog>,
+}
+
+impl CatalogTimestampPersistence {
+    pub(crate) fn new(timeline: Timeline, catalog: Arc<Catalog>) -> Self {
+        Self { timeline, catalog }
+    }
+}
+
+#[async_trait::async_trait]
+impl TimestampPersistence<mz_repr::Timestamp> for CatalogTimestampPersistence {
+    async fn persist_timestamp(&self, timestamp: mz_repr::Timestamp) -> Result<(), Error> {
+        self.catalog
+            .persist_timestamp(&self.timeline, timestamp)
+            .await
     }
 }
 
@@ -387,10 +404,7 @@ impl Coordinator {
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
             .oracle
-            .write_ts(|ts| {
-                self.catalog
-                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
-            })
+            .write_ts()
             .await
     }
 
@@ -415,10 +429,7 @@ impl Coordinator {
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
             .oracle
-            .apply_write(timestamp, |ts| {
-                self.catalog
-                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
-            })
+            .apply_write(timestamp)
             .await;
     }
 
@@ -427,11 +438,14 @@ impl Coordinator {
         &'a mut self,
         timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
+        let catalog = Arc::clone(&self.catalog);
+        let timestamp_persistence = CatalogTimestampPersistence::new(timeline.clone(), catalog);
+
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
-            |ts| self.catalog.persist_timestamp(timeline, ts),
+            timestamp_persistence,
             &mut self.global_timelines,
         )
         .await
@@ -439,15 +453,15 @@ impl Coordinator {
 
     /// Ensures that a global timeline state exists for `timeline`, with an initial time
     /// of `initially`.
-    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, Fut>(
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, P>(
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
-        persist_fn: impl FnOnce(Timestamp) -> Fut,
+        timestamp_persistence: P,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp>
     where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
+        P: TimestampPersistence<mz_repr::Timestamp> + 'static,
     {
         if !global_timelines.contains_key(timeline) {
             let oracle = if timeline == &Timeline::EpochMilliseconds {
@@ -455,7 +469,7 @@ impl Coordinator {
                     initially,
                     move || (now)().into(),
                     *TIMESTAMP_PERSIST_INTERVAL,
-                    persist_fn,
+                    timestamp_persistence,
                 )
                 .await
             } else {
@@ -463,7 +477,7 @@ impl Coordinator {
                     initially,
                     Timestamp::minimum,
                     *TIMESTAMP_PERSIST_INTERVAL,
-                    persist_fn,
+                    timestamp_persistence,
                 )
                 .await
             };
@@ -891,9 +905,7 @@ impl Coordinator {
                 let id_bundle = self.ids_in_timeline(&timeline);
                 let now =
                     Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle));
-                oracle
-                    .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))
-                    .await;
+                oracle.apply_write(now).await;
             };
             let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
