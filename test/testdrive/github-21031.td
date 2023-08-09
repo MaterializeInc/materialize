@@ -30,6 +30,9 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 <TIMESTAMP> 1 1
 > COMMIT
 
+# Needed when running the next query that touches a log source
+> SET CLUSTER_REPLICA=r1
+
 # To ensure that the subscribe has reached the introspection sources, we
 # install another dataflow and wait for that to show up. Introspection sources
 # are not serializable, but dataflows still show up in order.

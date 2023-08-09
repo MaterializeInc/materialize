@@ -89,6 +89,9 @@
   );
 4095
 
+# Needed when running the next queries that touches a log source
+> SET CLUSTER_REPLICA=r1
+
 > WITH operators AS (
   SELECT
       dod.dataflow_id,
