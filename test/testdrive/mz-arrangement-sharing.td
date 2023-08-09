@@ -701,6 +701,8 @@ ReduceMinsMaxes
 "ArrangeAccumulable"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3)]]"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3)]]-errors"
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
 "ArrangeBy[[Column(0), Column(2)]]"
 "ArrangeBy[[Column(0)]]"
 "ArrangeBy[[Column(0)]]"
