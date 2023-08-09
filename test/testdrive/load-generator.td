@@ -10,13 +10,13 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts                subsource      <null>                         default
-auction_house           load-generator ${arg.default-storage-size}    default
-auction_house_progress  progress       <null>                         default
-auctions                subsource      <null>                         default
-bids                    subsource      <null>                         default
-organizations           subsource      <null>                         default
-users                   subsource      <null>                         default
+accounts                subsource      <null>                         <null>
+auction_house           load-generator ${arg.default-storage-size}    materialize_public_auction_house
+auction_house_progress  progress       <null>                         <null>
+auctions                subsource      <null>                         <null>
+bids                    subsource      <null>                         <null>
+organizations           subsource      <null>                         <null>
+users                   subsource      <null>                         <null>
 
 # Adding test to check for tables() work
 > CREATE SCHEMA a;

@@ -515,31 +515,31 @@ SELECT ${arg.replicas} > 1;
 > SHOW SOURCES FROM mz_internal
 name                                           type   size  cluster
 ------------------------------------------------------------------
-mz_active_peeks_per_worker                   log   <null>   default
-mz_arrangement_batches_raw                   log   <null>   default
-mz_arrangement_records_raw                   log   <null>   default
-mz_arrangement_sharing_raw                   log   <null>   default
-mz_compute_delays_histogram_raw              log   <null>   default
-mz_compute_dependencies_per_worker           log   <null>   default
-mz_compute_exports_per_worker                log   <null>   default
-mz_compute_frontiers_per_worker              log   <null>   default
-mz_compute_import_frontiers_per_worker       log   <null>   default
-mz_compute_operator_durations_histogram_raw  log   <null>   default
-mz_dataflow_addresses_per_worker             log   <null>   default
-mz_dataflow_channels_per_worker              log   <null>   default
-mz_dataflow_operator_reachability_raw        log   <null>   default
-mz_dataflow_operators_per_worker             log   <null>   default
-mz_frontiers                                 source <null>  default
-mz_message_counts_received_raw               log   <null>   default
-mz_message_counts_sent_raw                   log   <null>   default
-mz_peek_durations_histogram_raw              log   <null>   default
-mz_scheduling_elapsed_raw                    log   <null>   default
-mz_scheduling_parks_histogram_raw            log   <null>   default
-mz_sink_statistics                           source <null>  default
-mz_sink_status_history                       source <null>  default
-mz_source_statistics                         source <null>  default
-mz_source_status_history                     source <null>  default
-mz_storage_shards                            source <null>  default
+mz_active_peeks_per_worker                   log   <null>   <null>
+mz_arrangement_batches_raw                   log   <null>   <null>
+mz_arrangement_records_raw                   log   <null>   <null>
+mz_arrangement_sharing_raw                   log   <null>   <null>
+mz_compute_delays_histogram_raw              log   <null>   <null>
+mz_compute_dependencies_per_worker           log   <null>   <null>
+mz_compute_exports_per_worker                log   <null>   <null>
+mz_compute_frontiers_per_worker              log   <null>   <null>
+mz_compute_import_frontiers_per_worker       log   <null>   <null>
+mz_compute_operator_durations_histogram_raw  log   <null>   <null>
+mz_dataflow_addresses_per_worker             log   <null>   <null>
+mz_dataflow_channels_per_worker              log   <null>   <null>
+mz_dataflow_operator_reachability_raw        log   <null>   <null>
+mz_dataflow_operators_per_worker             log   <null>   <null>
+mz_frontiers                                 source <null>  <null>
+mz_message_counts_received_raw               log   <null>   <null>
+mz_message_counts_sent_raw                   log   <null>   <null>
+mz_peek_durations_histogram_raw              log   <null>   <null>
+mz_scheduling_elapsed_raw                    log   <null>   <null>
+mz_scheduling_parks_histogram_raw            log   <null>   <null>
+mz_sink_statistics                           source <null>  <null>
+mz_sink_status_history                       source <null>  <null>
+mz_source_statistics                         source <null>  <null>
+mz_source_status_history                     source <null>  <null>
+mz_storage_shards                            source <null>  <null>
 
 > SHOW TABLES FROM mz_internal
 name

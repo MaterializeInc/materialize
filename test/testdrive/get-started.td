@@ -14,13 +14,13 @@
 > SHOW SOURCES
 name          type           size                         cluster
 -----------------------------------------------------------------
+accounts      subsource      <null>                       <null>
+auctions      subsource      <null>                       <null>
+bids          subsource      <null>                       <null>
 demo          load-generator ${arg.default-storage-size}  materialize_public_demo
-demo_progress progress       <null>                       default
-accounts      subsource      <null>                       default
-auctions      subsource      <null>                       default
-bids          subsource      <null>                       default
-organizations subsource      <null>                       default
-users         subsource      <null>                       default
+demo_progress progress       <null>                       <null>
+organizations subsource      <null>                       <null>
+users         subsource      <null>                       <null>
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone"

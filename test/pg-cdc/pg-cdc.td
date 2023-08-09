@@ -259,25 +259,25 @@ contains: must not specify DETAILS option in CREATE SOURCE
   );
 
 > SHOW SOURCES
-array_types_table     subsource <null>
-conflict_table        subsource <null>
-create                subsource <null>
-escaped_text_table    subsource <null>
-large_text            subsource <null>
-multipart_pk          subsource <null>
-mz_source             postgres  ${arg.default-storage-size}
-mz_source_progress    progress  <null>
-no_replica_identity   subsource <null>
-nonpk_table           subsource <null>
-nulls_table           subsource <null>
-pk_table              subsource <null>
-"space table"         subsource <null>
-trailing_space_nopk   subsource <null>
-trailing_space_pk     subsource <null>
-"\"literal_quotes\""  subsource <null>
-types_table           subsource <null>
-utf8_table            subsource <null>
-таблица               subsource <null>
+array_types_table     subsource <null>  <null>
+conflict_table        subsource <null>  <null>
+create                subsource <null>  <null>
+escaped_text_table    subsource <null>  <null>
+large_text            subsource <null>  <null>
+multipart_pk          subsource <null>  <null>
+mz_source             postgres  ${arg.default-storage-size}  materialize_public_mz_source
+mz_source_progress    progress  <null>  <null>
+no_replica_identity   subsource <null>  <null>
+nonpk_table           subsource <null>  <null>
+nulls_table           subsource <null>  <null>
+pk_table              subsource <null>  <null>
+"space table"         subsource <null>  <null>
+trailing_space_nopk   subsource <null>  <null>
+trailing_space_pk     subsource <null>  <null>
+"\"literal_quotes\""  subsource <null>  <null>
+types_table           subsource <null>  <null>
+utf8_table            subsource <null>  <null>
+таблица               subsource <null>  <null>
 
 > SELECT lsn > 0 FROM mz_source_progress
 true

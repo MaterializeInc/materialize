@@ -190,8 +190,8 @@ renamed_sink
 > SHOW SOURCES;
 name               type   size                            cluster
 -----------------------------------------------------------------
-renamed_mz_data    kafka     ${arg.default-storage-size}  default
-mz_data_progress   progress  <null>                       default
+mz_data_progress   progress  <null>                       <null>
+renamed_mz_data    kafka     ${arg.default-storage-size}  materialize_public_mz_data
 
 # Sink was successfully renamed
 > SHOW SINKS

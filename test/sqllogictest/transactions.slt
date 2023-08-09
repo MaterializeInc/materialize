@@ -756,8 +756,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,1
-s_progress,progress,NULL
+s,load-generator,1,materialize_public_s
+s_progress,progress,NULL,NULL
 COMPLETE 2
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
