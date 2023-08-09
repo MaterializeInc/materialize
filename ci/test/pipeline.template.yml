@@ -557,7 +557,10 @@ steps:
     parallelism: 3
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
-    inputs: [test/cloudtest, misc/python/materialize/cloudtest]
+    inputs:
+      - test/cloudtest
+      - misc/python/materialize/cloudtest
+      - misc/kind
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
