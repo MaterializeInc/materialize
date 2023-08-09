@@ -31,13 +31,13 @@ for all processes of all extant cluster replicas.
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics -->
-| Field               | Type         | Meaning                                              |
-| ------------------- | ------------ | --------                                             |
-| `replica_id`        | [`text`]     | The ID of a cluster replica.                         |
-| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica. |
-| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core. |
-| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                     |
-| `disk_bytes`        | [`uint8`]    | Currently null. Reserved for later use.              |
+| Field               | Type         | Meaning                                                                           |
+| ------------------- | ------------ | --------                                                                          |
+| `replica_id`        | [`text`]     | The ID of a cluster replica.                                                      |
+| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                              |
+| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                              |
+| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                  |
+| `disk_bytes`        | [`uint8`]    | The number of bytes used in the attached disk, if there is one. `NULL` otherwise. |
 
 ### `mz_cluster_replica_sizes`
 
@@ -50,15 +50,15 @@ them for any kind of capacity planning.
 {{< /warning >}}
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_sizes -->
-| Field                  | Type        | Meaning                                                       |
-|------------------------|-------------|---------------------------------------------------------------|
-| `size`                 | [`text`]    | The human-readable replica size.                              |
-| `processes`            | [`uint8`]   | The number of processes in the replica.                       |
-| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.            |
-| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core. |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core. |
-| `disk_bytes`           | [`uint8`]   | Currently null. Reserved for later use.                       |
-| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.              |
+| Field                  | Type        | Meaning                                                          |
+|------------------------|-------------|------------------------------------------------------------------|
+| `size`                 | [`text`]    | The human-readable replica size.                                 |
+| `processes`            | [`uint8`]   | The number of processes in the replica.                          |
+| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.               |
+| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.    |
+| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.    |
+| `disk_bytes`           | [`uint8`]   | The size of the attached disk, if there is one. `NULL` otherwise |
+| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                 |
 
 ### `mz_cluster_links`
 
@@ -102,13 +102,13 @@ for all processes of all extant cluster replicas, as a percentage of the total r
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_utilization -->
-| Field            | Type                 | Meaning                                                    |
-|------------------|----------------------|------------------------------------------------------------|
-| `replica_id`     | [`text`]             | The ID of a cluster replica.                               |
-| `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.       |
-| `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation. |
-| `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation. |
-| `disk_percent`   | [`double precision`] | Currently null. Reserved for later use.                    |
+| Field            | Type                 | Meaning                                                                              |
+|------------------|----------------------|--------------------------------------------------------------------------------------|
+| `replica_id`     | [`text`]             | The ID of a cluster replica.                                                         |
+| `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                 |
+| `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation.                           |
+| `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.                           |
+| `disk_percent`   | [`double precision`] | Approximate disk usage in % of the attached disk, if there is one. `NULL` otherwise. |
 
 ### `mz_cluster_replica_heartbeats`
 
