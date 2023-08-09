@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ClusterId, CreateReplicaConfig, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
-    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+    ClusterId, CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaId,
+    ReplicaLocation, ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
@@ -844,7 +844,9 @@ impl Coordinator {
                     sizes.insert(location.size.clone());
                     disks.insert(location.disk);
 
-                    if let Some(az) = &location.availability_zone {
+                    if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
+                        &location.availability_zones
+                    {
                         if !new_availability_zones.contains(az) {
                             coord_bail!(
                                 "unmanaged replica has availability zone {az} which is not \

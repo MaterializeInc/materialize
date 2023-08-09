@@ -14,8 +14,8 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
-    ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
-    ReplicaLocation,
+    ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaId, ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
@@ -238,16 +238,15 @@ impl CatalogState {
         let replica = &cluster.replicas_by_id[&id];
 
         let (size, disk, az) = match &replica.config.location {
+            // TODO(guswynn): The column should be `availability_zones`, not
+            // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
-                availability_zone,
-                // This is filled in durin concretization, and is exposed on the cluster
-                // in `mz_clusters`.
-                allowed_availability_zones: _,
+                availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), availability_zone.as_deref()),
-            ReplicaLocation::Unmanaged(_) => (None, None, None),
+            }) => (Some(&**size), Some(*disk), Some(az.as_str())),
+            _ => (None, None, None),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.

@@ -160,6 +160,18 @@ pub struct UnmanagedReplicaLocation {
     pub workers: usize,
 }
 
+/// Information about availability zone constraints for replicas.
+#[derive(Clone, Debug)]
+pub enum ManagedReplicaAvailabilityZones {
+    /// Specified if the `Replica` is from `MANAGED` cluster,
+    /// and specifies if their is an `AVAILABILITY ZONES`
+    /// constraint. Empty list's are represented as `None`.
+    FromCluster(Option<Vec<String>>),
+    /// Specified if the `Replica` is from a non-`MANAGED` cluster,
+    /// and specifies if their is a specific `AVAILABILITY ZONE`.
+    FromReplica(Option<String>),
+}
+
 /// The location of a managed replica.
 #[derive(Clone, Debug, Serialize)]
 pub struct ManagedReplicaLocation {
@@ -167,15 +179,21 @@ pub struct ManagedReplicaLocation {
     pub allocation: ReplicaAllocation,
     /// SQL size parameter used for allocation
     pub size: String,
-    /// The replica's availability zone, if specified.
-    pub availability_zone: Option<String>,
     /// The replica's availability zones, if specified.
-    /// Always `None` if `availability_zone` is `Some`.
     ///
-    /// This is placed here during replica concretization for convenience.
-    /// It is never serialized anywhere.
+    /// This is either the replica's specific `AVAILABILITY ZONE`,
+    /// or the zones placed here during replica concretization
+    /// from the `MANAGED` cluster config.
+    ///
+    /// We skip serialization (which is used for some validation
+    /// in tests) as the latter case is a "virtual" piece of information,
+    /// that exists only at runtime.
+    ///
+    /// An empty list of availability zones is concretized as `None`,
+    /// as the on-disk serialization of `MANAGED CLUSTER AVAILABILITY ZONES`
+    /// is an empty list if none are specified
     #[serde(skip)]
-    pub allowed_availability_zones: Option<Vec<String>>,
+    pub availability_zones: ManagedReplicaAvailabilityZones,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
 }
@@ -545,9 +563,10 @@ where
                         ("workers".into(), location.allocation.workers.to_string()),
                         ("size".into(), location.size.to_string()),
                     ]),
-                    availability_zones: location
-                        .availability_zone
-                        .map_or(location.allowed_availability_zones, |zone| Some(vec![zone])),
+                    availability_zones: match location.availability_zones {
+                        ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
+                        ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+                    },
                     // This provides the orchestrator with some label selectors that
                     // are used to constraint the scheduling of replicas, based on
                     // its internal configuration.

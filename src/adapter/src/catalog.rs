@@ -29,9 +29,9 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
-    UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
+    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
+    ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
@@ -5267,9 +5267,16 @@ impl Catalog {
                         .get(&size)
                         .expect("catalog out of sync")
                         .clone(),
-                    availability_zone,
-                    allowed_availability_zones: allowed_availability_zones
-                        .map(|zones| zones.to_vec()),
+                    availability_zones: match (availability_zone, allowed_availability_zones) {
+                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
+                        (None, Some(azs)) if azs.is_empty() => {
+                            ManagedReplicaAvailabilityZones::FromCluster(None)
+                        }
+                        (None, Some(azs)) => {
+                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
+                        }
+                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
+                    },
                     size,
                     disk,
                 })
@@ -8079,13 +8086,17 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 allocation: _,
                 size,
-                availability_zone,
-
-                allowed_availability_zones: _,
+                availability_zones,
                 disk,
             }) => SerializedReplicaLocation::Managed {
                 size,
-                availability_zone,
+                availability_zone: if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
+                    availability_zones
+                {
+                    Some(az)
+                } else {
+                    None
+                },
                 disk,
             },
         }
