@@ -221,13 +221,13 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct PersistWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
-    inner: Arc<PersistWriteWorkerInner<T>>,
+pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+    inner: Arc<PersistTableWriteWorkerInner<T>>,
 }
 
-/// Commands for [PersistWriteWorker].
+/// Commands for [PersistTableWriteWorker].
 #[derive(Debug)]
-enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
+enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandle(GlobalId),
@@ -235,22 +235,19 @@ enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
         Vec<(GlobalId, Vec<Update<T>>, T)>,
         tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ),
-    /// Appends `Vec<TimelessUpdate>` to `GlobalId` at, essentially,
-    /// `max(write_frontier, T)`.
-    MonotonicAppend(
-        Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
-        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
-    ),
     Shutdown,
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorker<T> {
+// TODO(txn): This impl is duplicative of PersistMonotonicWriteWorker, but it's
+// an intermediate state. The impl of this one will be completely replaced by
+// #20954.
+impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
     pub(crate) fn new(
         mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
-        mz_ore::task::spawn(|| "PersistWriteHandles", async move {
+        mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut write_handles =
                 BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
 
@@ -275,7 +272,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
 
                             while let Some((span, command)) = commands.pop_front() {
                                 match command {
-                                    PersistWriteWorkerCmd::Register(id, write_handle) => {
+                                    PersistTableWriteCmd::Register(id, write_handle) => {
                                         let previous = write_handles.insert(id, write_handle);
                                         if previous.is_some() {
                                             panic!(
@@ -284,10 +281,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                             );
                                         }
                                     }
-                                    PersistWriteWorkerCmd::Update(id, write_handle) => {
-                                        write_handles.insert(id, write_handle).expect("PersistWriteWorkerCmd::Update only valid for updating extant write handles");
+                                    PersistTableWriteCmd::Update(id, write_handle) => {
+                                        write_handles.insert(id, write_handle).expect("PersistTableWriteCmd::Update only valid for updating extant write handles");
                                     },
-                                    PersistWriteWorkerCmd::DropHandle(id) => {
+                                    PersistTableWriteCmd::DropHandle(id) => {
                                         // n.b. this should only remove the
                                         // handle from the persist worker and
                                         // not take any additional action such
@@ -296,7 +293,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         // using it.
                                         write_handles.remove(&id);
                                     }
-                                    PersistWriteWorkerCmd::Append(updates, response) => {
+                                    PersistTableWriteCmd::Append(updates, response) => {
                                         let mut ids = BTreeSet::new();
                                         for (id, update, upper) in updates {
                                             ids.insert(id);
@@ -324,46 +321,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         }
                                         all_responses.push((ids, response));
                                     }
-                                    PersistWriteWorkerCmd::MonotonicAppend(updates, response) => {
-                                        let mut updates_outer = Vec::with_capacity(updates.len());
-                                        for (id, update, at_least) in updates {
-                                            let current_upper = write_handles[&id].upper().clone();
-                                            if update.is_empty() && current_upper.is_empty() {
-                                                // Ignore timestamp advancement for
-                                                // closed collections. TODO? Make this a
-                                                // correctable error
-                                                continue;
-                                            }
-
-                                            let lower = if current_upper.less_than(&at_least) {
-                                                at_least
-                                            } else {
-                                                current_upper
-                                                    .elements()
-                                                    .iter()
-                                                    .min()
-                                                    .expect("cannot append data to closed collection")
-                                                    .clone()
-                                            };
-
-                                            let upper = lower.step_forward();
-                                            let update = update
-                                                .into_iter()
-                                                .map(|TimestamplessUpdate { row, diff }| Update {
-                                                    row,
-                                                    diff,
-                                                    timestamp: lower.clone(),
-                                                })
-                                                .collect::<Vec<_>>();
-
-                                            updates_outer.push((id, update, upper));
-                                        }
-                                        commands.push_front((
-                                            span,
-                                            PersistWriteWorkerCmd::Append(updates_outer, response),
-                                        ));
-                                    }
-                                    PersistWriteWorkerCmd::Shutdown => {
+                                    PersistTableWriteCmd::Shutdown => {
                                         shutdown = true;
                                     }
                                 }
@@ -465,11 +423,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                 }
             }
 
-            tracing::info!("PersistWriteWorker shutting down");
+            tracing::info!("PersistTableWriteWorker shutting down");
         });
 
         Self {
-            inner: Arc::new(PersistWriteWorkerInner::new(tx)),
+            inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
         }
     }
 
@@ -478,7 +436,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
         id: GlobalId,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) {
-        self.send(PersistWriteWorkerCmd::Register(id, write_handle))
+        self.send(PersistTableWriteCmd::Register(id, write_handle))
     }
 
     /// Update the existing write handle associated with `id` to `write_handle`.
@@ -490,7 +448,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
     /// - If `id` is not currently associated with any write handle.
     #[allow(dead_code)]
     pub(crate) fn update(&self, id: GlobalId, write_handle: WriteHandle<SourceData, (), T, Diff>) {
-        self.send(PersistWriteWorkerCmd::Update(id, write_handle))
+        self.send(PersistTableWriteCmd::Update(id, write_handle))
     }
 
     pub(crate) fn append(
@@ -503,39 +461,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                 .expect("rx has not been dropped at this point");
             rx
         } else {
-            self.send(PersistWriteWorkerCmd::Append(updates, tx));
-            rx
-        }
-    }
-
-    /// Appends values to collections associated with `GlobalId`, but lets
-    /// the persist worker chose timestamps guaranteed to be monotonic and
-    /// that the time will be at least `T`.
-    ///
-    /// This lets the writer influence how far forward the timestamp will be
-    /// advanced, while still guaranteeing that it will advance.
-    ///
-    /// Note it is still possible for the append operation to fail in the
-    /// face of contention from other writers.
-    ///
-    /// # Panics
-    /// - If appending non-empty `TimelessUpdate` to closed collections
-    ///   (i.e. those with empty uppers), whose uppers cannot be
-    ///   monotonically increased.
-    ///
-    ///   Collections with empty uppers can continue receiving empty
-    ///   updates, i.e. those used soley to advance collections' uppers.
-    pub(crate) fn monotonic_append(
-        &self,
-        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if updates.is_empty() {
-            tx.send(Ok(()))
-                .expect("rx has not been dropped at this point");
-            rx
-        } else {
-            self.send(PersistWriteWorkerCmd::MonotonicAppend(updates, tx));
+            self.send(PersistTableWriteCmd::Append(updates, tx));
             rx
         }
     }
@@ -545,15 +471,15 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
     pub(crate) fn drop_handle(&self, id: GlobalId) {
-        self.send(PersistWriteWorkerCmd::DropHandle(id))
+        self.send(PersistTableWriteCmd::DropHandle(id))
     }
 
-    fn send(&self, cmd: PersistWriteWorkerCmd<T>) {
+    fn send(&self, cmd: PersistTableWriteCmd<T>) {
         self.inner.send(cmd);
     }
 }
 
-/// Contains the components necessary for sending commands to a `PersistWriteWorker`.
+/// Contains the components necessary for sending commands to a `PersistTableWriteWorker`.
 ///
 /// When `Drop`-ed sends a shutdown command, as such this should _never_ implement `Clone` because
 /// if one clone is dropped, the other clones will be unable to send commands. If you need this
@@ -562,30 +488,30 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
 /// #[derive(Clone)] <-- do not do this.
 ///
 #[derive(Debug)]
-struct PersistWriteWorkerInner<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+struct PersistTableWriteWorkerInner<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
     /// Sending side of a channel that we can use to send commands.
-    tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>,
+    tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd<T>)>,
 }
 
-impl<T> Drop for PersistWriteWorkerInner<T>
+impl<T> Drop for PersistTableWriteWorkerInner<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
     fn drop(&mut self) {
-        self.send(PersistWriteWorkerCmd::Shutdown);
+        self.send(PersistTableWriteCmd::Shutdown);
         // TODO: Can't easily block on shutdown occurring.
     }
 }
 
-impl<T> PersistWriteWorkerInner<T>
+impl<T> PersistTableWriteWorkerInner<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
-    fn new(tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>) -> Self {
-        PersistWriteWorkerInner { tx }
+    fn new(tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd<T>)>) -> Self {
+        PersistTableWriteWorkerInner { tx }
     }
 
-    fn send(&self, cmd: PersistWriteWorkerCmd<T>) {
+    fn send(&self, cmd: PersistTableWriteCmd<T>) {
         match self.tx.send((tracing::Span::current(), cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {
@@ -596,13 +522,13 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct PersistWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
-    inner: Arc<PersistWriteWorkerInner<T>>,
+pub struct PersistMonotonicWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+    inner: Arc<PersistMonotonicWriteWorkerInner<T>>,
 }
 
-/// Commands for [PersistWriteWorker].
+/// Commands for [PersistMonotonicWriteWorker].
 #[derive(Debug)]
-enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
+enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandle(GlobalId),
@@ -619,13 +545,16 @@ enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Shutdown,
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorker<T> {
+// TODO(txn): This impl is duplicative of PersistTableWriteWorker, but it's
+// an intermediate state. The impl of the table one will be completely replaced
+// by #20954.
+impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicWriteWorker<T> {
     pub(crate) fn new(
         mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
-        mz_ore::task::spawn(|| "PersistWriteHandles", async move {
+        mz_ore::task::spawn(|| "PersistMonotonicWriteWorker", async move {
             let mut write_handles =
                 BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
 
@@ -650,7 +579,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
 
                             while let Some((span, command)) = commands.pop_front() {
                                 match command {
-                                    PersistWriteWorkerCmd::Register(id, write_handle) => {
+                                    PersistMonotonicWriteCmd::Register(id, write_handle) => {
                                         let previous = write_handles.insert(id, write_handle);
                                         if previous.is_some() {
                                             panic!(
@@ -659,10 +588,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                             );
                                         }
                                     }
-                                    PersistWriteWorkerCmd::Update(id, write_handle) => {
-                                        write_handles.insert(id, write_handle).expect("PersistWriteWorkerCmd::Update only valid for updating extant write handles");
+                                    PersistMonotonicWriteCmd::Update(id, write_handle) => {
+                                        write_handles.insert(id, write_handle).expect("PersistMonotonicWriteCmd::Update only valid for updating extant write handles");
                                     },
-                                    PersistWriteWorkerCmd::DropHandle(id) => {
+                                    PersistMonotonicWriteCmd::DropHandle(id) => {
                                         // n.b. this should only remove the
                                         // handle from the persist worker and
                                         // not take any additional action such
@@ -671,7 +600,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         // using it.
                                         write_handles.remove(&id);
                                     }
-                                    PersistWriteWorkerCmd::Append(updates, response) => {
+                                    PersistMonotonicWriteCmd::Append(updates, response) => {
                                         let mut ids = BTreeSet::new();
                                         for (id, update, upper) in updates {
                                             ids.insert(id);
@@ -699,7 +628,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         }
                                         all_responses.push((ids, response));
                                     }
-                                    PersistWriteWorkerCmd::MonotonicAppend(updates, response) => {
+                                    PersistMonotonicWriteCmd::MonotonicAppend(updates, response) => {
                                         let mut updates_outer = Vec::with_capacity(updates.len());
                                         for (id, update, at_least) in updates {
                                             let current_upper = write_handles[&id].upper().clone();
@@ -735,10 +664,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         }
                                         commands.push_front((
                                             span,
-                                            PersistWriteWorkerCmd::Append(updates_outer, response),
+                                            PersistMonotonicWriteCmd::Append(updates_outer, response),
                                         ));
                                     }
-                                    PersistWriteWorkerCmd::Shutdown => {
+                                    PersistMonotonicWriteCmd::Shutdown => {
                                         shutdown = true;
                                     }
                                 }
@@ -840,11 +769,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                 }
             }
 
-            tracing::info!("PersistWriteWorker shutting down");
+            tracing::info!("PersistMonotonicWriteWorker shutting down");
         });
 
         Self {
-            inner: Arc::new(PersistWriteWorkerInner::new(tx)),
+            inner: Arc::new(PersistMonotonicWriteWorkerInner::new(tx)),
         }
     }
 
@@ -853,7 +782,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
         id: GlobalId,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) {
-        self.send(PersistWriteWorkerCmd::Register(id, write_handle))
+        self.send(PersistMonotonicWriteCmd::Register(id, write_handle))
     }
 
     /// Update the existing write handle associated with `id` to `write_handle`.
@@ -865,22 +794,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
     /// - If `id` is not currently associated with any write handle.
     #[allow(dead_code)]
     pub(crate) fn update(&self, id: GlobalId, write_handle: WriteHandle<SourceData, (), T, Diff>) {
-        self.send(PersistWriteWorkerCmd::Update(id, write_handle))
-    }
-
-    pub(crate) fn append(
-        &self,
-        updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if updates.is_empty() {
-            tx.send(Ok(()))
-                .expect("rx has not been dropped at this point");
-            rx
-        } else {
-            self.send(PersistWriteWorkerCmd::Append(updates, tx));
-            rx
-        }
+        self.send(PersistMonotonicWriteCmd::Update(id, write_handle))
     }
 
     /// Appends values to collections associated with `GlobalId`, but lets
@@ -910,7 +824,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                 .expect("rx has not been dropped at this point");
             rx
         } else {
-            self.send(PersistWriteWorkerCmd::MonotonicAppend(updates, tx));
+            self.send(PersistMonotonicWriteCmd::MonotonicAppend(updates, tx));
             rx
         }
     }
@@ -920,15 +834,15 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
     pub(crate) fn drop_handle(&self, id: GlobalId) {
-        self.send(PersistWriteWorkerCmd::DropHandle(id))
+        self.send(PersistMonotonicWriteCmd::DropHandle(id))
     }
 
-    fn send(&self, cmd: PersistWriteWorkerCmd<T>) {
+    fn send(&self, cmd: PersistMonotonicWriteCmd<T>) {
         self.inner.send(cmd);
     }
 }
 
-/// Contains the components necessary for sending commands to a `PersistWriteWorker`.
+/// Contains the components necessary for sending commands to a `PersistMonotonicWriteWorker`.
 ///
 /// When `Drop`-ed sends a shutdown command, as such this should _never_ implement `Clone` because
 /// if one clone is dropped, the other clones will be unable to send commands. If you need this
@@ -937,30 +851,30 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
 /// #[derive(Clone)] <-- do not do this.
 ///
 #[derive(Debug)]
-struct PersistWriteWorkerInner<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+struct PersistMonotonicWriteWorkerInner<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
     /// Sending side of a channel that we can use to send commands.
-    tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>,
+    tx: UnboundedSender<(tracing::Span, PersistMonotonicWriteCmd<T>)>,
 }
 
-impl<T> Drop for PersistWriteWorkerInner<T>
+impl<T> Drop for PersistMonotonicWriteWorkerInner<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
     fn drop(&mut self) {
-        self.send(PersistWriteWorkerCmd::Shutdown);
+        self.send(PersistMonotonicWriteCmd::Shutdown);
         // TODO: Can't easily block on shutdown occurring.
     }
 }
 
-impl<T> PersistWriteWorkerInner<T>
+impl<T> PersistMonotonicWriteWorkerInner<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
-    fn new(tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>) -> Self {
-        PersistWriteWorkerInner { tx }
+    fn new(tx: UnboundedSender<(tracing::Span, PersistMonotonicWriteCmd<T>)>) -> Self {
+        PersistMonotonicWriteWorkerInner { tx }
     }
 
-    fn send(&self, cmd: PersistWriteWorkerCmd<T>) {
+    fn send(&self, cmd: PersistMonotonicWriteCmd<T>) {
         match self.tx.send((tracing::Span::current(), cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {

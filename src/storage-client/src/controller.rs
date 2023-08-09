@@ -145,7 +145,19 @@ pub enum DataSource {
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
-    Other,
+    Other(DataSourceOther),
+}
+
+/// Describes how data is written to a collection maintained outside of the
+/// storage controller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataSourceOther {
+    /// `environmentd` appends timestamped data, i.e. it is a `TABLE`.
+    TableWrites,
+    /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
+    Compute,
+    /// Some other sources writes this data, i.e. a subsource.
+    Source,
 }
 
 /// Describes a request to create a source.
@@ -196,20 +208,18 @@ impl<T> CollectionDescription<T> {
                 //
                 // See <https://github.com/MaterializeInc/materialize/issues/20211>.
             }
-            DataSource::Other => {
+            DataSource::Other(_) => {
                 // We don't know anything about it's dependencies.
             }
         }
 
         result
     }
-}
 
-impl<T> From<RelationDesc> for CollectionDescription<T> {
-    fn from(desc: RelationDesc) -> Self {
+    pub fn from_desc(desc: RelationDesc, source: DataSourceOther) -> Self {
         Self {
             desc,
-            data_source: DataSource::Other,
+            data_source: DataSource::Other(source),
             since: None,
             status_collection_id: None,
         }
@@ -412,7 +422,7 @@ pub trait StorageController: Debug + Send {
     /// The method may return an error, indicating an immediately visible error, and also the
     /// oneshot may return an error if one is encountered during the write.
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
-    fn append(
+    fn append_table(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
@@ -813,9 +823,11 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(super) stash: mz_stash::Stash,
-    /// Write handle for persist shards.
-    pub(super) persist_write_handles: persist_handles::PersistWriteWorker<T>,
-    /// Read handles for persist shards.
+    /// Write handle for table shards.
+    pub(super) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
+    /// Write handle for monotonic shards.
+    pub(super) persist_monotonic_worker: persist_handles::PersistMonotonicWriteWorker<T>,
+    /// Read handles for all shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
@@ -1099,8 +1111,9 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .await
             .expect("stash operation must succeed");
 
-        let persist_write_handles = persist_handles::PersistWriteWorker::new(tx);
-        let collection_manager_write_handle = persist_write_handles.clone();
+        let persist_table_worker = persist_handles::PersistTableWriteWorker::new(tx.clone());
+        let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new(tx);
+        let collection_manager_write_handle = persist_monotonic_worker.clone();
 
         let collection_manager =
             collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
@@ -1109,7 +1122,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             stash,
-            persist_write_handles,
+            persist_table_worker,
+            persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
             pending_compaction_commands: vec![],
@@ -1435,7 +1449,22 @@ where
                     metadata.clone(),
                 );
 
-                self.state.persist_write_handles.register(id, write);
+                match description.data_source {
+                    DataSource::Introspection(_) | DataSource::Webhook => {
+                        debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
+                        self.state.persist_monotonic_worker.register(id, write);
+                    }
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
+                        self.state.persist_table_worker.register(id, write);
+                    }
+                    DataSource::Ingestion(_)
+                    | DataSource::Progress
+                    | DataSource::Other(DataSourceOther::Compute)
+                    | DataSource::Other(DataSourceOther::Source) => {
+                        debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                    }
+                }
                 self.state.persist_read_handles.register(id, since_handle);
 
                 self.state.collections.insert(id, collection_state);
@@ -1486,7 +1515,7 @@ where
                 DataSource::Webhook
                 | DataSource::Introspection(_)
                 | DataSource::Progress
-                | DataSource::Other => {
+                | DataSource::Other(_) => {
                     // No since to patch up and no read holds to install on
                     // dependencies!
                 }
@@ -1587,7 +1616,7 @@ where
                     // Register the collection so our manager knows about it.
                     self.state.collection_manager.register_collection(id);
                 }
-                DataSource::Progress | DataSource::Other => {}
+                DataSource::Progress | DataSource::Other(_) => {}
             }
         }
 
@@ -1910,7 +1939,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn append(
+    fn append_table(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
@@ -1923,7 +1952,7 @@ where
             }
         }
 
-        Ok(self.state.persist_write_handles.append(commands))
+        Ok(self.state.persist_table_worker.append(commands))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
@@ -2232,12 +2261,18 @@ where
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
-                        // Drop all write handles. This is safe to do because there will be no more
-                        // data passed to the write handle. n.b. we do not need to drop the read
-                        // handle because this code is only ever executed in response to dropping a
-                        // collection, which downgrades the write handle to the empty anitchain,
-                        // which in turn drops the read handle.
-                        self.state.persist_write_handles.drop_handle(*id);
+                        // Drop all write handles. This is safe to do because
+                        // there will be no more data passed to the write
+                        // handle. n.b. we do not need to drop the read handle
+                        // because this code is only ever executed in response
+                        // to dropping a collection, which downgrades the write
+                        // handle to the empty anitchain, which in turn drops
+                        // the read handle.
+                        //
+                        // At most one of these workers will have the handle,
+                        // but it's safe to drop from both.
+                        self.state.persist_table_worker.drop_handle(*id);
+                        self.state.persist_monotonic_worker.drop_handle(*id);
 
                         self.state.collections.remove(id).map(
                             |CollectionState {
@@ -3102,7 +3137,20 @@ where
                 )
                 .await;
 
-            self.state.persist_write_handles.update(id, write);
+            match collection_desc.data_source {
+                DataSource::Introspection(_) | DataSource::Webhook => {
+                    self.state.persist_monotonic_worker.update(id, write);
+                }
+                DataSource::Other(DataSourceOther::TableWrites) => {
+                    self.state.persist_table_worker.update(id, write);
+                }
+                DataSource::Ingestion(_)
+                | DataSource::Progress
+                | DataSource::Other(DataSourceOther::Compute)
+                | DataSource::Other(DataSourceOther::Source) => {
+                    // No-op.
+                }
+            }
             self.state.persist_read_handles.update(id, since_handle);
         }
     }
@@ -3293,7 +3341,7 @@ where
         for id in collections {
             let collection = self.collection(id).expect("known to exist");
             assert!(
-                matches!(collection.description.data_source, DataSource::Other | DataSource::Ingestion(_)),
+                matches!(collection.description.data_source, DataSource::Other(_) | DataSource::Ingestion(_)),
                 "only primary sources w/ subsources and subsources can have dependency read holds installed"
             );
 
@@ -3477,7 +3525,7 @@ impl<T: Timestamp> CollectionState<T> {
             DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
             DataSource::Webhook
             | DataSource::Introspection(_)
-            | DataSource::Other
+            | DataSource::Other(_)
             | DataSource::Progress => None,
         }
     }
