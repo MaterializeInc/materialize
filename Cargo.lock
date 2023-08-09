@@ -2771,7 +2771,7 @@ dependencies = [
 [[package]]
 name = "kube-client"
 version = "0.85.0"
-source = "git+https://github.com/MaterializeInc/kube-rs.git#946c1f3a4b60bbb24292e7b06423c4c3a793d6d8"
+source = "git+https://github.com/MaterializeInc/kube-rs.git?rev=838a7981483005e1af7c1338c48a4d0540a33ce4#838a7981483005e1af7c1338c48a4d0540a33ce4"
 dependencies = [
  "base64 0.21.0",
  "bytes",
@@ -2807,7 +2807,7 @@ dependencies = [
 [[package]]
 name = "kube-core"
 version = "0.85.0"
-source = "git+https://github.com/MaterializeInc/kube-rs.git#946c1f3a4b60bbb24292e7b06423c4c3a793d6d8"
+source = "git+https://github.com/MaterializeInc/kube-rs.git?rev=838a7981483005e1af7c1338c48a4d0540a33ce4#838a7981483005e1af7c1338c48a4d0540a33ce4"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -8018,13 +8018,13 @@ dependencies = [
 [[package]]
 name = "tonic-build"
 version = "0.9.2"
-source = "git+https://github.com/MaterializeInc/tonic#f2892a068a0d7513aac570ae8a58fa48d84b5d45"
+source = "git+https://github.com/MaterializeInc/tonic?rev=0d86e360ab45779770ca150c8487fe7940c299a9#0d86e360ab45779770ca150c8487fe7940c299a9"
 dependencies = [
- "prettyplease 0.2.4",
+ "prettyplease 0.1.25",
  "proc-macro2",
  "prost-build",
  "quote",
- "syn 2.0.18",
+ "syn 1.0.107",
 ]
 
 [[package]]

@@ -53,8 +53,8 @@ indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.19.0", features = ["v1_25"] }
 kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", default-features = false, features = ["jsonpatch", "schema", "ws"] }
+kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
@@ -151,8 +151,8 @@ indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.19.0", features = ["v1_25"] }
 kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", default-features = false, features = ["jsonpatch", "schema", "ws"] }
+kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }

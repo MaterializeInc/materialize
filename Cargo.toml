@@ -144,7 +144,7 @@ serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
 
 # Waiting on https://github.com/hyperium/tonic/pull/1398.
-tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
+tonic-build = { git = "https://github.com/MaterializeInc/tonic", rev = "0d86e360ab45779770ca150c8487fe7940c299a9" }
 
 # Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
 # upstream.
@@ -167,8 +167,8 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 
 # Waiting for a new release of kube-client compatible with base64 0.21.0
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git" }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git" }
+kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
+kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
 
 # Waiting on `lru` dep to update to `0.11.0`
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
