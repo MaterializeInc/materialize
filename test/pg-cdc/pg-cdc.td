@@ -675,10 +675,10 @@ contains:TEXT COLUMNS can only refer to tables being added to source
   );
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource <null>
-enum_source             postgres  ${arg.default-storage-size}
-enum_source_progress    progress  <null>
-enum_table              subsource <null>
+another_enum_table      subsource <null> <null>
+enum_source             postgres  ${arg.default-storage-size} materialize_public_enum_source
+enum_source_progress    progress  <null> <null>
+enum_table              subsource <null> <null>
 
 > SELECT * FROM enum_table
 var0
@@ -720,9 +720,9 @@ INSERT INTO pk_table VALUES (99999);
   );
 
 > SHOW SOURCES
-another_source          postgres  ${arg.default-storage-size}
-another_source_progress progress  <null>
-another_table           subsource <null>
+another_source          postgres  ${arg.default-storage-size} materialize_public_another_source
+another_source_progress progress  <null> <null>
+another_table           subsource <null> <null>
 
 > DROP SOURCE another_source
 

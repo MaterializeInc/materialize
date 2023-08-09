@@ -197,7 +197,7 @@ renamed_mz_data    kafka     ${arg.default-storage-size}  materialize_public_mz_
 > SHOW SINKS
 name               type   size                            cluster
 -----------------------------------------------------------------
-renamed_sink       kafka  ${arg.default-storage-size}     default
+renamed_sink       kafka  ${arg.default-storage-size}     materialize_public_sink1
 
 # View was successfully renamed
 > SHOW VIEWS
