@@ -78,7 +78,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  size  text
 7  replication_factor  uint4
 8  disk  boolean
-9  availability_zones  list
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_columns' ORDER BY position
