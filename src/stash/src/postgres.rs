@@ -359,7 +359,7 @@ impl StashFactory {
                 Ok(()) => break,
                 Err(err) => {
                     warn!("initial stash connection error, retrying: {err}");
-                    if retry.next().await.is_none() {
+                    if err.is_unrecoverable() || retry.next().await.is_none() {
                         return Err(err);
                     }
                 }
