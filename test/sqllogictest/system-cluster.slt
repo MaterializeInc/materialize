@@ -125,7 +125,7 @@ Explained Query:
           ReadExistingIndex mz_catalog.mz_sinks lookup_value=(\"u3\")
             ArrangeBy keys=[[#0]]
               Get mz_catalog.mz_clusters
-              
+
 Used Indexes:
   - mz_internal.mz_show_sinks_ind
   - mz_internal.mz_clusters_ind

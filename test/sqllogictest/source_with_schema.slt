@@ -58,7 +58,7 @@ CREATE SOURCE baz.auction FROM LOAD GENERATOR AUCTION FOR TABLES (bids AS baz_bi
 query TTTT
 SHOW SOURCES FROM baz;
 ----
-auction          load-generator 1    materialize_public_auction
+auction          load-generator 1    materialize_baz_auction
 auction_progress progress       NULL NULL
 baz_bids         subsource      NULL NULL
 
