@@ -14,8 +14,6 @@ This page shows you how to stream data from [Amazon Aurora for PostgreSQL](https
 
 {{% postgres-direct/before-you-begin %}}
 
-  {{% postgres-direct/postgres-schema-changes %}}
-
 ## Step 1. Enable logical replication
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html) protocol to track changes in your database and propagate them to Materialize.
@@ -199,6 +197,8 @@ Now that you've configured your database network and created an ingestion cluste
     ```
 
     To ingest data from specific schemas or tables in your publication, use `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.
+
+1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes) for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context) syntax.
 
 {{< /tab >}}
 
