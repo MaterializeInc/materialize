@@ -89,81 +89,9 @@
   );
 4095
 
-> WITH operators AS (
-  SELECT
-      dod.dataflow_id,
-      dor.id AS region_id,
-      dod.id,
-      ars.records
-  FROM
-      mz_internal.mz_dataflow_operator_dataflows dod
-      JOIN mz_internal.mz_dataflow_addresses doa
-          ON dod.id = doa.id
-      JOIN mz_internal.mz_dataflow_addresses dra
-          ON dra.address = doa.address[:list_length(doa.address) - 1]
-      JOIN mz_internal.mz_dataflow_operators dor
-          ON dor.id = dra.id
-      JOIN mz_internal.mz_arrangement_sizes ars
-          ON ars.operator_id = dod.id
-  WHERE
-      dod.name = 'Arranged TopK input'
-      OR dod.name = 'Arranged MinsMaxesHierarchical input'
-      OR dod.name = 'Arrange ReduceMinsMaxes'
-  ),
-  levels AS (
-      SELECT o.dataflow_id, o.region_id, COUNT(*) AS levels
-      FROM operators o
-      GROUP BY o.dataflow_id, o.region_id
-  ),
-  pivot AS (
-      SELECT
-          o1.dataflow_id,
-          o1.region_id,
-          o1.id,
-          o1.records
-      FROM operators o1
-      WHERE
-          o1.id = (
-              SELECT MIN(o2.id)
-              FROM operators o2
-              WHERE
-                  o2.dataflow_id = o1.dataflow_id
-                  AND o2.region_id = o1.region_id
-              OPTIONS (EXPECTED GROUP SIZE = 8)
-          )
-  ),
-  candidates AS (
-      SELECT
-          o.dataflow_id,
-          o.region_id,
-          o.id,
-          o.records
-      FROM
-          operators o
-          JOIN pivot p
-              ON o.dataflow_id = p.dataflow_id
-                  AND o.region_id = p.region_id
-                  AND o.id <> p.id
-      WHERE o.records >= p.records * (1 - 0.15)
-  ),
-  cuts AS (
-      SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
-      FROM candidates c
-      GROUP BY c.dataflow_id, c.region_id
-      HAVING COUNT(*) > 0
-  )
-  SELECT
-      dod.dataflow_name,
-      dod.name AS region_name,
-      l.levels,
-      c.to_cut,
-      pow(16, l.levels - c.to_cut) - 1 AS hint
-  FROM cuts c
-      JOIN levels l
-          ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
-      JOIN mz_internal.mz_dataflow_operator_dataflows dod
-          ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id
-  ORDER BY dod.dataflow_name, dod.name;
+> SELECT dataflow_name, region_name, levels, to_cut, hint
+  FROM mz_internal.mz_expected_group_size_advice
+  ORDER BY dataflow_name, region_name;
 "Dataflow: materialize.public.lineitem_by_orderkey" ReduceHierarchical 8 7 15
 "Dataflow: materialize.public.lineitem_by_orderkey" TopK 8 7 15
 "Dataflow: materialize.public.lineitem_by_partsuppkey" TopK 8 6 255
@@ -200,81 +128,9 @@
   FROM lineitem l1
   GROUP BY l1.l_orderkey;
 
-> WITH operators AS (
-  SELECT
-      dod.dataflow_id,
-      dor.id AS region_id,
-      dod.id,
-      ars.records
-  FROM
-      mz_internal.mz_dataflow_operator_dataflows dod
-      JOIN mz_internal.mz_dataflow_addresses doa
-          ON dod.id = doa.id
-      JOIN mz_internal.mz_dataflow_addresses dra
-          ON dra.address = doa.address[:list_length(doa.address) - 1]
-      JOIN mz_internal.mz_dataflow_operators dor
-          ON dor.id = dra.id
-      JOIN mz_internal.mz_arrangement_sizes ars
-          ON ars.operator_id = dod.id
-  WHERE
-      dod.name = 'Arranged TopK input'
-      OR dod.name = 'Arranged MinsMaxesHierarchical input'
-      OR dod.name = 'Arrange ReduceMinsMaxes'
-  ),
-  levels AS (
-      SELECT o.dataflow_id, o.region_id, COUNT(*) AS levels
-      FROM operators o
-      GROUP BY o.dataflow_id, o.region_id
-  ),
-  pivot AS (
-      SELECT
-          o1.dataflow_id,
-          o1.region_id,
-          o1.id,
-          o1.records
-      FROM operators o1
-      WHERE
-          o1.id = (
-              SELECT MIN(o2.id)
-              FROM operators o2
-              WHERE
-                  o2.dataflow_id = o1.dataflow_id
-                  AND o2.region_id = o1.region_id
-              OPTIONS (EXPECTED GROUP SIZE = 8)
-          )
-  ),
-  candidates AS (
-      SELECT
-          o.dataflow_id,
-          o.region_id,
-          o.id,
-          o.records
-      FROM
-          operators o
-          JOIN pivot p
-              ON o.dataflow_id = p.dataflow_id
-                  AND o.region_id = p.region_id
-                  AND o.id <> p.id
-      WHERE o.records >= p.records * (1 - 0.15)
-  ),
-  cuts AS (
-      SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
-      FROM candidates c
-      GROUP BY c.dataflow_id, c.region_id
-      HAVING COUNT(*) > 0
-  )
-  SELECT
-      dod.dataflow_name,
-      dod.name AS region_name,
-      l.levels,
-      c.to_cut,
-      pow(16, l.levels - c.to_cut) - 1 AS hint
-  FROM cuts c
-      JOIN levels l
-          ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
-      JOIN mz_internal.mz_dataflow_operator_dataflows dod
-          ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id
-  ORDER BY dod.dataflow_name, dod.name;
+> SELECT dataflow_name, region_name, levels, to_cut, hint
+  FROM mz_internal.mz_expected_group_size_advice
+  ORDER BY dataflow_name, region_name;
 "Dataflow: materialize.public.lineitem_by_orderkey" ReduceHierarchical 8 7 15
 "Dataflow: materialize.public.lineitem_by_partsuppkey" TopK 8 6 255
 "Dataflow: materialize.public.lineitem_by_partsuppkey" ReduceHierarchical 8 6 255
