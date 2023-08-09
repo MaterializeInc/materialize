@@ -127,7 +127,7 @@ Your `dev_role` has the default system-level permissions and needs object-level 
 
 Currently, the `dev_role` has no permissions on the table `dev_table`.
 
-### Step 3. Grant privileges on example objects
+## Step 3. Grant privileges on example objects
 
 In this example, let's say your `dev_role` needs the following permissions:
 
