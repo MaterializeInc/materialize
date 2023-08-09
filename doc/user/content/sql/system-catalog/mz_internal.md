@@ -889,6 +889,24 @@ are contained in operators under each dataflow.
 | `records` | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
 | `batches` | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
 
+### `mz_expected_group_size_advice`
+
+The `mz_expected_group_size_advice` view provides advice on opportunities to set the `EXPECTED GROUP SIZE`
+[query hint]. This hint is applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns. The
+maintainance of these query patterns is implemented inside an operator scope, called a region, through a
+hierarchical scheme for either reduction or top-k computation.
+
+<!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
+| Field           | Type        | Meaning                                                                                                             |
+|-----------------|-------------|---------------------------------------------------------------------------------------------------------------------|
+| `dataflow_id`   | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                        |
+| `dataflow_name` | [`text`]    | The internal name of the dataflow hosting the min/max reduction or top-k.                                           |
+| `region_id`     | [`uint8`] | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).               |
+| `region_name`   | [`text`]    | The internal name of the root operator scope for the min/max reduction or top-k.                                    |
+| `levels`        | [`bigint`] | The number of levels in the hierarchical scheme implemented by the region.                                           |
+| `to_cut`        | [`bigint`] | The number of levels that can be eliminated (cut) from the region's hierarchy.                                       |
+| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy.  |
+
 ### `mz_message_counts`
 
 The `mz_message_counts` view describes the messages sent and received over the [dataflow] channels in the system.
@@ -1012,6 +1030,10 @@ Field          | Type                         | Meaning
 [`timestamp with time zone`]: /sql/types/timestamp
 [arrangement]: /get-started/arrangements/#arrangements
 [dataflow]: /get-started/arrangements/#dataflows
+[`MIN`]: /sql/functions/#min
+[`MAX`]: /sql/functions/#max
+[Top K]: /transform-data/patterns/top-k
+[query hint]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
