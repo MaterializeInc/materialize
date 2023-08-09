@@ -11,36 +11,36 @@ use crate::objects::wire_compatible;
 use crate::upgrade::MigrationAction;
 use crate::{StashError, Transaction, TypedCollection};
 
-pub mod objects_v31 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v31.rs"));
-}
-
 pub mod objects_v32 {
     include!(concat!(env!("OUT_DIR"), "/objects_v32.rs"));
 }
 
-wire_compatible!(objects_v31::RoleKey with objects_v32::RoleKey);
-wire_compatible!(objects_v31::RoleValue with objects_v32::RoleValue);
+pub mod objects_v33 {
+    include!(concat!(env!("OUT_DIR"), "/objects_v33.rs"));
+}
 
-const MZ_INTROSPECTION_ROLE_ID: objects_v32::RoleId = objects_v32::RoleId {
-    value: Some(objects_v32::role_id::Value::System(2)),
+wire_compatible!(objects_v32::RoleKey with objects_v33::RoleKey);
+wire_compatible!(objects_v32::RoleValue with objects_v33::RoleValue);
+
+const MZ_INTROSPECTION_ROLE_ID: objects_v33::RoleId = objects_v33::RoleId {
+    value: Some(objects_v33::role_id::Value::System(2)),
 };
 
 /// Rename mz_introspection to mz_support
 pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
-    const ROLES_COLLECTION: TypedCollection<objects_v31::RoleKey, objects_v31::RoleValue> =
+    const ROLES_COLLECTION: TypedCollection<objects_v32::RoleKey, objects_v32::RoleValue> =
         TypedCollection::new("role");
 
-    let old_role_key = objects_v32::RoleKey {
+    let old_role_key = objects_v33::RoleKey {
         id: Some(MZ_INTROSPECTION_ROLE_ID),
     };
 
     ROLES_COLLECTION
-        .migrate_compat::<objects_v32::RoleKey, objects_v32::RoleValue>(tx, |entries| {
+        .migrate_compat::<objects_v33::RoleKey, objects_v33::RoleValue>(tx, |entries| {
             let mut updates = Vec::new();
             for (key, value) in entries {
                 let new_value = if key == &old_role_key {
-                    objects_v32::RoleValue {
+                    objects_v33::RoleValue {
                         name: "mz_support".to_string(),
                         ..value.clone()
                     }
@@ -63,7 +63,7 @@ mod tests {
 
     use super::upgrade;
 
-    use crate::upgrade::v31_to_v32::{objects_v31, objects_v32, MZ_INTROSPECTION_ROLE_ID};
+    use crate::upgrade::v32_to_v33::{objects_v32, objects_v33, MZ_INTROSPECTION_ROLE_ID};
     use crate::{DebugStashFactory, TypedCollection};
 
     #[mz_ore::test(tokio::test)]
@@ -72,40 +72,40 @@ mod tests {
         let factory: DebugStashFactory = DebugStashFactory::new().await;
         let mut stash = factory.open_debug().await;
 
-        let roles_v31: TypedCollection<objects_v31::RoleKey, objects_v31::RoleValue> =
+        let roles_v32: TypedCollection<objects_v32::RoleKey, objects_v32::RoleValue> =
             TypedCollection::new("role");
 
-        let system_role_id_v31 = objects_v31::RoleId {
-            value: Some(objects_v31::role_id::Value::System(1)),
+        let system_role_id_v32 = objects_v32::RoleId {
+            value: Some(objects_v32::role_id::Value::System(1)),
         };
-        let introspection_role_id_v31 = objects_v31::RoleId {
-            value: Some(objects_v31::role_id::Value::System(2)),
+        let introspection_role_id_v32 = objects_v32::RoleId {
+            value: Some(objects_v32::role_id::Value::System(2)),
         };
 
-        roles_v31
+        roles_v32
             .insert_without_overwrite(
                 &mut stash,
                 vec![
                     (
-                        objects_v31::RoleKey {
-                            id: Some(system_role_id_v31),
+                        objects_v32::RoleKey {
+                            id: Some(system_role_id_v32),
                         },
-                        objects_v31::RoleValue {
+                        objects_v32::RoleValue {
                             name: "mz_system".to_string(),
-                            attributes: Some(objects_v31::RoleAttributes { inherit: true }),
-                            membership: Some(objects_v31::RoleMembership {
+                            attributes: Some(objects_v32::RoleAttributes { inherit: true }),
+                            membership: Some(objects_v32::RoleMembership {
                                 map: Default::default(),
                             }),
                         },
                     ),
                     (
-                        objects_v31::RoleKey {
-                            id: Some(introspection_role_id_v31),
+                        objects_v32::RoleKey {
+                            id: Some(introspection_role_id_v32),
                         },
-                        objects_v31::RoleValue {
+                        objects_v32::RoleValue {
                             name: "mz_introspection".to_string(),
-                            attributes: Some(objects_v31::RoleAttributes { inherit: true }),
-                            membership: Some(objects_v31::RoleMembership {
+                            attributes: Some(objects_v32::RoleAttributes { inherit: true }),
+                            membership: Some(objects_v32::RoleMembership {
                                 map: Default::default(),
                             }),
                         },
@@ -126,12 +126,12 @@ mod tests {
             .await
             .expect("migration failed");
 
-        let roles_v32: TypedCollection<objects_v32::RoleKey, objects_v32::RoleValue> =
+        let roles_v33: TypedCollection<objects_v33::RoleKey, objects_v33::RoleValue> =
             TypedCollection::new("role");
-        let roles = roles_v32.iter(&mut stash).await.unwrap();
+        let roles = roles_v33.iter(&mut stash).await.unwrap();
 
-        let system_role_id_v32 = objects_v32::RoleId {
-            value: Some(objects_v32::role_id::Value::System(1)),
+        let system_role_id_v33 = objects_v33::RoleId {
+            value: Some(objects_v33::role_id::Value::System(1)),
         };
         let mut roles = roles
             .into_iter()
@@ -142,25 +142,25 @@ mod tests {
             roles,
             vec![
                 (
-                    objects_v32::RoleKey {
-                        id: Some(system_role_id_v32),
+                    objects_v33::RoleKey {
+                        id: Some(system_role_id_v33),
                     },
-                    objects_v32::RoleValue {
+                    objects_v33::RoleValue {
                         name: "mz_system".to_string(),
-                        attributes: Some(objects_v32::RoleAttributes { inherit: true }),
-                        membership: Some(objects_v32::RoleMembership {
+                        attributes: Some(objects_v33::RoleAttributes { inherit: true }),
+                        membership: Some(objects_v33::RoleMembership {
                             map: Default::default(),
                         }),
                     },
                 ),
                 (
-                    objects_v32::RoleKey {
+                    objects_v33::RoleKey {
                         id: Some(MZ_INTROSPECTION_ROLE_ID),
                     },
-                    objects_v32::RoleValue {
+                    objects_v33::RoleValue {
                         name: "mz_support".to_string(),
-                        attributes: Some(objects_v32::RoleAttributes { inherit: true }),
-                        membership: Some(objects_v32::RoleMembership {
+                        attributes: Some(objects_v33::RoleAttributes { inherit: true }),
+                        membership: Some(objects_v33::RoleMembership {
                             map: Default::default(),
                         }),
                     },
