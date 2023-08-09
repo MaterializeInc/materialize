@@ -35,6 +35,7 @@ use rand::Rng;
 use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
+use tracing::info;
 use url::Url;
 
 use crate::error::PosError;
@@ -690,6 +691,7 @@ pub async fn create_state(
         let materialize_internal_url =
             util::postgres::config_url(&config.materialize_internal_pgconfig)?;
 
+        info!("Connecting to {}", materialize_url.as_str());
         let (pgclient, pgconn) = Retry::default()
             .max_duration(config.default_timeout)
             .retry_async_canceling(|_| async move {
