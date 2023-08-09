@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# This test uses introspection queries that need to be targeted to a replica
+> SET cluster_replica = r1
+
 # Start from a TPC-H load generator source with small data.
 > CREATE SOURCE lgtpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1) FOR ALL TABLES WITH (SIZE = '1');
 
