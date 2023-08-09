@@ -105,16 +105,21 @@ _replica_name_ | A name for a cluster replica.
 
 {{% replica-options %}}
 
-{{< note >}}
-If you do not specify an availability zone, Materialize will automatically
-assign the availability zone with the least existing replicas for the
-associated cluster to increase the cluster's tolerance to availability zone
-failure.
+## Availability zone assignment
 
-To check the availability zone associated with each replica in a cluster, use
-the [`mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
-system table.
-{{< /note >}}
+When assigning replicas of a [managed cluster](#managed-clusters) to
+availability zones, Materialize makes the following guarantees, within each
+cluster:
+
+{{< warning >}}
+These guarantees do not apply to [unmanaged clusters](#unmanaged-clusters).
+{{< /warning >}}
+
+- Different replicas are _never_ scheduled on the same node.
+- Different replicas are _always_ spread evenly across availability
+  zones. **Known limitation:** replicas with more than 1 process are excluded
+  from this constraint. See [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes)
+  to determine if that is the case for your replicas.
 
 ## Details
 
