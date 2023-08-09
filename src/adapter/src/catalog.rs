@@ -29,9 +29,9 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
-    UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
+    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
+    ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
@@ -108,7 +108,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
@@ -3573,6 +3573,7 @@ impl Catalog {
         }
 
         let clusters = catalog.storage().await.load_clusters().await?;
+        let mut cluster_azs = BTreeMap::new();
         for storage::Cluster {
             id,
             name,
@@ -3613,6 +3614,10 @@ impl Catalog {
                 )
                 .await?;
 
+            if let ClusterVariant::Managed(managed) = &config.variant {
+                cluster_azs.insert(id, managed.availability_zones.clone());
+            }
+
             catalog.state.insert_cluster(
                 id,
                 name,
@@ -3638,8 +3643,11 @@ impl Catalog {
                 interval: serialized_config.logging.interval,
             };
             let config = ReplicaConfig {
-                location: catalog
-                    .concretize_replica_location(serialized_config.location, &vec![])?,
+                location: catalog.concretize_replica_location(
+                    serialized_config.location,
+                    &vec![],
+                    cluster_azs.get(&cluster_id).map(|zones| &**zones),
+                )?,
                 compute: ComputeReplicaConfig {
                     logging,
                     idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
@@ -4653,7 +4661,6 @@ impl Catalog {
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
                 bootstrap_role: None,
             },
             None,
@@ -5216,6 +5223,7 @@ impl Catalog {
         &self,
         location: SerializedReplicaLocation,
         allowed_sizes: &Vec<String>,
+        allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
             SerializedReplicaLocation::Unmanaged {
@@ -5224,19 +5232,32 @@ impl Catalog {
                 computectl_addrs,
                 compute_addrs,
                 workers,
-            } => ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            }),
+            } => {
+                if allowed_availability_zones.is_some() {
+                    coord_bail!(
+                        "internal error: tried concretize unmanaged replica \
+                        with specific availability_zones"
+                    );
+                }
+                ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
+                    storagectl_addrs,
+                    storage_addrs,
+                    computectl_addrs,
+                    compute_addrs,
+                    workers,
+                })
+            }
             SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
-                az_user_specified,
                 disk,
             } => {
+                if allowed_availability_zones.is_some() && availability_zone.is_some() {
+                    coord_bail!(
+                        "internal error: tried concretize managed replica with \
+                        specific availability zones and availability zone"
+                    );
+                }
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.state.cluster_replica_sizes;
 
@@ -5246,9 +5267,17 @@ impl Catalog {
                         .get(&size)
                         .expect("catalog out of sync")
                         .clone(),
-                    availability_zone,
+                    availability_zones: match (availability_zone, allowed_availability_zones) {
+                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
+                        (None, Some(azs)) if azs.is_empty() => {
+                            ManagedReplicaAvailabilityZones::FromCluster(None)
+                        }
+                        (None, Some(azs)) => {
+                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
+                        }
+                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
+                    },
                     size,
-                    az_user_specified,
                     disk,
                 })
             }
@@ -8032,10 +8061,8 @@ pub enum SerializedReplicaLocation {
     },
     Managed {
         size: String,
-        availability_zone: String,
-        /// `true` if the AZ was specified by the user and must be respected;
-        /// `false` if it was picked arbitrarily by Materialize.
-        az_user_specified: bool,
+        /// `Some(az)` if the AZ was specified by the user and must be respected;
+        availability_zone: Option<String>,
         disk: bool,
     },
 }
@@ -8059,13 +8086,17 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 allocation: _,
                 size,
-                availability_zone,
-                az_user_specified,
+                availability_zones,
                 disk,
             }) => SerializedReplicaLocation::Managed {
                 size,
-                availability_zone,
-                az_user_specified,
+                availability_zone: if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
+                    availability_zones
+                {
+                    Some(az)
+                } else {
+                    None
+                },
                 disk,
             },
         }

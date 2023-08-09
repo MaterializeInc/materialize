@@ -864,8 +864,7 @@ fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
         location: Some(proto::replica_config::Location::Managed(
             proto::replica_config::ManagedLocation {
                 size: args.default_cluster_replica_size.to_string(),
-                availability_zone: args.default_availability_zone.to_string(),
-                az_user_specified: false,
+                availability_zone: None,
                 disk: false,
             },
         )),

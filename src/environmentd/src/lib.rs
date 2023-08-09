@@ -108,7 +108,6 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use rand::seq::SliceRandom;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -398,7 +397,6 @@ impl Listeners {
                         builtin_cluster_replica_size: config
                             .bootstrap_builtin_cluster_replica_size
                             .clone(),
-                        default_availability_zone: mz_adapter::DUMMY_AVAILABILITY_ZONE.into(),
                         bootstrap_role: config.bootstrap_role.clone(),
                     },
                     None,
@@ -452,14 +450,6 @@ impl Listeners {
             &BootstrapArgs {
                 default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
                 builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
-                // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
-                // shipped to cloud since all clusters will have had a default
-                // availability zone installed.
-                default_availability_zone: config
-                    .availability_zones
-                    .choose(&mut rand::thread_rng())
-                    .cloned()
-                    .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
                 bootstrap_role: config.bootstrap_role,
             },
             config.deploy_generation,
