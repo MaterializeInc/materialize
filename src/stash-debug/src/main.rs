@@ -87,7 +87,6 @@ use anyhow::Context;
 use clap::Parser;
 use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
-use mz_adapter::DUMMY_AVAILABILITY_ZONE;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -472,7 +471,6 @@ impl Usage {
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
                 bootstrap_role: None,
             },
             None,

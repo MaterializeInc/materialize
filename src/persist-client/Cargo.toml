@@ -56,7 +56,7 @@ timely = { version = "0.12.0", default-features = false, features = ["bincode"] 
 thiserror = "1.0.37"
 tokio = { version = "1.24.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-stream = "0.1.11"
-tonic = "0.8.2"
+tonic = "0.9.2"
 tracing = "0.1.37"
 uuid = { version = "1.2.2", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
@@ -66,7 +66,7 @@ tokio-console = ["mz-ore/tokio-console"]
 
 [dev-dependencies]
 async-trait = "0.1.68"
-axum = { version = "0.6.7" }
+axum = { version = "0.6.20" }
 clap = { version = "3.2.24", features = ["derive", "env"] }
 criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
@@ -83,7 +83,7 @@ tempfile = "3.2.0"
 [build-dependencies]
 prost-build = "0.11.2"
 protobuf-src = "1.1.0"
-tonic-build = "0.8.2"
+tonic-build = "0.9.2"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

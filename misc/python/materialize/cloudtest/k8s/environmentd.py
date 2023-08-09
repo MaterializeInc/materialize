@@ -37,7 +37,8 @@ try:
 except ImportError:
     from semver import VersionInfo as Version
 
-from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 
 
 class EnvironmentdService(K8sService):

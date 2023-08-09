@@ -235,7 +235,7 @@ steps:
   - id: cluster-tests
     label: Cluster tests
     depends_on: build-x86_64
-    timeout_in_minutes: 20
+    timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs: [test/cluster]
     plugins:

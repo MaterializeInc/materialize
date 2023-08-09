@@ -59,7 +59,7 @@ timely = { version = "0.12.0", default-features = false, features = ["bincode"] 
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.11"
-tonic = "0.8.2"
+tonic = "0.9.2"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 url = { version = "2.3.1", features = ["serde"] }
@@ -69,7 +69,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [build-dependencies]
 prost-build = "0.11.2"
 protobuf-src = "1.1.0"
-tonic-build = "0.8.2"
+tonic-build = "0.9.2"
 
 [dev-dependencies]
 itertools = "0.10.5"

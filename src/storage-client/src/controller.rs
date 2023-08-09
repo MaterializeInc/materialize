@@ -3119,13 +3119,13 @@ where
                         .collection::<ProtoShardId, ()>(command_wals::SHARD_FINALIZATION.name())
                         .await
                         .expect("named collection must exist");
-                    tx.peek(collection).await
+                    tx.peek_one(collection).await
                 })
             })
             .await
             .expect("stash operation succeeds")
             .into_iter()
-            .map(|(shard, _, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
+            .map(|(shard, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
 
         // Open a persist client to delete unused shards.
         let persist_client = self

@@ -29,7 +29,9 @@ from kubernetes.client import (
 )
 
 from materialize import ROOT
-from materialize.cloudtest.k8s import K8sConfigMap, K8sService, K8sStatefulSet
+from materialize.cloudtest.k8s.api.k8s_config_map import K8sConfigMap
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mzcompose.services import Cockroach
 
 

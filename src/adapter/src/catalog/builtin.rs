@@ -1739,7 +1739,15 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("managed", ScalarType::Bool.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("replication_factor", ScalarType::UInt32.nullable(true))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column(
+            "availability_zones",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(true),
+        ),
     is_retained_metrics_object: false,
 });
 
@@ -1775,6 +1783,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
+        // `NULL` for un-orchestrated clusters and for replicas where the user
+        // hasn't specified them.
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true)),
@@ -2162,6 +2172,33 @@ UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
+};
+
+pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
+    name: "mz_object_fully_qualified_names",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_object_fully_qualified_names (id, name, object_type, schema_name, database_name) AS
+    SELECT o.id, o.name, o.type, sc.name as schema_name, db.name as database_name
+    FROM mz_catalog.mz_objects o
+    INNER JOIN mz_catalog.mz_schemas sc ON sc.id = o.schema_id
+    -- LEFT JOIN accounts for objects in the ambient database.
+    LEFT JOIN mz_catalog.mz_databases db ON db.id = sc.database_id"
+};
+
+pub const MZ_OBJECT_LIFETIMES: BuiltinView = BuiltinView {
+    name: "mz_object_lifetimes",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_object_lifetimes (id, object_type, event_type, occurred_at) AS
+    SELECT
+        CASE
+            WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
+            ELSE a.details ->> 'id'
+        END id,
+        a.object_type,
+        a.event_type,
+        a.occurred_at
+    FROM mz_catalog.mz_audit_events a
+    WHERE a.event_type = 'create' OR a.event_type = 'drop'",
 };
 
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
@@ -4368,6 +4405,15 @@ ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_lifetimes_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_object_lifetimes_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_object_lifetimes (id, object_type)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
     attributes: RoleAttributes::new().with_all(),
@@ -4600,6 +4646,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
+        Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),
+        Builtin::View(&MZ_OBJECT_LIFETIMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
@@ -4742,6 +4790,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
+        Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
     ]);
 
     builtins

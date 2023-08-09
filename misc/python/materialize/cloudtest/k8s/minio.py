@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.cloudtest.k8s import K8sResource
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.util.wait import wait
 
 
 class Minio(K8sResource):

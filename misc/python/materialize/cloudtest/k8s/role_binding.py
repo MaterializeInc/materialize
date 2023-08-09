@@ -9,7 +9,7 @@
 
 from kubernetes.client import V1ObjectMeta, V1RoleBinding, V1RoleRef, V1Subject
 
-from materialize.cloudtest.k8s import K8sRoleBinding
+from materialize.cloudtest.k8s.api.k8s_role_binding import K8sRoleBinding
 
 
 class AdminRoleBinding(K8sRoleBinding):

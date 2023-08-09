@@ -26,6 +26,7 @@ mz-controller = { path = "../controller" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
+mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }

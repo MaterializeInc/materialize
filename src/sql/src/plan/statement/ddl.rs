@@ -2847,6 +2847,10 @@ pub fn plan_create_cluster(
         let replication_factor = replication_factor.unwrap_or(1);
         let availability_zones = availability_zones.unwrap_or_default();
 
+        if !availability_zones.is_empty() {
+            scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTER_AVAILABILITY_ZONES)?;
+        }
+
         let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
         let disk = disk.unwrap_or(disk_default);
         if disk {

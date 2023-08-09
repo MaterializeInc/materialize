@@ -109,6 +109,7 @@ impl Coordinator {
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
+        let mut update_cluster_scheduling_config = false;
 
         for op in &ops {
             match op {
@@ -194,6 +195,7 @@ impl Coordinator {
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
+                    update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -204,6 +206,7 @@ impl Coordinator {
                     update_storage_config = true;
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
+                    update_cluster_scheduling_config = true;
                 }
                 _ => (),
             }
@@ -460,6 +463,9 @@ impl Coordinator {
             if update_secrets_caching_config {
                 self.update_secrets_caching_config();
             }
+            if update_cluster_scheduling_config {
+                self.update_cluster_scheduling_config();
+            }
         }
         .await;
 
@@ -666,6 +672,12 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
+    }
+
+    fn update_cluster_scheduling_config(&mut self) {
+        let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(config);
     }
 
     fn update_secrets_caching_config(&mut self) {

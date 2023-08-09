@@ -942,8 +942,9 @@ impl PersistGrpcPubSubServer {
 
     /// Starts the gRPC server. Consumes `self` and runs until the task is cancelled.
     pub async fn serve(self, listen_addr: SocketAddr) -> Result<(), anyhow::Error> {
+        // Increase the default message decoding limit to avoid unnecessary panics
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self))
+            .add_service(ProtoPersistPubSubServer::new(self).max_decoding_message_size(usize::MAX))
             .serve(listen_addr)
             .await?;
         Ok(())

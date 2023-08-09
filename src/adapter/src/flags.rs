@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
@@ -58,6 +59,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
                 config.upsert_rocksdb_retry_duration(),
                 config.upsert_rocksdb_stats_log_interval_seconds(),
                 config.upsert_rocksdb_stats_persist_interval_seconds(),
+                config.upsert_rocksdb_point_lookup_block_cache_size_mb(),
             ) {
                 Ok(u) => u,
                 Err(e) => {
@@ -81,13 +83,13 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
             // Interpret the `Numeric` as a float here, we don't need perfect
             // precision for a percentage. Unfortunately `Decimal` makes us handle errors.
-            max_inflight_bytes_cluster_size_percent: config
-                .storage_dataflow_max_inflight_bytes_to_cluster_size_percent()
+            max_inflight_bytes_cluster_size_fraction: config
+                .storage_dataflow_max_inflight_bytes_to_cluster_size_fraction()
                 .and_then(|d| match d.try_into() {
                     Err(e) => {
                         tracing::error!(
                             "Couldn't convert {:?} to f64, so defaulting to `None`: {e:?}",
-                            config.storage_dataflow_max_inflight_bytes_to_cluster_size_percent()
+                            config.storage_dataflow_max_inflight_bytes_to_cluster_size_fraction()
                         );
                         None
                     }
@@ -148,5 +150,22 @@ fn grpc_client_config(config: &SystemVars) -> GrpcClientParameters {
         connect_timeout: Some(config.grpc_connect_timeout()),
         http2_keep_alive_interval: Some(config.grpc_client_http2_keep_alive_interval()),
         http2_keep_alive_timeout: Some(config.grpc_client_http2_keep_alive_timeout()),
+    }
+}
+
+pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingConfig {
+    ServiceSchedulingConfig {
+        multi_pod_az_affinity_weight: config.cluster_multi_process_replica_az_affinity_weight(),
+        soften_replication_anti_affinity: config.cluster_soften_replication_anti_affinity(),
+        soften_replication_anti_affinity_weight: config
+            .cluster_soften_replication_anti_affinity_weight(),
+        topology_spread: ServiceTopologySpreadConfig {
+            enabled: config.cluster_enable_topology_spread(),
+            ignore_non_singular_scale: config.cluster_topology_spread_ignore_non_singular_scale(),
+            max_skew: config.cluster_topology_spread_max_skew(),
+            soft: config.cluster_topology_spread_soft(),
+        },
+        soften_az_affinity: config.cluster_soften_az_affinity(),
+        soften_az_affinity_weight: config.cluster_soften_az_affinity_weight(),
     }
 }

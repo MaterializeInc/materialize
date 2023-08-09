@@ -303,8 +303,7 @@ message ReplicaConfig {
 
     message ManagedLocation {
         string size = 1;
-        string availability_zone = 2;
-        bool az_user_specified = 3;
+        optional string availability_zone = 2;
         bool disk = 4;
     }
 
