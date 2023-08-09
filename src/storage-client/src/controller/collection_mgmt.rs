@@ -55,7 +55,7 @@ impl CollectionManager {
     pub(super) fn new<
         T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
     >(
-        write_handle: persist_handles::PersistWriteWorker<T>,
+        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager {
         let collections: Arc<Mutex<BTreeSet<GlobalId>>> = Arc::new(Mutex::new(BTreeSet::new()));

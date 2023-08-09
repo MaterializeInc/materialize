@@ -813,9 +813,11 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(super) stash: mz_stash::Stash,
-    /// Write handle for persist shards.
-    pub(super) persist_write_handles: persist_handles::PersistWriteWorker<T>,
-    /// Read handles for persist shards.
+    /// Write handle for table shards.
+    pub(super) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
+    /// Write handle for table shards.
+    pub(super) persist_monotonic_worker: persist_handles::PersistMonotonicWriteWorker<T>,
+    /// Read handles for all shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
@@ -1099,8 +1101,9 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .await
             .expect("stash operation must succeed");
 
-        let persist_write_handles = persist_handles::PersistWriteWorker::new(tx);
-        let collection_manager_write_handle = persist_write_handles.clone();
+        let persist_table_worker = persist_handles::PersistTableWriteWorker::new(tx.clone());
+        let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new(tx);
+        let collection_manager_write_handle = persist_monotonic_worker.clone();
 
         let collection_manager =
             collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
@@ -1109,7 +1112,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             stash,
-            persist_write_handles,
+            persist_table_worker,
+            persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
             pending_compaction_commands: vec![],
@@ -1435,7 +1439,34 @@ where
                     metadata.clone(),
                 );
 
-                self.state.persist_write_handles.register(id, write);
+                match description.data_source {
+                    DataSource::Introspection(_) | DataSource::Webhook => {
+                        tracing::debug!(
+                            "WIP registering {} as monotonic: desc={:?} meta={:?}",
+                            id,
+                            description,
+                            metadata
+                        );
+                        self.state.persist_monotonic_worker.register(id, write);
+                    }
+                    DataSource::Other => {
+                        tracing::debug!(
+                            "WIP registering {} as table: desc={:?} meta={:?}",
+                            id,
+                            description,
+                            metadata
+                        );
+                        self.state.persist_table_worker.register(id, write);
+                    }
+                    DataSource::Ingestion(_) | DataSource::Progress => {
+                        tracing::debug!(
+                            "WIP NOT registering {} for writes: desc={:?} meta={:?}",
+                            id,
+                            description,
+                            metadata
+                        );
+                    }
+                }
                 self.state.persist_read_handles.register(id, since_handle);
 
                 self.state.collections.insert(id, collection_state);
@@ -1909,6 +1940,7 @@ where
         }
     }
 
+    // WIP rename this table_append
     #[tracing::instrument(level = "debug", skip_all)]
     fn append(
         &mut self,
@@ -1923,7 +1955,7 @@ where
             }
         }
 
-        Ok(self.state.persist_write_handles.append(commands))
+        Ok(self.state.persist_table_worker.append(commands))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
@@ -2232,12 +2264,18 @@ where
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
-                        // Drop all write handles. This is safe to do because there will be no more
-                        // data passed to the write handle. n.b. we do not need to drop the read
-                        // handle because this code is only ever executed in response to dropping a
-                        // collection, which downgrades the write handle to the empty anitchain,
-                        // which in turn drops the read handle.
-                        self.state.persist_write_handles.drop_handle(*id);
+                        // Drop all write handles. This is safe to do because
+                        // there will be no more data passed to the write
+                        // handle. n.b. we do not need to drop the read handle
+                        // because this code is only ever executed in response
+                        // to dropping a collection, which downgrades the write
+                        // handle to the empty anitchain, which in turn drops
+                        // the read handle.
+                        //
+                        // WIP do we need to care about which category this id
+                        // lives in or safe to just drop it from both?
+                        self.state.persist_table_worker.drop_handle(*id);
+                        self.state.persist_monotonic_worker.drop_handle(*id);
 
                         self.state.collections.remove(id).map(
                             |CollectionState {
@@ -3102,7 +3140,8 @@ where
                 )
                 .await;
 
-            self.state.persist_write_handles.update(id, write);
+            // WIP
+            self.state.persist_table_worker.update(id, write);
             self.state.persist_read_handles.update(id, since_handle);
         }
     }
