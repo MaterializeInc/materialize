@@ -283,6 +283,14 @@ pub fn show_schemas<'a>(
     ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
+pub fn show_roles<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let query = format!("SELECT name FROM mz_catalog.mz_roles WHERE id NOT LIKE 's%'",);
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -299,7 +307,10 @@ pub fn show_objects<'a>(
         ShowObjectType::Sink => show_sinks(scx, from, filter),
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
-        ShowObjectType::Role => bail_unsupported!("SHOW ROLES"),
+        ShowObjectType::Role => {
+            assert!(from.is_none(), "parser should reject from");
+            show_roles(scx, filter)
+        }
         ShowObjectType::Cluster => {
             assert!(from.is_none(), "parser should reject from");
             show_clusters(scx, filter)
