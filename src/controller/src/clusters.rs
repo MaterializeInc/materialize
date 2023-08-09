@@ -164,11 +164,11 @@ pub struct UnmanagedReplicaLocation {
 #[derive(Clone, Debug)]
 pub enum ManagedReplicaAvailabilityZones {
     /// Specified if the `Replica` is from `MANAGED` cluster,
-    /// and specifies if their is an `AVAILABILITY ZONES`
-    /// constraint. Empty list's are represented as `None`.
+    /// and specifies if there is an `AVAILABILITY ZONES`
+    /// constraint. Empty lists are represented as `None`.
     FromCluster(Option<Vec<String>>),
     /// Specified if the `Replica` is from a non-`MANAGED` cluster,
-    /// and specifies if their is a specific `AVAILABILITY ZONE`.
+    /// and specifies if there is a specific `AVAILABILITY ZONE`.
     FromReplica(Option<String>),
 }
 
