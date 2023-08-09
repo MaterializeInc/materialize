@@ -117,12 +117,18 @@ EOF
 query T multiline
 EXPLAIN SHOW SINKS
 ----
-Explained Query (fast path):
-  Project (#3, #4, #6)
-    ReadExistingIndex mz_internal.mz_show_sinks_ind lookup_value=("u3")
-
+Explained Query:
+  Project (#0..=#2, #5)
+    Join on=(#3 = #4) type=differential
+      ArrangeBy keys=[[#3]]
+        Project (#3, #4, #6, #8)
+          ReadExistingIndex mz_catalog.mz_sinks lookup_value=(\"u3\")
+            ArrangeBy keys=[[#0]]
+              Get mz_catalog.mz_clusters
+              
 Used Indexes:
   - mz_internal.mz_show_sinks_ind
+  - mz_internal.mz_clusters_ind
 
 EOF
 

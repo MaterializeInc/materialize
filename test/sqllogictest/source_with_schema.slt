@@ -19,7 +19,7 @@ CREATE SCHEMA foo
 statement ok
 CREATE SOURCE foo.auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
 
-query TTT
+query TTTT
 SHOW SOURCES FROM foo;
 ----
 accounts         subsource      NULL NULL
@@ -37,7 +37,7 @@ CREATE SCHEMA bar
 statement ok
 CREATE SOURCE bar.auction FROM LOAD GENERATOR AUCTION FOR TABLES (bids) WITH (SIZE '1');
 
-query TTT
+query TTTT
 SHOW SOURCES FROM bar;
 ----
 auction          load-generator 1    materialize_public_auction
@@ -55,14 +55,14 @@ CREATE SCHEMA qux;
 statement ok
 CREATE SOURCE baz.auction FROM LOAD GENERATOR AUCTION FOR TABLES (bids AS baz_bids, users AS qux.users) WITH (SIZE '1');
 
-query TTT
+query TTTT
 SHOW SOURCES FROM baz;
 ----
 auction          load-generator 1    materialize_public_auction
 auction_progress progress       NULL NULL
 baz_bids         subsource      NULL NULL
 
-query TTT
+query TTTT
 SHOW SOURCES FROM qux;
 ----
 users subsource NULL NULL

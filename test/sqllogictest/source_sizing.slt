@@ -26,7 +26,7 @@ u4  u3  s2  load-generator  NULL  1
 u1  u3  s1_progress  progress   NULL  NULL
 u3  u3  s2_progress  progress   NULL  NULL
 
-query TTT
+query TTTT
 SHOW SOURCES
 ----
 s1          load-generator  1    materialize_public_s1
