@@ -58,6 +58,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
                 config.upsert_rocksdb_retry_duration(),
                 config.upsert_rocksdb_stats_log_interval_seconds(),
                 config.upsert_rocksdb_stats_persist_interval_seconds(),
+                config.upsert_rocksdb_point_lookup_block_cache_size_mb(),
             ) {
                 Ok(u) => u,
                 Err(e) => {

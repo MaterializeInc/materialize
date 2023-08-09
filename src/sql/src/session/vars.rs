@@ -772,6 +772,15 @@ mod upsert_rocksdb {
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
+    pub static UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB: ServerVar<Option<u32>> =
+        ServerVar {
+            name: UncasedStr::new("upsert_rocksdb_point_lookup_block_cache_size_mb"),
+            value: &None,
+            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+            internal: true,
+        };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -1944,6 +1953,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2346,6 +2356,10 @@ impl SystemVars {
 
     pub fn upsert_rocksdb_stats_persist_interval_seconds(&self) -> u32 {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
+    }
+
+    pub fn upsert_rocksdb_point_lookup_block_cache_size_mb(&self) -> Option<u32> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -3944,6 +3958,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
