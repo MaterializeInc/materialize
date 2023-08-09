@@ -287,7 +287,7 @@ pub fn show_roles<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = format!("SELECT name FROM mz_catalog.mz_roles WHERE id NOT LIKE 's%'",);
+    let query = "SELECT name FROM mz_catalog.mz_roles WHERE id NOT LIKE 's%'".to_string();
     ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
