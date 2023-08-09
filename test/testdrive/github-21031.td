@@ -12,6 +12,10 @@
 # This test confirms that subscribes that advance to the empty frontier are
 # fully cleaned up.
 #
+
+# This test uses introspection queries that need to be targeted to a replica
+> SET cluster_replica = r1
+
 # This test relies on testdrive's automatic retries, since it queries
 # introspection sources that take a while to update.
 
