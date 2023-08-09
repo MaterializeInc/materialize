@@ -43,7 +43,7 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
     ```
 
     {{< note >}}
-    All of the resources in this tutorial can be run with a single `terraform apply` but we will add and apply resources incrementally to better illustrate grants.
+  All of the resources in this tutorial can be run with a single terraform apply but we will add and apply resources incrementally to better illustrate grants.
     {{</ note >}}
 
 3. Each role you create has default role attributes that determine how they can interact with Materialize objects. Let’s look at the role attributes of the role you created:
@@ -165,7 +165,7 @@ In this example, let's say your `dev_role` needs the following permissions:
     ```
 
     {{< note >}}
-    All of the grant resources are a 1:1 between a specific role, object and privilege. So adding three privileges to the `dev_role` will require three Terraform resources. 
+  All of the grant resources are a 1:1 between a specific role, object and privilege. So adding three privileges to the `dev_role` will require three Terraform resources.
     {{</ note >}}
 
 2. We will run Terraform to grant these privileges on the `dev_table` table.
