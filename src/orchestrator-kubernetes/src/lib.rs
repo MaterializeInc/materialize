@@ -93,7 +93,7 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
-use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
@@ -351,14 +351,14 @@ impl k8s_openapi::Metadata for MetricValueList {
 }
 
 impl NamespacedKubernetesOrchestrator {
-    /// Return a `ListParams` instance that limits results to the namespace
+    /// Return a `wather::Config` instance that limits results to the namespace
     /// assigned to this orchestrator.
-    fn list_pod_params(&self) -> ListParams {
+    fn watch_pod_params(&self) -> watcher::Config {
         let ns_selector = format!(
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
         );
-        ListParams::default().labels(&ns_selector)
+        watcher::Config::default().labels(&ns_selector)
     }
     /// Convert a higher-level label key to the actual one we
     /// will give to Kubernetes
@@ -1317,7 +1317,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let stream = watcher(self.pod_api.clone(), self.list_pod_params())
+        let stream = watcher(self.pod_api.clone(), self.watch_pod_params())
             .touched_objects()
             .filter_map(|object| async move {
                 match object {

@@ -550,10 +550,10 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 let stream = make_ws_tls(&uri, configure);
                 let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
                 //  let (mut ws, _resp) = tungstenite::connect(uri).unwrap();
-                ws.write_message(Message::Text(serde_json::to_string(&auth).unwrap()))
+                ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
                     .unwrap();
 
-                ws.write_message(Message::Text(
+                ws.send(Message::Text(
                     r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
                 ))
                 .unwrap();
@@ -565,7 +565,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     mut expected_tag_opt: Option<&str>,
                 ) {
                     while expected_tag_opt.is_some() || expected_row_opt.is_some() {
-                        let resp = ws.read_message().unwrap();
+                        let resp = ws.read().unwrap();
                         if let Message::Text(msg) = resp {
                             let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                             match (msg, &expected_row_opt, expected_tag_opt) {
@@ -598,13 +598,13 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
                     Assert::SuccessSuperuserCheck(is_superuser) => {
                         assert_success_response(&mut ws, None, Some("SELECT 1"));
-                        ws.write_message(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
+                        ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
                             .unwrap();
                         let expected = if *is_superuser { "\"on\"" } else { "\"off\"" };
                         assert_success_response(&mut ws, Some(vec![expected]), Some("SELECT 1"));
                     }
                     Assert::Err(check) => {
-                        let resp = ws.read_message().unwrap();
+                        let resp = ws.read().unwrap();
                         let (code, message) = match resp {
                             Message::Close(frame) => {
                                 let frame = frame.unwrap();
