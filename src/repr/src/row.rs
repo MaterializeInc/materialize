@@ -413,36 +413,66 @@ enum Tag {
     CheapTimestampTz,
     // ORDER MATTERS for all the IntN_K tags,
     // because we use arithmetic to figure out which tag to use during encoding.
-    Int16_8,
-    Int16,
-    
-    Int32_8,
-    Int32_16,
-    Int32_24,
-    Int32,
+    Int16_0,
+    Int16_8_NonNegative,
+    Int16_NonNegative,
 
-    Int64_8,
-    Int64_16,
-    Int64_24,
-    Int64_32,
-    Int64_40,
-    Int64_48,
-    Int64_56,
-    Int64,
+    Int32_0,
+    Int32_8_NonNegative,
+    Int32_16_NonNegative,
+    Int32_24_NonNegative,
+    Int32_NonNegative,
+
+    Int64_0,
+    Int64_8_NonNegative,
+    Int64_16_NonNegative,
+    Int64_24_NonNegative,
+    Int64_32_NonNegative,
+    Int64_40_NonNegative,
+    Int64_48_NonNegative,
+    Int64_56_NonNegative,
+    Int64_NonNegative,
+
+    Int16_8_Negative,
+    Int16_Negative,
+
+    Int32_8_Negative,
+    Int32_16_Negative,
+    Int32_24_Negative,
+    Int32_Negative,
+
+    Int64_8_Negative,
+    Int64_16_Negative,
+    Int64_24_Negative,
+    Int64_32_Negative,
+    Int64_40_Negative,
+    Int64_48_Negative,
+    Int64_56_Negative,
+    Int64_Negative,
 }
 
 impl Tag {
     fn actual_int_length(self) -> usize {
         use Tag::*;
         match self {
-            Int16_8 | Int32_8 | Int64_8 => 1,
-            Int16 | Int32_16 | Int64_16 => 2,
-            Int32_24 | Int64_24 => 3,
-            Int32 | Int64_32 => 4,
-            Int64_40 => 5,
-            Int64_48 => 6,
-            Int64_56 => 7,
-            Int64 => 8,
+            Int16_0 | Int32_0 | Int64_0 => 0,
+            Int16_8_NonNegative | Int32_8_NonNegative | Int64_8_NonNegative => 1,
+            Int16_NonNegative | Int32_16_NonNegative | Int64_16_NonNegative => 2,
+            Int32_24_NonNegative | Int64_24_NonNegative => 3,
+            Int32_NonNegative | Int64_32_NonNegative => 4,
+            Int64_40_NonNegative => 5,
+            Int64_48_NonNegative => 6,
+            Int64_56_NonNegative => 7,
+            Int64_NonNegative => 8,
+            Int16_8_Negative | Int32_8_Negative | Int64_8_Negative => 1,
+            Int16_Negative | Int32_16_Negative | Int64_16_Negative => 2,
+            Int32_24_Negative | Int64_24_Negative => 3,
+            Int32_Negative | Int64_32_Negative => 4,
+            Int64_40_Negative => 5,
+            Int64_48_Negative => 6,
+            Int64_56_Negative => 7,
+            Int64_Negative => 8,
+
             _ => panic!(),
         }
     }
@@ -501,23 +531,35 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
     byte
 }
 
-fn read_byte_array_sign_extending<const N: usize>(
+unsafe fn read_byte_array_sign_extending<const N: usize, const Fill: u8>(
     data: &[u8],
     offset: &mut usize,
     length: usize,
 ) -> [u8; N] {
-    debug_assert!(length <= N);
-    let mut raw = [0; N];
-    if length > 0 {
-        std::io::Write::write(&mut &mut raw[0..length], &data[*offset..*offset + length]).unwrap();
-        *offset += length;
-        // This is little-endian, so the sign bit is in the last
-        // element.
-        let is_negative = (raw[length - 1] & 0x80) != 0;
-        let fill_val = if is_negative { 255 } else { 0 };
-        raw[length..N].fill(fill_val);
+    let mut raw = [Fill; N];
+    for i in 0..length {
+        debug_assert!(i < raw.len());
+        debug_assert!(*offset + i < data.len());
+        *raw.get_unchecked_mut(i) = *data.get_unchecked(*offset + i);
     }
+    *offset += length;
     raw
+}
+
+unsafe fn read_byte_array_extending_negative<const N: usize>(
+    data: &[u8],
+    offset: &mut usize,
+    length: usize,
+) -> [u8; N] {
+    read_byte_array_sign_extending::<N, 255>(data, offset, length)
+}
+
+unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
+    data: &[u8],
+    offset: &mut usize,
+    length: usize,
+) -> [u8; N] {
+    read_byte_array_sign_extending::<N, 0>(data, offset, length)
 }
 
 fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
@@ -558,37 +600,77 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
-        Tag::Int16 | Tag::Int16_8 => {
-            let i = i16::from_le_bytes(read_byte_array_sign_extending(
+        Tag::Int16_0 | Tag::Int16_NonNegative | Tag::Int16_8_NonNegative => {
+            let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
                 tag.actual_int_length(),
             ));
             Datum::Int16(i)
         }
-        Tag::Int32 | Tag::Int32_8 | Tag::Int32_16 | Tag::Int32_24 => {
-            let i = i32::from_le_bytes(read_byte_array_sign_extending(
+        Tag::Int32_0
+        | Tag::Int32_NonNegative
+        | Tag::Int32_8_NonNegative
+        | Tag::Int32_16_NonNegative
+        | Tag::Int32_24_NonNegative => {
+            let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
                 tag.actual_int_length(),
             ));
             Datum::Int32(i)
         }
-        Tag::Int64
-        | Tag::Int64_8
-        | Tag::Int64_16
-        | Tag::Int64_24
-        | Tag::Int64_32
-        | Tag::Int64_40
-        | Tag::Int64_48
-        | Tag::Int64_56 => {
-            let i = i64::from_le_bytes(read_byte_array_sign_extending(
+        Tag::Int64_0
+        | Tag::Int64_NonNegative
+        | Tag::Int64_8_NonNegative
+        | Tag::Int64_16_NonNegative
+        | Tag::Int64_24_NonNegative
+        | Tag::Int64_32_NonNegative
+        | Tag::Int64_40_NonNegative
+        | Tag::Int64_48_NonNegative
+        | Tag::Int64_56_NonNegative => {
+            let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
                 tag.actual_int_length(),
             ));
             Datum::Int64(i)
         }
+        Tag::Int16_Negative | Tag::Int16_8_Negative => {
+            let i = i16::from_le_bytes(read_byte_array_extending_negative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
+            Datum::Int16(i)
+        }
+        Tag::Int32_Negative
+        | Tag::Int32_8_Negative
+        | Tag::Int32_16_Negative
+        | Tag::Int32_24_Negative => {
+            let i = i32::from_le_bytes(read_byte_array_extending_negative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
+            Datum::Int32(i)
+        }
+        Tag::Int64_Negative
+        | Tag::Int64_8_Negative
+        | Tag::Int64_16_Negative
+        | Tag::Int64_24_Negative
+        | Tag::Int64_32_Negative
+        | Tag::Int64_40_Negative
+        | Tag::Int64_48_Negative
+        | Tag::Int64_56_Negative => {
+            let i = i64::from_le_bytes(read_byte_array_extending_negative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
+            Datum::Int64(i)
+        }
+
         Tag::UInt8 => {
             let i = u8::from_le_bytes(read_byte_array(data, offset));
             Datum::UInt8(i)
@@ -863,16 +945,12 @@ where
 
     // To fit in n bytes, we require that
     // everything but the leading sign bits fits in n*8 - 1
-    // bits. Why the -1? Because we still need one sign bit
-    // in the encoded data.
-    //
-    // We can improve this, at the cost of doubling the number of extra tags,
-    // by encoding whether the number is positive or negative in the tag.
+    // bits.
     let n_sign_bits = if i.is_negative() {
         i.leading_ones() as u8
     } else {
         i.leading_zeros() as u8
-    } - 1;
+    };
 
     (64 - n_sign_bits + 7) / 8
 }
@@ -887,19 +965,34 @@ where
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(Tag::Int16_8) + mbs - 1;
+            let tag = u8::from(if i.is_negative() {
+                Tag::Int16_8_Negative
+            } else {
+                Tag::Int16_8_NonNegative
+            }) + mbs
+                - 1;
             data.push(tag.into());
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(Tag::Int32_8) + mbs - 1;
+            let tag = u8::from(if i.is_negative() {
+                Tag::Int32_8_Negative
+            } else {
+                Tag::Int32_8_NonNegative
+            }) + mbs
+                - 1;
             data.push(tag.into());
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(Tag::Int64_8) + mbs - 1;
+            let tag = u8::from(if i.is_negative() {
+                Tag::Int64_8_Negative
+            } else {
+                Tag::Int64_8_NonNegative
+            }) + mbs
+                - 1;
             data.push(tag.into());
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
