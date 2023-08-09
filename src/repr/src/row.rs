@@ -887,19 +887,19 @@ where
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(Tag::Int16_8) + mbs;
+            let tag = u8::from(Tag::Int16_8) + mbs - 1;
             data.push(tag.into());
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(Tag::Int32_8) + mbs;
+            let tag = u8::from(Tag::Int32_8) + mbs - 1;
             data.push(tag.into());
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(Tag::Int64_8) + mbs;
+            let tag = u8::from(Tag::Int64_8) + mbs - 1;
             data.push(tag.into());
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
