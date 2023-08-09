@@ -165,17 +165,28 @@ Used Indexes:
 
 EOF
 
-query T multiline
-EXPLAIN SELECT name FROM (SHOW CLUSTERS)
-----
-Explained Query (fast path):
-  Project (#0)
-    ReadExistingIndex mz_internal.mz_show_clusters_ind
-
-Used Indexes:
-  - mz_internal.mz_show_clusters_ind
-
-EOF
+# TODO[btv] - We should probably someday
+# optimize `SELECT name FROM (SHOW CLUSTERS)`
+# to do the same thing as `SELECT name FROM mz_clusters`;
+# i.e., just read out of the index we have on the latter table.
+# However, today we cannot do that. It's probably fine in practice
+# as there won't be more than a few dozen clusters/replicas in any
+# real world deployment, so spinning up a dataflow with joins
+# etc. is only mildly bad.
+#
+# See discussion here: https://materializeinc.slack.com/archives/C02PPB50ZHS/p1691531471306959
+#
+# query T multiline
+# EXPLAIN SELECT name FROM (SHOW CLUSTERS)
+# ----
+# Explained Query (fast path):
+#   Project (#0)
+#     ReadExistingIndex mz_internal.mz_show_clusters_ind
+#
+# Used Indexes:
+#   - mz_internal.mz_show_clusters_ind
+#
+# EOF
 
 query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS
