@@ -9,7 +9,7 @@
 
 from kubernetes.client import V1ObjectMeta, V1Service, V1ServicePort, V1ServiceSpec
 
-from materialize.cloudtest.k8s import K8sService
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class PersistPubSubService(K8sService):
