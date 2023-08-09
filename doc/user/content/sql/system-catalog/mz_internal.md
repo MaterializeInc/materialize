@@ -968,6 +968,32 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 | `requested_ns`  | [`uint8`]   | The requested length of the park event in nanoseconds.   |
 | `count`         | [`numeric`] | The (noncumulative) count of park events in this bucket. |
 
+### `mz_object_fully_qualified_names`
+
+The `mz_object_fully_qualified_names` table contains a row for each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
+Field          | Type       | Meaning
+---------------|------------|----------
+`id`           | [`text`]   | Materialize's unique ID for the object.
+`name`         | [`text`]   | The name of the object.
+`object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).
+
+### `mz_object_lifetimes`
+
+The `mz_object_lifetimes` table contains a row for each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
+Field          | Type                         | Meaning
+---------------|------------------------------|----------
+`id`           | [`text`]                     | Materialize's unique ID for the object.
+`object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.
+`occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred.
+
+
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
 
