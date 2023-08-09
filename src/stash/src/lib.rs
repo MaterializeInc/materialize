@@ -215,7 +215,7 @@ impl StashError {
     /// or a retry is not safe due to an indeterminate state).
     pub fn is_unrecoverable(&self) -> bool {
         match &self.inner {
-            InternalStashError::Fence(_) => true,
+            InternalStashError::Fence(_) | InternalStashError::StashNotWritable(_) => true,
             _ => false,
         }
     }

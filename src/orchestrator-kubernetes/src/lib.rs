@@ -939,6 +939,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     } else {
                         "DoNotSchedule".to_string()
                     },
+                    // TODO(guswynn): restore these once they are supported.
+                    // Consider node affinities when calculating topology spread. This is the
+                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_affinity_policy>,
+                    // made explicit.
+                    // node_affinity_policy: Some("Honor".to_string()),
+                    // Do not consider node taints when calculating topology spread. This is the
+                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_taints_policy>,
+                    // made explicit.
+                    // node_taints_policy: Some("Ignore".to_string()),
+                    match_label_keys: None,
+                    // Once the above are restorted, we should't have `..Default::default()` here because the specifics of these fields are
+                    // subtle enough where we want compilation failures when we upgrade
+                    ..Default::default()
                 };
                 Some(vec![constraint])
             } else {
