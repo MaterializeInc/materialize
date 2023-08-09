@@ -23,7 +23,7 @@ users                   subsource      <null>                         <null>
 > CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids);
 
 > SHOW SOURCES FROM a;
-auction_bids            load-generator ${arg.default-storage-size}  materialize_a_auction_bids 
+auction_bids            load-generator ${arg.default-storage-size}  materialize_a_auction_bids
 auction_bids_progress   progress       <null>                       <null>
 bids                    subsource      <null>                       <null>
 
