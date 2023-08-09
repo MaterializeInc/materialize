@@ -1154,21 +1154,21 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
 mod grpc_client {
     use super::*;
 
-    pub const CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    pub const CONNECT_TIMEOUT: ServerVar<Option<Duration>> = ServerVar {
         name: UncasedStr::new("grpc_client_connect_timeout"),
-        value: &Duration::from_secs(5),
+        value: &Some(Duration::from_secs(5)),
         description: "Timeout to apply to initial gRPC client connection establishment.",
         internal: true,
     };
-    pub const HTTP2_KEEP_ALIVE_INTERVAL: ServerVar<Duration> = ServerVar {
+    pub const HTTP2_KEEP_ALIVE_INTERVAL: ServerVar<Option<Duration>> = ServerVar {
         name: UncasedStr::new("grpc_client_http2_keep_alive_interval"),
-        value: &Duration::from_secs(3),
+        value: &Some(Duration::from_secs(3)),
         description: "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
         internal: true,
     };
-    pub const HTTP2_KEEP_ALIVE_TIMEOUT: ServerVar<Duration> = ServerVar {
+    pub const HTTP2_KEEP_ALIVE_TIMEOUT: ServerVar<Option<Duration>> = ServerVar {
         name: UncasedStr::new("grpc_client_http2_keep_alive_timeout"),
-        value: &Duration::from_secs(5),
+        value: &Some(Duration::from_secs(5)),
         description:
             "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
         internal: true,
@@ -2561,15 +2561,15 @@ impl SystemVars {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 
-    pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
+    pub fn grpc_client_http2_keep_alive_interval(&self) -> Option<Duration> {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
     }
 
-    pub fn grpc_client_http2_keep_alive_timeout(&self) -> Duration {
+    pub fn grpc_client_http2_keep_alive_timeout(&self) -> Option<Duration> {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
     }
 
-    pub fn grpc_connect_timeout(&self) -> Duration {
+    pub fn grpc_connect_timeout(&self) -> Option<Duration> {
         *self.expect_value(&grpc_client::CONNECT_TIMEOUT)
     }
 }

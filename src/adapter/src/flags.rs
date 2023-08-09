@@ -146,8 +146,8 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
 
 fn grpc_client_config(config: &SystemVars) -> GrpcClientParameters {
     GrpcClientParameters {
-        connect_timeout: Some(config.grpc_connect_timeout()),
-        http2_keep_alive_interval: Some(config.grpc_client_http2_keep_alive_interval()),
-        http2_keep_alive_timeout: Some(config.grpc_client_http2_keep_alive_timeout()),
+        connect_timeout: config.grpc_connect_timeout(),
+        http2_keep_alive_interval: config.grpc_client_http2_keep_alive_interval(),
+        http2_keep_alive_timeout: config.grpc_client_http2_keep_alive_timeout(),
     }
 }
