@@ -872,7 +872,7 @@ where
         i.leading_ones() as u8
     } else {
         i.leading_zeros() as u8
-    } + 1;
+    } - 1;
 
     (64 - n_sign_bits + 7) / 8
 }
