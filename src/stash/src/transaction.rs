@@ -404,7 +404,7 @@ impl<'a> Transaction<'a> {
     /// Sealed entries are those with timestamps less than the collection's upper
     /// frontier.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn peek<K, V>(
+    pub(crate) async fn peek<K, V>(
         &self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<(K, V, Diff)>, StashError>
@@ -447,7 +447,7 @@ impl<'a> Transaction<'a> {
         let mut res = BTreeMap::new();
         for (k, v, diff) in rows {
             if diff != 1 {
-                return Err("unexpected peek multiplicity".into());
+                return Err(format!("unexpected peek multiplicity of {diff}").into());
             }
             if res.insert(k, v).is_some() {
                 return Err(format!("duplicate peek keys for collection {}", collection.id).into());
