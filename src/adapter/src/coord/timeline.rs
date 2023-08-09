@@ -82,7 +82,7 @@ pub struct WriteTimestamp<T = mz_repr::Timestamp> {
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
 pub(crate) struct TimelineState<T> {
-    pub(crate) oracle: CatalogTimestampOracle<T>,
+    pub(crate) oracle: Box<dyn TimestampOracle<T>>,
     pub(crate) read_holds: ReadHolds<T>,
 }
 
@@ -106,17 +106,17 @@ impl Coordinator {
     pub(crate) fn get_timestamp_oracle(
         &self,
         timeline: &Timeline,
-    ) -> &CatalogTimestampOracle<Timestamp> {
-        &self
-            .global_timelines
+    ) -> &dyn TimestampOracle<Timestamp> {
+        self.global_timelines
             .get(timeline)
             .expect("all timelines have a timestamp oracle")
             .oracle
+            .as_ref()
     }
 
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
-    fn get_local_timestamp_oracle(&self) -> &CatalogTimestampOracle<Timestamp> {
+    fn get_local_timestamp_oracle(&self) -> &dyn TimestampOracle<Timestamp> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
@@ -217,7 +217,7 @@ impl Coordinator {
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle,
+                    oracle: Box::new(oracle),
                     read_holds: ReadHolds::new(),
                 },
             );

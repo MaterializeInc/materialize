@@ -33,7 +33,6 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_oracle::TimestampOracle;
 use crate::util::ResultExt;
 
 /// The value to round all `since` frontiers to.

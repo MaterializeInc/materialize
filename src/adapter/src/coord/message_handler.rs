@@ -29,7 +29,6 @@ use tracing::{event, warn, Instrument, Level};
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
-use crate::coord::timestamp_oracle::TimestampOracle;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
