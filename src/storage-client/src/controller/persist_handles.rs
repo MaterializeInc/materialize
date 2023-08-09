@@ -285,6 +285,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                             while let Some((span, command)) = commands.pop_front() {
                                 match command {
                                     PersistWriteWorkerCmd::Register(id, write_handle) => {
+                                        tracing::info!("WIP register {}", id);
                                         let previous = write_handles.insert(id, write_handle);
                                         if previous.is_some() {
                                             panic!(
@@ -294,9 +295,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         }
                                     }
                                     PersistWriteWorkerCmd::Update(id, write_handle) => {
+                                        tracing::info!("WIP update {}", id);
                                         write_handles.insert(id, write_handle).expect("PersistWriteWorkerCmd::Update only valid for updating extant write handles");
                                     },
                                     PersistWriteWorkerCmd::DropHandle(id) => {
+                                        tracing::info!("WIP drop {}", id);
                                         // n.b. this should only remove the
                                         // handle from the persist worker and
                                         // not take any additional action such
@@ -306,6 +309,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         write_handles.remove(&id);
                                     }
                                     PersistWriteWorkerCmd::Append(updates, response) => {
+                                        tracing::info!(
+                                            "WIP append uppers={:?} ids={:?} times={:?}",
+                                            updates.iter().map(|(_, _, x)| x).collect::<BTreeSet<_>>(),
+                                            updates.iter().map(|(x, _, _)| x).collect::<BTreeSet<_>>(),
+                                            updates.iter().flat_map(|(_, x, _)| x).map(|x| x.timestamp.clone()).collect::<BTreeSet<_>>(),
+                                        );
                                         let mut ids = BTreeSet::new();
                                         for (id, update, upper) in updates {
                                             ids.insert(id);
@@ -334,6 +343,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         all_responses.push((ids, response));
                                     }
                                     PersistWriteWorkerCmd::MonotonicAppend(updates, response) => {
+                                        tracing::info!(
+                                            "WIP monotonic_append uppers={:?} ids={:?}",
+                                            updates.iter().map(|(_, _, x)| x).collect::<BTreeSet<_>>(),
+                                            updates.iter().map(|(x, _, _)| x).collect::<BTreeSet<_>>()
+                                        );
                                         let mut updates_outer = Vec::with_capacity(updates.len());
                                         for (id, update, at_least) in updates {
                                             let current_upper = write_handles[&id].upper().clone();
