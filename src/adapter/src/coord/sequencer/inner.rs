@@ -44,7 +44,7 @@ use mz_sql::catalog::{
     ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
-    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
+    Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -62,9 +62,9 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOptionName, CreateSourceConnection, CreateSourceSubsource,
-    DeferredItemName, PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement,
-    TransactionMode, WithOptionValue,
+    AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
+    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
+    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
@@ -4524,6 +4524,102 @@ impl Coordinator {
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
+    }
+
+    pub(super) async fn sequence_alter_connection(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
+        drop_options: BTreeSet<ConnectionOptionName>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let cur_entry = self.catalog().get_entry(&id);
+        let cur_conn = cur_entry.connection().expect("known to be connection");
+
+        // Parse statement.
+        let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
+            .expect("invalid create sql persisted to catalog")
+            .into_element()
+            .ast
+        {
+            Statement::CreateConnection(stmt) => stmt,
+            _ => unreachable!("proved type is source"),
+        };
+
+        let catalog = self.catalog().for_system_session();
+
+        // Resolve items in statement
+        let (mut create_conn_stmt, resolved_ids) =
+            mz_sql::names::resolve(&catalog, create_conn_stmt)
+                .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
+
+        // Retain options that are neither set nor dropped.
+        create_conn_stmt
+            .values
+            .retain(|o| !set_options.contains_key(&o.name) && !drop_options.contains(&o.name));
+
+        // Set new values
+        create_conn_stmt.values.extend(
+            set_options
+                .into_iter()
+                .map(|(name, value)| ConnectionOption { name, value }),
+        );
+
+        // Open a new catalog, which we will use to re-plan our
+        // statement with the desired config.
+        let mut catalog = self.catalog().for_system_session();
+        catalog.mark_id_unresolvable_for_replanning(id);
+
+        // Re-define our source in terms of the amended statement
+        let plan = match mz_sql::plan::plan(
+            None,
+            &catalog,
+            Statement::CreateConnection(create_conn_stmt),
+            &Params::empty(),
+            &resolved_ids,
+        )
+        .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
+        {
+            Plan::CreateConnection(plan) => plan,
+            _ => unreachable!("create source plan is only valid response"),
+        };
+
+        // Parse statement.
+        let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql)
+            .expect("invalid create sql persisted to catalog")
+            .into_element()
+            .ast
+        {
+            Statement::CreateConnection(stmt) => stmt,
+            _ => unreachable!("proved type is source"),
+        };
+
+        let catalog = self.catalog().for_system_session();
+        // Resolve items in statement
+        let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
+            .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
+
+        let conn = catalog::Connection {
+            create_sql: plan.connection.create_sql,
+            connection: plan.connection.connection,
+            resolved_ids: new_deps,
+        };
+
+        // Redefine connection.
+        let ops = vec![catalog::Op::UpdateItem {
+            id,
+            // Look this up again so we don't have to hold an immutable reference to the
+            // entry for so long.
+            name: self.catalog.get_entry(&id).name().clone(),
+            to_item: CatalogItem::Connection(conn),
+        }];
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        // todo: restart ingestions
+
+        // todo: fix
+        Ok(ExecuteResponse::AlteredRole)
     }
 
     pub(super) async fn sequence_alter_source(
