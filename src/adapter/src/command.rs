@@ -50,6 +50,9 @@ pub enum Command {
         session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
+        /// keys of settings that were set on statup, and thus should not be
+        /// overridden by defaults.
+        set_setting_keys: Vec<String>,
     },
 
     Declare {

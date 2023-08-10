@@ -27,7 +27,9 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
 };
-use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
+use mz_sql::session::vars::{
+    EndTransactionAction, OwnedVarInput, Var, VarInput, STATEMENT_LOGGING_SAMPLE_RATE,
+};
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
@@ -96,10 +98,12 @@ impl Coordinator {
                 session,
                 cancel_tx,
                 tx,
+                set_setting_keys,
             } => {
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
-                self.handle_startup(session, cancel_tx, tx).await;
+                self.handle_startup(session, cancel_tx, tx, set_setting_keys)
+                    .await;
             }
 
             Command::Execute {
@@ -301,6 +305,7 @@ impl Coordinator {
         mut session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
+        set_setting_keys: Vec<String>,
     ) {
         if self
             .catalog()
@@ -350,6 +355,20 @@ impl Coordinator {
             messages.push(StartupMessage::UnknownSessionDatabase(
                 session.vars().database().into(),
             ));
+        }
+        if !set_setting_keys
+            .iter()
+            .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
+        {
+            // let default = catalog.state().system_config().statem
+            session.vars_mut().set(
+                None,
+                STATEMENT_LOGGING_SAMPLE_RATE.name(),
+                VarInput::Flat(&default),
+            );
+            session
+                .vars_mut()
+                .end_transaction(EndTransactionAction::Commit);
         }
 
         let session_type = metrics::session_type_label_value(session.user());

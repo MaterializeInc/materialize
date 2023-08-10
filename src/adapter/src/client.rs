@@ -149,6 +149,9 @@ impl Client {
     pub async fn startup(
         &self,
         session: Session,
+        // keys of settings that were set on statup, and thus should not be
+        // overridden by defaults.
+        set_setting_keys: Vec<String>,
     ) -> Result<(SessionClient, StartupResponse), AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
@@ -172,6 +175,7 @@ impl Client {
                 session,
                 cancel_tx,
                 tx,
+                set_setting_keys,
             })
             .await;
         match response {

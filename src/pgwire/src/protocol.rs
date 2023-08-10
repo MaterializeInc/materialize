@@ -244,6 +244,7 @@ where
         (session, is_expired)
     };
 
+    let mut setting_keys = vec![];
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match parse_options(&value) {
@@ -272,6 +273,8 @@ where
                     name: key,
                     reason: err.to_string(),
                 });
+            } else {
+                setting_keys.push(key);
             }
         }
     }
