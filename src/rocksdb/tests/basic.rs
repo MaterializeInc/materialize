@@ -97,6 +97,8 @@ fn instance_metrics_for_tests() -> Result<Box<RocksDBInstanceMetrics>, anyhow::E
         multi_get_size: face_counter_vec.get_delete_on_drop_counter(vec!["two".to_string()]),
         multi_get_result_count: face_counter_vec
             .get_delete_on_drop_counter(vec!["three".to_string()]),
+        multi_get_result_bytes: face_counter_vec
+            .get_delete_on_drop_counter(vec!["four".to_string()]),
         multi_put_size: face_counter_vec.get_delete_on_drop_counter(vec!["five".to_string()]),
     }))
 }

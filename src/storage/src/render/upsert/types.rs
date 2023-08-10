@@ -857,6 +857,9 @@ where
         self.worker_metrics
             .multi_get_result_count
             .inc_by(stats.returned_gets);
+        self.worker_metrics
+            .multi_get_result_bytes
+            .inc_by(stats.processed_gets_size);
 
         Ok(())
     }

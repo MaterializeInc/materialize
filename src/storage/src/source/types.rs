@@ -495,6 +495,7 @@ pub struct UpsertMetrics {
     pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 
@@ -545,6 +546,9 @@ impl UpsertMetrics {
             multi_get_result_count: base
                 .multi_get_result_count
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_get_result_bytes: base
+                .multi_get_result_bytes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: base
                 .multi_put_size
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
@@ -557,6 +561,9 @@ impl UpsertMetrics {
                     .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_result_count: base
                     .rocksdb_multi_get_result_count
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_get_result_bytes: base
+                    .rocksdb_multi_get_result_bytes
                     .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_put_size: base
                     .rocksdb_multi_put_size

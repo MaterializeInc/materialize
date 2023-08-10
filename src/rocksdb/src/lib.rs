@@ -184,6 +184,8 @@ pub struct RocksDBInstanceMetrics {
     pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of multi_get non-empty results.
     pub multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// Total size of bytes returned in the result
+    pub multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of write batches.
     pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
@@ -623,6 +625,9 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                         instance_metrics
                             .multi_get_result_count
                             .inc_by(returned_gets);
+                        instance_metrics
+                            .multi_get_result_bytes
+                            .inc_by(processed_gets_size);
                         batch.clear();
                         response_sender.send(Ok((
                             MultiGetResult {
