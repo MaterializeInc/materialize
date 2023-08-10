@@ -419,7 +419,7 @@ pub trait StorageController: Debug + Send {
 
     /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
     /// monotonically append to the specified [`GlobalId`].
-    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender;
+    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -826,7 +826,7 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     pending_compaction_commands: Vec<(GlobalId, Antichain<T>, Option<StorageInstanceId>)>,
 
     /// Interface for managed collections
-    pub(super) collection_manager: collection_mgmt::CollectionManager,
+    pub(super) collection_manager: collection_mgmt::CollectionManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(super) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
@@ -1926,7 +1926,7 @@ where
         Ok(self.state.persist_write_handles.append(commands))
     }
 
-    fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
+    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
         self.state.collection_manager.monotonic_appender(id)
     }
 

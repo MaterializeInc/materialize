@@ -15,9 +15,14 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_ore::now::EpochMillis;
+use mz_persist_types::Codec64;
+use mz_repr::TimestampManipulation;
 use mz_repr::{GlobalId, Row};
 use timely::progress::ChangeBatch;
+use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 
 use crate::client::PackableStats;
@@ -50,11 +55,15 @@ impl<T> StatsInitState<T> {
 
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
-pub(super) fn spawn_statistics_scraper<Stats: PackableStats + Debug + Send + 'static>(
+pub(super) fn spawn_statistics_scraper<Stats, T>(
     statistics_collection_id: GlobalId,
-    collection_mgmt: CollectionManager,
+    collection_mgmt: CollectionManager<T>,
     shared_stats: Arc<Mutex<BTreeMap<GlobalId, StatsInitState<Stats>>>>,
-) -> Box<dyn Any + Send + Sync> {
+) -> Box<dyn Any + Send + Sync>
+where
+    Stats: PackableStats + Debug + Send + 'static,
+    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
     // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
     const STATISTICS_INTERVAL: Duration = Duration::from_secs(30);
 

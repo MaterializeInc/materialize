@@ -7,39 +7,41 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A tokio task (and support machinery) for maintaining storage-managed
+//! Tokio tasks (and support machinery) for maintaining storage-managed
 //! collections.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
+use futures::stream::StreamExt;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::retry::Retry;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, error, info};
 
 use crate::client::TimestamplessUpdate;
 use crate::controller::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 256;
-// We only append data once per-second.
-const DEFAULT_APPEND_CADANCE: Duration = Duration::from_secs(1);
+const CHANNEL_CAPACITY: usize = 128;
+// Default rate at which we append data and advance the uppers of managed collections.
+const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
-pub struct CollectionManager {
-    collections: Arc<Mutex<BTreeSet<GlobalId>>>,
-    tx: mpsc::Sender<(
-        GlobalId,
-        Vec<(Row, Diff)>,
-        oneshot::Sender<Result<(), StorageError>>,
-    )>,
-    notifies: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
+pub struct CollectionManager<T>
+where
+    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
+{
+    collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel, WriteTask)>>>,
+    write_handle: persist_handles::PersistWriteWorker<T>,
+    now: NowFn,
 }
 
 /// The `CollectionManager` provides two complementary functions:
@@ -51,194 +53,18 @@ pub struct CollectionManager {
 ///   second. For this usecase:
 ///     - The `CollectionManager` handles contention by permitting and ignoring errors.
 ///     - Closed collections will not panic if they continue receiving these requests.
-impl CollectionManager {
-    pub(super) fn new<
-        T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    >(
+impl<T> CollectionManager<T>
+where
+    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    pub(super) fn new(
         write_handle: persist_handles::PersistWriteWorker<T>,
         now: NowFn,
-    ) -> CollectionManager {
-        let collections: Arc<Mutex<BTreeSet<GlobalId>>> = Arc::new(Mutex::new(BTreeSet::new()));
-        let collections_outer = Arc::clone(&collections);
-
-        let (tx, mut rx) = mpsc::channel::<(
-            GlobalId,
-            Vec<(Row, Diff)>,
-            oneshot::Sender<Result<(), StorageError>>,
-        )>(CHANNEL_CAPACITY);
-
-        // Allows callers to wait until we finish any in-progress work.
-        //
-        // For example, after unregistering a collection a user might wait on a barrier to be sure
-        // any in-progress work with that collection has completed.
-        //
-        // TODO(parkmycar): Revist the API for persist write handles. Ideally we can return results
-        // per-ID instead of for the entire batch. This should allow us to gracefully handle
-        // collections for which a write handle doesn't exist, or the shard has been sealed.
-        let notifies: Arc<Mutex<Vec<oneshot::Sender<_>>>> = Arc::new(Mutex::new(Vec::new()));
-        let notifies_outer = Arc::clone(&notifies);
-
-        mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(1_000));
-
-            loop {
-                // Notify any waiters.
-                notifies
-                    .lock()
-                    .expect("CollectionManager panicked")
-                    .drain(..)
-                    .for_each(|waiter| {
-                        let _ = waiter.send(());
-                    });
-
-                tokio::select! {
-                    _ = interval.tick() => {
-                        // Update each collection.
-                        let updates = {
-                            let collections = collections.lock().expect("collection_mgmt panicked");
-                            let now = T::from(now());
-                            collections
-                                .iter()
-                                .map(|id| (*id, vec![], now.clone()))
-                                .collect()
-                        };
-
-                        // Failures don't matter when advancing collections'
-                        // uppers. This might fail when a clusterd happens
-                        // to be writing to this concurrently. Advancing
-                        // uppers here is best-effort and only needs to
-                        // succeed if no one else is advancing it;
-                        // contention proves otherwise.
-                        match write_handle.monotonic_append(updates).await {
-                            Ok(_append_result) => (), // All good!
-                            Err(_recv_error) => {
-                                // Sender hung up, this seems fine and can
-                                // happen when shutting down.
-                            }
-                        }
-                    },
-                    cmd = rx.recv_many(CHANNEL_CAPACITY) => {
-                        if let Some(batch) = cmd {
-                            // To rate limit appends to persist we add artifical latency, and will
-                            // finish no sooner than this instant.
-                            let min_time_to_complete = Instant::now() + DEFAULT_APPEND_CADANCE;
-
-                            // Group all of our updates based on ID.
-                            let mut updates: BTreeMap<GlobalId, UpdateRequest> = BTreeMap::new();
-                            for (id, rows, notif) in batch {
-                                let request = updates.entry(id).or_default();
-                                request.rows.extend(rows);
-                                request.notifs.push(notif);
-                            }
-
-                            // Make sure all of the collections exist.
-                            let (mut updates, non_existent): (BTreeMap<_, _>, BTreeMap<_, _>) = {
-                                let collections = collections.lock().expect("collection_mgmt panicked");
-                                updates
-                                    .into_iter()
-                                    .partition(|(key, _val)| collections.contains(key))
-                            };
-
-                            // Return errors for requests whose collection does not exist.
-                            //
-                            // Note: Here we use IdentifierInvalid as oppossed to
-                            // IdentifierMissing because the ID might exist but wasn't
-                            // registered as a managed collection, which is different than
-                            // the ID missing entirely.
-                            notify_listeners(non_existent, |id| Err(StorageError::IdentifierInvalid(id)));
-
-                            // As updates succeed we'll remove them from the set.
-                            while !updates.is_empty() {
-                                // Gather all of the updates into a request for persist.
-                                let request = updates
-                                    .iter()
-                                    .map(|(id, req)| {
-                                        let rows = req
-                                            .rows
-                                            .clone()
-                                            .into_iter()
-                                            .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                                            .collect::<Vec<_>>();
-                                        (*id, rows, T::from(now()))
-                                    })
-                                    .collect();
-
-                                // Append updates to persist!
-                                let append_result = match write_handle.monotonic_append(request).await {
-                                    Ok(append_result) => append_result,
-                                    Err(_recv_error) => {
-                                        // Sender hung up, this seems fine and can
-                                        // happen when shutting down.
-                                        notify_listeners(updates, |_id| Err(StorageError::ShuttingDown("PersistWriteWorker")));
-                                        break
-                                    }
-                                };
-
-                                match append_result {
-                                    // Everything was successful!
-                                    Ok(()) => {
-                                        // Notify all of our listeners.
-                                        notify_listeners(updates, |_id| Ok(()));
-                                        // Break because there are no more updates to send.
-                                        break
-                                    },
-                                    // Failed to write to some collections.
-                                    Err(StorageError::InvalidUppers(failed_ids)) => {
-                                        // It's fine to retry invalid-uppers errors here, since monotonic appends
-                                        // do not specify a particular upper or timestamp.
-                                        assert!(
-                                            failed_ids.iter().all(|id| updates.contains_key(id)),
-                                            "expect to receive errors only for collections we tried to update"
-                                        );
-
-                                        let (failed, success): (BTreeMap<_, _>, BTreeMap<_, _>) = updates
-                                            .into_iter()
-                                            .partition(|(id, _val)| failed_ids.contains(id));
-
-                                        // Notify listeners of success.
-                                        notify_listeners(success, |_id| Ok(()));
-
-                                        // Check if any collections disappeared while we were writing.
-                                        let (exists, non_existent) = {
-                                            let collections = collections
-                                                .lock()
-                                                .expect("CollectionManager panicked");
-                                            failed
-                                                .into_iter()
-                                                .partition(|(id, _val)| collections.contains(id))
-                                        };
-
-                                        // Notify listeners that the collection no longer exists.
-                                        notify_listeners(non_existent, |id| Err(StorageError::IdentifierMissing(id)));
-
-                                        // Retain and retry the updates that failed.
-                                        updates = exists;
-
-                                        debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
-                                    }
-                                    // Uh-oh, something else went wrong!
-                                    Err(other) => {
-                                        let failed_ids = updates.into_keys().collect::<Vec<_>>();
-                                        panic!("Unhandled error while appending to managed collection {failed_ids:?}: {other:?}")
-                                    }
-                                }
-                            }
-
-                            // Wait until our artificial latency has completed.
-                            //
-                            // Note: if writing to persist took longer than `DEFAULT_APPEND_CADANCE`
-                            // this await will resolve immediately.
-                            tokio::time::sleep_until(min_time_to_complete).await;
-                        }
-                    }
-                }
-            }
-        });
-
+    ) -> CollectionManager<T> {
         CollectionManager {
-            tx,
-            collections: collections_outer,
-            notifies: notifies_outer,
+            collections: Arc::new(Mutex::new(BTreeMap::new())),
+            write_handle,
+            now,
         }
     }
 
@@ -247,10 +73,27 @@ impl CollectionManager {
     /// - Accept appends for. However, note that when appending, the
     ///   `CollectionManager` expects to be the only writer.
     pub(super) fn register_collection(&self, id: GlobalId) {
-        self.collections
-            .lock()
-            .expect("collection_mgmt panicked")
-            .insert(id);
+        let mut guard = self.collections.lock().expect("collection_mgmt panicked");
+
+        // Check if this collection is already registered.
+        if let Some((_writer, task)) = guard.get(&id) {
+            // The collection is already registered and the task is still running so nothing to do.
+            if !task.is_finished() {
+                return;
+            }
+        }
+
+        // Spawns a new task so we can write to this collection.
+        let writer_and_handle = write_task(id, self.write_handle.clone(), self.now.clone());
+        let prev = guard.insert(id, writer_and_handle);
+
+        // Double check the previous task was actually finished.
+        if let Some((_, prev_task)) = prev {
+            assert!(
+                prev_task.is_finished(),
+                "should only spawn a new task if the previous is finished"
+            );
+        }
     }
 
     /// Unregisters the collection as one that `CollectionManager` will maintain.
@@ -258,23 +101,18 @@ impl CollectionManager {
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
     pub(super) async fn unregsiter_collection(&self, id: GlobalId) -> bool {
-        let existed = self
+        let prev = self
             .collections
             .lock()
             .expect("CollectionManager panicked")
             .remove(&id);
+        let existed = prev.is_some();
 
-        // Wait for the CollectionManager to finish all in-progress work, so we can be sure that we
-        // no longer reference the specified collection again.
-        let (tx, rx) = oneshot::channel();
-        self.notifies
-            .lock()
-            .expect("CollectionManager panicked")
-            .push(tx);
-
-        // We don't care if our sender dropped, because that would mean the CollectionManager
-        // has shutdown and at that point it's definitely not referencing `id` anymore.
-        let _ = rx.await;
+        // Wait for the task to complete before reporting as unregisted.
+        if let Some((_prev_writer, prev_task)) = prev {
+            prev_task.abort();
+            let _ = prev_task.await;
+        }
 
         existed
     }
@@ -288,19 +126,177 @@ impl CollectionManager {
     /// - If the collection closed.
     pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if !updates.is_empty() {
-            let (tx, _rx) = oneshot::channel();
-            self.tx.send((id, updates, tx)).await.expect("rx hung up");
+            let appender = self.monotonic_appender(id).expect("id to exist");
+            match appender.append(updates).await {
+                Ok(()) => (),
+                // There's nothing we can do if we're shutting down.
+                Err(StorageError::ShuttingDown(_)) => (),
+                Err(e) => panic!("unexpected error when appending to collection {id}, err: {e:?}"),
+            }
         }
     }
 
     /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
     /// collection correlated with `id`.
-    pub(super) fn monotonic_appender(&self, id: GlobalId) -> MonotonicAppender {
-        MonotonicAppender {
-            id,
-            tx: self.tx.clone(),
-        }
+    pub(super) fn monotonic_appender(
+        &self,
+        id: GlobalId,
+    ) -> Result<MonotonicAppender, StorageError> {
+        let guard = self.collections.lock().expect("CollectionManager panicked");
+        let tx = guard
+            .get(&id)
+            .map(|(tx, _)| tx.clone())
+            .ok_or(StorageError::IdentifierMissing(id))?;
+
+        Ok(MonotonicAppender { tx })
     }
+}
+
+type WriteChannel = mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>;
+type WriteTask = tokio::task::JoinHandle<()>;
+
+/// Spawns a [`tokio::task`] that will continuously bump the upper for the specified collection,
+/// and append data that is sent via the provided [`mpsc::Sender`].
+///
+/// TODO(parkmycar): One day if we want to customize the tick interval for each collection, that
+/// should be done here.
+/// TODO(parkmycar): Maybe add prometheus metrics for each collection?
+fn write_task<T>(
+    id: GlobalId,
+    write_handle: persist_handles::PersistWriteWorker<T>,
+    now: NowFn,
+) -> (WriteChannel, WriteTask)
+where
+    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+
+    let handle = mz_ore::task::spawn(
+        || format!("CollectionManager-write_task-{id}"),
+        async move {
+            let mut interval = tokio::time::interval(DEFAULT_TICK);
+
+            'run: loop {
+                tokio::select! {
+                    // Prefer sending actual updates over just bumping the upper, because sending
+                    // updates also bump the upper.
+                    biased;
+
+                    // Pull as many queued updates off the channel as possible.
+                    cmd = rx.recv_many(CHANNEL_CAPACITY) => {
+                        if let Some(batch) = cmd {
+                            // To rate limit appends to persist we add artifical latency, and will
+                            // finish no sooner than this instant.
+                            let min_time_to_complete = Instant::now() + DEFAULT_TICK;
+
+                            // Reset the interval which is used to periodically bump the uppers
+                            // because the uppers will get bumped with the following update.
+                            interval.reset();
+
+                            let (rows, responders): (Vec<_>, Vec<_>) = batch
+                                .into_iter()
+                                .unzip();
+
+                            // Append updates to persist!
+                            let rows = rows
+                                .into_iter()
+                                .flatten()
+                                .map(|(row, diff)| TimestamplessUpdate { row, diff })
+                                .collect();
+                            let request = vec![(id, rows, T::from(now()))];
+
+                            // We'll try really hard to succeed, but eventually stop.
+                            let retries = Retry::default()
+                                .initial_backoff(Duration::from_secs(1))
+                                .clamp_backoff(Duration::from_secs(3))
+                                .factor(1.25)
+                                .max_tries(20)
+                                .into_retry_stream();
+                            let mut retries = Box::pin(retries);
+
+                            'append_retry: loop {
+                                let append_result = match write_handle.monotonic_append(request.clone()).await {
+                                    // We got a response!
+                                    Ok(append_result) => append_result,
+                                    // Failed to receive which means the worker shutdown.
+                                    Err(_recv_error) => {
+                                        // Sender hung up, this seems fine and can happen when shutting down.
+                                        notify_listeners(responders, || Err(StorageError::ShuttingDown("PersistWriteWorker")));
+
+                                        // End the task since we can no longer send writes to persist.
+                                        break 'run;
+                                    }
+                                };
+
+                                match append_result {
+                                    // Everything was successful!
+                                    Ok(()) => {
+                                        // Notify all of our listeners.
+                                        notify_listeners(responders, || Ok(()));
+                                        // Break out of the retry loop so we can wait for more data.
+                                        break 'append_retry;
+                                    },
+                                    // Failed to write to some collections,
+                                    Err(StorageError::InvalidUppers(failed_ids)) => {
+                                        // It's fine to retry invalid-uppers errors here, since
+                                        // monotonic appends do not specify a particular upper or
+                                        // timestamp.
+
+                                        assert_eq!(failed_ids.len(), 1, "received errors for more than one collection");
+                                        assert_eq!(failed_ids[0], id, "received errors for a different collection");
+
+                                        // We've exhausted all of our retries, notify listeners
+                                        // and break out of the retry loop so we can wait for more
+                                        // data.
+                                        if retries.next().await.is_none() {
+                                            notify_listeners(responders, || Err(StorageError::InvalidUppers(vec![id])));
+                                            error!("exhausted retries when appending to managed collection {failed_ids:?}");
+                                            break 'append_retry;
+                                        }
+
+                                        debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
+                                    }
+                                    // Uh-oh, something else went wrong!
+                                    Err(other) => {
+                                        panic!("Unhandled error while appending to managed collection {id:?}: {other:?}")
+                                    }
+                                }
+                            }
+
+                            // Wait until our artificial latency has completed.
+                            //
+                            // Note: if writing to persist took longer than `DEFAULT_TICK` this
+                            // await will resolve immediately.
+                            tokio::time::sleep_until(min_time_to_complete).await;
+                        }
+                    }
+
+                    // If we haven't received any updates, then we'll move the upper forward.
+                    _ = interval.tick() => {
+                        // Update our collection.
+                        let now = T::from(now());
+                        let updates = vec![(id, vec![], now.clone())];
+
+                        // Failures don't matter when advancing collections' uppers. This might
+                        // fail when a clusterd happens to be writing to this concurrently.
+                        // Advancing uppers here is best-effort and only needs to succeed if no
+                        // one else is advancing it; contention proves otherwise.
+                        match write_handle.monotonic_append(updates).await {
+                            Ok(_append_result) => (), // All good!
+                            Err(_recv_error) => {
+                                // Sender hung up, this seems fine and can happen when shutting down.
+                                break 'run;
+                            }
+                        }
+                    },
+                }
+            }
+
+            info!("write_task-{id} ending");
+        },
+    );
+
+    (tx, handle)
 }
 
 /// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
@@ -308,12 +304,7 @@ impl CollectionManager {
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
 #[derive(Debug)]
 pub struct MonotonicAppender {
-    id: GlobalId,
-    tx: mpsc::Sender<(
-        GlobalId,
-        Vec<(Row, Diff)>,
-        oneshot::Sender<Result<(), StorageError>>,
-    )>,
+    tx: WriteChannel,
 }
 
 impl MonotonicAppender {
@@ -321,13 +312,16 @@ impl MonotonicAppender {
         let (tx, rx) = oneshot::channel();
 
         // Make sure there is space available on the channel.
-        let permit = self
-            .tx
-            .try_reserve()
-            .map_err(|_| StorageError::ResourceExhausted("collection manager"))?;
+        let permit = self.tx.try_reserve().map_err(|e| {
+            let msg = "collection manager";
+            match e {
+                TrySendError::Full(_) => StorageError::ResourceExhausted(msg),
+                TrySendError::Closed(_) => StorageError::ShuttingDown(msg),
+            }
+        })?;
 
         // Send our update to the CollectionManager.
-        permit.send((self.id, updates, tx));
+        permit.send((updates, tx));
 
         // Wait for a response, if we fail to receive then the CollectionManager has gone away.
         let result = rx
@@ -342,21 +336,13 @@ impl MonotonicAppender {
 // same semantics as a oneshot channel, so we specifically don't make it `Clone`.
 static_assertions::assert_not_impl_any!(MonotonicAppender: Clone);
 
-#[derive(Default)]
-struct UpdateRequest {
-    rows: Vec<(Row, Diff)>,
-    notifs: Vec<oneshot::Sender<Result<(), StorageError>>>,
-}
-
 // Helper method for notifying listeners.
-fn notify_listeners(
-    elements: BTreeMap<GlobalId, UpdateRequest>,
-    result: impl Fn(GlobalId) -> Result<(), StorageError>,
+fn notify_listeners<T>(
+    responders: impl IntoIterator<Item = oneshot::Sender<T>>,
+    result: impl Fn() -> T,
 ) {
-    for (id, UpdateRequest { notifs, .. }) in elements {
-        for notif in notifs {
-            // We don't care if the listener disappeared.
-            let _ = notif.send(result(id));
-        }
+    for r in responders {
+        // We don't care if the listener disappeared.
+        let _ = r.send(result());
     }
 }
