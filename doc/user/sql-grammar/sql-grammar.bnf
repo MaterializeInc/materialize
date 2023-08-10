@@ -391,6 +391,9 @@ show_indexes ::=
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+show_roles ::=
+  'SHOW' 'ROLES'
+  ('LIKE' 'pattern' | 'WHERE' expr)?
 show_secrets ::=
     'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_variable ::=

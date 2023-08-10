@@ -428,12 +428,16 @@ DROP ROLE group1
 statement ok
 DROP ROLE joe
 
-# SHOW ROLES/USERS is not yet implemented
-statement error SHOW ROLES not yet supported
+# SHOW ROLES/USERS
+query T
 show roles
+----
+materialize
 
-statement error SHOW ROLES not yet supported
+query T
 show users
+----
+materialize
 
 # Test grant/revoke multiple roles
 
