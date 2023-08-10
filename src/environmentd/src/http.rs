@@ -41,9 +41,7 @@ use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
-use mz_sql::session::user::{
-    ExternalUserMetadata, User, HTTP_DEFAULT_USER, INTROSPECTION_USER, SUPPORT_USER, SYSTEM_USER,
-};
+use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
 use serde::{Deserialize, Serialize};
@@ -725,17 +723,7 @@ async fn auth(
         // If no Frontegg authentication, use the requested user or the default
         // HTTP user.
         (None, Credentials::User(user)) => User {
-            name: match user {
-                Some(user) => {
-                    // TODO: Remove once we don't need mz_introspection
-                    if user == INTROSPECTION_USER.name {
-                        SUPPORT_USER.name.clone()
-                    } else {
-                        user
-                    }
-                }
-                None => HTTP_DEFAULT_USER.name.to_string(),
-            },
+            name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
             external_metadata: None,
         },
         // With frontegg disabled, specifying credentials is an error.
