@@ -122,7 +122,7 @@ impl Coordinator {
                     .await;
             }
 
-            Command::RetireExecute { data, reason } => self.retire_execute(data, reason),
+            Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
 
             Command::Declare {
                 name,

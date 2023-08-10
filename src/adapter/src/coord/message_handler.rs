@@ -19,7 +19,6 @@ use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
@@ -36,7 +35,7 @@ use crate::coord::{
     SinkConnectionReady,
 };
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, AdapterNotice, ExecuteContextExtra, TimestampContext};
+use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -95,7 +94,7 @@ impl Coordinator {
                     .await;
             }
             Message::RetireExecute { data, reason } => {
-                self.retire_execute(data, reason);
+                self.retire_execution(reason, data);
             }
             Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
@@ -104,15 +103,6 @@ impl Coordinator {
             Message::PeekStageReady { ctx, stage } => {
                 self.sequence_peek_stage(ctx, stage).await;
             }
-        }
-    }
-    pub(crate) fn retire_execute(
-        &mut self,
-        ctx_extra: ExecuteContextExtra,
-        reason: StatementEndedExecutionReason,
-    ) {
-        if let Some(statement_uuid) = ctx_extra.retire() {
-            self.end_statement_execution(statement_uuid, reason)
         }
     }
 
