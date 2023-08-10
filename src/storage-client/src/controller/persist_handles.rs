@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
@@ -221,17 +222,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 
 #[derive(Debug, Clone)]
 pub struct PersistWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
-    tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>,
-}
-
-impl<T> Drop for PersistWriteWorker<T>
-where
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-{
-    fn drop(&mut self) {
-        self.send(PersistWriteWorkerCmd::Shutdown);
-        // TODO: Can't easily block on shutdown occurring.
-    }
+    inner: Arc<PersistWriteWorkerInner<T>>,
 }
 
 /// Commands for [PersistWriteWorker].
@@ -473,9 +464,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                     }
                 }
             }
+
+            tracing::info!("PersistWriteWorker shutting down");
         });
 
-        Self { tx }
+        Self {
+            inner: Arc::new(PersistWriteWorkerInner::new(tx)),
+        }
     }
 
     pub(crate) fn register(
@@ -551,6 +546,43 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
     /// the handle's shard.
     pub(crate) fn drop_handle(&self, id: GlobalId) {
         self.send(PersistWriteWorkerCmd::DropHandle(id))
+    }
+
+    fn send(&self, cmd: PersistWriteWorkerCmd<T>) {
+        self.inner.send(cmd);
+    }
+}
+
+/// Contains the components necessary for sending commands to a `PersistWriteWorker`.
+///
+/// When `Drop`-ed sends a shutdown command, as such this should _never_ implement `Clone` because
+/// if one clone is dropped, the other clones will be unable to send commands. If you need this
+/// to be `Clone`-able, wrap it in an `Arc` or `Rc` first.
+///
+/// #[derive(Clone)] <-- do not do this.
+///
+#[derive(Debug)]
+struct PersistWriteWorkerInner<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+    /// Sending side of a channel that we can use to send commands.
+    tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>,
+}
+
+impl<T> Drop for PersistWriteWorkerInner<T>
+where
+    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
+{
+    fn drop(&mut self) {
+        self.send(PersistWriteWorkerCmd::Shutdown);
+        // TODO: Can't easily block on shutdown occurring.
+    }
+}
+
+impl<T> PersistWriteWorkerInner<T>
+where
+    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
+{
+    fn new(tx: UnboundedSender<(tracing::Span, PersistWriteWorkerCmd<T>)>) -> Self {
+        PersistWriteWorkerInner { tx }
     }
 
     fn send(&self, cmd: PersistWriteWorkerCmd<T>) {

@@ -34,6 +34,9 @@ const CHANNEL_CAPACITY: usize = 128;
 // Default rate at which we append data and advance the uppers of managed collections.
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
+type WriteChannel = mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>;
+type WriteTask = tokio::task::JoinHandle<()>;
+
 #[derive(Debug, Clone)]
 pub struct CollectionManager<T>
 where
@@ -151,9 +154,6 @@ where
         Ok(MonotonicAppender { tx })
     }
 }
-
-type WriteChannel = mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>;
-type WriteTask = tokio::task::JoinHandle<()>;
 
 /// Spawns a [`tokio::task`] that will continuously bump the upper for the specified collection,
 /// and append data that is sent via the provided [`mpsc::Sender`].
@@ -282,9 +282,11 @@ where
                         // Advancing uppers here is best-effort and only needs to succeed if no
                         // one else is advancing it; contention proves otherwise.
                         match write_handle.monotonic_append(updates).await {
-                            Ok(_append_result) => (), // All good!
+                            // All good!
+                            Ok(_append_result) => (),
+                            // Sender hung up, this seems fine and can happen when shutting down.
                             Err(_recv_error) => {
-                                // Sender hung up, this seems fine and can happen when shutting down.
+                                // Exit the run loop because there is no other work we can do.
                                 break 'run;
                             }
                         }
