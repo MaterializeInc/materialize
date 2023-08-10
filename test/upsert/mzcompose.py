@@ -36,6 +36,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
             "enable_unmanaged_cluster_replicas": "true",
+            "storage_dataflow_delay_sources_past_rehydration": "true",
         },
         environment_extra=materialized_environment_extra,
     ),
@@ -170,6 +171,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -192,6 +194,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -296,7 +299,8 @@ def workflow_incident_49(c: Composition) -> None:
             "with DISK",
             Materialized(
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "true"
+                    "disk_cluster_replicas_default": "true",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -305,7 +309,8 @@ def workflow_incident_49(c: Composition) -> None:
             "without DISK",
             Materialized(
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "false"
+                    "disk_cluster_replicas_default": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -410,6 +415,7 @@ def workflow_autospill(c: Composition) -> None:
                 "upsert_source_disk_default": "true",
                 "upsert_rocksdb_auto_spill_to_disk": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "200",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
             },
         ),
     ):
