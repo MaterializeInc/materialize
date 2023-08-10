@@ -19,12 +19,12 @@ use std::sync::{Arc, Mutex, Weak};
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropHistogram, GaugeVec, HistogramVec, HistogramVecExt, IntCounter, IntCounterVec,
-    IntGaugeVec, MetricsRegistry, UIntGaugeVec,
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropHistogram, GaugeVec, HistogramVec,
+    HistogramVecExt, IntCounter, IntCounterVec, IntGaugeVec, MetricsRegistry, UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
-use prometheus::core::{AtomicI64, GenericCounterVec};
+use prometheus::core::{AtomicI64, AtomicU64, GenericCounterVec};
 
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
@@ -211,18 +211,18 @@ pub(super) struct UpsertMetrics {
 
     // These are used by `shared`.
     pub(super) merge_snapshot_latency: HistogramVec,
-    pub(super) merge_snapshot_updates: HistogramVec,
+    pub(super) merge_snapshot_updates: IntCounterVec,
     pub(super) multi_get_latency: HistogramVec,
-    pub(super) multi_get_size: HistogramVec,
+    pub(super) multi_get_size: IntCounterVec,
     pub(super) multi_put_latency: HistogramVec,
-    pub(super) multi_put_size: HistogramVec,
+    pub(super) multi_put_size: IntCounterVec,
 
     // These are used by `rocksdb`.
     pub(super) rocksdb_multi_get_latency: HistogramVec,
-    pub(super) rocksdb_multi_get_size: HistogramVec,
-    pub(super) rocksdb_multi_get_result_size: HistogramVec,
+    pub(super) rocksdb_multi_get_size: IntCounterVec,
+    pub(super) rocksdb_multi_get_result_size: IntCounterVec,
     pub(super) rocksdb_multi_put_latency: HistogramVec,
-    pub(super) rocksdb_multi_put_size: HistogramVec,
+    pub(super) rocksdb_multi_put_size: IntCounterVec,
     // These are maps so that multiple timely workers can interact with the same
     // `DeleteOnDropHistogram`, which is only dropped once ALL workers drop it.
     // The map may contain arbitrary, old `Weak`s for deleted sources, which are
@@ -276,13 +276,12 @@ impl UpsertMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
             merge_snapshot_updates: registry.register(metric!(
-                name: "mz_storage_upsert_merge_snapshot_updates",
+                name: "mz_storage_upsert_merge_snapshot_updates_counter",
                 help: "The batch size, \
                     of merging snapshot updates into upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
                 var_labels: ["source_id"],
-                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             multi_get_latency: registry.register(metric!(
                 name: "mz_storage_upsert_multi_get_latency",
@@ -295,13 +294,12 @@ impl UpsertMetrics {
             )),
             // Choose a relatively low number of representative buckets.
             multi_get_size: registry.register(metric!(
-                name: "mz_storage_upsert_multi_get_size",
+                name: "mz_storage_upsert_multi_get_size_counter",
                 help: "The batch size, \
                     of getting values from the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
                 var_labels: ["source_id"],
-                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             multi_put_latency: registry.register(metric!(
                 name: "mz_storage_upsert_multi_put_latency",
@@ -314,13 +312,12 @@ impl UpsertMetrics {
             )),
             // Choose a relatively low number of representative buckets.
             multi_put_size: registry.register(metric!(
-                name: "mz_storage_upsert_multi_put_size",
+                name: "mz_storage_upsert_multi_put_size_counter",
                 help: "The batch size, \
                     of getting values into the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
                 var_labels: ["source_id"],
-                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             shared,
             rocksdb_multi_get_latency: registry.register(metric!(
@@ -330,20 +327,17 @@ impl UpsertMetrics {
                 var_labels: ["source_id"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
-            // Choose a relatively low number of representative buckets.
             rocksdb_multi_get_size: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_get_size",
+                name: "mz_storage_rocksdb_multi_get_size_counter",
                 help: "The batch size, \
                     of getting batches of values from RocksDB for this source.",
                 var_labels: ["source_id"],
-                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             rocksdb_multi_get_result_size: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_get_result_size",
+                name: "mz_storage_rocksdb_multi_get_result_size_counter",
                 help: "The number of non-empty records returned, \
                     when getting batches of values from RocksDB for this source.",
                 var_labels: ["source_id"],
-                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             rocksdb_multi_put_latency: registry.register(metric!(
                 name: "mz_storage_rocksdb_multi_put_latency",
@@ -352,13 +346,11 @@ impl UpsertMetrics {
                 var_labels: ["source_id"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
-            // Choose a relatively low number of representative buckets.
             rocksdb_multi_put_size: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_put_size",
+                name: "mz_storage_rocksdb_multi_put_size_counter",
                 help: "The batch size, \
                     of putting batches of values into RocksDB for this source.",
                 var_labels: ["source_id"],
-                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             rocksdb,
         }
@@ -398,16 +390,16 @@ impl UpsertMetrics {
                     .get_delete_on_drop_histogram(vec![source_id.clone()]),
                 multi_get_size: self
                     .rocksdb_multi_get_size
-                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                    .get_delete_on_drop_counter(vec![source_id.clone()]),
                 multi_get_result_size: self
                     .rocksdb_multi_get_result_size
-                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                    .get_delete_on_drop_counter(vec![source_id.clone()]),
                 multi_put_latency: self
                     .rocksdb_multi_put_latency
                     .get_delete_on_drop_histogram(vec![source_id.clone()]),
                 multi_put_size: self
                     .rocksdb_multi_put_size
-                    .get_delete_on_drop_histogram(vec![source_id]),
+                    .get_delete_on_drop_counter(vec![source_id]),
             }
         };
 
@@ -422,11 +414,11 @@ impl UpsertMetrics {
 #[derive(Debug)]
 pub(crate) struct UpsertSharedMetrics {
     pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) merge_snapshot_updates: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    pub(crate) multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl UpsertSharedMetrics {
@@ -438,19 +430,19 @@ impl UpsertSharedMetrics {
                 .get_delete_on_drop_histogram(vec![source_id.clone()]),
             merge_snapshot_updates: metrics
                 .merge_snapshot_updates
-                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                .get_delete_on_drop_counter(vec![source_id.clone()]),
             multi_get_latency: metrics
                 .multi_get_latency
                 .get_delete_on_drop_histogram(vec![source_id.clone()]),
             multi_get_size: metrics
                 .multi_get_size
-                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                .get_delete_on_drop_counter(vec![source_id.clone()]),
             multi_put_latency: metrics
                 .multi_put_latency
                 .get_delete_on_drop_histogram(vec![source_id.clone()]),
             multi_put_size: metrics
                 .multi_put_size
-                .get_delete_on_drop_histogram(vec![source_id]),
+                .get_delete_on_drop_counter(vec![source_id]),
         }
     }
 }

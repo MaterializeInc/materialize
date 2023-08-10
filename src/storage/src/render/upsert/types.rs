@@ -75,7 +75,7 @@ use std::time::Instant;
 
 use bincode::Options;
 use itertools::Itertools;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropGauge;
 use mz_rocksdb::RocksDBConfig;
@@ -733,9 +733,7 @@ where
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics
-            .merge_snapshot_updates
-            .observe(f64::cast_lossy(stats.updates));
+        self.metrics.merge_snapshot_updates.inc_by(stats.updates);
 
         self.snapshot_stats += stats;
         // Updating the metrics
@@ -797,9 +795,7 @@ where
         self.metrics
             .multi_put_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics
-            .multi_put_size
-            .observe(f64::cast_lossy(stats.processed_puts));
+        self.metrics.multi_put_size.inc_by(stats.processed_puts);
 
         self.stats.update_envelope_state_bytes_by(stats.size_diff);
         self.stats.update_envelope_state_count_by(stats.values_diff);
@@ -828,9 +824,7 @@ where
         self.metrics
             .multi_get_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics
-            .multi_get_size
-            .observe(f64::cast_lossy(stats.processed_gets));
+        self.metrics.multi_get_size.inc_by(stats.processed_gets);
 
         Ok(())
     }

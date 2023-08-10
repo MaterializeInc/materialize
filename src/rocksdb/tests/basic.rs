@@ -73,21 +73,23 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_ore::metrics::HistogramVecExt;
+use mz_ore::metrics::{CounterVecExt, HistogramVecExt};
 use mz_rocksdb::{InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBMetrics};
-use prometheus::{HistogramOpts, HistogramVec};
+use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
 
 fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
     let fake_hist_vec =
         HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
+    let face_counter_vec =
+        IntCounterVec::new(Opts::new("fake_counter", "fake_help"), &["fake_label"])?;
 
     Ok(Box::new(RocksDBMetrics {
         multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
-        multi_get_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
-        multi_get_result_size: fake_hist_vec
-            .get_delete_on_drop_histogram(vec!["three".to_string()]),
+        multi_get_size: face_counter_vec.get_delete_on_drop_counter(vec!["two".to_string()]),
+        multi_get_result_size: face_counter_vec
+            .get_delete_on_drop_counter(vec!["three".to_string()]),
         multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
-        multi_put_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["five".to_string()]),
+        multi_put_size: face_counter_vec.get_delete_on_drop_counter(vec!["five".to_string()]),
     }))
 }
 

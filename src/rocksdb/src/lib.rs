@@ -88,10 +88,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use itertools::Itertools;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::DeleteOnDropHistogram;
+use mz_ore::metrics::{DeleteOnDropCounter, DeleteOnDropHistogram};
 use mz_ore::retry::{Retry, RetryResult};
+use prometheus::core::AtomicU64;
 use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -173,13 +174,13 @@ pub struct RocksDBMetrics {
     /// Latency of multi_gets, in fractional seconds.
     pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of multi_get batches.
-    pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of multi_get non-empty results.
-    pub multi_get_result_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_get_result_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
     pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of write batches.
-    pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 /// The result type for `multi_get`.
@@ -564,12 +565,14 @@ fn rocksdb_core_loop<K, V, M, O>(
                         match gets {
                             Ok(gets) => {
                                 metrics.multi_get_latency.observe(latency.as_secs_f64());
-                                metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                                metrics
+                                    .multi_get_size
+                                    .inc_by(batch_size.try_into().unwrap());
                                 let multi_get_result_size =
                                     gets.iter().filter(|r| r.is_some()).count();
                                 metrics
                                     .multi_get_result_size
-                                    .observe(f64::cast_lossy(multi_get_result_size));
+                                    .inc_by(multi_get_result_size.try_into().unwrap());
 
                                 let processed_gets: u64 = gets.len().try_into().unwrap();
 
@@ -679,7 +682,9 @@ fn rocksdb_core_loop<K, V, M, O>(
                             Ok(()) => {
                                 let latency = now.elapsed();
                                 metrics.multi_put_latency.observe(latency.as_secs_f64());
-                                metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
+                                metrics
+                                    .multi_put_size
+                                    .inc_by(batch_size.try_into().unwrap());
                                 RetryResult::Ok(())
                             }
                             Err(e) => match e.kind() {
