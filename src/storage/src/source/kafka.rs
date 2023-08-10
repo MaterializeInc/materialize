@@ -171,15 +171,11 @@ impl SourceRender for KafkaSourceConnection {
             let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
 
-            // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
-            // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
-            // `resume_upper`, which is necessary for this basic form of backpressure to work.
-            start_signal.await;
             info!(
                 source_id = config.id.to_string(),
                 worker_id = config.worker_id,
                 num_workers = config.worker_count,
-                "kafka worker noticed rehydration is finished, instantiating Kafka source reader at offsets {start_offsets:?}"
+                "instantiating Kafka source reader at offsets {start_offsets:?}"
             );
 
             let group_id = self.group_id(config.id);
@@ -260,6 +256,17 @@ impl SourceRender for KafkaSourceConnection {
                     unreachable!("pending future never returns");
                 }
             };
+
+            // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
+            // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
+            // `resume_upper`, which is necessary for this basic form of backpressure to work.
+            start_signal.await;
+            info!(
+                source_id = config.id.to_string(),
+                worker_id = config.worker_id,
+                num_workers = config.worker_count,
+                "kafka worker noticed rehydration is finished, starting partition queues..."
+            );
 
             let partition_info = Arc::new(Mutex::new(None));
             let metadata_thread_handle = {
