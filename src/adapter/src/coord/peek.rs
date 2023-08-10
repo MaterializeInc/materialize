@@ -342,7 +342,7 @@ impl crate::coord::Coordinator {
             };
         }
 
-        let timestamp = determination.timestamp_context.timestamp_or_default();
+        let timestamp = determination.timestamp_context.timestamp_owned();
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to

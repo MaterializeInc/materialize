@@ -1347,7 +1347,7 @@ fn test_github_18950() {
 
         let explain: String = row.get(0);
         let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-        let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
+        let explain_timestamp = explain.determination.timestamp_context.timestamp();
 
         if let Some(timestamp) = query_timestamp {
             assert_eq!(timestamp, *explain_timestamp);
@@ -1413,7 +1413,7 @@ fn test_github_18950() {
 
     let explain: String = row.get(0);
     let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-    let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
+    let explain_timestamp = explain.determination.timestamp_context.timestamp();
 
     assert_eq!(*explain_timestamp, mz_now_timestamp);
 }

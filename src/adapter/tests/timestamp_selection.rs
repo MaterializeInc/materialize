@@ -325,7 +325,7 @@ fn test_timestamp_selection() {
                     if tc.args.contains_key("full") {
                         format!("{}\n", serde_json::to_string_pretty(&ts).unwrap())
                     } else {
-                        format!("{}\n", ts.timestamp_context.timestamp_or_default())
+                        format!("{}\n", ts.timestamp_context.timestamp_owned())
                     }
                 }
                 _ => panic!("unknown directive {}", tc.directive),

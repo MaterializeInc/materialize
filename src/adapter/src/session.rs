@@ -989,17 +989,18 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                     assert_eq!(txn_timeline, add_timeline);
                                     assert_eq!(txn_ts, add_ts);
                                 }
-                                (TimestampContext::NoTimestamp, _) => {
+                                // Independent timestamps can be ignored within a transaction.
+                                (TimestampContext::IndependentTimestamp(_), _) => {
                                     *determination = add_timestamp_determination
                                 }
-                                (_, TimestampContext::NoTimestamp) => {}
+                                (_, TimestampContext::IndependentTimestamp(_)) => {}
                             };
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
                         // transaction.
                         writes @ TransactionOps::Writes(..)
-                            if !determination.timestamp_context.contains_timestamp() =>
+                            if !determination.timestamp_context.timeline_dependent() =>
                         {
                             *ops = writes;
                         }
@@ -1025,10 +1026,10 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                 return Err(AdapterError::MultiTableWriteTransaction);
                             }
                         }
-                        // Iff peeks do not have a timestamp (i.e. they are
+                        // Iff peeks have an independent timestamp (i.e. they are
                         // constant), we can permit them.
                         TransactionOps::Peeks(determination)
-                            if !determination.timestamp_context.contains_timestamp() => {}
+                            if !determination.timestamp_context.timeline_dependent() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }

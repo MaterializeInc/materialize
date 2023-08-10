@@ -39,8 +39,9 @@ use crate::AdapterError;
 pub enum TimestampContext<T> {
     /// Read is executed in a specific timeline with a specific timestamp.
     TimelineTimestamp(Timeline, T),
-    /// Read is execute without a timeline or timestamp.
-    NoTimestamp,
+    /// Read is executed without a timeline. This is applicable for constant and AS OF queries such
+    /// as `SELECT 1` or `SELECT * FROM t AS OF 42`.
+    IndependentTimestamp(T),
 }
 
 impl<T: TimestampManipulation> TimestampContext<T> {
@@ -64,7 +65,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
                     ts,
                 )
             }
-            TimelineContext::TimestampIndependent => Self::NoTimestamp,
+            TimelineContext::TimestampIndependent => Self::IndependentTimestamp(ts),
         }
     }
 
@@ -72,37 +73,34 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     pub fn timeline(&self) -> Option<&Timeline> {
         match self {
             Self::TimelineTimestamp(timeline, _) => Some(timeline),
-            Self::NoTimestamp => None,
+            Self::IndependentTimestamp(_) => None,
         }
     }
 
     /// The timestamp belonging to this context, if one exists.
-    pub fn timestamp(&self) -> Option<&T> {
+    pub fn timestamp(&self) -> &T {
         match self {
-            Self::TimelineTimestamp(_, ts) => Some(ts),
-            Self::NoTimestamp => None,
+            Self::TimelineTimestamp(_, ts) => ts,
+            Self::IndependentTimestamp(ts) => ts,
         }
     }
 
     /// The timestamp belonging to this context, or a sensible default if one does not exists.
-    pub fn timestamp_or_default(&self) -> T {
+    pub fn timestamp_owned(&self) -> T {
         match self {
             Self::TimelineTimestamp(_, ts) => ts.clone(),
-            // Anything without a timestamp is given the maximum possible timestamp to indicate
-            // that they have been closed up until the end of time. This allows us to SUBSCRIBE to
-            // static views.
-            Self::NoTimestamp => T::maximum(),
+            Self::IndependentTimestamp(ts) => ts.clone(),
         }
     }
 
-    /// Whether or not the context contains a timestamp.
-    pub fn contains_timestamp(&self) -> bool {
-        self.timestamp().is_some()
+    /// Whether or not the context's timestamp is timeline dependent.
+    pub fn timeline_dependent(&self) -> bool {
+        matches!(self, Self::TimelineTimestamp(_, _))
     }
 
     /// Converts this `TimestampContext` to an `Antichain`.
     pub fn antichain(&self) -> Antichain<T> {
-        Antichain::from_elem(self.timestamp_or_default())
+        Antichain::from_elem(self.timestamp_owned())
     }
 }
 
@@ -457,26 +455,24 @@ impl Coordinator {
             && isolation_level == &IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
-            if let Some(strict) = det.timestamp_context.timestamp() {
-                let serializable_det = self.determine_timestamp_for(
-                    self.catalog().state(),
-                    session,
-                    id_bundle,
-                    when,
-                    compute_instance,
-                    timeline_context,
-                    real_time_recency_ts,
-                    &IsolationLevel::Serializable,
-                )?;
-                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
-                    self.metrics
-                        .timestamp_difference_for_strict_serializable_ms
-                        .with_label_values(&[&compute_instance.to_string()])
-                        .observe(f64::cast_lossy(u64::from(
-                            strict.saturating_sub(*serializable),
-                        )));
-                }
-            }
+            let strict = det.timestamp_context.timestamp();
+            let serializable_det = self.determine_timestamp_for(
+                self.catalog().state(),
+                session,
+                id_bundle,
+                when,
+                compute_instance,
+                timeline_context,
+                real_time_recency_ts,
+                &IsolationLevel::Serializable,
+            )?;
+            let serializable = serializable_det.timestamp_context.timestamp();
+            self.metrics
+                .timestamp_difference_for_strict_serializable_ms
+                .with_label_values(&[&compute_instance.to_string()])
+                .observe(f64::cast_lossy(u64::from(
+                    strict.saturating_sub(*serializable),
+                )));
         }
         Ok(det)
     }
@@ -554,10 +550,7 @@ pub struct TimestampDetermination<T> {
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
     pub fn respond_immediately(&self) -> bool {
-        match &self.timestamp_context {
-            TimestampContext::TimelineTimestamp(_, timestamp) => !self.upper.less_equal(timestamp),
-            TimestampContext::NoTimestamp => true,
-        }
+        !self.upper.less_equal(self.timestamp_context.timestamp())
     }
 }
 
@@ -634,7 +627,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             "                query timestamp: {}",
             self.determination
                 .timestamp_context
-                .timestamp_or_default()
+                .timestamp_owned()
                 .display(timeline)
         )?;
         if let Some(oracle_read_ts) = &self.determination.oracle_read_ts {

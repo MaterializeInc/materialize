@@ -2377,14 +2377,19 @@ impl Coordinator {
                         &timeline_context,
                         real_time_recency_ts,
                     )?;
-                    // We only need read holds if the read depends on a timestamp. We don't set the
+
+                    // We only need read holds if the read depends on a timeline. We don't set the
                     // read holds here because it makes the code a bit more clear to handle the two
                     // cases for "is this the first statement in a transaction?" in an if/else block
                     // below.
-                    let read_holds = determination
-                        .timestamp_context
-                        .timestamp()
-                        .map(|timestamp| (timestamp.clone(), determine_bundle));
+                    let read_holds = if determination.timestamp_context.timeline_dependent() {
+                        Some((
+                            determination.timestamp_context.timestamp_owned(),
+                            determine_bundle,
+                        ))
+                    } else {
+                        None
+                    };
                     (determination, read_holds)
                 }
             };
@@ -2402,8 +2407,8 @@ impl Coordinator {
                 // index could be caused by a CREATE INDEX after the transaction started.
                 let allowed_id_bundle = txn_reads.id_bundle();
                 let outside = source_bundle.difference(&allowed_id_bundle);
-                // Queries without a timestamp and timeline can belong to any existing timedomain.
-                if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
+                // Queries without a timeline can belong to any existing timedomain.
+                if determination.timestamp_context.timeline_dependent() && !outside.is_empty() {
                     let valid_names =
                         self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
                     let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
@@ -2434,8 +2439,10 @@ impl Coordinator {
         if when.is_transactional() {
             session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
         } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
-            // If the query uses AS OF, then ignore the timestamp.
-            transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
+            // If the query uses AS OF, then ignore the timeline.
+            transaction_determination.timestamp_context = TimestampContext::IndependentTimestamp(
+                *transaction_determination.timestamp_context.timestamp(),
+            );
             session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
         };
 
@@ -2471,7 +2478,7 @@ impl Coordinator {
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
         dataflow.set_as_of(determination.timestamp_context.antichain());
         let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Time(determination.timestamp_context.timestamp_or_default()),
+            logical_time: EvalTime::Time(determination.timestamp_context.timestamp_owned()),
             session,
         };
         let state = self.catalog().state();
@@ -2576,7 +2583,7 @@ impl Coordinator {
         let as_of = self
             .determine_timestamp(session, &id_bundle, &when, cluster_id, &timeline, None)?
             .timestamp_context
-            .timestamp_or_default();
+            .timestamp_owned();
 
         let make_sink_desc = |coord: &mut Coordinator, session: &mut Session, from, from_desc| {
             let up_to = up_to
@@ -2941,7 +2948,7 @@ impl Coordinator {
             Explainee::Query => {
                 dataflow.set_as_of(query_as_of);
                 let style = ExprPrepStyle::OneShot {
-                    logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                    logical_time: EvalTime::Time(timestamp_context.timestamp_owned()),
                     session,
                 };
                 let state = self.catalog().state();
