@@ -278,7 +278,7 @@ impl UpsertMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
             merge_snapshot_updates: registry.register(metric!(
-                name: "mz_storage_upsert_merge_snapshot_updates_counter",
+                name: "mz_storage_upsert_merge_snapshot_updates_total",
                 help: "The batch size, \
                     of merging snapshot updates into upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
@@ -286,13 +286,13 @@ impl UpsertMetrics {
                 var_labels: ["source_id"],
             )),
             merge_snapshot_inserts: registry.register(metric!(
-                name: "mz_storage_upsert_merge_snapshot_inserts_counter",
+                name: "mz_storage_upsert_merge_snapshot_inserts_total",
                 help: "The number of inserts in a batch for merging snapshot updates \
                     for this source.",
                 var_labels: ["source_id"],
             )),
             merge_snapshot_deletes: registry.register(metric!(
-                name: "mz_storage_upsert_merge_snapshot_deletes_counter",
+                name: "mz_storage_upsert_merge_snapshot_deletes_total",
                 help: "The number of deletes in a batch for merging snapshot updates \
                     for this source.",
                 var_labels: ["source_id"],
@@ -307,7 +307,7 @@ impl UpsertMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
             multi_get_size: registry.register(metric!(
-                name: "mz_storage_upsert_multi_get_size_counter",
+                name: "mz_storage_upsert_multi_get_size_total",
                 help: "The batch size, \
                     of getting values from the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
@@ -324,7 +324,7 @@ impl UpsertMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
             multi_put_size: registry.register(metric!(
-                name: "mz_storage_upsert_multi_put_size_counter",
+                name: "mz_storage_upsert_multi_put_size_total",
                 help: "The batch size, \
                     of getting values into the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
@@ -340,13 +340,13 @@ impl UpsertMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
             rocksdb_multi_get_size: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_get_size_counter",
+                name: "mz_storage_rocksdb_multi_get_size_total",
                 help: "The batch size, \
                     of getting batches of values from RocksDB for this source.",
                 var_labels: ["source_id"],
             )),
             rocksdb_multi_get_result_size: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_get_result_size_counter",
+                name: "mz_storage_rocksdb_multi_get_result_size_total",
                 help: "The number of non-empty records returned, \
                     when getting batches of values from RocksDB for this source.",
                 var_labels: ["source_id"],
@@ -359,7 +359,7 @@ impl UpsertMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
             rocksdb_multi_put_size: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_put_size_counter",
+                name: "mz_storage_rocksdb_multi_put_size_total",
                 help: "The batch size, \
                     of putting batches of values into RocksDB for this source.",
                 var_labels: ["source_id"],
