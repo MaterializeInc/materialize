@@ -101,8 +101,11 @@ fn main() -> anyhow::Result<()> {
     let hashes = fs::File::open(PROTO_HASHES).context("opening proto hashes")?;
     let reader = BufReader::new(&hashes);
     let hashes: Vec<ProtoHash> = serde_json::from_reader(reader)?;
-    let mut persisted: BTreeMap<String, String> =
-        hashes.into_iter().map(|e| (e.name, e.md5)).collect();
+    let mut persisted: BTreeMap<String, String> = hashes
+        .clone()
+        .into_iter()
+        .map(|e| (e.name, e.md5))
+        .collect();
 
     let package_regex = regex::bytes::Regex::new("package objects(_v[\\d]+)?;").unwrap();
     // Discover all of the protobuf files on disk.
@@ -226,7 +229,7 @@ fn main() -> anyhow::Result<()> {
     // else has changed.
     //
     // We also rewrite the file if it has been put out of order.
-    if any_new || sorted_to_persist != to_persist {
+    if any_new || sorted_to_persist != hashes {
         let mut file = fs::File::options()
             .write(true)
             .truncate(true)
