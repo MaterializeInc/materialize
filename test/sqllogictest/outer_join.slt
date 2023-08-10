@@ -82,7 +82,10 @@ statement ok
 create table left(x int, y int);
 
 statement ok
-create table right1_keyed(x int, y int);
+create table right1(x int, y int);
+
+statement ok
+create view right1_keyed(x, y) as select distinct on(x) * from right1;
 
 statement ok
 create table right2(x int, y int);
@@ -157,23 +160,9 @@ Explained Query:
           map=(null, null)
           Union consolidate_output=true
             Negate
-              Join::Linear
-                linear_stage[0]
-                  lookup={ relation=0, key=[#0] }
-                  stream={ key=[#0], thinning=() }
-                source={ relation=1, key=[#0] }
-                ArrangeBy
-                  raw=true
-                  arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-                  Get::PassArrangements materialize.public.left
-                    raw=true
-                Reduce::Distinct
-                  val_plan
-                    project=()
-                  key_plan=id
-                  Get::Collection l0
-                    project=(#0)
-                    raw=true
+              Get::Collection l0
+                project=(#0, #1)
+                raw=true
             Get::PassArrangements materialize.public.left
               raw=true
         Get::Collection l0
@@ -182,9 +171,11 @@ Explained Query:
     cte l0 =
       Join::Linear
         linear_stage[0]
-          lookup={ relation=1, key=[#0] }
+          closure
+            project=(#0, #2, #1)
+          lookup={ relation=0, key=[#0] }
           stream={ key=[#0], thinning=(#1) }
-        source={ relation=0, key=[#0] }
+        source={ relation=1, key=[#0] }
         ArrangeBy
           raw=true
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -194,10 +185,11 @@ Explained Query:
         ArrangeBy
           raw=true
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-          Get::Collection materialize.public.right1_keyed
-            raw=true
+          TopK::MonotonicTop1 group_by=[#0] must_consolidate
+            Get::Collection materialize.public.right1
+              raw=true
 
-Source materialize.public.right1_keyed
+Source materialize.public.right1
   filter=((#0) IS NOT NULL)
 Source materialize.public.right2
   filter=((#0) IS NOT NULL)

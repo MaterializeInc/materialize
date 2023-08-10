@@ -12,11 +12,6 @@
 # PR https://github.com/MaterializeInc/materialize/pull/7715
 #
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
 statement ok
 CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 

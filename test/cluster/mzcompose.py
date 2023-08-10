@@ -1052,12 +1052,6 @@ def workflow_test_github_19610(c: Composition) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
-            port=6877,
-            user="mz_system",
-        )
-
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -1162,12 +1156,6 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
             port=6877,
             user="mz_system",
         )
