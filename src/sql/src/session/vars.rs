@@ -2155,7 +2155,7 @@ impl SystemVars {
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
-            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT);
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
             .with_value_constrained_var(
                 &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
