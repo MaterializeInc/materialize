@@ -1255,28 +1255,46 @@ mod cluster_scheduling {
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 /// availability of features.
 ///
+/// The arguments to `feature_flags!` are:
+/// - `$name`, which will be the name of the feature flag, in snake_case,
+/// - `$feature_desc`, a human-readable description of the feature,
+/// - `$value`, which if not provided, defaults to `false` and also defaults `$internal` to `true`.
+/// - `$internal`, which if not provided, defaults to `true`. Requires `$value`.
+///
 /// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
 /// - Belong to `SystemVars`, _not_ `SessionVars`
-/// - Default to false and must be explicitly enabled
+/// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 macro_rules! feature_flags {
-    ($(($name:expr, $feature_desc:literal)),+ $(,)?) => {
+    // Match `$name, $feature_desc`, default `$value` to false.
+    (@inner $name:expr, $feature_desc:literal) => {
+        feature_flags!(@inner $name, $feature_desc, false);
+    };
+    // Match `$name, $feature_desc, $value`, default `$internal` to false.
+    (@inner $name:expr, $feature_desc:literal, $value:expr) => {
+        feature_flags!(@inner $name, $feature_desc, $value, true);
+    };
+    // Match `$name, $feature_desc, $value, $internal`.
+    (@inner $name:expr, $feature_desc:literal, $value:expr, $internal:expr) => {
         paste::paste!{
-            $(
-                // Note that the ServerVar is not directly exported; we expect these to be
-                // accessible through their FeatureFlag variant.
-                static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
-                    name: UncasedStr::new(stringify!($name)),
-                    value: &false,
-                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true
-                };
+            // Note that the ServerVar is not directly exported; we expect these to be
+            // accessible through their FeatureFlag variant.
+            static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
+                name: UncasedStr::new(stringify!($name)),
+                value: &$value,
+                description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                internal: $internal
+            };
 
-                pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
-                    flag: &[<$name:upper _VAR>],
-                    feature_desc: $feature_desc,
-                };
-            )+
+            pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
+                flag: &[<$name:upper _VAR>],
+                feature_desc: $feature_desc,
+            };
+        }
+    };
+    ($(($name:expr, $feature_desc:literal $(, $($extra:expr),+)?)),+ $(,)?) => {
+        $(feature_flags!(@inner $name, $feature_desc $(, $($extra),+)?);)+
 
+        paste::paste!{
             impl SystemVars {
                 fn with_feature_flags(self) -> Self
                 {
