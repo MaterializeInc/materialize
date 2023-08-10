@@ -696,7 +696,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
     }
 }
 
-fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String> {
+fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     let mut formatted: Vec<String> = vec![];
     for i in 0..row.len() {
         let t: Option<Slt> = row.get::<usize, Option<Slt>>(i);
@@ -706,19 +706,8 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
             None => "NULL".into(),
         });
     }
-    if mode == Mode::Cockroach && sort.yes() {
-        formatted
-            .iter()
-            .flat_map(|s| {
-                crate::parser::split_cols(s, types.len())
-                    .into_iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    } else {
-        formatted
-    }
+
+    formatted
 }
 
 impl<'a> Runner<'a> {
@@ -1394,7 +1383,7 @@ impl<'a> RunnerInner<'a> {
                     location,
                 });
             }
-            let row = format_row(row, expected_types, *mode, sort);
+            let row = format_row(row, expected_types, *mode);
             formatted_rows.push(row);
         }
 
