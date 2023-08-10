@@ -204,7 +204,7 @@ impl Client {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(conn_id, SUPPORT_USER.clone());
-        let (mut session_client, _) = self.startup(session).await?;
+        let (mut session_client, _) = self.startup(session, vec![]).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;

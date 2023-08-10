@@ -59,6 +59,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
     "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+    "statement_logging_max_sample_rate": "1.0",
+    "statement_logging_default_sample_rate": "1.0",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

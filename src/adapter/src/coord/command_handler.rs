@@ -360,12 +360,19 @@ impl Coordinator {
             .iter()
             .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
         {
-            // let default = catalog.state().system_config().statem
-            session.vars_mut().set(
-                None,
-                STATEMENT_LOGGING_SAMPLE_RATE.name(),
-                VarInput::Flat(&default),
-            );
+            let default = catalog
+                .state()
+                .system_config()
+                .statement_logging_default_sample_rate();
+            session
+                .vars_mut()
+                .set(
+                    None,
+                    STATEMENT_LOGGING_SAMPLE_RATE.name(),
+                    VarInput::Flat(&default.to_string()),
+                    false,
+                )
+                .expect("constrained to be valid");
             session
                 .vars_mut()
                 .end_transaction(EndTransactionAction::Commit);

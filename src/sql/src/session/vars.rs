@@ -1136,6 +1136,16 @@ that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
     internal: false,
 });
 
+static DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("statement_logging_default_sample_rate"),
+        value: &DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+        description:
+            "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
+        internal: false,
+    });
+
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -2160,6 +2170,10 @@ impl SystemVars {
             .with_value_constrained_var(
                 &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             );
 
         vars.refresh_internal_state();
@@ -2780,6 +2794,11 @@ impl SystemVars {
     /// Returns the `statement_logging_max_sample_rate` configuration parameter.
     pub fn statement_logging_max_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_MAX_SAMPLE_RATE)
+    }
+
+    /// Returns the `statement_logging_default_sample_rate` configuration parameter.
+    pub fn statement_logging_default_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
     }
 }
 
