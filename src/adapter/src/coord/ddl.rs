@@ -22,6 +22,7 @@ use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
@@ -390,6 +391,10 @@ impl Coordinator {
                             .active_compute()
                             .cancel_peeks(pending_peek.cluster_id, vec![uuid].into_iter().collect())
                             .unwrap_or_terminate("unable to cancel peek");
+                        self.retire_execution(
+                            StatementEndedExecutionReason::Canceled,
+                            pending_peek.ctx_extra,
+                        );
                         // Client may have left.
                         let _ = pending_peek.sender.send(PeekResponse::Error(format!(
                             "query could not complete because {dropped_name} was dropped"
