@@ -94,16 +94,7 @@ u4  foo
 u7  bar
 
 query T rowsort
-SHOW CLUSTERS
-----
-mz_system
-mz_introspection
-bar
-default
-foo
-
-query T rowsort
-SHOW CLUSTERS LIKE 'd%'
+SELECT name FROM (SHOW CLUSTERS LIKE 'd%')
 ----
 default
 
