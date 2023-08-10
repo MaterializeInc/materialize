@@ -908,16 +908,6 @@ impl Stash {
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                            15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
-                            16 => upgrade::v16_to_v17::upgrade(),
-                            17 => upgrade::v17_to_v18::upgrade(&mut tx).await?,
-                            18 => upgrade::v18_to_v19::upgrade(&mut tx).await?,
-                            19 => upgrade::v19_to_v20::upgrade(&mut tx).await?,
-                            20 => upgrade::v20_to_v21::upgrade(&mut tx).await?,
-                            21 => upgrade::v21_to_v22::upgrade(&mut tx).await?,
-                            22 => upgrade::v22_to_v23::upgrade(&mut tx).await?,
-                            23 => upgrade::v23_to_v24::upgrade(&mut tx).await?,
-                            24 => upgrade::v24_to_v25::upgrade(&mut tx).await?,
                             25 => upgrade::v25_to_v26::upgrade(),
                             26 => upgrade::v26_to_v27::upgrade(),
                             27 => upgrade::v27_to_v28::upgrade(&mut tx).await?,
