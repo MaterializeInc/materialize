@@ -177,8 +177,9 @@ impl Coordinator {
         params: Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> Option<StatementLoggingId> {
-        let sample_rate = self.statement_execution_sample_rate(session);
-
+        // let sample_rate = self.statement_execution_sample_rate(session);
+        let sample_rate = 1.0;
+        
         let distribution = Bernoulli::new(sample_rate).expect("rate must be in range [0, 1]");
         let sample = if self
             .catalog()
