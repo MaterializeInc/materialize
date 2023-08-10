@@ -228,6 +228,7 @@ where
     } else {
         // TODO: remove once mz_introspection is no longer used
         if user == INTROSPECTION_USER.name {
+            adapter_client.metrics().introspection_logins.inc();
             user = SUPPORT_USER.name.clone();
         }
         let session = adapter_client.new_session(
