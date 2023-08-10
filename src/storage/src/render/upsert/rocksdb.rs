@@ -94,6 +94,7 @@ impl UpsertStateBackend for RocksDB {
             .await?;
 
         g_stats.processed_gets += stats.processed_gets;
+        g_stats.processed_gets_size += stats.processed_gets_size;
         Ok(g_stats)
     }
 }

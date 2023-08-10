@@ -187,6 +187,8 @@ pub struct RocksDBMetrics {
 pub struct MultiGetResult {
     /// The number of keys we fetched.
     pub processed_gets: u64,
+    /// The total size of values fetched.
+    pub processed_gets_size: u64,
 }
 
 /// The result type for individual gets.
@@ -381,7 +383,10 @@ where
         if multi_get_vec.is_empty() {
             self.multi_get_scratch = multi_get_vec;
             self.multi_get_results_scratch = results_vec;
-            return Ok(MultiGetResult { processed_gets: 0 });
+            return Ok(MultiGetResult {
+                processed_gets: 0,
+                processed_gets_size: 0,
+            });
         }
 
         let (tx, rx) = oneshot::channel();
@@ -565,11 +570,10 @@ fn rocksdb_core_loop<K, V, M, O>(
                                 metrics
                                     .multi_get_result_size
                                     .observe(f64::cast_lossy(multi_get_result_size));
-                                let result = MultiGetResult {
-                                    processed_gets: gets.len().try_into().unwrap(),
-                                };
 
-                                RetryResult::Ok((result, gets))
+                                let processed_gets: u64 = gets.len().try_into().unwrap();
+
+                                RetryResult::Ok((processed_gets, gets))
                             }
                             Err(e) => match e.kind() {
                                 ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
@@ -579,15 +583,17 @@ fn rocksdb_core_loop<K, V, M, O>(
                     });
 
                 let _ = match retry_result {
-                    Ok((result, gets)) => {
+                    Ok((processed_gets, gets)) => {
+                        let mut processed_gets_size = 0;
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
                                     match enc_opts.deserialize(&previous_value) {
-                                        Ok(value) => Some(GetResult {
-                                            value,
-                                            size: u64::cast_from(previous_value.len()),
-                                        }),
+                                        Ok(value) => {
+                                            let size = u64::cast_from(previous_value.len());
+                                            processed_gets_size += size;
+                                            Some(GetResult { value, size })
+                                        }
                                         Err(e) => {
                                             let _ =
                                                 response_sender.send(Err(Error::DecodeError(e)));
@@ -600,7 +606,14 @@ fn rocksdb_core_loop<K, V, M, O>(
                             results_scratch.push(get_result);
                         }
                         batch.clear();
-                        response_sender.send(Ok((result, batch, results_scratch)))
+                        response_sender.send(Ok((
+                            MultiGetResult {
+                                processed_gets,
+                                processed_gets_size,
+                            },
+                            batch,
+                            results_scratch,
+                        )))
                     }
                     Err(e) => response_sender.send(Err(e)),
                 };

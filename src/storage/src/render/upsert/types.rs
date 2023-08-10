@@ -349,8 +349,10 @@ pub struct PutStats {
 /// Statistics for a single call to `multi_get`.
 #[derive(Clone, Default, Debug)]
 pub struct GetStats {
-    /// The number of puts/deletes processed
+    /// The number of gets processed
     pub processed_gets: u64,
+    /// The total size in bytes returned
+    pub processed_gets_size: u64,
 }
 
 /// A trait that defines the fundamental primitives required by a state-backing of
@@ -450,6 +452,7 @@ impl UpsertStateBackend for InMemoryHashMap {
             stats.processed_gets += 1;
             let value = self.state.get(&key).cloned();
             let size = value.as_ref().map(|v| v.memory_size());
+            stats.processed_gets_size += size.unwrap_or(0);
             *result_out = UpsertValueAndSize { value, size };
         }
         Ok(stats)
