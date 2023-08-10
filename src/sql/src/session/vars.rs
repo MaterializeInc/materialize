@@ -907,7 +907,7 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
 /// (namely, upsert) till after rehydration is finished.
 const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_dataflow_delay_sources_past_rehydration"),
-    value: &true,
+    value: &false,
     description: "Whether or not to delay sources producing values in some scenarios \
                   (namely, upsert) till after rehydration is finished",
     internal: true,
