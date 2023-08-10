@@ -5010,7 +5010,6 @@ dependencies = [
  "prost-build",
  "protobuf-src",
  "rand",
- "regex",
  "serde",
  "serde_json",
  "similar-asserts",
