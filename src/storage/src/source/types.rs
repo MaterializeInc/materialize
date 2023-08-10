@@ -23,6 +23,7 @@ use differential_dataflow::Collection;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
+use mz_rocksdb::RocksDBInstanceMetrics;
 use mz_storage_client::metrics::BackpressureMetrics;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
@@ -489,8 +490,16 @@ pub struct UpsertMetrics {
     pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+
+    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+
     pub(crate) shared: Arc<UpsertSharedMetrics>,
-    pub(crate) rocksdb: Arc<mz_rocksdb::RocksDBMetrics>,
+    pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
+    pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
     // `UpsertMetrics` keeps a reference (through `Arc`'s) to backpressure metrics, so that
     // they are not dropped when the `persist_source` operator is dropped.
     _backpressure_metrics: Option<BackpressureMetrics>,
@@ -518,10 +527,37 @@ impl UpsertMetrics {
                 .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
             rocksdb_autospill_in_use: Arc::new(
                 base.rocksdb_autospill_in_use
-                    .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
+                    .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
             ),
+            merge_snapshot_updates: base
+                .merge_snapshot_updates
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            merge_snapshot_inserts: base
+                .merge_snapshot_inserts
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            merge_snapshot_deletes: base
+                .merge_snapshot_deletes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_get_size: base
+                .multi_get_size
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_put_size: base
+                .multi_put_size
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+
             shared: base.shared(&source_id),
-            rocksdb: base.rocksdb(&source_id),
+            rocksdb_shared: base.rocksdb_shared(&source_id),
+            rocksdb_instance_metrics: Arc::new(RocksDBInstanceMetrics {
+                multi_get_size: base
+                    .rocksdb_multi_get_size
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_get_result_size: base
+                    .rocksdb_multi_get_result_size
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_put_size: base
+                    .rocksdb_multi_put_size
+                    .get_delete_on_drop_counter(vec![source_id_s, worker_id]),
+            }),
             _backpressure_metrics: backpressure_metrics,
         }
     }

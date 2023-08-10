@@ -474,7 +474,8 @@ pub(crate) struct RocksDBParams {
     pub(crate) instance_path: PathBuf,
     pub(crate) env: rocksdb::Env,
     pub(crate) tuning_config: RocksDBConfig,
-    pub(crate) metrics: Arc<mz_rocksdb::RocksDBMetrics>,
+    pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
+    pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
 }
 
 pub struct AutoSpillBackend {
@@ -505,7 +506,8 @@ impl AutoSpillBackend {
             instance_path,
             env,
             tuning_config,
-            metrics,
+            shared_metrics,
+            instance_metrics,
         } = rocksdb_params;
         tracing::info!("spilling to disk for upsert at {:?}", instance_path);
 
@@ -514,7 +516,8 @@ impl AutoSpillBackend {
                 instance_path,
                 mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
                 tuning_config.clone(),
-                Arc::clone(metrics),
+                Arc::clone(shared_metrics),
+                Arc::clone(instance_metrics),
                 upsert_bincode_opts(),
             )
             .await
@@ -744,9 +747,15 @@ where
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics.merge_snapshot_updates.inc_by(stats.updates);
-        self.metrics.merge_snapshot_inserts.inc_by(stats.inserts);
-        self.metrics.merge_snapshot_deletes.inc_by(stats.deletes);
+        self.worker_metrics
+            .merge_snapshot_updates
+            .inc_by(stats.updates);
+        self.worker_metrics
+            .merge_snapshot_inserts
+            .inc_by(stats.inserts);
+        self.worker_metrics
+            .merge_snapshot_deletes
+            .inc_by(stats.deletes);
 
         self.snapshot_stats += stats;
         // Updating the metrics
@@ -808,7 +817,9 @@ where
         self.metrics
             .multi_put_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics.multi_put_size.inc_by(stats.processed_puts);
+        self.worker_metrics
+            .multi_put_size
+            .inc_by(stats.processed_puts);
 
         self.stats.update_envelope_state_bytes_by(stats.size_diff);
         self.stats.update_envelope_state_count_by(stats.values_diff);
@@ -837,7 +848,9 @@ where
         self.metrics
             .multi_get_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics.multi_get_size.inc_by(stats.processed_gets);
+        self.worker_metrics
+            .multi_get_size
+            .inc_by(stats.processed_gets);
 
         Ok(())
     }

@@ -177,7 +177,8 @@ where
             source_config.worker_id,
             source_config.id
         );
-        let rocksdb_metrics = Arc::clone(&upsert_metrics.rocksdb);
+        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+        let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
         let rocksdb_dir = scratch_directory
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
@@ -201,7 +202,8 @@ where
                             instance_path: rocksdb_dir,
                             env,
                             tuning_config: tuning,
-                            metrics: rocksdb_metrics,
+                            shared_metrics: rocksdb_shared_metrics,
+                            instance_metrics: rocksdb_instance_metrics,
                         },
                         spill_threshold,
                         rocksdb_in_use_metric,
@@ -223,7 +225,8 @@ where
                             &rocksdb_dir,
                             mz_rocksdb::InstanceOptions::defaults_with_env(env),
                             tuning,
-                            rocksdb_metrics,
+                            rocksdb_shared_metrics,
+                            rocksdb_instance_metrics,
                             // For now, just use the same config as the one used for
                             // merging snapshots.
                             upsert_bincode_opts(),

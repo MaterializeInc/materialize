@@ -74,16 +74,16 @@
 // END LINT CONFIG
 
 use mz_ore::metrics::{CounterVecExt, HistogramVecExt};
-use mz_rocksdb::{InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBMetrics};
+use mz_rocksdb::{InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBSharedMetrics};
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
 
-fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
+fn metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error> {
     let fake_hist_vec =
         HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
     let face_counter_vec =
         IntCounterVec::new(Opts::new("fake_counter", "fake_help"), &["fake_label"])?;
 
-    Ok(Box::new(RocksDBMetrics {
+    Ok(Box::new(RocksDBSharedMetrics {
         multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
         multi_get_size: face_counter_vec.get_delete_on_drop_counter(vec!["two".to_string()]),
         multi_get_result_size: face_counter_vec

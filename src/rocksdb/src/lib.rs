@@ -168,17 +168,22 @@ impl InstanceOptions {
     }
 }
 
-/// Metrics about an instances usage of RocksDB. User-provided
+/// Shared metrics about an instances usage of RocksDB. User-provided
 /// so the user can choose the labels.
-pub struct RocksDBMetrics {
+pub struct RocksDBSharedMetrics {
     /// Latency of multi_gets, in fractional seconds.
     pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Latency of write batch writes, in fractional seconds.
+    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+}
+
+/// Worker metrics about an instances usage of RocksDB. User-provided
+/// so the user can choose the labels.
+pub struct RocksDBInstanceMetrics {
     /// Size of multi_get batches.
     pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of multi_get non-empty results.
     pub multi_get_result_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    /// Latency of write batch writes, in fractional seconds.
-    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of write batches.
     pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
@@ -272,16 +277,18 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O>(
+    pub async fn new<M, O, IM>(
         instance_path: &Path,
         options: InstanceOptions,
         tuning_config: RocksDBConfig,
-        metrics: M,
+        shared_metrics: M,
+        instance_metrics: IM,
         enc_opts: O,
     ) -> Result<Self, Error>
     where
         O: bincode::Options + Copy + Send + Sync + 'static,
-        M: Deref<Target = RocksDBMetrics> + Send + 'static,
+        M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
+        IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
@@ -312,7 +319,8 @@ where
                 tuning_config,
                 instance_path,
                 rx,
-                metrics,
+                shared_metrics,
+                instance_metrics,
                 creation_error_tx,
                 enc_opts,
             )
@@ -494,19 +502,21 @@ where
     }
 }
 
-fn rocksdb_core_loop<K, V, M, O>(
+fn rocksdb_core_loop<K, V, M, O, IM>(
     options: InstanceOptions,
     tuning_config: RocksDBConfig,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
-    metrics: M,
+    shared_metrics: M,
+    instance_metrics: IM,
     creation_error_tx: oneshot::Sender<Error>,
     enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
-    M: Deref<Target = RocksDBMetrics> + Send + 'static,
+    M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
+    IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
     let rocksdb_options = options.as_rocksdb_options(&tuning_config);
@@ -564,13 +574,15 @@ fn rocksdb_core_loop<K, V, M, O>(
                         let gets: Result<Vec<_>, _> = gets.into_iter().collect();
                         match gets {
                             Ok(gets) => {
-                                metrics.multi_get_latency.observe(latency.as_secs_f64());
-                                metrics
+                                shared_metrics
+                                    .multi_get_latency
+                                    .observe(latency.as_secs_f64());
+                                instance_metrics
                                     .multi_get_size
                                     .inc_by(batch_size.try_into().unwrap());
                                 let multi_get_result_size =
                                     gets.iter().filter(|r| r.is_some()).count();
-                                metrics
+                                instance_metrics
                                     .multi_get_result_size
                                     .inc_by(multi_get_result_size.try_into().unwrap());
 
@@ -681,8 +693,10 @@ fn rocksdb_core_loop<K, V, M, O>(
                         match db.write_opt(writes, &wo) {
                             Ok(()) => {
                                 let latency = now.elapsed();
-                                metrics.multi_put_latency.observe(latency.as_secs_f64());
-                                metrics
+                                shared_metrics
+                                    .multi_put_latency
+                                    .observe(latency.as_secs_f64());
+                                instance_metrics
                                     .multi_put_size
                                     .inc_by(batch_size.try_into().unwrap());
                                 RetryResult::Ok(())
