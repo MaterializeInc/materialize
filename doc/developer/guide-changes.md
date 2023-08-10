@@ -17,9 +17,9 @@ We use [GitHub pull requests](https://github.com/MaterializeInc/materialize/pull
 small, must be submitted as a pull request, and that pull request must pass a
 battery of automated tests before it merges.
 
-Any substantial PR must additionally be reviewed by one or more engineers who
-are familiar with the areas of the codebase that are touched in the PR. The
-goals of code review are threefold:
+All PRs must be reviewed by one or more employees who are familiar with the
+areas of the codebase that are touched in the PR. The goals of code review are
+threefold:
 
 1. To ensure the health of the codebase improves over time.
 
@@ -381,18 +381,9 @@ strategy works best when you are fairly confident in the change. If you're not
 confident in the change, consider assigning _both_ an experienced an
 inexperienced reviewer.
 
-Coming soon: a breakdown of which tech lead is responsible for each area of the
-codebase. The tech lead needn't review every PR in their area of responsibility,
-but can help direct code review requests to the appropriate engineer.
-
 ### Merging
 
 #### When to merge
-
-For sufficiently trivial changes, you can consider merging without review. This
-should be somewhat rare, however, and only when you have high confidence that a)
-the change is correct, and b) the change is uncontroversial. When in doubt, get
-a review!
 
 When a reviewer approves your PR, they will either press the "approve" button
 in GitHub's code review interface, leaving a big green checkmark on your PR,
@@ -411,6 +402,10 @@ SQL layer LGTM, but please get someone else to review the docs changes." In this
 case you must use your discretion as to when you have received a covering set
 of approvals. (This is a great reason to prefer small PRs when possible, since
 you can gather full approvals from various owners in parallel.)
+
+We've configured GitHub to require at least one formal approval (i.e., clicking
+"Approve" in the review UI, rather than just posting a comment like "LGTM")
+before a PR can be merged.
 
 #### Stalled PRs
 
