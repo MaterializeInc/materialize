@@ -220,6 +220,7 @@ pub(super) struct UpsertMetrics {
     // These are used by `rocksdb`.
     pub(super) rocksdb_multi_get_latency: HistogramVec,
     pub(super) rocksdb_multi_get_size: HistogramVec,
+    pub(super) rocksdb_multi_get_result_size: HistogramVec,
     pub(super) rocksdb_multi_put_latency: HistogramVec,
     pub(super) rocksdb_multi_put_size: HistogramVec,
     // These are maps so that multiple timely workers can interact with the same
@@ -337,6 +338,13 @@ impl UpsertMetrics {
                 var_labels: ["source_id"],
                 buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
+            rocksdb_multi_get_result_size: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_get_result_size",
+                help: "The number of non-empty records returned, \
+                    when getting batches of values from RocksDB for this source.",
+                var_labels: ["source_id"],
+                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
+            )),
             rocksdb_multi_put_latency: registry.register(metric!(
                 name: "mz_storage_rocksdb_multi_put_latency",
                 help: "The latencies, in fractional seconds, \
@@ -390,6 +398,9 @@ impl UpsertMetrics {
                     .get_delete_on_drop_histogram(vec![source_id.clone()]),
                 multi_get_size: self
                     .rocksdb_multi_get_size
+                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                multi_get_result_size: self
+                    .rocksdb_multi_get_result_size
                     .get_delete_on_drop_histogram(vec![source_id.clone()]),
                 multi_put_latency: self
                     .rocksdb_multi_put_latency

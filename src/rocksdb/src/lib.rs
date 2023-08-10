@@ -174,6 +174,8 @@ pub struct RocksDBMetrics {
     pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of multi_get batches.
     pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Size of multi_get non-empty results.
+    pub multi_get_result_size: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
     pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of write batches.
@@ -558,6 +560,11 @@ fn rocksdb_core_loop<K, V, M, O>(
                             Ok(gets) => {
                                 metrics.multi_get_latency.observe(latency.as_secs_f64());
                                 metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
+                                let multi_get_result_size =
+                                    gets.iter().filter(|r| r.is_some()).count();
+                                metrics
+                                    .multi_get_result_size
+                                    .observe(f64::cast_lossy(multi_get_result_size));
                                 let result = MultiGetResult {
                                     processed_gets: gets.len().try_into().unwrap(),
                                 };

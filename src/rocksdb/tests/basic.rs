@@ -84,8 +84,10 @@ fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
     Ok(Box::new(RocksDBMetrics {
         multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
         multi_get_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
-        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["three".to_string()]),
-        multi_put_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+        multi_get_result_size: fake_hist_vec
+            .get_delete_on_drop_histogram(vec!["three".to_string()]),
+        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+        multi_put_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["five".to_string()]),
     }))
 }
 
