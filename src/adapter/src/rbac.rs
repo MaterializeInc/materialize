@@ -25,7 +25,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan;
 use mz_sql::plan::{MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
 
@@ -89,7 +89,7 @@ pub enum UnauthorizedError {
     MzSystem { action: String },
     /// The action cannot be performed by the mz_introspection role.
     #[error("permission denied to {action}")]
-    MzIntrospection { action: String },
+    MzSupport { action: String },
 }
 
 impl UnauthorizedError {
@@ -101,9 +101,9 @@ impl UnauthorizedError {
             UnauthorizedError::MzSystem { .. } => {
                 Some(format!("You must be the '{}' role", SYSTEM_USER.name))
             }
-            UnauthorizedError::MzIntrospection { .. } => Some(format!(
+            UnauthorizedError::MzSupport { .. } => Some(format!(
                 "The '{}' role has very limited privileges",
-                INTROSPECTION_USER.name
+                SUPPORT_USER.name
             )),
             UnauthorizedError::Ownership { .. }
             | UnauthorizedError::RoleMembership { .. }

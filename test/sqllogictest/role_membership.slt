@@ -910,8 +910,8 @@ r2
 r3
 r4
 mz_system
+mz_support
 materialize
-mz_introspection
 COMPLETE 7
 
 statement ok
