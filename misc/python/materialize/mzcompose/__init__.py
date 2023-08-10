@@ -474,10 +474,13 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
+        port: Optional[int] = None,
         password: Optional[str] = None,
     ) -> Any:
         """Execute and return results of a SQL query."""
-        with self.sql_cursor(service=service, user=user, password=password) as cursor:
+        with self.sql_cursor(
+            service=service, user=user, port=port, password=password
+        ) as cursor:
             cursor.execute(sql)
             return cursor.fetchall()
 

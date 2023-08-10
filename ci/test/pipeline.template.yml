@@ -208,27 +208,14 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: kafka-persistence
-    label: Kafka persistence
+  - id: persistence
+    label: Persistence tests
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
-          run: kafka-sources
-    agents:
-      queue: linux-x86_64
-
-  - id: table-persistence
-    label: Table persistence
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persistence
-          run: user-tables
     agents:
       queue: linux-x86_64
 
