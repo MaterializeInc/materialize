@@ -183,7 +183,7 @@ pub struct RocksDBInstanceMetrics {
     /// Size of multi_get batches.
     pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of multi_get non-empty results.
-    pub multi_get_result_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of write batches.
     pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
@@ -195,6 +195,8 @@ pub struct MultiGetResult {
     pub processed_gets: u64,
     /// The total size of values fetched.
     pub processed_gets_size: u64,
+    /// The number of records returns.
+    pub returned_gets: u64,
 }
 
 /// The result type for individual gets.
@@ -395,6 +397,7 @@ where
             return Ok(MultiGetResult {
                 processed_gets: 0,
                 processed_gets_size: 0,
+                returned_gets: 0,
             });
         }
 
@@ -580,12 +583,6 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                                 instance_metrics
                                     .multi_get_size
                                     .inc_by(batch_size.try_into().unwrap());
-                                let multi_get_result_size =
-                                    gets.iter().filter(|r| r.is_some()).count();
-                                instance_metrics
-                                    .multi_get_result_size
-                                    .inc_by(multi_get_result_size.try_into().unwrap());
-
                                 let processed_gets: u64 = gets.len().try_into().unwrap();
 
                                 RetryResult::Ok((processed_gets, gets))
@@ -600,6 +597,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 let _ = match retry_result {
                     Ok((processed_gets, gets)) => {
                         let mut processed_gets_size = 0;
+                        let mut returned_gets: u64 = 0;
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
@@ -607,6 +605,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                                         Ok(value) => {
                                             let size = u64::cast_from(previous_value.len());
                                             processed_gets_size += size;
+                                            returned_gets += 1;
                                             Some(GetResult { value, size })
                                         }
                                         Err(e) => {
@@ -620,11 +619,16 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                             };
                             results_scratch.push(get_result);
                         }
+
+                        instance_metrics
+                            .multi_get_result_count
+                            .inc_by(returned_gets);
                         batch.clear();
                         response_sender.send(Ok((
                             MultiGetResult {
                                 processed_gets,
                                 processed_gets_size,
+                                returned_gets,
                             },
                             batch,
                             results_scratch,

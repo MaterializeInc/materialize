@@ -359,6 +359,8 @@ pub struct GetStats {
     pub processed_gets: u64,
     /// The total size in bytes returned
     pub processed_gets_size: u64,
+    /// The number of non-empty records returned
+    pub returned_gets: u64,
 }
 
 /// A trait that defines the fundamental primitives required by a state-backing of
@@ -459,6 +461,7 @@ impl UpsertStateBackend for InMemoryHashMap {
             let value = self.state.get(&key).cloned();
             let size = value.as_ref().map(|v| v.memory_size());
             stats.processed_gets_size += size.unwrap_or(0);
+            stats.returned_gets += size.map(|_| 1).unwrap_or(0);
             *result_out = UpsertValueAndSize { value, size };
         }
         Ok(stats)
@@ -851,6 +854,9 @@ where
         self.worker_metrics
             .multi_get_size
             .inc_by(stats.processed_gets);
+        self.worker_metrics
+            .multi_get_result_count
+            .inc_by(stats.returned_gets);
 
         Ok(())
     }
