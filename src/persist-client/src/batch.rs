@@ -678,10 +678,15 @@ pub(crate) struct BatchParts<T> {
     batch_metrics: BatchWriteMetrics,
 }
 
+// NB: In practice, the inputs to this end up getting downcased before they make
+// it here.
 fn force_keep_stats_col(name: &str) -> bool {
-    name == "mz_internal_super_secret_source_data_errors"
-        || name == "timestamp"
+    // If we trim the "err" column, then we can't ever use pushdown on this part
+    // (because it could have >0 errors).
+    name == "err"
+        // Various flavors of timestamp column names found in the wild.
         || name == "ts"
+        || name.ends_with("timestamp")
         || name.ends_with("time")
         || name.ends_with("_at")
         || name.starts_with("last_")

@@ -10,6 +10,7 @@
 import os
 import time
 from argparse import Namespace
+from textwrap import dedent
 from typing import Union
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
@@ -171,3 +172,52 @@ def workflow_compaction(c: Composition) -> None:
     c.rm("materialized", "testdrive", destroy_volumes=True)
 
     c.rm_volumes("mzdata")
+
+
+def workflow_inspect_shard(c: Composition) -> None:
+    """Regression test for https://github.com/MaterializeInc/materialize/pull/21098"""
+    c.up("materialized")
+    c.sql(
+        dedent(
+            """
+            CREATE TABLE foo (
+                big0 string, big1 string, big2 string, big3 string, big4 string, big5 string,
+                barTimestamp string,
+                big6 string, big7 string
+            );
+            INSERT INTO foo VALUES (
+                repeat('x', 1024), repeat('x', 1024), repeat('x', 1024), repeat('x', 1024), repeat('x', 1024), repeat('x', 1024),
+                repeat('SENTINEL', 2048),
+                repeat('x', 1024), repeat('x', 1024)
+            );
+            """
+        )
+    )
+    json_dict = c.sql_query("INSPECT SHARD 'u1'", port=6877, user="mz_system")[0][0]
+
+    cols = json_dict["batches"][1]["part_runs"][0][0]["stats"]["cols"]["ok"]
+
+    # Leading columns are present in the stats
+    assert "SENTINEL" in cols["bartimestamp"]["lower"]
+    assert "SENTINEL" in cols["bartimestamp"]["upper"]
+
+    for col_name in ["big0", "big1", "big2"]:
+        assert cols[col_name]["lower"].endswith("xxx")
+        assert cols[col_name]["upper"].endswith("xxy")
+
+    # Trailing columns not represented because of stats size limits
+    for col_name in ["big3", "big4", "big5"]:
+        assert col_name not in cols
+
+
+def workflow_default(c: Composition) -> None:
+    for workflow in [
+        "inspect-shard",
+        "kafka-sources",
+        "user-tables",
+        # Legacy tests, not currently operational
+        # "failpoints",
+        # "compaction"
+    ]:
+        c.down(destroy_volumes=True)
+        c.workflow(workflow)
