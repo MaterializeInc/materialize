@@ -212,6 +212,8 @@ pub(super) struct UpsertMetrics {
     // These are used by `shared`.
     pub(super) merge_snapshot_latency: HistogramVec,
     pub(super) merge_snapshot_updates: IntCounterVec,
+    pub(super) merge_snapshot_inserts: IntCounterVec,
+    pub(super) merge_snapshot_deletes: IntCounterVec,
     pub(super) multi_get_latency: HistogramVec,
     pub(super) multi_get_size: IntCounterVec,
     pub(super) multi_put_latency: HistogramVec,
@@ -281,6 +283,18 @@ impl UpsertMetrics {
                     of merging snapshot updates into upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
+                var_labels: ["source_id"],
+            )),
+            merge_snapshot_inserts: registry.register(metric!(
+                name: "mz_storage_upsert_merge_snapshot_inserts_counter",
+                help: "The number of inserts in a batch for merging snapshot updates \
+                    for this source.",
+                var_labels: ["source_id"],
+            )),
+            merge_snapshot_deletes: registry.register(metric!(
+                name: "mz_storage_upsert_merge_snapshot_deletes_counter",
+                help: "The number of deletes in a batch for merging snapshot updates \
+                    for this source.",
                 var_labels: ["source_id"],
             )),
             multi_get_latency: registry.register(metric!(
@@ -415,6 +429,8 @@ impl UpsertMetrics {
 pub(crate) struct UpsertSharedMetrics {
     pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
@@ -430,6 +446,12 @@ impl UpsertSharedMetrics {
                 .get_delete_on_drop_histogram(vec![source_id.clone()]),
             merge_snapshot_updates: metrics
                 .merge_snapshot_updates
+                .get_delete_on_drop_counter(vec![source_id.clone()]),
+            merge_snapshot_inserts: metrics
+                .merge_snapshot_inserts
+                .get_delete_on_drop_counter(vec![source_id.clone()]),
+            merge_snapshot_deletes: metrics
+                .merge_snapshot_deletes
                 .get_delete_on_drop_counter(vec![source_id.clone()]),
             multi_get_latency: metrics
                 .multi_get_latency

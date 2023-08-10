@@ -323,6 +323,10 @@ pub struct MergeStats {
     /// If the current call to `merge_snapshot_chunk` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
+    /// The number of inserts i.e. +1 diff
+    pub inserts: u64,
+    /// The number of deletes i.e. -1 diffs
+    pub deletes: u64,
 }
 
 impl std::ops::AddAssign for MergeStats {
@@ -330,6 +334,8 @@ impl std::ops::AddAssign for MergeStats {
         self.updates += rhs.updates;
         self.values_diff += rhs.values_diff;
         self.size_diff += rhs.size_diff;
+        self.inserts += rhs.inserts;
+        self.deletes += rhs.deletes;
     }
 }
 
@@ -700,6 +706,11 @@ where
 
             for (key, value, diff) in self.merge_scratch.drain(..) {
                 stats.updates += 1;
+                if diff > 0 {
+                    stats.inserts += 1;
+                } else if diff < 0 {
+                    stats.deletes += 1;
+                }
                 let entry = self.merge_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);
 
@@ -734,6 +745,8 @@ where
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
         self.metrics.merge_snapshot_updates.inc_by(stats.updates);
+        self.metrics.merge_snapshot_inserts.inc_by(stats.inserts);
+        self.metrics.merge_snapshot_deletes.inc_by(stats.deletes);
 
         self.snapshot_stats += stats;
         // Updating the metrics
