@@ -14,6 +14,7 @@ from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 class PersistPubSubService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         self.service = V1Service(
             api_version="v1",
             kind="Service",

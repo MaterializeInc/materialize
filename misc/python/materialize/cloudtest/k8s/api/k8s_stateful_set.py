@@ -10,13 +10,15 @@
 
 from kubernetes.client import V1StatefulSet
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class K8sStatefulSet(K8sResource):
     stateful_set: V1StatefulSet
 
-    def __init__(self) -> None:
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE):
+        super().__init__(namespace)
         self.stateful_set = self.generate_stateful_set()
 
     def generate_stateful_set(self) -> V1StatefulSet:
