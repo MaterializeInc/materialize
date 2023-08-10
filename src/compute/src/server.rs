@@ -217,43 +217,36 @@ impl<'w, A: Allocate> Worker<'w, A> {
         parts: usize,
     ) -> Vec<ComputeCommand<T>> {
         match command {
-            ComputeCommand::CreateDataflows(dataflows) => {
-                let mut dataflows_parts = vec![Vec::new(); parts];
-
-                for dataflow in dataflows {
-                    // A list of descriptions of objects for each part to build.
-                    let mut builds_parts = vec![Vec::new(); parts];
-                    // Partition each build description among `parts`.
-                    for build_desc in dataflow.objects_to_build {
-                        let build_part = build_desc.plan.partition_among(parts);
-                        for (plan, objects_to_build) in
-                            build_part.into_iter().zip(builds_parts.iter_mut())
-                        {
-                            objects_to_build.push(BuildDesc {
-                                id: build_desc.id,
-                                plan,
-                            });
-                        }
-                    }
-                    // Each list of build descriptions results in a dataflow description.
-                    for (dataflows_part, objects_to_build) in
-                        dataflows_parts.iter_mut().zip(builds_parts)
+            ComputeCommand::CreateDataflow(dataflow) => {
+                // A list of descriptions of objects for each part to build.
+                let mut builds_parts = vec![Vec::new(); parts];
+                // Partition each build description among `parts`.
+                for build_desc in dataflow.objects_to_build {
+                    let build_part = build_desc.plan.partition_among(parts);
+                    for (plan, objects_to_build) in
+                        build_part.into_iter().zip(builds_parts.iter_mut())
                     {
-                        dataflows_part.push(DataflowDescription {
-                            source_imports: dataflow.source_imports.clone(),
-                            index_imports: dataflow.index_imports.clone(),
-                            objects_to_build,
-                            index_exports: dataflow.index_exports.clone(),
-                            sink_exports: dataflow.sink_exports.clone(),
-                            as_of: dataflow.as_of.clone(),
-                            until: dataflow.until.clone(),
-                            debug_name: dataflow.debug_name.clone(),
+                        objects_to_build.push(BuildDesc {
+                            id: build_desc.id,
+                            plan,
                         });
                     }
                 }
-                dataflows_parts
+
+                // Each list of build descriptions results in a dataflow description.
+                builds_parts
                     .into_iter()
-                    .map(ComputeCommand::CreateDataflows)
+                    .map(|objects_to_build| DataflowDescription {
+                        source_imports: dataflow.source_imports.clone(),
+                        index_imports: dataflow.index_imports.clone(),
+                        objects_to_build,
+                        index_exports: dataflow.index_exports.clone(),
+                        sink_exports: dataflow.sink_exports.clone(),
+                        as_of: dataflow.as_of.clone(),
+                        until: dataflow.until.clone(),
+                        debug_name: dataflow.debug_name.clone(),
+                    })
+                    .map(ComputeCommand::CreateDataflow)
                     .collect()
             }
             command => vec![command; parts],
@@ -519,16 +512,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     ComputeCommand::CreateInstance(logging) => {
                         old_logging_config = Some(logging);
                     }
-                    ComputeCommand::CreateDataflows(dataflows) => {
-                        for dataflow in dataflows.iter() {
-                            let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
-                            old_dataflows.insert(export_ids, dataflow);
-                        }
+                    ComputeCommand::CreateDataflow(dataflow) => {
+                        let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
+                        old_dataflows.insert(export_ids, dataflow);
                     }
-                    ComputeCommand::AllowCompaction(frontiers) => {
-                        for (id, frontier) in frontiers.iter() {
-                            old_frontiers.insert(id, frontier);
-                        }
+                    ComputeCommand::AllowCompaction { id, frontier } => {
+                        old_frontiers.insert(id, frontier);
                     }
                     _ => {
                         // Nothing to do in these cases.
@@ -544,57 +533,49 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Traverse new commands, sorting out what remediation we can do.
             for command in new_commands.iter() {
                 match command {
-                    ComputeCommand::CreateDataflows(dataflows) => {
-                        // Track dataflow we must build anew.
-                        let mut new_dataflows = Vec::new();
+                    ComputeCommand::CreateDataflow(dataflow) => {
+                        // Attempt to find an existing match for the dataflow.
+                        let as_of = dataflow.as_of.as_ref().unwrap();
+                        let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
 
-                        // Attempt to find an existing match for each dataflow.
-                        for dataflow in dataflows.iter() {
-                            let as_of = dataflow.as_of.as_ref().unwrap();
-                            let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
-
-                            if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
-                                let compatible = old_dataflow.compatible_with(dataflow);
-                                let uncompacted = !export_ids
-                                    .iter()
-                                    .flat_map(|id| old_frontiers.get(id))
-                                    .any(|frontier| {
-                                        !timely::PartialOrder::less_equal(
-                                            *frontier,
-                                            dataflow.as_of.as_ref().unwrap(),
-                                        )
-                                    });
-                                // We cannot reconcile subscriptions at the moment, because the response buffer is shared,
-                                // and to a first approximation must be completely reformed.
-                                let subscribe_free = dataflow
-                                    .sink_exports
-                                    .iter()
-                                    .all(|(_id, sink)| !sink.connection.is_subscribe());
-                                if compatible && uncompacted && subscribe_free {
-                                    // Match found; remove the match from the deletion queue,
-                                    // and compact its outputs to the dataflow's `as_of`.
-                                    old_dataflows.remove(&export_ids);
-                                    for id in export_ids.iter() {
-                                        old_compaction.insert(*id, as_of.clone());
-                                    }
-                                    retain_ids.extend(export_ids);
-                                } else {
-                                    new_dataflows.push(dataflow.clone());
+                        if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
+                            let compatible = old_dataflow.compatible_with(dataflow);
+                            let uncompacted = !export_ids
+                                .iter()
+                                .flat_map(|id| old_frontiers.get(id))
+                                .any(|frontier| {
+                                    !timely::PartialOrder::less_equal(
+                                        *frontier,
+                                        dataflow.as_of.as_ref().unwrap(),
+                                    )
+                                });
+                            // We cannot reconcile subscriptions at the moment, because the response buffer is shared,
+                            // and to a first approximation must be completely reformed.
+                            let subscribe_free = dataflow
+                                .sink_exports
+                                .iter()
+                                .all(|(_id, sink)| !sink.connection.is_subscribe());
+                            if compatible && uncompacted && subscribe_free {
+                                // Match found; remove the match from the deletion queue,
+                                // and compact its outputs to the dataflow's `as_of`.
+                                old_dataflows.remove(&export_ids);
+                                for id in export_ids.iter() {
+                                    old_compaction.insert(*id, as_of.clone());
                                 }
-
-                                compute_state.metrics.record_dataflow_reconciliation(
-                                    self.timely_worker.index(),
-                                    compatible,
-                                    uncompacted,
-                                    subscribe_free,
-                                );
+                                retain_ids.extend(export_ids);
                             } else {
-                                new_dataflows.push(dataflow.clone());
+                                todo_commands
+                                    .push(ComputeCommand::CreateDataflow(dataflow.clone()));
                             }
-                        }
 
-                        if !new_dataflows.is_empty() {
-                            todo_commands.push(ComputeCommand::CreateDataflows(new_dataflows));
+                            compute_state.metrics.record_dataflow_reconciliation(
+                                self.timely_worker.index(),
+                                compatible,
+                                uncompacted,
+                                subscribe_free,
+                            );
+                        } else {
+                            todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));
                         }
                     }
                     ComputeCommand::CreateInstance(logging) => {
@@ -624,12 +605,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
             }
-            if !old_compaction.is_empty() {
-                let compactions = old_compaction
-                    .iter()
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect();
-                todo_commands.insert(0, ComputeCommand::AllowCompaction(compactions));
+            for (&id, frontier) in &old_compaction {
+                let frontier = frontier.clone();
+                todo_commands.insert(0, ComputeCommand::AllowCompaction { id, frontier });
             }
 
             // Clean up worker-local state.

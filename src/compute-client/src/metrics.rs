@@ -318,10 +318,10 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 pub struct CommandMetrics<M> {
     create_timely: M,
     create_instance: M,
-    create_dataflows: M,
+    create_dataflow: M,
     allow_compaction: M,
     peek: M,
-    cancel_peeks: M,
+    cancel_peek: M,
     initialization_complete: M,
     update_configuration: M,
 }
@@ -334,10 +334,10 @@ impl<M> CommandMetrics<M> {
         Self {
             create_timely: build_metric("create_timely"),
             create_instance: build_metric("create_instance"),
-            create_dataflows: build_metric("create_dataflows"),
+            create_dataflow: build_metric("create_dataflow"),
             allow_compaction: build_metric("allow_compaction"),
             peek: build_metric("peek"),
-            cancel_peeks: build_metric("cancel_peeks"),
+            cancel_peek: build_metric("cancel_peek"),
             initialization_complete: build_metric("initialization_complete"),
             update_configuration: build_metric("update_configuration"),
         }
@@ -351,10 +351,10 @@ impl<M> CommandMetrics<M> {
         f(&self.create_instance);
         f(&self.initialization_complete);
         f(&self.update_configuration);
-        f(&self.create_dataflows);
+        f(&self.create_dataflow);
         f(&self.allow_compaction);
         f(&self.peek);
-        f(&self.cancel_peeks);
+        f(&self.cancel_peek);
     }
 
     pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
@@ -365,10 +365,10 @@ impl<M> CommandMetrics<M> {
             CreateInstance(_) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
-            CreateDataflows(_) => &self.create_dataflows,
-            AllowCompaction(_) => &self.allow_compaction,
+            CreateDataflow(_) => &self.create_dataflow,
+            AllowCompaction { .. } => &self.allow_compaction,
             Peek(_) => &self.peek,
-            CancelPeeks { .. } => &self.cancel_peeks,
+            CancelPeek { .. } => &self.cancel_peek,
         }
     }
 
@@ -378,10 +378,10 @@ impl<M> CommandMetrics<M> {
         match proto.kind.as_ref().unwrap() {
             CreateTimely(_) => &self.create_timely,
             CreateInstance(_) => &self.create_instance,
-            CreateDataflows(_) => &self.create_dataflows,
+            CreateDataflow(_) => &self.create_dataflow,
             AllowCompaction(_) => &self.allow_compaction,
             Peek(_) => &self.peek,
-            CancelPeeks(_) => &self.cancel_peeks,
+            CancelPeek(_) => &self.cancel_peek,
             InitializationComplete(_) => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
         }
@@ -391,7 +391,7 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `ComputeResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
-    frontier_uppers: M,
+    frontier_upper: M,
     peek_response: M,
     subscribe_response: M,
 }
@@ -402,7 +402,7 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
-            frontier_uppers: build_metric("frontier_uppers"),
+            frontier_upper: build_metric("frontier_upper"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
         }
@@ -412,7 +412,7 @@ impl<M> ResponseMetrics<M> {
         use crate::protocol::response::proto_compute_response::Kind::*;
 
         match proto.kind.as_ref().unwrap() {
-            FrontierUppers(_) => &self.frontier_uppers,
+            FrontierUpper(_) => &self.frontier_upper,
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
         }

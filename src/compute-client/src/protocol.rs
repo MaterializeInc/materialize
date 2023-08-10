@@ -21,15 +21,15 @@
 //! gracefully handle messages that don’t reflect the state of the world described by the messages
 //! they have previously sent. In other words, messages sent take effect only eventually. For
 //! example, after the compute controller has instructed the replica to cancel a peek (by sending a
-//! [`CancelPeeks`] command, it must still be ready to accept non-[`Canceled`] responses to the
-//! peek. Similarly, if a replica receives a [`CancelPeeks`] command for a peek it has already
+//! [`CancelPeek`] command, it must still be ready to accept non-[`Canceled`] responses to the
+//! peek. Similarly, if a replica receives a [`CancelPeek`] command for a peek it has already
 //! answered, it must handle that command gracefully (e.g., by ignoring it).
 //!
 //! While the protocol does not provide any guarantees about the delay between sending a message
 //! and it being received and processed, it does guarantee that messages are delivered in the same
 //! order they are sent in. For example, if the compute controller sends a [`Peek`] command
-//! followed by a [`CancelPeeks`] command, it is guaranteed that [`CancelPeeks`] is only received
-//! by the replica after the [`Peek`] command.
+//! followed by a [`CancelPeek`] command, it is guaranteed that [`CancelPeek`] is only received by
+//! the replica after the [`Peek`] command.
 //!
 //! # Message Transport and Encoding
 //!
@@ -85,15 +85,15 @@
 //!
 //! The compute controller may send any number of computation commands:
 //!
-//!   - [`CreateDataflows`]
+//!   - [`CreateDataflow`]
 //!   - [`AllowCompaction`]
 //!   - [`Peek`]
-//!   - [`CancelPeeks`]
+//!   - [`CancelPeek`]
 //!   - [`UpdateConfiguration`]
 //!
 //! The compute controller must respect dependencies between commands. For example, it must send a
-//! [`CreateDataflows`] command before it sends [`AllowCompaction`] or [`Peek`] commands that
-//! target the created dataflow.
+//! [`CreateDataflow`] command before it sends [`AllowCompaction`] or [`Peek`] commands that target
+//! the created dataflow.
 //!
 //! The replica must send the required responses to computation commands. This includes commands it
 //! has received in the initialization phase that have not already been responded to.
@@ -102,13 +102,12 @@
 //! [`CreateTimely`]: self::command::ComputeCommand::CreateTimely
 //! [`CreateInstance`]: self::command::ComputeCommand::CreateInstance
 //! [`InitializationComplete`]: self::command::ComputeCommand::InitializationComplete
-//! [`CreateDataflows`]: self::command::ComputeCommand::CreateDataflows
+//! [`CreateDataflow`]: self::command::ComputeCommand::CreateDataflow
 //! [`AllowCompaction`]: self::command::ComputeCommand::AllowCompaction
 //! [`Peek`]: self::command::ComputeCommand::Peek
-//! [`CancelPeeks`]: self::command::ComputeCommand::CancelPeeks
+//! [`CancelPeek`]: self::command::ComputeCommand::CancelPeek
 //! [`UpdateConfiguration`]: self::command::ComputeCommand::UpdateConfiguration
 //! [`ComputeResponse`]: self::response::ComputeResponse
-//! [`FrontierUppers`]: self::response::ComputeResponse::FrontierUppers
 //! [`Canceled`]: self::response::PeekResponse::Canceled
 //! [`SubscribeResponse::DroppedAt`]: self::response::SubscribeResponse::DroppedAt
 
