@@ -207,7 +207,7 @@ For the latest information on Segment's Webhook Destination, please see their
 
 Given any number of conditions, e.g. a network hiccup, it's possible for your application to send
 an event more than once. If your event contains a unique ID you can de-duplicate these events
-using a [`MATERIALIZED VIEW`](sql/create-materialized-view/) and the `DISCINCT ON` clause.
+using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISCINCT ON` clause.
 
 ```
 CREATE MATERIALIZED VIEW my_webhook_idempotent IN CLUSTER my_compute_cluster AS (
