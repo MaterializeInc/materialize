@@ -386,6 +386,8 @@ where
 {
     // We only want to arrange parts of the input that are not part of the actual output
     // such that `input.concat(&negated_output.negate())` yields the correct TopK
+    // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
+    // built-in view mz_internal.mz_expected_group_size_advice.
     input
         .arrange_named::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {

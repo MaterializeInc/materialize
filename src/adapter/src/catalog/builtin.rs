@@ -3256,6 +3256,133 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
         GROUP BY mo.name, mdod.dataflow_id",
 };
 
+pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
+    name: "mz_expected_group_size_advice",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW
+    mz_internal.mz_expected_group_size_advice
+    AS
+        -- The mz_expected_group_size_advice view provides tuning suggestions for the EXPECTED
+        -- GROUP SIZE. This tuning hint is effective for min/max/top-k patterns, where a stack
+        -- of arrangements must be built. For each dataflow and region corresponding to one
+        -- such pattern, we look for how many levels can be eliminated without hitting a level
+        -- that actually substantially filters the input. The advice is constructed so that
+        -- setting the hint for the affected region will eliminate these redundant levels of
+        -- the hierachical rendering.
+        --
+        -- A number of helper CTEs are used for the view definition. The first one, operators,
+        -- looks for operator names that comprise arrangements of inputs to each level of a
+        -- min/max/top-k hierarchy.
+        WITH operators AS (
+            SELECT
+                dod.dataflow_id,
+                dor.id AS region_id,
+                dod.id,
+                ars.records
+            FROM
+                mz_internal.mz_dataflow_operator_dataflows dod
+                JOIN mz_internal.mz_dataflow_addresses doa
+                    ON dod.id = doa.id
+                JOIN mz_internal.mz_dataflow_addresses dra
+                    ON dra.address = doa.address[:list_length(doa.address) - 1]
+                JOIN mz_internal.mz_dataflow_operators dor
+                    ON dor.id = dra.id
+                JOIN mz_internal.mz_arrangement_sizes ars
+                    ON ars.operator_id = dod.id
+            WHERE
+                dod.name = 'Arranged TopK input'
+                OR dod.name = 'Arranged MinsMaxesHierarchical input'
+                OR dod.name = 'Arrange ReduceMinsMaxes'
+            ),
+        -- The second CTE, levels, simply computes the heights of the min/max/top-k hierarchies
+        -- identified in operators above.
+        levels AS (
+            SELECT o.dataflow_id, o.region_id, COUNT(*) AS levels
+            FROM operators o
+            GROUP BY o.dataflow_id, o.region_id
+        ),
+        -- The third CTE, pivot, determines for each min/max/top-k hierarchy, the first input
+        -- operator. This operator is crucially important, as it records the number of records
+        -- that was given as input to the gadget as a whole.
+        pivot AS (
+            SELECT
+                o1.dataflow_id,
+                o1.region_id,
+                o1.id,
+                o1.records
+            FROM operators o1
+            WHERE
+                o1.id = (
+                    SELECT MIN(o2.id)
+                    FROM operators o2
+                    WHERE
+                        o2.dataflow_id = o1.dataflow_id
+                        AND o2.region_id = o1.region_id
+                    OPTIONS (EXPECTED GROUP SIZE = 8)
+                )
+        ),
+        -- The fourth CTE, candidates, will look for operators where the number of records
+        -- maintained is not significantly different from the number at the pivot (excluding
+        -- the pivot itself). These are the candidates for being cut from the dataflow region
+        -- by adjusting the hint. The query includes a constant, heuristically tuned on TPC-H
+        -- load generator data, to give some room for small deviations in number of records.
+        -- The intuition for allowing for this deviation is that we are looking for a strongly
+        -- reducing point in the hierarchy. To see why one such operator ought to exist in an
+        -- untuned hierarchy, consider that at each level, we use hashing to distribute rows
+        -- among groups where the min/max/top-k computation is (partially) applied. If the
+        -- hierarchy has too many levels, the first-level (pivot) groups will be such that many
+        -- groups might be empty or contain only one row. Each subsequent level will have a number
+        -- of groups that is reduced exponentially. So at some point, we will find the level where
+        -- we actually start having a few rows per group. That's where we will see the row counts
+        -- significantly drop off.
+        candidates AS (
+            SELECT
+                o.dataflow_id,
+                o.region_id,
+                o.id,
+                o.records
+            FROM
+                operators o
+                JOIN pivot p
+                    ON o.dataflow_id = p.dataflow_id
+                        AND o.region_id = p.region_id
+                        AND o.id <> p.id
+            WHERE o.records >= p.records * (1 - 0.15)
+        ),
+        -- The fifth CTE, cuts, computes for each relevant dataflow region, the number of
+        -- candidate levels that should be cut. We only return here dataflow regions where at
+        -- least one level must be cut. Note that once we hit a point where the hierarchy starts
+        -- to have a filtering effect, i.e., after the last candidate, it is dangerous to suggest
+        -- cutting the height of the hierarchy further. This is because we will have way less
+        -- groups in the next level, so there should be even further reduction happening or there
+        -- is some substantial skew in the data. But if the latter is the case, then we should not
+        -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
+        -- at these unusually large groups.
+        cuts AS (
+            SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
+            FROM candidates c
+            GROUP BY c.dataflow_id, c.region_id
+            HAVING COUNT(*) > 0
+        )
+        -- Finally, we compute the hint suggestion for each dataflow region based on the number of
+        -- levels and the number of candidates to be cut. The hint is computed taking into account
+        -- the fan-in used in rendering for the hash partitioning and reduction of the groups,
+        -- currently equal to 16.
+        SELECT
+            dod.dataflow_id,
+            dod.dataflow_name,
+            dod.id AS region_id,
+            dod.name AS region_name,
+            l.levels,
+            c.to_cut,
+            pow(16, l.levels - c.to_cut) - 1 AS hint
+        FROM cuts c
+            JOIN levels l
+                ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
+            JOIN mz_internal.mz_dataflow_operator_dataflows dod
+                ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id",
+};
+
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
@@ -4668,6 +4795,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),

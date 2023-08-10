@@ -594,6 +594,7 @@ mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operators
 mz_dataflows
 mz_dataflows_per_worker
+mz_expected_group_size_advice
 mz_global_frontiers
 mz_message_counts
 mz_message_counts_per_worker
