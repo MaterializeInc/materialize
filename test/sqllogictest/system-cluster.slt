@@ -85,11 +85,11 @@ Explained Query:
           Project (#3, #4, #6)
             Get l1
       Project (#1..=#3, #5)
-        Filter (#0 = \"u3\")
+        Filter (#0 = \\\"u3\\\")
           Get l0
   With
     cte l1 =
-      ReadExistingIndex mz_catalog.mz_sources lookup_value=(\"u3\")
+      ReadExistingIndex mz_catalog.mz_sources lookup_value=(\\\"u3\\\")
         cte l0 =
       Project (#0..=#4, #6)
         Join on=(#4 = #5) type=differential
@@ -151,7 +151,7 @@ Explained Query:
     Join on=(#3 = #4) type=differential
       ArrangeBy keys=[[#3]]
         Project (#3, #4, #6, #8)
-          ReadExistingIndex mz_catalog.mz_sinks lookup_value=(\"u3\")
+          ReadExistingIndex mz_catalog.mz_sinks lookup_value=(\\\"u3\\\")
             ArrangeBy keys=[[#0]]
         Get mz_catalog.mz_clusters
 
