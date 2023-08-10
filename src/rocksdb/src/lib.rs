@@ -583,9 +583,8 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                                 instance_metrics
                                     .multi_get_size
                                     .inc_by(batch_size.try_into().unwrap());
-                                let processed_gets: u64 = gets.len().try_into().unwrap();
 
-                                RetryResult::Ok((processed_gets, gets))
+                                RetryResult::Ok(gets)
                             }
                             Err(e) => match e.kind() {
                                 ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
@@ -595,7 +594,8 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                     });
 
                 let _ = match retry_result {
-                    Ok((processed_gets, gets)) => {
+                    Ok(gets) => {
+                        let processed_gets: u64 = gets.len().try_into().unwrap();
                         let mut processed_gets_size = 0;
                         let mut returned_gets: u64 = 0;
                         for previous_value in gets {
