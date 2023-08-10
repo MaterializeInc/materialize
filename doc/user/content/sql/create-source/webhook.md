@@ -251,7 +251,7 @@ have a way to send test events. If you're having trouble with your `CHECK` state
 creating a temporary source without `CHECK` and using that to iterate more quickly.
 
 ```
-CREATE SOURCE my_webhook_temporary_debug IN CLUSER my_cluster FROM WEBHOOK
+CREATE SOURCE my_webhook_temporary_debug IN CLUSTER my_cluster FROM WEBHOOK
   -- Specify the BODY FORMAT as TEXT or BYTES which is how it's provided to CHECK.
   BODY FORMAT TEXT
   INCLUDE HEADERS
@@ -262,7 +262,15 @@ Once you have a few events in _my_webhook_temporary_debug_ you can query it with
 
 ```
 SELECT
+  -- Your would be CHECK statement.
   decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || body, 'my key', 'sha512')
 FROM my_webhook_temporary_debug
 LIMIT 10
 ```
+
+{{< note >}}
+
+It's not possible to use `SECRET`s in a `SELECT` statement, so you'll need to provide these values
+as raw text for debugging.
+
+{{< /note >}}
