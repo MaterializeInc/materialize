@@ -306,7 +306,6 @@ impl UpsertMetrics {
                 var_labels: ["source_id"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
-            // Choose a relatively low number of representative buckets.
             multi_get_size: registry.register(metric!(
                 name: "mz_storage_upsert_multi_get_size_counter",
                 help: "The batch size, \
@@ -324,7 +323,6 @@ impl UpsertMetrics {
                 var_labels: ["source_id"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
-            // Choose a relatively low number of representative buckets.
             multi_put_size: registry.register(metric!(
                 name: "mz_storage_upsert_multi_put_size_counter",
                 help: "The batch size, \
