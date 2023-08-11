@@ -32,8 +32,8 @@ class KubectlError(AssertionError):
         return "\n".join(
             [
                 f"error in kubectl command: {self.cmd} returned {self.returncode}",
-                f"stdout: {self.stdout}",
-                f"stderr: {self.stderr}",
+                f"stdout: {self.stdout.decode('utf-8')}",
+                f"stderr: {self.stderr.decode('utf-8')}",
             ],
         )
 
