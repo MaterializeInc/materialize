@@ -195,3 +195,131 @@ Used Indexes:
   - materialize.public.tt_x
 
 EOF
+
+# regression test drawn from LDBC-BI query 15 for having a selectivity of 0
+# TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE Person_knows_Person (
+    creationDate timestamp with time zone NOT NULL,
+    Person1id bigint NOT NULL,
+    Person2id bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+  mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
+  path (src bigint, dst bigint, w double precision) AS (
+      SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
+      FROM Person_knows_Person pp left join mm on least(pp.person1id, pp.person2id) = mm.src AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  pexists (src bigint, dir bool) AS (
+      (
+          SELECT 1::bigint, true
+          UNION
+          SELECT 2::bigint, false
+      )
+      UNION
+      (
+          WITH
+          ss (src, dir) AS (SELECT src, dir FROM pexists),
+          ns (src, dir) AS (SELECT p.dst, ss.dir FROM ss, path p WHERE ss.src = p.src),
+          bb (src, dir) AS (SELECT src, dir FROM ns UNION ALL SELECT src, dir FROM ss),
+          found (found) AS (
+              SELECT 1 AS found
+              FROM bb b1, bb b2
+              WHERE b1.dir AND (NOT b2.dir) AND b1.src = b2.src
+          )
+          SELECT src, dir
+          FROM ns
+          WHERE NOT EXISTS (SELECT 1 FROM found)
+          UNION
+          SELECT -1, true
+          WHERE EXISTS (SELECT 1 FROM found)
+      )
+  ),
+  pathfound (c bool) AS (
+      SELECT true AS c
+      FROM pexists
+      WHERE src = -1 AND dir
+  )
+SELECT * FROM pexists;
+----
+Explained Query:
+  Return
+    Get l4
+  With Mutually Recursive
+    cte l4 =
+      Distinct group_by=[#0, #1]
+        Union
+          Distinct group_by=[#0, #1]
+            Union
+              Project (#1, #0)
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l1
+                  ArrangeBy keys=[[]]
+                    Union
+                      Negate
+                        Get l3
+                      Constant
+                        - ()
+              Project (#1, #0)
+                Map (true, -1)
+                  Get l3
+          Constant
+            - (1, true)
+            - (2, false)
+    cte l3 =
+      Distinct
+        Project ()
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter #1
+                  Get l2
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter NOT(#1)
+                  Get l2
+    cte l2 =
+      Union
+        Project (#1, #0)
+          Get l1
+        Get l4
+    cte l1 =
+      Project (#1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l4
+          ArrangeBy keys=[[#0]]
+            Union
+              Project (#1, #2)
+                Get l0
+              Project (#1, #2)
+                Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential
+                  ArrangeBy keys=[[#0..=#2]]
+                    Union
+                      Negate
+                        Distinct group_by=[#0..=#2]
+                          Get l0
+                      Distinct group_by=[#0..=#2]
+                        Get materialize.public.person_knows_person
+                  ArrangeBy keys=[[#0..=#2]]
+                    Get materialize.public.person_knows_person
+    cte l0 =
+      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
+        Get materialize.public.person_knows_person
+
+Used Indexes:
+  - materialize.public.person_knows_person_person1id_person2id
+
+EOF
