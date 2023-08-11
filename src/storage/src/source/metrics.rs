@@ -383,7 +383,7 @@ impl UpsertMetrics {
                 var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_multi_put_count: registry.register(metric!(
-                name: "mz_storage_rocksdb_multi_get_count_total",
+                name: "mz_storage_rocksdb_multi_put_count_total",
                 help: "The number of calls to rocksdb multi_put.",
                 var_labels: ["source_id", "worker_id"],
             )),
