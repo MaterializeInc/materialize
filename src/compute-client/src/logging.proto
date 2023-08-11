@@ -32,6 +32,8 @@ message ProtoTimelyLog {
         google.protobuf.Empty messages_sent = 7;
         google.protobuf.Empty messages_received = 8;
         google.protobuf.Empty reachability = 9;
+        google.protobuf.Empty batches_sent = 10;
+        google.protobuf.Empty batches_received = 11;
     }
 }
 

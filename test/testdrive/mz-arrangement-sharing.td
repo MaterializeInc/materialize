@@ -840,6 +840,8 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "ArrangeByKey Differential(ArrangementRecords)"
 "ArrangeByKey Differential(Sharing)"
 "ArrangeByKey Timely(Addresses)"
+"ArrangeByKey Timely(BatchesReceived)"
+"ArrangeByKey Timely(BatchesSent)"
 "ArrangeByKey Timely(Channels)"
 "ArrangeByKey Timely(Elapsed)"
 "ArrangeByKey Timely(Histogram)"

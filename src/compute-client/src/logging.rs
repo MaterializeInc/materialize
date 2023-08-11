@@ -142,6 +142,8 @@ pub enum TimelyLog {
     MessagesSent,
     MessagesReceived,
     Reachability,
+    BatchesSent,
+    BatchesReceived,
 }
 
 impl RustType<ProtoTimelyLog> for TimelyLog {
@@ -158,6 +160,8 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
                 TimelyLog::MessagesSent => MessagesSent(()),
                 TimelyLog::MessagesReceived => MessagesReceived(()),
                 TimelyLog::Reachability => Reachability(()),
+                TimelyLog::BatchesSent => BatchesSent(()),
+                TimelyLog::BatchesReceived => BatchesReceived(()),
             }),
         }
     }
@@ -174,6 +178,8 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
             Some(MessagesSent(())) => Ok(TimelyLog::MessagesSent),
             Some(MessagesReceived(())) => Ok(TimelyLog::MessagesReceived),
             Some(Reachability(())) => Ok(TimelyLog::Reachability),
+            Some(BatchesSent(())) => Ok(TimelyLog::BatchesSent),
+            Some(BatchesReceived(())) => Ok(TimelyLog::BatchesReceived),
             None => Err(TryFromProtoError::missing_field("ProtoTimelyLog::kind")),
         }
     }
@@ -351,6 +357,16 @@ impl LogVariant {
                 .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
                 .with_column("requested_ns", ScalarType::UInt64.nullable(false)),
 
+            LogVariant::Timely(TimelyLog::BatchesReceived) => RelationDesc::empty()
+                .with_column("channel_id", ScalarType::UInt64.nullable(false))
+                .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+
+            LogVariant::Timely(TimelyLog::BatchesSent) => RelationDesc::empty()
+                .with_column("channel_id", ScalarType::UInt64.nullable(false))
+                .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+
             LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
@@ -450,7 +466,9 @@ impl LogVariant {
                 vec![(0, 0), (1, 1)],
             )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
-            LogVariant::Timely(TimelyLog::MessagesReceived)
+            LogVariant::Timely(TimelyLog::BatchesReceived)
+            | LogVariant::Timely(TimelyLog::BatchesSent)
+            | LogVariant::Timely(TimelyLog::MessagesReceived)
             | LogVariant::Timely(TimelyLog::MessagesSent) => vec![
                 (
                     LogVariant::Timely(TimelyLog::Channels),

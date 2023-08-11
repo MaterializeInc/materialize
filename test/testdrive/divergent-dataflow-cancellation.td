@@ -90,7 +90,7 @@ contains: canceling statement due to statement timeout
 > SELECT count(*)
   FROM mz_internal.mz_compute_frontiers_per_worker
   WHERE worker_id = 0
-23
+25
 
 > SELECT count(*) FROM mz_internal.mz_compute_import_frontiers_per_worker
 0

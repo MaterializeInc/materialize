@@ -149,6 +149,8 @@ SID   from_worker_id    2           uint8
 SID   to_worker_id      3           uint8
 SID   sent              4           bigint
 SID   received          5           bigint
+SID   batch_sent        6           bigint
+SID   batch_received    7           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

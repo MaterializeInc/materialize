@@ -536,6 +536,8 @@ mz_dataflow_shutdown_durations_histogram_raw log   <null>
 mz_frontiers                                 source <null>
 mz_message_counts_received_raw               log   <null>
 mz_message_counts_sent_raw                   log   <null>
+mz_message_batch_counts_received_raw         log   <null>
+mz_message_batch_counts_sent_raw             log   <null>
 mz_peek_durations_histogram_raw              log   <null>
 mz_scheduling_elapsed_raw                    log   <null>
 mz_scheduling_parks_histogram_raw            log   <null>
@@ -656,7 +658,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-96
+102
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
