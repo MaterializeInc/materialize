@@ -67,7 +67,9 @@ def wait_for_environmentd(config: EnvironmentConfig) -> Dict[str, Any]:
         assert region_info.get("sqlAddress")
         return response
 
-    environment_json = retry(get_environment, 600, [AssertionError]).json()
+    environment_json: Dict[str, Any] = retry(
+        get_environment, 600, [AssertionError]
+    ).json()
     pgwire_url = environment_json["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
     wait_for_connectable((pgwire_host, int(pgwire_port)), 300)

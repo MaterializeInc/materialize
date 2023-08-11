@@ -57,7 +57,7 @@ def pgwire_sql_conn(config: EnvironmentConfig) -> connection:
     return conn
 
 
-def sql_query_http(config: EnvironmentConfig, query: str) -> str:
+def sql_query_http(config: EnvironmentConfig, query: str) -> List[List[Any]]:
     environment = wait_for_environmentd(config)
     environmentd_url: str = environment["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
@@ -67,4 +67,5 @@ def sql_query_http(config: EnvironmentConfig, query: str) -> str:
         "/api/sql",
         {"query": query},
     )
-    return response.json()["results"][0]["rows"]
+    rows: List[List[Any]] = response.json()["results"][0]["rows"]
+    return rows

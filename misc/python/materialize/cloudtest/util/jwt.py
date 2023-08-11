@@ -75,4 +75,6 @@ def fetch_jwt(email: str, password: str, host: str) -> str:
     except Exception as e:
         eprint(e, res, res.text)
         raise
-    return res.json()["accessToken"]
+
+    access_token: str = res.json()["accessToken"]
+    return access_token

@@ -111,7 +111,7 @@ def patch(
 ) -> requests.Response:
     eprint(f"PATCH {base_url}{path}")
 
-    def try_patch() -> Any:
+    def try_patch() -> requests.Response:
         with verbose_http_errors():
             headers = {}
             if use_token:
@@ -147,7 +147,7 @@ def delete(
 ) -> requests.Response:
     eprint(f"DELETE {base_url}{path}")
 
-    def try_delete() -> Any:
+    def try_delete() -> requests.Response:
         with verbose_http_errors():
             headers = {}
             if use_token:

@@ -129,7 +129,7 @@ def kubectl_get(
     namespace: Optional[str],
     resource_type: str,
     resource_name: Optional[str] = None,
-) -> Any:
+) -> Dict[str, Any]:
     command = [
         "kubectl",
         "--context",
@@ -145,13 +145,14 @@ def kubectl_get(
     command.extend(["-o", "yaml"])
 
     try:
-        return yaml.safe_load(
+        yaml_data: Dict[str, Any] = yaml.safe_load(
             subprocess.run(
                 command,
                 capture_output=True,
                 check=True,
             ).stdout,
         )
+        return yaml_data
     except subprocess.CalledProcessError as e:
         raise KubectlError.from_subprocess_error(e) from e
 
@@ -163,14 +164,15 @@ def kubectl_get_retry(
     resource_name: str,
     max_attempts: int,
 ) -> Dict[str, Any]:
-    def f() -> Any:
+    def f() -> Dict[str, Any]:
         return kubectl_get(context, namespace, resource_type, resource_name)
 
-    return retry(
+    yaml_data: Dict[str, Any] = retry(
         f,
         max_attempts=max_attempts,
         exception_types=[KubectlError],
     )
+    return yaml_data
 
 
 def kubectl_get_or_none(
@@ -202,7 +204,8 @@ def load_k8s_yaml(
     contents = Path(tests_dir).joinpath(filepath).read_text()
     for old, new in (substitutions or {}).items():
         contents = contents.replace(old, new)
-    return yaml.safe_load(contents)
+    yaml_data: Dict[str, Any] = yaml.safe_load(contents)
+    return yaml_data
 
 
 def await_environment_pod(context: str, namespace: str, pod_name: str) -> None:
