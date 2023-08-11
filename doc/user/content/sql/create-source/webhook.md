@@ -130,7 +130,9 @@ when the server is at the maximum will return 429 Too Many Requests.
 ### Creating a Basic Authentication
 
 [Basic Authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme) enables a simple and rudimentary way to grant authorization to your Webhook source.
-To store the sensitive credentials and make it reusable accros multiple `CREATE SOURCE` statements use [Secrets](https://materialize.com/docs/sql/create-secret/).
+
+To store the sensitive credentials and make them reusable across multiple `CREATE SOURCE`` statements, use [Secrets](https://materialize.com/docs/sql/create-secret/).
+
 
 ```sql
   CREATE SECRET BASIC_HOOK_AUTH AS 'Basic <base64_auth>';
@@ -153,3 +155,5 @@ After a successful secret creation, you can use the same secret to create differ
       headers->'authorization' = BASIC_HOOK_AUTH
     );
 ```
+
+Your new Webhook is now up and ready to accept requests using the basic authentication.
