@@ -9,8 +9,8 @@
 
 from typing import Any, List, Optional, Sequence
 
-import psycopg2
-from psycopg2.extensions import connection
+import psycopg2  # type: ignore
+from psycopg2.extensions import connection  # type: ignore
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.environment import wait_for_environmentd
