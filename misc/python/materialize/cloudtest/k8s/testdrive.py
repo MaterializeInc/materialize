@@ -70,19 +70,13 @@ class Testdrive(K8sPod):
         kafka_addr: Optional[str] = None,
         schema_registry_url: Optional[str] = None,
     ) -> None:
-        materialize_url = (
-            materialize_url if materialize_url else self.default_materialize_url
+        materialize_url = _coalesce(materialize_url, self.default_materialize_url)
+        materialize_internal_url = _coalesce(
+            materialize_internal_url, self.default_materialize_internal_url
         )
-        materialize_internal_url = (
-            materialize_internal_url
-            if materialize_internal_url
-            else self.default_materialize_internal_url
-        )
-        kafka_addr = kafka_addr if kafka_addr else self.default_kafka_addr
-        schema_registry_url = (
-            schema_registry_url
-            if schema_registry_url
-            else self.default_schema_registry_url
+        kafka_addr = _coalesce(kafka_addr, self.default_kafka_addr)
+        schema_registry_url = _coalesce(
+            schema_registry_url, self.default_schema_registry_url
         )
 
         self.wait(condition="condition=Ready", resource="pod/testdrive")
@@ -111,3 +105,7 @@ class Testdrive(K8sPod):
             *args,
             input=input,
         )
+
+
+def _coalesce(value: Optional[str], default_value: str) -> str:
+    return value if value else default_value
