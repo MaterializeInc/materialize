@@ -30,10 +30,10 @@ class Testdrive(K8sPod):
     ) -> None:
         super().__init__(namespace)
         self.aws_region = aws_region
-        self.default_materialize_url = materialize_url
-        self.default_materialize_internal_url = materialize_internal_url
-        self.default_kafka_addr = kafka_addr
-        self.default_schema_registry_url = schema_registry_url
+        self.materialize_url = materialize_url
+        self.materialize_internal_url = materialize_internal_url
+        self.kafka_addr = kafka_addr
+        self.schema_registry_url = schema_registry_url
 
         metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
@@ -65,20 +65,7 @@ class Testdrive(K8sPod):
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
         default_timeout: str = "300s",
-        materialize_url: Optional[str] = None,
-        materialize_internal_url: Optional[str] = None,
-        kafka_addr: Optional[str] = None,
-        schema_registry_url: Optional[str] = None,
     ) -> None:
-        materialize_url = _coalesce(materialize_url, self.default_materialize_url)
-        materialize_internal_url = _coalesce(
-            materialize_internal_url, self.default_materialize_internal_url
-        )
-        kafka_addr = _coalesce(kafka_addr, self.default_kafka_addr)
-        schema_registry_url = _coalesce(
-            schema_registry_url, self.default_schema_registry_url
-        )
-
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
             "exec",
@@ -86,10 +73,10 @@ class Testdrive(K8sPod):
             "testdrive",
             "--",
             "testdrive",
-            f"--materialize-url={materialize_url}",
-            f"--materialize-internal-url={materialize_internal_url}",
-            f"--kafka-addr={kafka_addr}",
-            f"--schema-registry-url={schema_registry_url}",
+            f"--materialize-url={self.materialize_url}",
+            f"--materialize-internal-url={self.materialize_internal_url}",
+            f"--kafka-addr={self.kafka_addr}",
+            f"--schema-registry-url={self.schema_registry_url}",
             f"--default-timeout={default_timeout}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
@@ -105,7 +92,3 @@ class Testdrive(K8sPod):
             *args,
             input=input,
         )
-
-
-def _coalesce(value: Optional[str], default_value: str) -> str:
-    return value if value else default_value
