@@ -41,7 +41,7 @@ JOIN auctions ON bids.auction_id = auctions.id
 WHERE bids.bid_time < auctions.end_time
 GROUP BY auctions.item
 ```
-<p></p>
+
 ```noftm
                                         Optimized Plan
 -----------------------------------------------------------------------------------------------
