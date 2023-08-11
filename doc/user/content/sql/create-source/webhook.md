@@ -64,7 +64,7 @@ Column     | Type                        | Optional?                            
 
 ## Webhook URL
 
-After creating a webhook source, requests can be sent to `https://<HOST>/api/webhook/<database>/<schema>/<src_name>`.
+After creating a webhook source, send **POST** requests to `https://<HOST>/api/webhook/<database>/<schema>/<src_name>`.
 Where `<HOST>` is the URL for your Materialize instance, which can be found on the [Materialize Web
 Console](https://console.materialize.com/). Then `<database>` and `<schema>` are the database and
 schema where you created your source, and `<src_name>` is the name you provided for your source at
