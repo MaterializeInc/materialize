@@ -37,6 +37,8 @@ You can only use `mz_now()` to establish a temporal filter under the following c
 - The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN...AND...`).
     At the moment, you can't use the `!=` operator with `mz_now()`.
 
+You cannot use temporal filters in the `WHERE` clause of an [aggregate `FILTER` expression](/sql/functions/filters.md).
+
 ## Examples
 
 These examples create real objects.
