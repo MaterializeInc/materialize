@@ -155,7 +155,7 @@ where
     }
 }
 
-/// Spawns a [`tokio::task`] that will continuously bump the upper for the specified collection,
+/// Spawns an [`mz_ore::task`] that will continuously bump the upper for the specified collection,
 /// and append data that is sent via the provided [`mpsc::Sender`].
 ///
 /// TODO(parkmycar): One day if we want to customize the tick interval for each collection, that
@@ -206,6 +206,11 @@ where
                             let request = vec![(id, rows, T::from(now()))];
 
                             // We'll try really hard to succeed, but eventually stop.
+                            //
+                            // Note: it's very rare we should ever need to retry, and if we need to
+                            // retry it should only take 1 or 2 attempts. We set `max_tries` to be
+                            // high though because if we hit some edge case we want to try hard to
+                            // commit the data.
                             let retries = Retry::default()
                                 .initial_backoff(Duration::from_secs(1))
                                 .clamp_backoff(Duration::from_secs(3))
