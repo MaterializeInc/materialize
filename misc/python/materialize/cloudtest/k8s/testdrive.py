@@ -24,7 +24,7 @@ class Testdrive(K8sPod):
         aws_region: Optional[str] = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
         materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
-        materialize_internal_url: str = "postgres://materialize:materialize@environmentd:6877/materialize",
+        materialize_internal_url: str = "postgres://mz_system@environmentd:6877/materialize",
         kafka_addr: str = "redpanda:9092",
         schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
