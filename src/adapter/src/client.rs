@@ -29,7 +29,7 @@ use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::hint::ApplicationNameHint;
-use mz_sql::session::user::{User, INTROSPECTION_USER};
+use mz_sql::session::user::{User, SUPPORT_USER};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -198,7 +198,7 @@ impl Client {
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
-        let session = self.new_session(conn_id, INTROSPECTION_USER.clone());
+        let session = self.new_session(conn_id, SUPPORT_USER.clone());
         let (mut session_client, _) = self.startup(session).await?;
 
         // Parse the SQL statement.

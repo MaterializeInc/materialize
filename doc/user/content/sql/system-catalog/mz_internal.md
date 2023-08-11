@@ -694,14 +694,23 @@ The `mz_arrangement_sharing` view describes how many times each [arrangement] in
 
 The `mz_arrangement_sizes` view describes the size of each [arrangement] in the system.
 
+The size, capacity, and allocations are an approximation, which may underestimate the actual size in memory.
+Specifically, reductions can use more memory than we show here.
+
 <!-- RELATION_SPEC mz_internal.mz_arrangement_sizes -->
-| Field          | Type        | Meaning                                                                                                                   |
-| -------------- |-------------| --------                                                                                                                  |
-| `operator_id`  | [`uint8`]   | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `records`      | [`numeric`] | The number of records in the arrangement.                                                                                 |
-| `batches`      | [`numeric`] | The number of batches in the arrangement.                                                                                 |
+| Field         | Type        | Meaning                                                                                                                   |
+|---------------|-------------| --------                                                                                                                  |
+| `operator_id` | [`uint8`]   | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+| `records`     | [`numeric`] | The number of records in the arrangement.                                                                                 |
+| `batches`     | [`numeric`] | The number of batches in the arrangement.                                                                                 |
+| `size`        | [`numeric`] | The utilized size in bytes of the arrangement.                                                                            |
+| `capacity`    | [`numeric`] | The capacity in bytes of the arrangement. Can be larger than the size.                                                    |
+| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangement.                                                        |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sizes_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_allocations_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
 
 ### `mz_compute_delays_histogram`
 
@@ -807,6 +816,22 @@ The `mz_dataflow_addresses` view describes how the [dataflow] channels and opera
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_addresses_per_worker -->
 
+### `mz_dataflow_arrangement_sizes`
+
+The `mz_dataflow_arrangement_sizes` view describes the size of arrangements per
+operators under each dataflow.
+
+<!-- RELATION_SPEC mz_internal.mz_dataflow_arrangement_sizes -->
+| Field         | Type        | Meaning                                                                      |
+|---------------|-------------|------------------------------------------------------------------------------|
+| `id`          | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
+| `name`        | [`text`]    | The name of the object (e.g., index) maintained by the dataflow.             |
+| `records`     | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
+| `batches`     | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
+| `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                              |
+| `capacity`    | [`numeric`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
+| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangements.          |
+
 ### `mz_dataflow_channels`
 
 The `mz_dataflow_channels` view describes the communication channels between [dataflow] operators.
@@ -876,18 +901,36 @@ The `mz_dataflow_operator_parents` view describes how [dataflow] operators are n
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_parents_per_worker -->
 
-### `mz_dataflow_arrangement_sizes`
+### `mz_dataflow_shutdown_durations_histogram`
 
-The `mz_dataflow_arrangement_sizes` view describes how many records and batches
-are contained in operators under each dataflow.
+The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the time in nanoseconds required to fully shut down dropped [dataflows][dataflow].
 
-<!-- RELATION_SPEC mz_internal.mz_dataflow_arrangement_sizes -->
-| Field     | Type        | Meaning                                                                      |
-|-----------|-------------|------------------------------------------------------------------------------|
-| `id`      | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`    | [`text`]    | The name of the object (e.g., index) maintained by the dataflow.             |
-| `records` | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
-| `batches` | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
+<!-- RELATION_SPEC mz_internal.mz_dataflow_shutdown_durations_histogram -->
+| Field          | Type        | Meaning                                                |
+| -------------- |-------------| --------                                               |
+| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.          |
+| `count`        | [`numeric`] | The (noncumulative) count of dataflows in this bucket. |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_shutdown_durations_histogram_raw -->
+
+### `mz_expected_group_size_advice`
+
+The `mz_expected_group_size_advice` view provides advice on opportunities to set the `EXPECTED GROUP SIZE`
+[query hint]. This hint is applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns. The
+maintainance of these query patterns is implemented inside an operator scope, called a region, through a
+hierarchical scheme for either reduction or top-k computation.
+
+<!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
+| Field           | Type        | Meaning                                                                                                             |
+|-----------------|-------------|---------------------------------------------------------------------------------------------------------------------|
+| `dataflow_id`   | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                        |
+| `dataflow_name` | [`text`]    | The internal name of the dataflow hosting the min/max reduction or top-k.                                           |
+| `region_id`     | [`uint8`] | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).               |
+| `region_name`   | [`text`]    | The internal name of the root operator scope for the min/max reduction or top-k.                                    |
+| `levels`        | [`bigint`] | The number of levels in the hierarchical scheme implemented by the region.                                           |
+| `to_cut`        | [`bigint`] | The number of levels that can be eliminated (cut) from the region's hierarchy.                                       |
+| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy.  |
 
 ### `mz_message_counts`
 
@@ -922,11 +965,15 @@ The `mz_peek_durations_histogram` view describes a histogram of the duration in 
 The `mz_records_per_dataflow` view describes the number of records in each [dataflow].
 
 <!-- RELATION_SPEC mz_internal.mz_records_per_dataflow -->
-| Field        | Type        | Meaning                                                                    |
-| ------------ |-------------| --------                                                                   |
-| `id`         | [`uint8`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`       | [`text`]    | The internal name of the dataflow.                                         |
-| `records`    | [`numeric`] | The number of records in the dataflow.                                     |
+| Field         | Type        | Meaning                                                                    |
+| ------------  |-------------| --------                                                                   |
+| `id`          | [`uint8`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
+| `name`        | [`text`]    | The internal name of the dataflow.                                         |
+| `records`     | [`numeric`] | The number of records in the dataflow.                                     |
+| `batches`     | [`numeric`] | The number of batches in the dataflow.                                     |
+| `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                            |
+| `capacity`    | [`numeric`] | The capacity in bytes of the arrangements. Can be larger than the size.    |
+| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangements.        |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_records_per_dataflow_per_worker -->
 
@@ -941,6 +988,10 @@ The `mz_records_per_dataflow_operator` view describes the number of records in e
 | `name`         | [`text`]    | The internal name of the operator.                                                           |
 | `dataflow_id`  | [`uint8`]   | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
 | `records`      | [`numeric`] | The number of records in the operator.                                                       |
+| `batches`      | [`numeric`] | The number of batches in the dataflow.                                                       |
+| `size`         | [`numeric`] | The utilized size in bytes of the arrangement.                                               |
+| `capacity`     | [`numeric`] | The capacity in bytes of the arrangement. Can be larger than the size.                       |
+| `allocations`  | [`numeric`] | The number of separate memory allocations backing the arrangement.                           |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_records_per_dataflow_operator_per_worker -->
 
@@ -1012,6 +1063,10 @@ Field          | Type                         | Meaning
 [`timestamp with time zone`]: /sql/types/timestamp
 [arrangement]: /get-started/arrangements/#arrangements
 [dataflow]: /get-started/arrangements/#dataflows
+[`MIN`]: /sql/functions/#min
+[`MAX`]: /sql/functions/#max
+[Top K]: /transform-data/patterns/top-k
+[query hint]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->

@@ -64,7 +64,7 @@ Column     | Type                        | Optional?                            
 
 ## Webhook URL
 
-After creating a webhook source, requests can be sent to `https://<HOST>/api/webhook/<database>/<schema>/<src_name>`.
+After creating a webhook source, send **POST** requests to `https://<HOST>/api/webhook/<database>/<schema>/<src_name>`.
 Where `<HOST>` is the URL for your Materialize instance, which can be found on the [Materialize Web
 Console](https://console.materialize.com/). Then `<database>` and `<schema>` are the database and
 schema where you created your source, and `<src_name>` is the name you provided for your source at
@@ -73,12 +73,12 @@ the time of creation.
 {{< note >}}
 
 This is a public URL that is open to the internet and has no security. To validate that requests
-are legitimate see [Validating Requests](#validating-requests). For limits imposed on this endpoint
+are legitimate see [Request Validation](#request-validation). For limits imposed on this endpoint
 see [Request Limits](#request-limits).
 
 {{< /note >}}
 
-## Validating Requests
+## Request Validation
 
 It's common for applications using webhooks to provide a method for validating a request is
 legitimate. Using `CHECK` you can specify an expression to do this validation for your Webhook
@@ -123,3 +123,37 @@ Webhook sources apply the following limits to received requests:
 * Maximum number of concurrent connections is 100, across all webhook sources. Trying to connect
 when the server is at the maximum will return 429 Too Many Requests.
 * Requests that contain a header name specified more than once will be rejected with 401 Unauthorized.
+
+
+## Examples
+
+### Creating a Basic Authentication
+
+[Basic Authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme) enables a simple and rudimentary way to grant authorization to your webhook source.
+
+To store the sensitive credentials and make them reusable across multiple `CREATE SOURCE` statements, use [Secrets](https://materialize.com/docs/sql/create-secret/).
+
+
+```sql
+  CREATE SECRET BASIC_HOOK_AUTH AS 'Basic <base64_auth>';
+```
+
+### Creating a Source
+
+After a successful secret creation, you can use the same secret to create different webhooks with the same basic authentication to check if a request is valid.
+
+```sql
+  CREATE SOURCE webhook_with_basic_auth IN CLUSTER my_cluster
+  FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+      WITH (
+        HEADERS,
+        BODY AS request_body,
+        SECRET BASIC_HOOK_AUTH,
+      )
+      headers->'authorization' = BASIC_HOOK_AUTH
+    );
+```
+
+Your new webhook is now up and ready to accept requests using the basic authentication.

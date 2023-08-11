@@ -70,7 +70,7 @@ use mz_sql::plan::{
     Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookValidation,
 };
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
@@ -99,7 +99,7 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
-    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
@@ -1908,9 +1908,9 @@ impl Cluster {
     pub fn role(&self) -> ClusterRole {
         // NOTE - These roles power monitoring systems. Do not change
         // them without talking to the cloud or observability groups.
-        if self.name == SYSTEM_USER.name {
+        if self.name == MZ_SYSTEM_CLUSTER.name {
             ClusterRole::SystemCritical
-        } else if self.name == INTROSPECTION_USER.name {
+        } else if self.name == MZ_INTROSPECTION_CLUSTER.name {
             ClusterRole::System
         } else {
             ClusterRole::User
@@ -4965,7 +4965,7 @@ impl Catalog {
         // be very easy for a code path to accidentally avoid this check by
         // calling `resolve_cluster(session.vars().cluster())`.
         if session.user().name != SYSTEM_USER.name
-            && session.user().name != INTROSPECTION_USER.name
+            && session.user().name != SUPPORT_USER.name
             && session.vars().cluster() == SYSTEM_USER.name
         {
             coord_bail!(

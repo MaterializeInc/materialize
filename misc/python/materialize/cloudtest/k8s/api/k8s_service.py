@@ -15,11 +15,15 @@ import sqlparse
 from kubernetes.client import V1Service
 from pg8000 import Connection, Cursor
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class K8sService(K8sResource):
     service: V1Service
+
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE):
+        super().__init__(namespace)
 
     def kind(self) -> str:
         return "service"

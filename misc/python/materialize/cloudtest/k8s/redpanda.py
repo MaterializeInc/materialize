@@ -20,12 +20,17 @@ from kubernetes.client import (
     V1ServiceSpec,
 )
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class RedpandaDeployment(K8sDeployment):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+    ) -> None:
+        super().__init__(namespace)
         container = V1Container(
             name="redpanda",
             image="vectorized/redpanda:v21.11.13",
@@ -55,7 +60,7 @@ class RedpandaDeployment(K8sDeployment):
         )
 
         template = V1PodTemplateSpec(
-            metadata=V1ObjectMeta(labels={"app": "redpanda"}),
+            metadata=V1ObjectMeta(namespace=namespace, labels={"app": "redpanda"}),
             spec=V1PodSpec(containers=[container]),
         )
 
@@ -66,20 +71,26 @@ class RedpandaDeployment(K8sDeployment):
         self.deployment = V1Deployment(
             api_version="apps/v1",
             kind="Deployment",
-            metadata=V1ObjectMeta(name="redpanda"),
+            metadata=V1ObjectMeta(name="redpanda", namespace=namespace),
             spec=spec,
         )
 
 
 class RedpandaService(K8sService):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+    ) -> None:
+        super().__init__(namespace)
         ports = [
             V1ServicePort(name="kafka", port=9092),
             V1ServicePort(name="schema-registry", port=8081),
         ]
 
         self.service = V1Service(
-            metadata=V1ObjectMeta(name="redpanda", labels={"app": "redpanda"}),
+            metadata=V1ObjectMeta(
+                name="redpanda", namespace=namespace, labels={"app": "redpanda"}
+            ),
             spec=V1ServiceSpec(
                 type="NodePort", ports=ports, selector={"app": "redpanda"}
             ),

@@ -14,6 +14,7 @@ from materialize.cloudtest.k8s.api.k8s_cluster_role import K8sClusterRole
 
 class VpcEndpointsClusterRole(K8sClusterRole):
     def __init__(self) -> None:
+        super().__init__()
         metadata = V1ObjectMeta(
             name="vpcendpoints",
             labels={"rbac.authorization.k8s.io/aggregate-to-admin": "true"},

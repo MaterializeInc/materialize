@@ -36,13 +36,13 @@ use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, ObjectType, RoleAttributes,
     TypeReference,
 };
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 use crate::rbac;
 
@@ -1341,6 +1341,30 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
+pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_shutdown_durations_histogram_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
+};
+
+pub const MZ_ARRANGEMENT_HEAP_SIZE_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_heap_size_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
+};
+
+pub const MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_heap_capacity_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
+};
+
+pub const MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_heap_allocations_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
+};
+
 pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2383,28 +2407,21 @@ pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: BuiltinView = BuiltinView
     name: "mz_records_per_dataflow_operator_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator_per_worker AS
-WITH records_cte AS (
-    SELECT
-        operator_id,
-        worker_id,
-        pg_catalog.count(*) AS records
-    FROM
-        mz_internal.mz_arrangement_records_raw
-    GROUP BY
-        operator_id, worker_id
-)
 SELECT
     dod.id,
     dod.name,
     dod.worker_id,
     dod.dataflow_id,
-    records_cte.records
+    COALESCE(ar_size.records, 0) AS records,
+    COALESCE(ar_size.batches, 0) AS batches,
+    COALESCE(ar_size.size, 0) AS size,
+    COALESCE(ar_size.capacity, 0) AS capacity,
+    COALESCE(ar_size.allocations, 0) AS allocations
 FROM
-    records_cte,
     mz_internal.mz_dataflow_operator_dataflows_per_worker dod
-WHERE
-    dod.id = records_cte.operator_id AND
-    dod.worker_id = records_cte.worker_id",
+    LEFT OUTER JOIN mz_internal.mz_arrangement_sizes_per_worker ar_size ON
+        dod.id = ar_size.operator_id AND
+        dod.worker_id = ar_size.worker_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2415,7 +2432,11 @@ SELECT
     id,
     name,
     dataflow_id,
-    pg_catalog.sum(records) AS records
+    pg_catalog.sum(records) AS records,
+    pg_catalog.sum(batches) AS batches,
+    pg_catalog.sum(size) AS size,
+    pg_catalog.sum(capacity) AS capacity,
+    pg_catalog.sum(allocations) AS allocations
 FROM mz_internal.mz_records_per_dataflow_operator_per_worker
 GROUP BY id, name, dataflow_id",
 };
@@ -2423,11 +2444,16 @@ GROUP BY id, name, dataflow_id",
 pub const MZ_RECORDS_PER_DATAFLOW_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS
+SELECT
     rdo.dataflow_id as id,
     dfs.name,
     rdo.worker_id,
-    pg_catalog.SUM(rdo.records) as records
+    pg_catalog.SUM(rdo.records) as records,
+    pg_catalog.SUM(rdo.batches) as batches,
+    pg_catalog.SUM(rdo.size) as size,
+    pg_catalog.SUM(rdo.capacity) as capacity,
+    pg_catalog.SUM(rdo.allocations) as allocations
 FROM
     mz_internal.mz_records_per_dataflow_operator_per_worker rdo,
     mz_internal.mz_dataflows_per_worker dfs
@@ -2443,10 +2469,15 @@ GROUP BY
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS
+SELECT
     id,
     name,
-    pg_catalog.SUM(records) as records
+    pg_catalog.SUM(records) as records,
+    pg_catalog.SUM(batches) as batches,
+    pg_catalog.SUM(size) as size,
+    pg_catalog.SUM(capacity) as capacity,
+    pg_catalog.SUM(allocations) as allocations
 FROM
     mz_internal.mz_records_per_dataflow_per_worker
 GROUP BY
@@ -2943,6 +2974,28 @@ FROM mz_internal.mz_peek_durations_histogram_per_worker
 GROUP BY duration_ns",
 };
 
+pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_dataflow_shutdown_durations_histogram_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker AS SELECT
+    worker_id, duration_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_dataflow_shutdown_durations_histogram_raw
+GROUP BY
+    worker_id, duration_ns",
+};
+
+pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_dataflow_shutdown_durations_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_shutdown_durations_histogram AS
+SELECT
+    duration_ns,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker
+GROUP BY duration_ns",
+};
+
 pub const MZ_SCHEDULING_ELAPSED_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3143,13 +3196,50 @@ records_cte AS (
         mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
+),
+heap_size_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS size
+    FROM
+        mz_internal.mz_arrangement_heap_size_raw
+    GROUP BY
+        operator_id, worker_id
+),
+heap_capacity_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS capacity
+    FROM
+        mz_internal.mz_arrangement_heap_capacity_raw
+    GROUP BY
+        operator_id, worker_id
+),
+heap_allocations_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS allocations
+    FROM
+        mz_internal.mz_arrangement_heap_allocations_raw
+    GROUP BY
+        operator_id, worker_id
 )
 SELECT
     batches_cte.operator_id,
     batches_cte.worker_id,
-    records_cte.records,
-    batches_cte.batches
-FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
+    COALESCE(records_cte.records, 0) AS records,
+    batches_cte.batches,
+    COALESCE(heap_size_cte.size, 0) AS size,
+    COALESCE(heap_capacity_cte.capacity, 0) AS capacity,
+    COALESCE(heap_allocations_cte.allocations, 0) AS allocations
+FROM batches_cte
+LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
@@ -3159,7 +3249,10 @@ pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
 SELECT
     operator_id,
     pg_catalog.sum(records) AS records,
-    pg_catalog.sum(batches) AS batches
+    pg_catalog.sum(batches) AS batches,
+    pg_catalog.sum(size) AS size,
+    pg_catalog.sum(capacity) AS capacity,
+    pg_catalog.sum(allocations) AS allocations
 FROM mz_internal.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
 };
@@ -3245,7 +3338,10 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
             mdod.dataflow_id AS id,
             mo.name,
             COALESCE(sum(mas.records), 0) AS records,
-            COALESCE(sum(mas.batches), 0) AS batches
+            COALESCE(sum(mas.batches), 0) AS batches,
+            COALESCE(sum(mas.size), 0) AS size,
+            COALESCE(sum(mas.capacity), 0) AS capacity,
+            COALESCE(sum(mas.allocations), 0) AS allocations
         FROM
             mz_internal.mz_dataflow_operators AS mdo
                 LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdo.id = mas.operator_id
@@ -3254,6 +3350,133 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
                 JOIN mz_objects AS mo ON mo.id = mce.export_id
                 JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
         GROUP BY mo.name, mdod.dataflow_id",
+};
+
+pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
+    name: "mz_expected_group_size_advice",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW
+    mz_internal.mz_expected_group_size_advice
+    AS
+        -- The mz_expected_group_size_advice view provides tuning suggestions for the EXPECTED
+        -- GROUP SIZE. This tuning hint is effective for min/max/top-k patterns, where a stack
+        -- of arrangements must be built. For each dataflow and region corresponding to one
+        -- such pattern, we look for how many levels can be eliminated without hitting a level
+        -- that actually substantially filters the input. The advice is constructed so that
+        -- setting the hint for the affected region will eliminate these redundant levels of
+        -- the hierachical rendering.
+        --
+        -- A number of helper CTEs are used for the view definition. The first one, operators,
+        -- looks for operator names that comprise arrangements of inputs to each level of a
+        -- min/max/top-k hierarchy.
+        WITH operators AS (
+            SELECT
+                dod.dataflow_id,
+                dor.id AS region_id,
+                dod.id,
+                ars.records
+            FROM
+                mz_internal.mz_dataflow_operator_dataflows dod
+                JOIN mz_internal.mz_dataflow_addresses doa
+                    ON dod.id = doa.id
+                JOIN mz_internal.mz_dataflow_addresses dra
+                    ON dra.address = doa.address[:list_length(doa.address) - 1]
+                JOIN mz_internal.mz_dataflow_operators dor
+                    ON dor.id = dra.id
+                JOIN mz_internal.mz_arrangement_sizes ars
+                    ON ars.operator_id = dod.id
+            WHERE
+                dod.name = 'Arranged TopK input'
+                OR dod.name = 'Arranged MinsMaxesHierarchical input'
+                OR dod.name = 'Arrange ReduceMinsMaxes'
+            ),
+        -- The second CTE, levels, simply computes the heights of the min/max/top-k hierarchies
+        -- identified in operators above.
+        levels AS (
+            SELECT o.dataflow_id, o.region_id, COUNT(*) AS levels
+            FROM operators o
+            GROUP BY o.dataflow_id, o.region_id
+        ),
+        -- The third CTE, pivot, determines for each min/max/top-k hierarchy, the first input
+        -- operator. This operator is crucially important, as it records the number of records
+        -- that was given as input to the gadget as a whole.
+        pivot AS (
+            SELECT
+                o1.dataflow_id,
+                o1.region_id,
+                o1.id,
+                o1.records
+            FROM operators o1
+            WHERE
+                o1.id = (
+                    SELECT MIN(o2.id)
+                    FROM operators o2
+                    WHERE
+                        o2.dataflow_id = o1.dataflow_id
+                        AND o2.region_id = o1.region_id
+                    OPTIONS (EXPECTED GROUP SIZE = 8)
+                )
+        ),
+        -- The fourth CTE, candidates, will look for operators where the number of records
+        -- maintained is not significantly different from the number at the pivot (excluding
+        -- the pivot itself). These are the candidates for being cut from the dataflow region
+        -- by adjusting the hint. The query includes a constant, heuristically tuned on TPC-H
+        -- load generator data, to give some room for small deviations in number of records.
+        -- The intuition for allowing for this deviation is that we are looking for a strongly
+        -- reducing point in the hierarchy. To see why one such operator ought to exist in an
+        -- untuned hierarchy, consider that at each level, we use hashing to distribute rows
+        -- among groups where the min/max/top-k computation is (partially) applied. If the
+        -- hierarchy has too many levels, the first-level (pivot) groups will be such that many
+        -- groups might be empty or contain only one row. Each subsequent level will have a number
+        -- of groups that is reduced exponentially. So at some point, we will find the level where
+        -- we actually start having a few rows per group. That's where we will see the row counts
+        -- significantly drop off.
+        candidates AS (
+            SELECT
+                o.dataflow_id,
+                o.region_id,
+                o.id,
+                o.records
+            FROM
+                operators o
+                JOIN pivot p
+                    ON o.dataflow_id = p.dataflow_id
+                        AND o.region_id = p.region_id
+                        AND o.id <> p.id
+            WHERE o.records >= p.records * (1 - 0.15)
+        ),
+        -- The fifth CTE, cuts, computes for each relevant dataflow region, the number of
+        -- candidate levels that should be cut. We only return here dataflow regions where at
+        -- least one level must be cut. Note that once we hit a point where the hierarchy starts
+        -- to have a filtering effect, i.e., after the last candidate, it is dangerous to suggest
+        -- cutting the height of the hierarchy further. This is because we will have way less
+        -- groups in the next level, so there should be even further reduction happening or there
+        -- is some substantial skew in the data. But if the latter is the case, then we should not
+        -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
+        -- at these unusually large groups.
+        cuts AS (
+            SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
+            FROM candidates c
+            GROUP BY c.dataflow_id, c.region_id
+            HAVING COUNT(*) > 0
+        )
+        -- Finally, we compute the hint suggestion for each dataflow region based on the number of
+        -- levels and the number of candidates to be cut. The hint is computed taking into account
+        -- the fan-in used in rendering for the hash partitioning and reduction of the groups,
+        -- currently equal to 16.
+        SELECT
+            dod.dataflow_id,
+            dod.dataflow_name,
+            dod.id AS region_id,
+            dod.name AS region_name,
+            l.levels,
+            c.to_cut,
+            pow(16, l.levels - c.to_cut) - 1 AS hint
+        FROM cuts c
+            JOIN levels l
+                ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
+            JOIN mz_internal.mz_dataflow_operator_dataflows dod
+                ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
@@ -4419,8 +4642,8 @@ pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     attributes: RoleAttributes::new().with_all(),
 });
 
-pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*INTROSPECTION_USER.name,
+pub static MZ_SUPPORT_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*SUPPORT_USER.name,
     attributes: RoleAttributes::new(),
 });
 
@@ -4428,7 +4651,7 @@ pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster
     name: &*SYSTEM_USER.name,
     privileges: vec![
         MzAclItem {
-            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE,
         },
@@ -4443,7 +4666,7 @@ pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
     });
 
 pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
-    name: &*INTROSPECTION_USER.name,
+    name: "mz_introspection",
     privileges: vec![
         MzAclItem {
             grantee: RoleId::Public,
@@ -4451,7 +4674,7 @@ pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| Builtin
             acl_mode: AclMode::USAGE,
         },
         MzAclItem {
-            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE.union(AclMode::CREATE),
         },
@@ -4589,6 +4812,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_RAW),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
@@ -4668,6 +4895,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
@@ -4683,6 +4911,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
+        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER),
+        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
@@ -4796,7 +5026,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     builtins
 });
 pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
+    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_SUPPORT_ROLE]);
 pub static BUILTIN_CLUSTERS: Lazy<Vec<&BuiltinCluster>> =
     Lazy::new(|| vec![&*MZ_SYSTEM_CLUSTER, &*MZ_INTROSPECTION_CLUSTER]);
 pub static BUILTIN_CLUSTER_REPLICAS: Lazy<Vec<&BuiltinClusterReplica>> = Lazy::new(|| {

@@ -518,11 +518,29 @@ pub fn trim_to_budget(
         return;
     }
 
-    // That wasn't enough. Sort the columns in order of ascending size and
-    // keep however many fit within the budget. This strategy both keeps the
-    // largest total number of columns and also optimizes for the sort of
-    // columns we expect to need stats in practice (timestamps are numbers
-    // or small strings).
+    // That wasn't enough. Try recursively trimming out entire cols.
+    //
+    // TODO: There are certainly more elegant things we could do here. One idea
+    // would be to call `trim_to_budget_struct` but with a closure for
+    // force_keep_col that always returns false. That would potentially at least
+    // keep _something_. Another possibility would be to replace this whole bit
+    // with some sort of recursive max-cost search with force_keep_col things
+    // weighted after everything else.
+    let mut budget_shortfall = stats.encoded_len().saturating_sub(budget);
+    trim_to_budget_struct(stats, &mut budget_shortfall, &force_keep_col);
+}
+
+/// Recursively trims cols in the struct, greatest-size first, keeping force
+/// kept cols and ancestors of force kept cols.
+fn trim_to_budget_struct(
+    stats: &mut ProtoStructStats,
+    budget_shortfall: &mut usize,
+    force_keep_col: &impl Fn(&str) -> bool,
+) {
+    // Sort the columns in order of ascending size and keep however many fit
+    // within the budget. This strategy both keeps the largest total number of
+    // columns and also optimizes for the sort of columns we expect to need
+    // stats in practice (timestamps are numbers or small strings).
     let mut col_costs: Vec<_> = stats
         .cols
         .iter()
@@ -530,13 +548,7 @@ pub fn trim_to_budget(
         .collect();
     col_costs.sort_unstable_by_key(|(_, c)| *c);
 
-    // We'd like to remove columns until the overall stats' encoded_len
-    // is less than the budget, but we don't want to call encoded_len
-    // for every column we remove, to avoid quadratic costs in the number
-    // of columns. Instead, we keep a running upper-bound estimate of
-    // encoded_len as we go.
-    let mut encoded_len = stats.encoded_len();
-    while encoded_len > budget {
+    while *budget_shortfall > 0 {
         let Some((name, cost)) = col_costs.pop() else {
             break;
         };
@@ -545,11 +557,32 @@ pub fn trim_to_budget(
             continue;
         }
 
-        stats.cols.remove(&name);
-        // Each field costs at least the cost of serializing the value
-        // and a byte for the tag. (Though a tag may be more than one
-        // byte in extreme cases.)
-        encoded_len -= cost + 1;
+        // Otherwise, if the col is a struct, recurse into it.
+        //
+        // TODO: Do this same recursion for json stats.
+        let col_stats = stats.cols.get_mut(&name).expect("col exists");
+        if let Some(proto_dyn_stats::Kind::Struct(col_struct)) = &mut col_stats.kind {
+            trim_to_budget_struct(col_struct, budget_shortfall, force_keep_col);
+            // This recursion might have gotten us under budget.
+            if *budget_shortfall == 0 {
+                break;
+            }
+            // Otherwise, if any columns are left, they must have been force
+            // kept, which means we need to force keep this struct as well.
+            if !col_struct.cols.is_empty() {
+                continue;
+            }
+            // We have to recompute the cost because trim_to_budget_struct might
+            // have already accounted for some of the shortfall.
+            *budget_shortfall = budget_shortfall.saturating_sub(col_struct.encoded_len() + 1);
+            stats.cols.remove(&name);
+        } else {
+            stats.cols.remove(&name);
+            // Each field costs at least the cost of serializing the value
+            // and a byte for the tag. (Though a tag may be more than one
+            // byte in extreme cases.)
+            *budget_shortfall = budget_shortfall.saturating_sub(cost + 1);
+        }
     }
 }
 
@@ -1684,5 +1717,55 @@ mod tests {
         trim_to_budget(&mut proto_stats, 30, |_| false);
         assert!(proto_stats.cols.contains_key("foo"));
         assert!(!proto_stats.cols.contains_key("bar"));
+    }
+
+    // Regression test for a bug found by a customer: trim_to_budget method only
+    // operates on the top level struct columns. This (sorta) worked before
+    // #19309, but now there are always two columns at the top level, "ok" and
+    // "err", and the real columns are all nested under "ok".
+    #[mz_ore::test]
+    fn stats_trim_to_budget_regression_recursion() {
+        fn str_stats(n: usize, l: &str, u: &str) -> Box<dyn DynStats> {
+            let stats: Box<dyn DynStats> = Box::new(OptionStats {
+                none: n,
+                some: PrimitiveStats {
+                    lower: l.to_owned(),
+                    upper: u.to_owned(),
+                },
+            });
+            stats
+        }
+
+        const BIG: usize = 100;
+
+        // Model our ok/err structure for SourceData stats for a RelationDesc
+        // with wide columns.
+        let mut cols = BTreeMap::new();
+        for col in 'a'..='z' {
+            let col = col.to_string();
+            let stats = str_stats(2, "", &col.repeat(BIG));
+            cols.insert(col, stats);
+        }
+        cols.insert("foo_timestamp".to_string(), str_stats(2, "foo", "foo"));
+        let source_data_stats = StructStats {
+            len: 2,
+            cols: BTreeMap::from([
+                ("err".to_owned(), str_stats(2, "", "")),
+                ("ok".to_owned(), Box::new(StructStats { len: 2, cols })),
+            ]),
+        };
+        let mut proto_stats = RustType::into_proto(&source_data_stats);
+        trim_to_budget(&mut proto_stats, BIG, |x| {
+            x.ends_with("timestamp") || x == "err"
+        });
+        // We don't want to trim either "ok" or "err".
+        assert!(proto_stats.cols.contains_key("ok"));
+        assert!(proto_stats.cols.contains_key("err"));
+        // Assert that we kept the timestamp column.
+        let ok = proto_stats.cols.get("ok").unwrap();
+        let proto_dyn_stats::Kind::Struct(ok_struct) = ok.kind.as_ref().unwrap() else {
+            panic!("ok was of unexpected type {:?}", ok);
+        };
+        assert!(ok_struct.cols.contains_key("foo_timestamp"));
     }
 }

@@ -15,18 +15,24 @@ from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
 from kubernetes.config import new_client_from_config  # type: ignore
 
 from materialize import ROOT, mzbuild, ui
-from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
+from materialize.cloudtest.util.wait import wait
 
 
 class K8sResource:
-    def kubectl(
-        self, *args: str, input: Optional[str] = None, namespace: Optional[str] = None
-    ) -> str:
-        try:
-            cmd = ["kubectl", "--context", self.context(), *args]
+    def __init__(self, namespace: str):
+        self.selected_namespace = namespace
 
-            if namespace is not None:
-                cmd.extend(["--namespace", namespace])
+    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
+        try:
+            cmd = [
+                "kubectl",
+                "--context",
+                self.context(),
+                "--namespace",
+                self.namespace(),
+                *args,
+            ]
 
             return subprocess.check_output(cmd, text=True, input=input)
         except subprocess.CalledProcessError as e:
@@ -58,7 +64,7 @@ class K8sResource:
         return DEFAULT_K8S_CONTEXT_NAME
 
     def namespace(self) -> str:
-        return DEFAULT_K8S_NAMESPACE
+        return self.selected_namespace
 
     def kind(self) -> str:
         assert False
@@ -79,3 +85,10 @@ class K8sResource:
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]
             return rimage.spec()
+
+    def wait(
+        self,
+        condition: str,
+        resource: str,
+    ) -> None:
+        wait(condition=condition, resource=resource, namespace=self.selected_namespace)

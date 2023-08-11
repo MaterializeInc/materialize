@@ -903,6 +903,16 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
     internal: true,
 };
 
+/// Whether or not to delay sources producing values in some scenarios
+/// (namely, upsert) till after rehydration is finished.
+const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_delay_sources_past_rehydration"),
+    value: &false,
+    description: "Whether or not to delay sources producing values in some scenarios \
+                  (namely, upsert) till after rehydration is finished",
+    internal: true,
+};
+
 /// The fraction of the cluster replica size to be used as the maximum number of
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
@@ -1255,28 +1265,46 @@ mod cluster_scheduling {
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 /// availability of features.
 ///
+/// The arguments to `feature_flags!` are:
+/// - `$name`, which will be the name of the feature flag, in snake_case,
+/// - `$feature_desc`, a human-readable description of the feature,
+/// - `$value`, which if not provided, defaults to `false` and also defaults `$internal` to `true`.
+/// - `$internal`, which if not provided, defaults to `true`. Requires `$value`.
+///
 /// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
 /// - Belong to `SystemVars`, _not_ `SessionVars`
-/// - Default to false and must be explicitly enabled
+/// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 macro_rules! feature_flags {
-    ($(($name:expr, $feature_desc:literal)),+ $(,)?) => {
+    // Match `$name, $feature_desc`, default `$value` to false.
+    (@inner $name:expr, $feature_desc:literal) => {
+        feature_flags!(@inner $name, $feature_desc, false);
+    };
+    // Match `$name, $feature_desc, $value`, default `$internal` to false.
+    (@inner $name:expr, $feature_desc:literal, $value:expr) => {
+        feature_flags!(@inner $name, $feature_desc, $value, true);
+    };
+    // Match `$name, $feature_desc, $value, $internal`.
+    (@inner $name:expr, $feature_desc:literal, $value:expr, $internal:expr) => {
         paste::paste!{
-            $(
-                // Note that the ServerVar is not directly exported; we expect these to be
-                // accessible through their FeatureFlag variant.
-                static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
-                    name: UncasedStr::new(stringify!($name)),
-                    value: &false,
-                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true
-                };
+            // Note that the ServerVar is not directly exported; we expect these to be
+            // accessible through their FeatureFlag variant.
+            static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
+                name: UncasedStr::new(stringify!($name)),
+                value: &$value,
+                description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                internal: $internal
+            };
 
-                pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
-                    flag: &[<$name:upper _VAR>],
-                    feature_desc: $feature_desc,
-                };
-            )+
+            pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
+                flag: &[<$name:upper _VAR>],
+                feature_desc: $feature_desc,
+            };
+        }
+    };
+    ($(($name:expr, $feature_desc:literal $(, $($extra:expr),+)?)),+ $(,)?) => {
+        $(feature_flags!(@inner $name, $feature_desc $(, $($extra),+)?);)+
 
+        paste::paste!{
             impl SystemVars {
                 fn with_feature_flags(self) -> Self
                 {
@@ -1414,6 +1442,11 @@ feature_flags!(
     (
         enable_managed_cluster_availability_zones,
         "MANAGED, AVAILABILITY ZONES syntax"
+    ),
+    (
+        enable_arrangement_size_logging,
+        "arrangement size logging",
+        true
     )
 );
 
@@ -2046,6 +2079,7 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+            .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2541,6 +2575,11 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_fraction` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_fraction(&self) -> Option<Numeric> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
+    pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
+        *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -4049,6 +4088,7 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -4064,6 +4104,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
+        || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)

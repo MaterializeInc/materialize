@@ -87,7 +87,7 @@ where
 /// This helper type unifies the responses of multiple partitioned workers in order to present as a
 /// single worker:
 ///
-///   * It emits `FrontierUppers` responses reporting the minimum/meet of frontiers reported by the
+///   * It emits `FrontierUpper` responses reporting the minimum/meet of frontiers reported by the
 ///     individual workers.
 ///   * It emits `PeekResponse`s and `SubscribeResponse`s reporting the union of the responses
 ///     received from the workers.
@@ -111,13 +111,13 @@ pub struct PartitionedComputeState<T> {
     /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
     /// partitions and individually listed for each partition.
     ///
-    /// Frontier tracking for a collection is initialized when the first `FrontierUppers` response
+    /// Frontier tracking for a collection is initialized when the first `FrontierUpper` response
     /// for that collection is received. Frontier tracking is ceased when all shards have reported
     /// advancement to the empty frontier.
     ///
-    /// The compute protocol requires that shards always emit a `FrontierUppers` response reporting
+    /// The compute protocol requires that shards always emit a `FrontierUpper` response reporting
     /// the empty frontier when a collection is dropped. It further requires that no further
-    /// `FrontierUppers` responses are emitted for a collection after the empty frontier was
+    /// `FrontierUpper` responses are emitted for a collection after the empty frontier was
     /// reported. These properties ensure that a) we always cease frontier tracking for collections
     /// that have been dropped and b) frontier tracking for a collection is not re-initialized
     /// after it was ceased.
@@ -256,40 +256,41 @@ where
         message: ComputeResponse<T>,
     ) -> Option<Result<ComputeResponse<T>, anyhow::Error>> {
         match message {
-            ComputeResponse::FrontierUppers(list) => {
-                let mut new_uppers = Vec::new();
-
-                for (id, new_shard_upper) in list {
-                    // Initialize frontier tracking state for this collection, if necessary.
-                    if !self.uppers.contains_key(&id) {
-                        self.start_frontier_tracking(id);
-                    }
-
-                    let (frontier, shard_frontiers) = self.uppers.get_mut(&id).unwrap();
-
-                    let old_upper = frontier.frontier().to_owned();
-                    let shard_upper = &mut shard_frontiers[shard_id];
-                    frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                    frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
-                    shard_upper.join_assign(&new_shard_upper);
-
-                    let new_upper = frontier.frontier();
-                    if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                        new_uppers.push((id, new_upper.to_owned()));
-                    }
-
-                    if new_upper.is_empty() {
-                        // All shards have reported advancement to the empty frontier, so we do not
-                        // expect further updates for this collection.
-                        self.cease_frontier_tracking(id);
-                    }
+            ComputeResponse::FrontierUpper {
+                id,
+                upper: new_shard_upper,
+            } => {
+                // Initialize frontier tracking state for this collection, if necessary.
+                if !self.uppers.contains_key(&id) {
+                    self.start_frontier_tracking(id);
                 }
 
-                if new_uppers.is_empty() {
-                    None
+                let (frontier, shard_frontiers) = self.uppers.get_mut(&id).unwrap();
+
+                let old_upper = frontier.frontier().to_owned();
+                let shard_upper = &mut shard_frontiers[shard_id];
+                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                shard_upper.join_assign(&new_shard_upper);
+
+                let new_upper = frontier.frontier();
+
+                let result = if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                    Some(Ok(ComputeResponse::FrontierUpper {
+                        id,
+                        upper: new_upper.to_owned(),
+                    }))
                 } else {
-                    Some(Ok(ComputeResponse::FrontierUppers(new_uppers)))
+                    None
+                };
+
+                if new_upper.is_empty() {
+                    // All shards have reported advancement to the empty frontier, so we do not
+                    // expect further updates for this collection.
+                    self.cease_frontier_tracking(id);
                 }
+
+                result
             }
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // Incorporate new peek responses; awaiting all responses.

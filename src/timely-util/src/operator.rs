@@ -578,6 +578,8 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
+            // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
+            #[allow(clippy::disallowed_methods)]
             self.arrange_core::<_, Tr>(exchange, name)
                 .as_collection(|k, _v| k.clone())
         } else {

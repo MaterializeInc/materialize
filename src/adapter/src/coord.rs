@@ -1209,11 +1209,10 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
-                        let dataflow_plan =
-                            vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
+                        let dataflow_plan = self.must_finalize_dataflow(dataflow, idx.cluster_id);
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.cluster_id, dataflow_plan)
+                            .create_dataflow(idx.cluster_id, dataflow_plan)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }

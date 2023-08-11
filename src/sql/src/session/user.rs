@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use once_cell::sync::Lazy;
 use uuid::Uuid;
@@ -17,17 +17,33 @@ pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
     external_metadata: None,
 });
 
+pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
+    name: "mz_support".into(),
+    external_metadata: None,
+});
+
 pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
     name: "mz_introspection".into(),
     external_metadata: None,
 });
 
 pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &INTROSPECTION_USER]
+    [&SYSTEM_USER, &SUPPORT_USER, &INTROSPECTION_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()
 });
+
+pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>> =
+    Lazy::new(|| {
+        [
+            (&SYSTEM_USER, "mz_system"),
+            (&SUPPORT_USER, "mz_introspection"),
+        ]
+        .into_iter()
+        .map(|(user, cluster)| (user.name.clone(), cluster.to_string()))
+        .collect()
+    });
 
 pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
     name: "anonymous_http_user".into(),

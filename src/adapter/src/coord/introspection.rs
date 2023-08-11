@@ -26,7 +26,7 @@ use mz_sql::names::{ResolvedIds, SystemObjectId};
 use mz_sql::plan::{ExplainPlan, Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
-use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE};
+use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
@@ -236,7 +236,7 @@ pub fn user_privilege_hack(
     plan: &Plan,
     resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
-    if session.user().name != MZ_INTROSPECTION_ROLE.name {
+    if session.user().name != MZ_SUPPORT_ROLE.name {
         return Ok(());
     }
 
@@ -325,7 +325,7 @@ pub fn user_privilege_hack(
         | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::MzIntrospection {
+                rbac::UnauthorizedError::MzSupport {
                     action: plan.name().to_string(),
                 },
             ))

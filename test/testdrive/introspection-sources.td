@@ -282,9 +282,9 @@ mv1_primary_idx mv1
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
-> SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
-true
-true
+> SELECT records >= 300, size >= 300*96, capacity >= 300*96 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
+true true true
+true true true
 
 # Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
 
@@ -292,5 +292,40 @@ true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
-0 0
+> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
+0 32 true true true
+
+# Tests that arrangement sizes are approximate
+
+> CREATE TABLE t4 (c int8)
+
+> CREATE INDEX ii_t4 ON t4(c)
+
+> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+0 32 true true true
+
+> INSERT INTO t4 SELECT 1
+
+> SELECT records, batches, size < 1024, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+1 32 true true true
+
+> INSERT INTO t4 SELECT generate_series(1, 1000)
+
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 96*1000 AND size < 2*96*1000, capacity > 96*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+true true true true true
+
+> DROP INDEX ii_t4
+
+> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+
+# Test arrangement size logging disabled works
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_arrangement_size_logging = false
+
+> CREATE INDEX ii_t4 ON t4(c)
+
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+true true 0 0 0
+
+> DROP INDEX ii_t4

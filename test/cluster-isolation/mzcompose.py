@@ -143,7 +143,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Introspection tables
 
-> SHOW CLUSTERS LIKE 'cluster2'
+> SELECT name FROM (SHOW CLUSTERS LIKE 'cluster2')
 cluster2
 
 > SELECT name FROM mz_tables WHERE name = 't1';

@@ -26,6 +26,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
         dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
+        enable_arrangement_size_logging: Some(config.enable_arrangement_size_logging()),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         persist: persist_config(config),
         tracing: tracing_config(config),
@@ -98,6 +99,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             disk_only: config.storage_dataflow_max_inflight_bytes_disk_only(),
         },
         grpc_client: grpc_client_config(config),
+        delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
     }
 }
 

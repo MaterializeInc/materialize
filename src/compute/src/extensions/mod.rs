@@ -7,5 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// No-op migration. Just need to bump the version number after supporting cluster/replica renaming.
-pub fn upgrade() {}
+#![warn(missing_docs)]
+
+//! Operator extensions to Timely and Differential
+
+pub(crate) mod arrange;
+pub(crate) mod reduce;

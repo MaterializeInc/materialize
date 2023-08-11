@@ -14,7 +14,7 @@ SELECT mz_version_num() < 5200;
 group
 joe
 mz_system
-mz_introspection
+mz_support
 materialize
 superuser_login
 "space role"

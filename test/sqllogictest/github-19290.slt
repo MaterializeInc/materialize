@@ -9,11 +9,6 @@
 
 # Regression test for #19290.
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
 statement ok
 CREATE SOURCE tpch
               FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
