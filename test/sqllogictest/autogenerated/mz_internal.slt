@@ -495,6 +495,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  channel_id  uint8
 2  sent  numeric
 3  received  numeric
+4  batch_sent  numeric
+5  batch_received  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_peek_durations_histogram' ORDER BY position
@@ -617,6 +619,8 @@ mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
 mz_kafka_sources
+mz_message_batch_counts_received_raw
+mz_message_batch_counts_sent_raw
 mz_message_counts
 mz_message_counts_per_worker
 mz_message_counts_received_raw

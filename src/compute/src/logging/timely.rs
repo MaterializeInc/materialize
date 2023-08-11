@@ -86,6 +86,8 @@ pub(super) fn construct<A: Allocate>(
         let (mut messages_received_out, messages_received) = demux.new_output();
         let (mut schedules_duration_out, schedules_duration) = demux.new_output();
         let (mut schedules_histogram_out, schedules_histogram) = demux.new_output();
+        let (mut batches_sent_out, batches_sent) = demux.new_output();
+        let (mut batches_received_out, batches_received) = demux.new_output();
 
         let mut demux_state = DemuxState::default();
         let mut demux_buffer = Vec::new();
@@ -97,6 +99,8 @@ pub(super) fn construct<A: Allocate>(
                 let mut parks = parks_out.activate();
                 let mut messages_sent = messages_sent_out.activate();
                 let mut messages_received = messages_received_out.activate();
+                let mut batches_sent = batches_sent_out.activate();
+                let mut batches_received = batches_received_out.activate();
                 let mut schedules_duration = schedules_duration_out.activate();
                 let mut schedules_histogram = schedules_histogram_out.activate();
 
@@ -109,6 +113,8 @@ pub(super) fn construct<A: Allocate>(
                     messages_received: ConsolidateBuffer::new(&mut messages_received, 5),
                     schedules_duration: ConsolidateBuffer::new(&mut schedules_duration, 6),
                     schedules_histogram: ConsolidateBuffer::new(&mut schedules_histogram, 7),
+                    batches_sent: ConsolidateBuffer::new(&mut batches_sent, 8),
+                    batches_received: ConsolidateBuffer::new(&mut batches_received, 9),
                 };
 
                 input.for_each(|cap, data| {
@@ -202,6 +208,34 @@ pub(super) fn construct<A: Allocate>(
                         .unwrap_or(Datum::Null),
                 ])
             });
+        let batches_sent = batches_sent
+            .as_collection()
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely batches sent",
+                compute_state.enable_arrangement_size_logging,
+            )
+            .as_collection(move |datum, ()| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(datum.channel)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(u64::cast_from(datum.worker)),
+                ])
+            });
+        let batches_received = batches_received
+            .as_collection()
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely batches received",
+                compute_state.enable_arrangement_size_logging,
+            )
+            .as_collection(move |datum, ()| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(datum.channel)),
+                    Datum::UInt64(u64::cast_from(datum.worker)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
         let messages_sent = messages_sent
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -269,6 +303,8 @@ pub(super) fn construct<A: Allocate>(
             (Parks, parks),
             (MessagesSent, messages_sent),
             (MessagesReceived, messages_received),
+            (BatchesSent, batches_sent),
+            (BatchesReceived, batches_received),
         ];
 
         // Build the output arrangements.
@@ -343,9 +379,9 @@ struct DemuxState {
     /// Information about the last requested park.
     last_park: Option<Park>,
     /// Maps channel IDs to vectors counting the messages sent to each target worker.
-    messages_sent: BTreeMap<usize, Vec<i64>>,
+    messages_sent: BTreeMap<usize, Vec<MessageCount>>,
     /// Maps channel IDs to vectors counting the messages received from each source worker.
-    messages_received: BTreeMap<usize, Vec<i64>>,
+    messages_received: BTreeMap<usize, Vec<MessageCount>>,
     /// Stores for scheduled operators the time when they were scheduled.
     schedule_starts: BTreeMap<usize, Duration>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
@@ -358,6 +394,15 @@ struct Park {
     time: Duration,
     /// Requested park time.
     requested: Option<Duration>,
+}
+
+/// Organize message counts into number of batches and records.
+#[derive(Default, Copy, Clone, Debug)]
+struct MessageCount {
+    /// The number of batches sent across a channel.
+    batches: i64,
+    /// The number of records sent across a channel.
+    records: i64,
 }
 
 type Pusher<D> = Tee<Timestamp, (D, Timestamp, Diff)>;
@@ -373,6 +418,8 @@ struct DemuxOutput<'a, 'b> {
     channels: OutputBuffer<'a, 'b, (ChannelDatum, ())>,
     addresses: OutputBuffer<'a, 'b, (usize, Vec<usize>)>,
     parks: OutputBuffer<'a, 'b, (ParkDatum, ())>,
+    batches_sent: OutputBuffer<'a, 'b, (MessageDatum, ())>,
+    batches_received: OutputBuffer<'a, 'b, (MessageDatum, ())>,
     messages_sent: OutputBuffer<'a, 'b, (MessageDatum, ())>,
     messages_received: OutputBuffer<'a, 'b, (MessageDatum, ())>,
     schedules_duration: OutputBuffer<'a, 'b, (usize, ())>,
@@ -400,7 +447,7 @@ impl Columnation for ParkDatum {
     type InnerRegion = CloneRegion<Self>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct MessageDatum {
     channel: usize,
     worker: usize,
@@ -574,7 +621,10 @@ impl DemuxHandler<'_, '_, '_> {
                     };
                     self.output
                         .messages_sent
-                        .give(self.cap, ((datum, ()), ts, -count));
+                        .give(self.cap, ((datum, ()), ts, -count.records));
+                    self.output
+                        .batches_sent
+                        .give(self.cap, ((datum, ()), ts, -count.batches));
                 }
             }
             if let Some(received) = self.state.messages_received.remove(&channel.id) {
@@ -585,7 +635,10 @@ impl DemuxHandler<'_, '_, '_> {
                     };
                     self.output
                         .messages_received
-                        .give(self.cap, ((datum, ()), ts, -count));
+                        .give(self.cap, ((datum, ()), ts, -count.records));
+                    self.output
+                        .batches_received
+                        .give(self.cap, ((datum, ()), ts, -count.batches));
                 }
             }
         }
@@ -635,13 +688,17 @@ impl DemuxHandler<'_, '_, '_> {
             self.output
                 .messages_sent
                 .give(self.cap, ((datum, ()), ts, count));
+            self.output
+                .batches_sent
+                .give(self.cap, ((datum, ()), ts, 1));
 
             let sent_counts = self
                 .state
                 .messages_sent
                 .entry(event.channel)
-                .or_insert_with(|| vec![0; self.peers]);
-            sent_counts[event.target] += count;
+                .or_insert_with(|| vec![Default::default(); self.peers]);
+            sent_counts[event.target].records += count;
+            sent_counts[event.target].batches += 1;
         } else {
             let datum = MessageDatum {
                 channel: event.channel,
@@ -650,13 +707,17 @@ impl DemuxHandler<'_, '_, '_> {
             self.output
                 .messages_received
                 .give(self.cap, ((datum, ()), ts, count));
+            self.output
+                .batches_received
+                .give(self.cap, ((datum, ()), ts, 1));
 
             let received_counts = self
                 .state
                 .messages_received
                 .entry(event.channel)
-                .or_insert_with(|| vec![0; self.peers]);
-            received_counts[event.source] += count;
+                .or_insert_with(|| vec![Default::default(); self.peers]);
+            received_counts[event.source].records += count;
+            received_counts[event.source].batches += 1;
         }
     }
 

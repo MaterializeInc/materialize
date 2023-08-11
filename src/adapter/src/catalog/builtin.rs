@@ -1365,6 +1365,18 @@ pub const MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
 };
 
+pub const MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_message_batch_counts_received_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Timely(TimelyLog::BatchesReceived),
+};
+
+pub const MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_message_batch_counts_sent_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Timely(TimelyLog::BatchesSent),
+};
+
 pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3092,7 +3104,29 @@ pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_message_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_message_counts_per_worker AS
-WITH sent_cte AS (
+WITH batch_sent_cte AS (
+    SELECT
+        channel_id,
+        from_worker_id,
+        to_worker_id,
+        pg_catalog.count(*) AS sent
+    FROM
+        mz_internal.mz_message_batch_counts_sent_raw
+    GROUP BY
+        channel_id, from_worker_id, to_worker_id
+),
+batch_received_cte AS (
+    SELECT
+        channel_id,
+        from_worker_id,
+        to_worker_id,
+        pg_catalog.count(*) AS received
+    FROM
+        mz_internal.mz_message_batch_counts_received_raw
+    GROUP BY
+        channel_id, from_worker_id, to_worker_id
+),
+sent_cte AS (
     SELECT
         channel_id,
         from_worker_id,
@@ -3119,8 +3153,13 @@ SELECT
     sent_cte.from_worker_id,
     sent_cte.to_worker_id,
     sent_cte.sent,
-    received_cte.received
-FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)",
+    received_cte.received,
+    batch_sent_cte.sent AS batch_sent,
+    batch_received_cte.received AS batch_received
+FROM sent_cte
+JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)
+JOIN batch_sent_cte USING (channel_id, from_worker_id, to_worker_id)
+JOIN batch_received_cte USING (channel_id, from_worker_id, to_worker_id)",
 };
 
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
@@ -3130,7 +3169,9 @@ pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
 SELECT
     channel_id,
     pg_catalog.sum(sent) AS sent,
-    pg_catalog.sum(received) AS received
+    pg_catalog.sum(received) AS received,
+    pg_catalog.sum(batch_sent) AS batch_sent,
+    pg_catalog.sum(batch_received) AS batch_received
 FROM mz_internal.mz_message_counts_per_worker
 GROUP BY channel_id",
 };
@@ -4810,6 +4851,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_DEPENDENCIES_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
+        Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
+        Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW),

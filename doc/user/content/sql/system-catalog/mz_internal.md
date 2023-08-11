@@ -934,7 +934,8 @@ hierarchical scheme for either reduction or top-k computation.
 
 ### `mz_message_counts`
 
-The `mz_message_counts` view describes the messages sent and received over the [dataflow] channels in the system.
+The `mz_message_counts` view describes the messages and message batches sent and received over the [dataflow] channels in the system.
+It distinguishes between individual records (`sent`, `received`) and batches of records (`batch_sent`, `batch_sent`).
 
 <!-- RELATION_SPEC mz_internal.mz_message_counts -->
 | Field              | Type        | Meaning                                                                                   |
@@ -942,8 +943,12 @@ The `mz_message_counts` view describes the messages sent and received over the [
 | `channel_id`       | [`uint8`]   | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels). |
 | `sent`             | [`numeric`] | The number of messages sent.                                                              |
 | `received`         | [`numeric`] | The number of messages received.                                                          |
+| `batch_sent`       | [`numeric`] | The number of batches sent.                                                               |
+| `batch_received`   | [`numeric`] | The number of batches received.                                                           |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_counts_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_batch_counts_received_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_batch_counts_sent_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_counts_received_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_message_counts_sent_raw -->
 

@@ -311,7 +311,7 @@ function View(props) {
             );
 
         SELECT
-          id, from_index, to_index, sent
+          id, from_index, to_index, sent, batch_sent
         FROM
           mz_internal.mz_dataflow_channels AS channels
           LEFT JOIN mz_internal.mz_message_counts AS counts
@@ -376,7 +376,7 @@ function View(props) {
 
       // {id: [source, target]}.
       const chans = Object.fromEntries(
-        chan_table.rows.map(([id, source, target, sent]) => [id, [source, target, sent]])
+        chan_table.rows.map(([id, source, target, sent, batch_sent]) => [id, [source, target, sent, batch_sent]])
       );
       setChans(chans);
 
@@ -443,7 +443,7 @@ function View(props) {
       sg.push('}');
       return sg.join('\n');
     });
-    const edges = Object.entries(chans).map(([id, [source, target, sent]]) => {
+    const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
       if (!(id in addrs)) {
         return `// ${id} not in addrs`;
       }
@@ -459,7 +459,7 @@ function View(props) {
       }
       return sent == null
         ? `_${from_id} -> _${to_id} [style="dashed"];`
-        : `_${from_id} -> _${to_id} [label="sent ${sent}"];`;
+        : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
       if (!addrs[id].length) {
