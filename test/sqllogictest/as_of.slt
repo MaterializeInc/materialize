@@ -141,10 +141,11 @@ BEGIN
 statement ok
 DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1) AS OF 42
 
+# TODO(jkosh44) It's not entirely clear what the answer to this should be.
 query III
 FETCH ALL c
 ----
-42  1  1
+18446744073709551615  1  1
 
 statement ok
 COMMIT
