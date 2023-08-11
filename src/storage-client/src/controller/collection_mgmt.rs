@@ -273,6 +273,11 @@ where
                             // Note: if writing to persist took longer than `DEFAULT_TICK` this
                             // await will resolve immediately.
                             tokio::time::sleep_until(min_time_to_complete).await;
+                        } else {
+                            // Sender has been dropped, which means the collection should have been
+                            // unregistered, break out of the run loop if we weren't already
+                            // aborted.
+                            break 'run;
                         }
                     }
 
