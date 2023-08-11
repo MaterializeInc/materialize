@@ -450,53 +450,42 @@ impl LogVariant {
     /// The result is a list of other variants, and for each a list of local
     /// and other column identifiers that can be equated.
     pub fn foreign_keys(&self) -> Vec<(LogVariant, Vec<(usize, usize)>)> {
+        use LogVariant::{Compute, Differential, Timely};
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => vec![],
-            LogVariant::Timely(TimelyLog::Channels) => vec![],
-            LogVariant::Timely(TimelyLog::Elapsed) => vec![(
-                LogVariant::Timely(TimelyLog::Operates),
-                vec![(0, 0), (1, 1)],
-            )],
-            LogVariant::Timely(TimelyLog::Histogram) => vec![(
-                LogVariant::Timely(TimelyLog::Operates),
-                vec![(0, 0), (1, 1)],
-            )],
-            LogVariant::Timely(TimelyLog::Addresses) => vec![(
-                LogVariant::Timely(TimelyLog::Operates),
-                vec![(0, 0), (1, 1)],
-            )],
-            LogVariant::Timely(TimelyLog::Parks) => vec![],
-            LogVariant::Timely(TimelyLog::BatchesReceived)
-            | LogVariant::Timely(TimelyLog::BatchesSent)
-            | LogVariant::Timely(TimelyLog::MessagesReceived)
-            | LogVariant::Timely(TimelyLog::MessagesSent) => vec![
-                (
-                    LogVariant::Timely(TimelyLog::Channels),
-                    vec![(0, 0), (1, 1)],
-                ),
-                (
-                    LogVariant::Timely(TimelyLog::Channels),
-                    vec![(0, 0), (2, 2)],
-                ),
+            Timely(TimelyLog::Operates) => vec![],
+            Timely(TimelyLog::Channels) => vec![],
+            Timely(TimelyLog::Elapsed) => vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])],
+            Timely(TimelyLog::Histogram) => {
+                vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])]
+            }
+            Timely(TimelyLog::Addresses) => {
+                vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])]
+            }
+            Timely(TimelyLog::Parks) => vec![],
+            Timely(TimelyLog::BatchesReceived)
+            | Timely(TimelyLog::BatchesSent)
+            | Timely(TimelyLog::MessagesReceived)
+            | Timely(TimelyLog::MessagesSent) => vec![
+                (Timely(TimelyLog::Channels), vec![(0, 0), (1, 1)]),
+                (Timely(TimelyLog::Channels), vec![(0, 0), (2, 2)]),
             ],
-            LogVariant::Timely(TimelyLog::Reachability) => vec![],
-            LogVariant::Differential(DifferentialLog::ArrangementBatches)
-            | LogVariant::Differential(DifferentialLog::ArrangementRecords)
-            | LogVariant::Differential(DifferentialLog::Sharing)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => vec![(
-                LogVariant::Timely(TimelyLog::Operates),
-                vec![(0, 0), (1, 1)],
-            )],
-            LogVariant::Compute(ComputeLog::DataflowCurrent) => vec![],
-            LogVariant::Compute(ComputeLog::DataflowDependency) => vec![],
-            LogVariant::Compute(ComputeLog::FrontierCurrent) => vec![],
-            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => vec![],
-            LogVariant::Compute(ComputeLog::FrontierDelay) => vec![],
-            LogVariant::Compute(ComputeLog::PeekCurrent) => vec![],
-            LogVariant::Compute(ComputeLog::PeekDuration) => vec![],
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => vec![],
+            Timely(TimelyLog::Reachability) => vec![],
+            Differential(DifferentialLog::ArrangementBatches)
+            | Differential(DifferentialLog::ArrangementRecords)
+            | Differential(DifferentialLog::Sharing)
+            | Compute(ComputeLog::ArrangementHeapSize)
+            | Compute(ComputeLog::ArrangementHeapCapacity)
+            | Compute(ComputeLog::ArrangementHeapAllocations) => {
+                vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])]
+            }
+            Compute(ComputeLog::DataflowCurrent) => vec![],
+            Compute(ComputeLog::DataflowDependency) => vec![],
+            Compute(ComputeLog::FrontierCurrent) => vec![],
+            Compute(ComputeLog::ImportFrontierCurrent) => vec![],
+            Compute(ComputeLog::FrontierDelay) => vec![],
+            Compute(ComputeLog::PeekCurrent) => vec![],
+            Compute(ComputeLog::PeekDuration) => vec![],
+            Compute(ComputeLog::ShutdownDuration) => vec![],
         }
     }
 }
