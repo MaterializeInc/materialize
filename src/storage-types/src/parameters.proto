@@ -33,6 +33,7 @@ message ProtoStorageParameters {
     uint64 shrink_upsert_unused_buffers_by_ratio = 13;
     bool truncate_statement_log = 14;
     uint64 statement_logging_retention_time_seconds = 15;
+    mz_proto.ProtoDuration pg_source_snapshot_statement_timeout = 16;
 }
 
 

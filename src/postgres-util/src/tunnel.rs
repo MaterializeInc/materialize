@@ -94,6 +94,8 @@ pub const DEFAULT_REPLICATION_KEEPALIVE_RETRIES: u32 = 5;
 // + DEFAULT_REPLICATION_KEEPALIVE_RETRIES * DEFAULT_REPLICATION_KEEPALIVE_INTERVAL
 pub const DEFAULT_REPLICATION_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
 
+pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
+
 /// Configuration for PostgreSQL connections.
 ///
 /// This wraps [`tokio_postgres::Config`] to allow the configuration of a

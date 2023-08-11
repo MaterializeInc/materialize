@@ -945,6 +945,15 @@ const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Sets the `statement_timeout` value to use during the snapshotting phase of
+/// PG sources.
+const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_statement_timeout"),
+    value: &mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
+    description: "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    internal: true,
+};
+
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -2337,6 +2346,7 @@ impl SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -2843,6 +2853,11 @@ impl SystemVars {
     /// Returns the `pg_replication_tcp_user_timeout` configuration parameter.
     pub fn pg_replication_tcp_user_timeout(&self) -> Duration {
         *self.expect_value(&PG_REPLICATION_TCP_USER_TIMEOUT)
+    }
+
+    /// Returns the `pg_replication_tcp_user_timeout` configuration parameter.
+    pub fn pg_source_snapshot_statement_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -4574,6 +4589,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
