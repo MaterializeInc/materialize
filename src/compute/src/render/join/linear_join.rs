@@ -12,7 +12,7 @@
 //! Consult [LinearJoinPlan] documentation for details.
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::{Arrange, Arranged};
+use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_client::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
@@ -24,6 +24,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
+use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };
@@ -159,6 +160,7 @@ where
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
+                    self.enable_arrangement_size_logging,
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -216,6 +218,7 @@ fn differential_join<G, T>(
         lookup_relation: _,
     }: LinearStagePlan,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    enable_arrangement_size_logging: bool,
 ) -> Collection<G, Row, Diff>
 where
     G: Scope,
@@ -246,7 +249,8 @@ where
         });
 
         errors.push(errs);
-        let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>("JoinStage");
+        let arranged =
+            keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage", enable_arrangement_size_logging);
         joined = JoinedFlavor::Local(arranged);
     }
 

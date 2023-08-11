@@ -62,4 +62,5 @@ message ProtoComputeParameters {
     optional bool enable_mz_join_core = 4;
     mz_tracing.params.ProtoTracingParameters tracing = 5;
     mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
+    optional bool enable_arrangement_size_logging = 7;
 }
