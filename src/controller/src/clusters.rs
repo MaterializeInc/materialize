@@ -502,8 +502,10 @@ where
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
-                            format!("--variable-length-row-encoding={}", mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst)),
                         ];
+                        if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
+                            args.push("--variable-length-row-encoding".to_string());
+                        }
                         if let Some(memory_limit) = location.allocation.memory_limit {
                             args.push(format!(
                                 "--announce-memory-limit={}",
