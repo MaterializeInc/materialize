@@ -160,6 +160,7 @@ impl RawSourceCreationConfig {
 pub struct SourceCreationParams {
     /// Sets timeouts specific to PG replication streams
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_snapshot_statement_timeout: Duration,
 }
 
 /// Creates a source dataflow operator graph from a source connection. The type of SourceConnection

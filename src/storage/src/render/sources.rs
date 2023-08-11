@@ -104,6 +104,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             .dataflow_parameters
             .pg_replication_timeouts
             .clone(),
+        pg_source_snapshot_statement_timeout: storage_state
+            .dataflow_parameters
+            .pg_source_snapshot_statement_timeout,
     };
 
     let base_source_config = RawSourceCreationConfig {

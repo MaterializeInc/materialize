@@ -45,6 +45,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             keepalives_interval: Some(config.pg_replication_keepalives_interval()),
             tcp_user_timeout: Some(config.pg_replication_tcp_user_timeout()),
         },
+        pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_source_status_history_entries(),
         upsert_rocksdb_tuning_config: {

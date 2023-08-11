@@ -9,6 +9,8 @@
 
 //! Configuration parameter types.
 
+use std::time::Duration;
+
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -27,6 +29,7 @@ pub struct StorageParameters {
     /// Persist client configuration.
     pub persist: PersistParameters,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_snapshot_statement_timeout: Duration,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
@@ -125,6 +128,7 @@ impl StorageParameters {
         StorageParameters {
             persist,
             pg_replication_timeouts,
+            pg_source_snapshot_statement_timeout,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
             upsert_rocksdb_tuning_config,
@@ -141,6 +145,7 @@ impl StorageParameters {
     ) {
         self.persist.update(persist);
         self.pg_replication_timeouts = pg_replication_timeouts;
+        self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
@@ -163,6 +168,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
         ProtoStorageParameters {
             persist: Some(self.persist.into_proto()),
             pg_replication_timeouts: Some(self.pg_replication_timeouts.into_proto()),
+            pg_source_snapshot_statement_timeout: Some(
+                self.pg_source_snapshot_statement_timeout.into_proto(),
+            ),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
@@ -194,6 +202,11 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             pg_replication_timeouts: proto
                 .pg_replication_timeouts
                 .into_rust_if_some("ProtoStorageParameters::pg_replication_timeouts")?,
+            pg_source_snapshot_statement_timeout: proto
+                .pg_source_snapshot_statement_timeout
+                .into_rust_if_some(
+                    "ProtoStorageParameters::pg_source_snapshot_statement_timeout",
+                )?,
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,
             ),
