@@ -226,6 +226,8 @@ pub(super) struct UpsertMetrics {
     pub(super) rocksdb_multi_get_size: IntCounterVec,
     pub(super) rocksdb_multi_get_result_count: IntCounterVec,
     pub(super) rocksdb_multi_get_result_bytes: IntCounterVec,
+    pub(super) rocksdb_multi_get_count: IntCounterVec,
+    pub(super) rocksdb_multi_put_count: IntCounterVec,
     pub(super) rocksdb_multi_put_latency: HistogramVec,
     pub(super) rocksdb_multi_put_size: IntCounterVec,
     // These are maps so that multiple timely workers can interact with the same
@@ -367,13 +369,23 @@ impl UpsertMetrics {
                 name: "mz_storage_rocksdb_multi_get_result_count_total",
                 help: "The number of non-empty records returned, \
                     when getting batches of values from RocksDB for this source.",
-                var_labels: ["source_id"],
+                var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_multi_get_result_bytes: registry.register(metric!(
                 name: "mz_storage_rocksdb_multi_get_result_bytes_total",
                 help: "The total size of records returned, \
                     when getting batches of values from RocksDB for this source.",
-                var_labels: ["source_id"],
+                var_labels: ["source_id", "worker_id"],
+            )),
+            rocksdb_multi_get_count: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_get_count_total",
+                help: "The number of calls to rocksdb multi_get.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            rocksdb_multi_put_count: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_get_count_total",
+                help: "The number of calls to rocksdb multi_put.",
+                var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_multi_put_latency: registry.register(metric!(
                 name: "mz_storage_rocksdb_multi_put_latency",
@@ -386,7 +398,7 @@ impl UpsertMetrics {
                 name: "mz_storage_rocksdb_multi_put_size_total",
                 help: "The batch size, \
                     of putting batches of values into RocksDB for this source.",
-                var_labels: ["source_id"],
+                var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_shared,
         }

@@ -186,6 +186,10 @@ pub struct RocksDBInstanceMetrics {
     pub multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Total size of bytes returned in the result
     pub multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// The number of calls to rocksdb multi_get
+    pub multi_get_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// The number of calls to rocksdb multi_put
+    pub multi_put_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of write batches.
     pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
@@ -585,6 +589,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                                 instance_metrics
                                     .multi_get_size
                                     .inc_by(batch_size.try_into().unwrap());
+                                instance_metrics.multi_get_count.inc();
 
                                 RetryResult::Ok(gets)
                             }
@@ -708,6 +713,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                                 instance_metrics
                                     .multi_put_size
                                     .inc_by(batch_size.try_into().unwrap());
+                                instance_metrics.multi_put_count.inc();
                                 RetryResult::Ok(())
                             }
                             Err(e) => match e.kind() {

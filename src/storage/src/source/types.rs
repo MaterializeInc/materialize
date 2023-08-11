@@ -565,6 +565,12 @@ impl UpsertMetrics {
                 multi_get_result_bytes: base
                     .rocksdb_multi_get_result_bytes
                     .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_get_count: base
+                    .rocksdb_multi_get_count
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_put_count: base
+                    .rocksdb_multi_put_count
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_put_size: base
                     .rocksdb_multi_put_size
                     .get_delete_on_drop_counter(vec![source_id_s, worker_id]),
