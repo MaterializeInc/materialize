@@ -95,7 +95,7 @@ SELECT * FROM data AS OF NULL::numeric;
 query error can't use null as a mz_timestamp for AS OF
 SUBSCRIBE (SELECT 1) AS OF NULL::timestamptz;
 
-# Test that timestamps are used for constant queries
+# Test that timestamps are used for constant queries with temporal filters
 
 statement ok
 create view events_over_time as values ('joe', 100), ('mike', 101), ('sam', 200), ('end', 18446744073709551615);

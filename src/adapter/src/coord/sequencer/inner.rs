@@ -2574,8 +2574,8 @@ impl Coordinator {
             .sufficient_collections(&depends_on);
         let mut timeline = self.validate_timeline_context(depends_on.clone())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
-            // If the from IDs are timestamp independent but the query contains temporal functions,
-            // or uses AS OF then the timeline context needs to be upgraded to timestamp dependent.
+            // If the from IDs are timestamp independent but the query contains temporal functions
+            // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
         let as_of = self
