@@ -15,6 +15,7 @@ mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-proto = { path = "../proto" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 num_cpus = "1.14.0"
+prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
