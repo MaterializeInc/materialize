@@ -136,6 +136,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
@@ -268,6 +269,31 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // Only the snapshot leader needs a replication connection.
                 connection_config.connect(&task_name).await?
             };
+
+            // Configure statement_timeout based on param. We want to be able to
+            // override the server value here in case it's set too low,
+            // respective to the size of the data we need to copy.
+            //
+            // Value is known to accept milliseconds w/o units.
+            // https://www.postgresql.org/docs/current/runtime-config-client.html
+            client.simple_query(
+                &format!("SET statement_timeout = {}", config.params.pg_source_snapshot_statement_timeout.as_millis())
+            ).await?;
+
+            mz_ore::soft_assert!{{
+                let row = simple_query_opt(&client, "SHOW statement_timeout;")
+                    .await?
+                    .unwrap();
+                let timeout = row.get("statement_timeout").unwrap().to_owned();
+
+                // This only needs to be compatible for values we test; doesn't
+                // need to generalize all possible interval/duration mappings.
+                mz_repr::adt::interval::Interval::from_str(&timeout)
+                    .map(|i| i.duration())
+                    .unwrap()
+                    .unwrap()
+                    == config.params.pg_source_snapshot_statement_timeout
+            }, "SET statement_timeout in PG snapshot did not take effect"};
 
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next_mut().await {

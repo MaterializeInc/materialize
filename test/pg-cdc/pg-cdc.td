@@ -138,6 +138,11 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 #
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
+# Sneak in a test for pg_source_snapshot_statement_timeout
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000
+
 > CREATE SOURCE "test_slot_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table");
@@ -151,6 +156,9 @@ test_slot_source_progress progress
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 0
 
 #
 # Error checking
