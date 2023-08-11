@@ -23,9 +23,17 @@ class Testdrive(K8sPod):
         release_mode: bool,
         aws_region: Optional[str] = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
+        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
+        materialize_internal_url: str = "postgres://materialize:materialize@environmentd:6877/materialize",
+        kafka_addr: str = "redpanda:9092",
+        schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
         super().__init__(namespace)
         self.aws_region = aws_region
+        self.default_materialize_url = materialize_url
+        self.default_materialize_internal_url = materialize_internal_url
+        self.default_kafka_addr = kafka_addr
+        self.default_schema_registry_url = schema_registry_url
 
         metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
@@ -57,11 +65,26 @@ class Testdrive(K8sPod):
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
         default_timeout: str = "300s",
-        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
-        materialize_internal_url: str = "postgres://materialize:materialize@environmentd:6877/materialize",
-        kafka_addr: str = "redpanda:9092",
-        schema_registry_url: str = "http://redpanda:8081",
+        materialize_url: Optional[str] = None,
+        materialize_internal_url: Optional[str] = None,
+        kafka_addr: Optional[str] = None,
+        schema_registry_url: Optional[str] = None,
     ) -> None:
+        materialize_url = (
+            materialize_url if materialize_url else self.default_materialize_url
+        )
+        materialize_internal_url = (
+            materialize_internal_url
+            if materialize_internal_url
+            else self.default_materialize_internal_url
+        )
+        kafka_addr = kafka_addr if kafka_addr else self.default_kafka_addr
+        schema_registry_url = (
+            schema_registry_url
+            if schema_registry_url
+            else self.default_schema_registry_url
+        )
+
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
             "exec",
