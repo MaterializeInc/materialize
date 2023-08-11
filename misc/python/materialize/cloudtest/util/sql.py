@@ -12,9 +12,9 @@ from typing import Any, List, Optional, Sequence
 import psycopg2
 from psycopg2.extensions import connection
 
-from ..config.environment_config import EnvironmentConfig
-from .environment import wait_for_environmentd
-from .http import post
+from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.environment import wait_for_environmentd
+from materialize.cloudtest.util.http import post
 
 
 def sql_query(

@@ -13,8 +13,8 @@ from typing import Any, Generator
 
 import requests
 
-from ..config.environment_config import EnvironmentConfig
-from .common import eprint
+from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.common import eprint
 
 
 @contextmanager

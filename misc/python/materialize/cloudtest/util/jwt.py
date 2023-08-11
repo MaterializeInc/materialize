@@ -16,7 +16,7 @@ import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from .common import eprint
+from materialize.cloudtest.util.common import eprint
 
 
 def _generate_jwt_keys() -> Tuple[rsa.RSAPrivateKey, bytes]:

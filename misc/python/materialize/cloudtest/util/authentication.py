@@ -13,7 +13,7 @@ from typing import Optional
 
 import requests
 
-from .jwt import fetch_jwt, make_jwt
+from materialize.cloudtest.util.jwt import fetch_jwt, make_jwt
 
 # TODO materialize#19626: move file to mz repo
 

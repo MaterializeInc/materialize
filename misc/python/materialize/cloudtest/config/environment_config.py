@@ -12,8 +12,8 @@ from typing import Callable, List, Optional
 
 import pytest
 
-from ..util.authentication import AuthConfig, get_auth
-from ..util.controller import ControllerDefinition
+from materialize.cloudtest.util.authentication import AuthConfig, get_auth
+from materialize.cloudtest.util.controller import ControllerDefinition
 
 
 @dataclass

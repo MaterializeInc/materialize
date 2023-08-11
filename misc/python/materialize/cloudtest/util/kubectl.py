@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .common import eprint, retry
+from materialize.cloudtest.util.common import eprint, retry
 
 
 class KubectlError(AssertionError):

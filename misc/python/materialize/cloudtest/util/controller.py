@@ -14,8 +14,8 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple, Union
 
-from .common import eprint, retry
-from .docker import docker_env
+from materialize.cloudtest.util.common import eprint, retry
+from materialize.cloudtest.util.docker import docker_env
 
 
 @dataclass
