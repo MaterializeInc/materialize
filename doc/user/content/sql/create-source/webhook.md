@@ -244,6 +244,14 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
 )
 ```
 
+{{< note >}}
+
+If the feature is enabled, when casting from `text` to `timestamp` you should prefer to use the
+[`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function, which enables
+[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+
+{{< /note >}}
+
 ### Debugging `CHECK` Statements
 
 It can be difficult to get your `CHECK` statement correct, especially if your application does not
