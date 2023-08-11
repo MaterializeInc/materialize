@@ -467,7 +467,7 @@ function View(props) {
       }
       const notes = [`id: ${id}`];
       let style = '';
-      if (id in records && records[id][0] !== null) {
+      if (id in records && records[id][0] > 0) {
         const record_count = records[id][0];
         const size = Math.ceil(records[id][1]/1024);
         // Any operator that can have records will have a red border (even if it
