@@ -690,6 +690,8 @@ fn force_keep_stats_col(name: &str) -> bool {
         || name.ends_with("time")
         || name.ends_with("_at")
         || name.starts_with("last_")
+        || name == "receivedat"
+        || name == "createdat"
 }
 
 impl<T: Timestamp + Codec64> BatchParts<T> {
