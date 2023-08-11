@@ -75,7 +75,7 @@
 
 //! Integration tests for Materialize server.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
@@ -104,6 +104,7 @@ use mz_ore::{
 };
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
+use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::Url;
@@ -883,38 +884,48 @@ fn test_storage_usage_collection_interval_timestamps() {
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Retry because it may take some time for the initial snapshot to be taken.
-    let rows = Retry::default().max_duration(Duration::from_secs(10)).retry(|_| {
-        let rows = client
-            .query(
-                "SELECT EXTRACT(EPOCH FROM collection_timestamp)::integer, SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage GROUP BY collection_timestamp ORDER BY collection_timestamp;",
-                &[],
-            )
-            .map_err(|e| e.to_string()).unwrap();
+    let rows = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let rows = client
+                    .query(
+                        "SELECT EXTRACT(EPOCH FROM collection_timestamp)::integer, ARRAY_AGG(object_id) \
+                FROM mz_catalog.mz_storage_usage \
+                GROUP BY collection_timestamp \
+                ORDER BY collection_timestamp ASC;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap();
 
-        if rows.is_empty() {
-            Err("expected some timestamp, instead found None".to_string())
-        } else {
-            Ok(rows)
-        }
-    }).unwrap();
+                if rows.is_empty() {
+                    Err("expected some timestamp, instead found None".to_string())
+                } else {
+                    Ok(rows)
+                }
+            })
+            .unwrap();
 
-    // If there are multiple timestamps, make sure they are at least storage interval (2 seconds) apart.
-    let timestamps: Vec<_> = rows
+    // The timestamp is selected after the storage usage is collected, so depending on how long
+    // each collection takes, the timestamps can be arbitrarily close together or far apart. If
+    // there are multiple timestamps, we ensure that they each contain the full set of object
+    // IDs.
+    let object_ids_by_timestamp: Vec<BTreeSet<_>> = rows
         .into_iter()
-        .map(|row| row.get::<_, i32>(0))
-        .map(|ts| u64::try_from(ts).unwrap())
+        .map(|row| row.get::<_, Array<String>>(1))
+        .map(|array| array.into_iter().collect())
         .collect();
     let mut prev = None;
-
-    for timestamp in timestamps {
+    for object_ids in object_ids_by_timestamp {
         match prev {
             None => {
-                prev = Some(timestamp);
+                prev = Some(object_ids);
             }
-            Some(prev_timestamp) => {
-                assert!(timestamp - prev_timestamp >= storage_interval_s,
-                            "found storage collection timestamps, {prev_timestamp} and {timestamp}, that are less than {storage_interval_s} s apart");
-                prev = Some(timestamp);
+            Some(ref prev_object_ids) => {
+                assert_eq!(
+                    prev_object_ids, &object_ids,
+                    "found different storage collection timestamps, that contained non-matching \
+                        object IDs. {prev_object_ids:?} and {object_ids:?}"
+                );
             }
         }
     }
