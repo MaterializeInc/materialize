@@ -76,7 +76,7 @@ It contains operators and so-called regions, which in turn contain operators and
 In our example, the dataflow contains a InputRegion and a BuildRegion.
 And the BuildRegion contains the operators from the above plan.
 
-IMAGE
+![Regions and operator visualization](/images/regions-and-operators.png)
 
 Again, it's not too important for our purposes to understand what these regions do and how they are used to structure the operator graph.
 For our purposes it's merely important to know than that they define a hierarchy on the operators.
