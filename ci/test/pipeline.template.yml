@@ -707,6 +707,8 @@ steps:
       # Changes to the SQL syntax
       - src/sql-parser/src
       - src/expr-parser/src
+      # Changes to SHOW
+      - src/sql/src/plan/statement/show.rs
       # Changes to feature flags and other settings
       - src/adapter/src/flags.rs
       - src/persist-client/src/cfg*
