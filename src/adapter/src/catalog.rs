@@ -98,8 +98,8 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
-    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
+    BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
@@ -5482,7 +5482,7 @@ impl Catalog {
                     }
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
-                    tx.update_role(id, existing_role.clone().into())?;
+                    tx.update_role(id, existing_role.clone())?;
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {
                         builtin_table_updates.push(builtin_update);
                     }
@@ -5906,12 +5906,8 @@ impl Catalog {
                         )));
                     }
                     let membership = RoleMembership::new();
-                    let serialized_role = SerializedRole {
-                        name: name.clone(),
-                        attributes: attributes.clone(),
-                        membership: membership.clone(),
-                    };
-                    let id = tx.insert_user_role(serialized_role)?;
+                    let id =
+                        tx.insert_user_role(name.clone(), attributes.clone(), membership.clone())?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -6502,7 +6498,7 @@ impl Catalog {
                     }
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.insert(role_id, grantor_id);
-                    tx.update_role(member_id, member_role.clone().into())?;
+                    tx.update_role(member_id, member_role.clone())?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, 1));
 
@@ -6536,7 +6532,7 @@ impl Catalog {
                         .push(state.pack_role_members_update(role_id, member_id, -1));
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.remove(&role_id);
-                    tx.update_role(member_id, member_role.clone().into())?;
+                    tx.update_role(member_id, member_role.clone())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -8099,36 +8095,6 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
                 },
                 disk,
             },
-        }
-    }
-}
-
-/// A [`Role`] that is serialized as JSON and persisted to the catalog
-/// stash. This is a separate type to allow us to evolve the on-disk format
-/// independently from the SQL layer.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub struct SerializedRole {
-    pub name: String,
-    pub attributes: RoleAttributes,
-    pub membership: RoleMembership,
-}
-
-impl From<Role> for SerializedRole {
-    fn from(role: Role) -> Self {
-        SerializedRole {
-            name: role.name,
-            attributes: role.attributes,
-            membership: role.membership,
-        }
-    }
-}
-
-impl From<&BuiltinRole> for SerializedRole {
-    fn from(role: &BuiltinRole) -> Self {
-        SerializedRole {
-            name: role.name.to_string(),
-            attributes: role.attributes.clone(),
-            membership: RoleMembership::new(),
         }
     }
 }

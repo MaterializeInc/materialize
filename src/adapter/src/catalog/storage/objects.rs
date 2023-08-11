@@ -16,7 +16,6 @@ use crate::catalog::storage::{
 };
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
-    SerializedRole,
 };
 
 use super::{
@@ -580,23 +579,21 @@ impl RustType<proto::RoleMembership> for RoleMembership {
 impl RustType<proto::RoleValue> for RoleValue {
     fn into_proto(&self) -> proto::RoleValue {
         proto::RoleValue {
-            name: self.role.name.to_string(),
-            attributes: Some(self.role.attributes.into_proto()),
-            membership: Some(self.role.membership.into_proto()),
+            name: self.name.to_string(),
+            attributes: Some(self.attributes.into_proto()),
+            membership: Some(self.membership.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::RoleValue) -> Result<Self, TryFromProtoError> {
         Ok(RoleValue {
-            role: SerializedRole {
-                name: proto.name,
-                attributes: proto
-                    .attributes
-                    .into_rust_if_some("RoleValue::attributes")?,
-                membership: proto
-                    .membership
-                    .into_rust_if_some("RoleValue::membership")?,
-            },
+            name: proto.name,
+            attributes: proto
+                .attributes
+                .into_rust_if_some("RoleValue::attributes")?,
+            membership: proto
+                .membership
+                .into_rust_if_some("RoleValue::membership")?,
         })
     }
 }
