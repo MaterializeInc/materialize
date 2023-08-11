@@ -2572,10 +2572,8 @@ impl Coordinator {
         let id_bundle = self
             .index_oracle(cluster_id)
             .sufficient_collections(&depends_on);
-        let mut timeline = self.validate_timeline_context(id_bundle.iter())?;
-        if matches!(timeline, TimelineContext::TimestampIndependent)
-            && (from.contains_temporal() || when.advance_to_timestamp().is_some())
-        {
+        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions,
             // or uses AS OF then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
