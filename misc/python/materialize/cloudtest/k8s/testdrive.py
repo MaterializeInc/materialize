@@ -23,9 +23,17 @@ class Testdrive(K8sPod):
         release_mode: bool,
         aws_region: Optional[str] = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
+        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
+        materialize_internal_url: str = "postgres://mz_system@environmentd:6877/materialize",
+        kafka_addr: str = "redpanda:9092",
+        schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
         super().__init__(namespace)
         self.aws_region = aws_region
+        self.materialize_url = materialize_url
+        self.materialize_internal_url = materialize_internal_url
+        self.kafka_addr = kafka_addr
+        self.schema_registry_url = schema_registry_url
 
         metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
@@ -57,10 +65,6 @@ class Testdrive(K8sPod):
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
         default_timeout: str = "300s",
-        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
-        materialize_internal_url: str = "postgres://materialize:materialize@environmentd:6877/materialize",
-        kafka_addr: str = "redpanda:9092",
-        schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
@@ -69,10 +73,10 @@ class Testdrive(K8sPod):
             "testdrive",
             "--",
             "testdrive",
-            f"--materialize-url={materialize_url}",
-            f"--materialize-internal-url={materialize_internal_url}",
-            f"--kafka-addr={kafka_addr}",
-            f"--schema-registry-url={schema_registry_url}",
+            f"--materialize-url={self.materialize_url}",
+            f"--materialize-internal-url={self.materialize_internal_url}",
+            f"--kafka-addr={self.kafka_addr}",
+            f"--schema-registry-url={self.schema_registry_url}",
             f"--default-timeout={default_timeout}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
