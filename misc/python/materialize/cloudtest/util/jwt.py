@@ -60,7 +60,7 @@ def make_jwt(tenant_id: str) -> str:
         "iat": now,
         "exp": now + 3600,
     }
-    tok: str = jwt.encode(payload, JWK_PRIVATE_KEY, algorithm="RS256")  # type: ignore
+    tok: str = jwt.encode(payload, JWK_PRIVATE_KEY, algorithm="RS256")
     return tok
 
 

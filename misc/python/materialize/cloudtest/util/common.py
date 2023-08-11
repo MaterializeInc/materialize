@@ -64,7 +64,7 @@ def is_subdict(
             elif isinstance(value, list):
                 if not is_sublist(
                     larger_list[i],
-                    cast(list[Any], value),
+                    value,
                     current_key,
                 ):
                     return False
@@ -91,7 +91,7 @@ def is_subdict(
         elif isinstance(value, list):
             if not is_sublist(
                 larger_dict[key],
-                cast(list[Any], value),
+                value,
                 current_key,
             ):
                 return False
