@@ -10,77 +10,301 @@ aliases:
   - /ops/troubleshooting/
 ---
 
-This page describes several SQL queries you can run to diagnose performance
-issues with Materialize.
+This page describes several SQL queries you can run to diagnose performance issues with Materialize.
+
+## Mental model and basic terminology
+
+When you create a materialized view and issue a query, Materialize creates a dataflow. A dataflow consists of instructions on how to respond to data input and to changes to that data. Once executed, the dataflow computes the result of the SQL query, polls the source for updates, and then incrementally updates the query results when new data arrives.
+
+Materialize dataflows act on collections of data. A collection provides a data stream of updates as they happen. To provide fast access to the changes to individual records, the collection can be represented in an alternate form, indexed on data to present the sequence of changes the collection has undergone. This indexed representation is called an arrangement.
+
+
+### Translating SQL to Differential Dataflow
+
+To make these concepts a bit more tangible, let's look at the example from the getting started guide. 
+
+
+```sql
+SELECT auctions.item, avg(bids.amount) AS average_bid
+FROM bids
+JOIN auctions ON bids.auction_id = auctions.id
+WHERE bids.bid_time < auctions.end_time
+GROUP BY auctions.item
+```
+
+This query from the guide joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the average `bids.amount` per auction. To understand how this SQL query is translated to differential dataflow, we can use `EXPLAIN` to display the plan used to evaluate the join.
+
+```sql
+EXPLAIN 
+SELECT auctions.item, avg(bids.amount) AS average_bid
+FROM bids
+JOIN auctions ON bids.auction_id = auctions.id
+WHERE bids.bid_time < auctions.end_time
+GROUP BY auctions.item
+                                        Optimized Plan
+-----------------------------------------------------------------------------------------------
+ Explained Query:                                                                             +
+   Project (#0, #3)                                                                           +
+     Map ((bigint_to_double(#1) / bigint_to_double(case when (#2 = 0) then null else #2 end)))+
+       Reduce group_by=[#1] aggregates=[sum(#0), count(*)]                                    +
+         Project (#1, #4)                                                                     +
+           Filter (#2 < #5)                                                                   +
+             Join on=(#0 = #3) type=differential                                              +
+               ArrangeBy keys=[[#0]]                                                          +
+                 Project (#2..=#4)                                                            +
+                   Get materialize.qck.bids                                                   +
+               ArrangeBy keys=[[#0]]                                                          +
+                 Project (#0, #2, #3)                                                         +
+                   Get materialize.qck.auctions                                               +
+
+(1 row)
+```
+
+The plan describes the specific Differential Dataflow operators that are used to evaluate the query.
+Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join on`, `Map`). 
+Others are specific to differential dataflow (`Get`, `ArrangeBy`).
+
+In general, a high level understanding of what these operators do is sufficient for effective debugging:
+`Filter` filters records, `Join on` joins records from two or more inputs, `Map` applies a function to transform records, etc.
+The `ArrangeBy` operator indexes data and stores it in memory for fast point lookups.
+It's not important to have a deep understanding of all these operators for effective debugging, though.
+
+Behind the scenes, the operator graph is turned into a dataflow that can be evaluated by the Differential Dataflow runtime.
+The dataflow is organized in a hierarchical structure. 
+It contains operators and so-called regions, which in turn contain operators and (sub)regions.
+
+In our example, the dataflow contains a InputRegion and a BuildRegion.
+And the BuildRegion contains the operators from the above plan.
+
+IMAGE
+
+Again, it's not too important for our purposes to understand what these regions do and how they are used to structure the operator graph.
+For our purposes it's merely important to know than that they define a hierarchy on the operators.
+
+
+
+## The system catalog and introspection relations
+
+Materialize collects a lot of useful information about the dataflows and operators in the System Catalog in [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations).
+The introspection relations are extremely valuable to troubleshoot and to understand what is happening under the hood,
+in particular if Materialize is not behaving in the expected way.
+However, it is important to understand that most of the statistics we need for troubleshooting purposes are specific to the cluster that is running the queries we want to debug.
 
 {{< warning >}}
-The queries below reference [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations), which are subject to future changes without notice.
-
-Due to the potential changes in introspection relations all relations below are created in the `mz_internal` schema, and it is not possible to create higher-level views dependent on them.
-{{< /warning >}}
-
-## Limitations
-
 The contents of introspection relations differ depending on the selected cluster and replica.
 As a consequence, you should expect the answers to the queries below to vary depending on which cluster you are working in.
 In particular, indexes and dataflows are local to a cluster, so their introspection information will vary across clusters.
+{{< /warning >}}
 
 <!--
 [//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot if and how fast a source is consuming."
 ``` -->
 
-## Why is Materialize running so slowly?
+## Where is Materialize spending time on computations?
 
 Materialize spends time in various dataflow operators maintaining
 materialized views or indexes. If Materialize is taking more time to update
 results than you expect, you can identify which operators
 take the largest total amount of time.
 
+### Finding expensive queries/dataflows
+
+To understand which query or dataflow, respectively, is taking the most time we can query the `mz_scheduling_elapsed` relation.
+The `elapsed_time` metric shows the absolute time the dataflows was busy since the system started and the dataflows was created.
+
 ```sql
--- Extract raw elapsed time information, summed across workers
-SELECT mdo.id, mdo.name, mse.elapsed_ns
+-- Extract raw elapsed time information for dataflows
+SELECT
+    mdo.id,
+    mdo.name,
+    mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
 FROM mz_internal.mz_scheduling_elapsed AS mse,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE mse.id = mdo.id
-ORDER BY elapsed_ns DESC;
+    mz_internal.mz_dataflow_operators AS mdo,
+    mz_internal.mz_dataflow_addresses AS mda
+WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
+ORDER BY elapsed_ns DESC
+ id  |                  name                  |  elapsed_time
+-----+----------------------------------------+-----------------
+ 354 | Dataflow: materialize.qck.num_bids     | 00:11:05.107351
+ 180 | Dataflow: materialize.qck.avg_bids_idx | 00:09:34.29102
+ 578 | Dataflow: materialize.qck.num_bids_idx | 00:01:25.363355
+(3 rows)
 ```
+
+These results show that the system spend the most time keeping the materialized view `num_bids` (from the quick start) up to date.
+Followed by the work on the index `avg_bids_idx` that has been defined on a view from the query above.
+
+### Finding expensive operators within a dataflow
+
+This result only shows dataflows and is a good starting point to get an overview of the work happening in the cluster.
+The `mz_scheduling_elapsed` relation also contains details for regions and operators.
+Be aware that every row shows aggregated times for all the element it contains.
+The `elapsed_time` of the dataflows above also includes the time of all the regions and operators they contain.
+
+Removing the condition `list_length(address) = 1` will include the regions and operators in the result.
+But because the parent child relationship is not always obvious, the results can be a bit hard to interpret.
+It can therefore make sense to only focus on operators and filter for a specific dataflow.
 
 ```sql
--- Extract raw elapsed time information, by worker
-SELECT mdo.id, mdo.name, mse.worker_id, mse.elapsed_ns
-FROM mz_internal.mz_scheduling_elapsed_per_worker AS mse,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE mse.id = mdo.id
-ORDER BY elapsed_ns DESC;
+-- Extract raw elapsed time information for operators
+WITH leaves AS (
+    SELECT *
+    FROM mz_internal.mz_dataflow_addresses AS outer
+    WHERE
+        outer.address NOT IN (
+            SELECT inner.address[:list_length(outer.address)]
+            FROM mz_internal.mz_dataflow_addresses AS inner
+            WHERE inner.id != outer.id
+        )
+)
+
+SELECT
+    mdo.id,
+    mdo.name,
+    mdod.dataflow_name,
+    mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
+FROM mz_internal.mz_scheduling_elapsed AS mse,
+    mz_internal.mz_dataflow_operators AS mdo,
+    mz_internal.mz_dataflow_operator_dataflows AS mdod
+WHERE mse.id = mdo.id AND mdo.id = mdod.id AND mdo.id IN (SELECT id FROM leaves)
+ORDER BY elapsed_ns DESC
+ id  |               name               |             dataflow_name              |  elapsed_time
+-----+----------------------------------+----------------------------------------+-----------------
+ 431 | ArrangeBy[[Column(0)]]           | Dataflow: materialize.qck.num_bids     | 00:06:17.074208
+ 257 | ArrangeBy[[Column(0)]]           | Dataflow: materialize.qck.avg_bids_idx | 00:06:16.302804
+ 268 | ArrangeBy[[Column(0)]]           | Dataflow: materialize.qck.avg_bids_idx | 00:00:34.975043
+ 442 | ArrangeBy[[Column(0)]]           | Dataflow: materialize.qck.num_bids     | 00:00:34.403058
+ 528 | shard_source_fetch(u517)         | Dataflow: materialize.qck.num_bids     | 00:00:29.972871
+ 594 | shard_source_fetch(u517)         | Dataflow: materialize.qck.num_bids_idx | 00:00:27.517982
+ 230 | shard_source_fetch(u510)         | Dataflow: materialize.qck.avg_bids_idx | 00:00:25.494895
+ 404 | shard_source_fetch(u510)         | Dataflow: materialize.qck.num_bids     | 00:00:22.286794
+ 566 | persist_sink u517 append_batches | Dataflow: materialize.qck.num_bids     | 00:00:17.657125
+ 196 | shard_source_fetch(u509)         | Dataflow: materialize.qck.avg_bids_idx | 00:00:08.692289
+ ...
 ```
 
-## Why is Materialize unresponsive for seconds at a time?
+## histograms
 
-Materialize operators get scheduled and try to
-behave themselves by returning control promptly, but
-that doesn't always happen. These queries
-reveal how many times each operator was scheduled for each
-power-of-two elapsed time: high durations indicate an event
-that took roughly that amount of time before it yielded,
-and incriminate the subject.
+The `elapsed_time` is a nice indicator for the most expensive dataflows and operators.
+A large class of problems can be identified by just looking at this metric.
+However, `elapsed_time` contains all work since the operator or dataflow was first created.
+Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
+If you are interested in what operator is taking the most time right now, 
+it can be a bit challenging to get that information from the `elapsed_time` metric.
+
+The relation `mz_compute_operator_durations_histogram` also tracks the time operators are busy,
+but instead of aggregating `elapsed_time` since an operator got created,
+it tracks how long each operator was scheduled at a time in a histogram.
+This information can show you two things: operators that block progress for others and operators that are currently doing work.
+
+If there is a very expensive operator that blocks progress for all other operators,
+it will become visible in the histogram.
+The offending operator will be scheduled much longer at a time compared to other operators.
+Therefore the values of the time buckets in the histogram will be much higher
+compared to the other operators.
 
 ```sql
--- Extract raw scheduling histogram information, summed across workers.
-SELECT mdo.id, mdo.name, mcodh.duration_ns, mcodh.count
-FROM mz_internal.mz_compute_operator_durations_histogram AS mcodh,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE mcodh.id = mdo.id
-ORDER BY mcodh.duration_ns DESC;
+-- Extract raw scheduling histogram information for operators
+WITH leaves AS (
+    SELECT *
+    FROM mz_internal.mz_dataflow_addresses AS outer
+    WHERE
+        outer.address NOT IN (
+            SELECT inner.address[:list_length(outer.address)]
+            FROM mz_internal.mz_dataflow_addresses AS inner
+            WHERE inner.id != outer.id
+        )
+),
+
+histograms AS (
+    SELECT
+        mdo.id,
+        mdo.name,
+        mdod.dataflow_name,
+        mcodh.count,
+        mcodh.duration_ns / 1000 * '1 MICROSECONDS'::interval AS duration
+    FROM mz_internal.mz_compute_operator_durations_histogram AS mcodh,
+        mz_internal.mz_dataflow_operators AS mdo,
+        mz_internal.mz_dataflow_operator_dataflows AS mdod
+    WHERE
+        mcodh.id = mdo.id
+        AND mdo.id = mdod.id
+        AND mdo.id IN (SELECT id FROM leaves)
+)
+
+SELECT *
+FROM histograms
+WHERE duration > '100 millisecond'::interval
+ORDER BY duration DESC;
+ id  |                 name                 |             dataflow_name              | count |    duration
+-----+--------------------------------------+----------------------------------------+-------+-----------------
+ 234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:01.073741
+ 234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:00.53687
+ 255 | FormArrangementKey                   | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:00.268435
+ 200 | persist_source::decode_and_mfp(u509) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:00.268435
+ 234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     2 | 00:00:00.268435
+ 255 | FormArrangementKey                   | Dataflow: materialize.qck.avg_bids_idx |     2 | 00:00:00.134217
+ 408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     1 | 00:00:01.073741
+ 408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     1 | 00:00:00.53687
+ 374 | persist_source::decode_and_mfp(u509) | Dataflow: materialize.qck.num_bids     |     1 | 00:00:00.268435
+ 408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     2 | 00:00:00.268435
+ 429 | FormArrangementKey                   | Dataflow: materialize.qck.num_bids     |     2 | 00:00:00.134217
+(11 rows)
 ```
 
+Note that this relation contains a lot of information.
+The query therefore filters all duration below `100 millisecond`.
+
+This is still reporting aggregated values since the operator has been created.
+To get a feeling for which operators are currently doing work,
+you can subscribe to the changes of the relation.
+
 ```sql
--- Extract raw scheduling histogram information, by worker.
-SELECT mdo.id, mdo.name, mcodh.worker_id, mcodh.duration_ns, mcodh.count
-FROM mz_internal.mz_compute_operator_durations_histogram_per_worker AS mcodh,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE mcodh.id = mdo.id
-ORDER BY mcodh.duration_ns DESC;
+-- Observe changes to the raw scheduling histogram information
+COPY(SUBSCRIBE(
+    WITH leaves AS (
+        SELECT *
+        FROM mz_internal.mz_dataflow_addresses AS outer
+        WHERE
+            outer.address NOT IN (
+                SELECT inner.address[:list_length(outer.address)]
+                FROM mz_internal.mz_dataflow_addresses AS inner
+                WHERE inner.id != outer.id
+            )
+    ),
+
+    histograms AS (
+        SELECT
+            mdo.id,
+            mdo.name,
+            mdod.dataflow_name,
+            mcodh.count,
+            mcodh.duration_ns / 1000 * '1 microseconds'::interval AS duration
+        FROM mz_internal.mz_compute_operator_durations_histogram AS mcodh,
+            mz_internal.mz_dataflow_operators AS mdo,
+            mz_internal.mz_dataflow_operator_dataflows AS mdod
+        WHERE
+            mcodh.id = mdo.id
+            AND mdo.id = mdod.id
+            AND mdo.id IN (SELECT id FROM leaves)
+    )
+
+    SELECT *
+    FROM histograms
+    WHERE duration > '100 milliseconds'::interval
+    ORDER BY dataflow_name ASC, duration DESC
+) WITH (SNAPSHOT = false, PROGRESS)) TO STDOUT;
+
+1691667343000	t	\N	\N	\N	\N	\N	\N
+1691667344000	t	\N	\N	\N	\N	\N	\N
+1691667344000	f	-1	431	ArrangeBy[[Column(0)]]	Dataflow: materialize.qck.num_bids	7673	00:00:00.104800
+1691667344000	f	1	431	ArrangeBy[[Column(0)]]	Dataflow: materialize.qck.num_bids	7674	00:00:00.104800
+1691667345000	t	\N	\N	\N	\N	\N	\N...
 ```
+
+In this way you can see that currently the only operator that is doing more than 100 milliseconds worth of work
+is the `ArrangeBy` operator form the materialized view `num_bids`.
+
 
 ## Why is Materialize using so much memory?
 
@@ -89,25 +313,32 @@ take up most of Materialize's memory use. Arrangements maintain indexes for data
 as it changes. These queries extract the numbers of records and
 batches backing each of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
-state. The number of batches should be logarithmic-ish in this
-number, and anything significantly larger is probably a bug.
+state.
 
 ```sql
--- Extract arrangement records and batches, summed across workers.
-SELECT mdo.id, mdo.name, mas.records, mas.batches
+-- Extract arrangement records and batches
+SELECT
+    mdo.id,
+    mdo.name,
+    mdod.dataflow_name,
+    mas.records
 FROM mz_internal.mz_arrangement_sizes AS mas,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE mas.operator_id = mdo.id
+    mz_internal.mz_dataflow_operators AS mdo,
+    mz_internal.mz_dataflow_operator_dataflows AS mdod
+WHERE mas.operator_id = mdo.id AND mdo.id = mdod.id
 ORDER BY mas.records DESC;
-```
-
-```sql
--- Extract arrangement records and batches, by worker.
-SELECT mdo.id, mdo.name, mas.worker_id, mas.records, mas.batches
-FROM mz_internal.mz_arrangement_sizes_per_worker AS mas,
-     mz_internal.mz_dataflow_operators AS mdo
-WHERE mas.operator_id = mdo.id
-ORDER BY mas.records DESC;
+ id  |          name          |             dataflow_name              | records
+-----+------------------------+----------------------------------------+---------
+ 431 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids     |  748128
+ 257 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.avg_bids_idx |  748128
+ 442 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids     |  135715
+ 268 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.avg_bids_idx |  135715
+ 340 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.avg_bids_idx |      17
+ 619 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids_idx |      17
+ 486 | ReduceAccumulable      | Dataflow: materialize.qck.num_bids     |       5
+ 484 | ArrangeAccumulable     | Dataflow: materialize.qck.num_bids     |       5
+ 312 | ReduceAccumulable      | Dataflow: materialize.qck.avg_bids_idx |       5
+ 310 | ArrangeAccumulable     | Dataflow: materialize.qck.avg_bids_idx |       5
 ```
 
 We've also bundled an interactive, web-based memory usage visualization tool to
