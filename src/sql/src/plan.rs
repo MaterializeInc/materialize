@@ -106,6 +106,7 @@ pub enum Plan {
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
+    CreateClusterShadow(CreateClusterShadowPlan),
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
@@ -220,6 +221,7 @@ impl Plan {
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
+            StatementKind::CreateClusterShadow => vec![PlanKind::CreateClusterShadow],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
             StatementKind::CreateDatabase => vec![PlanKind::CreateDatabase],
             StatementKind::CreateIndex => vec![PlanKind::CreateIndex],
@@ -281,6 +283,7 @@ impl Plan {
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
+            Plan::CreateClusterShadow(_) => "create cluster shadow",
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
@@ -482,6 +485,14 @@ pub struct CreateClusterReplicaPlan {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterShadowPlan {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub config: ReplicaConfig,
+    pub image: Option<String>,
 }
 
 /// Configuration of introspection for a cluster replica.

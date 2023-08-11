@@ -66,8 +66,6 @@ pub enum ReplicaCreationError {
     InstanceMissing(ComputeInstanceId),
     #[error("replica exists already: {0}")]
     ReplicaExists(ReplicaId),
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
 }
 
 impl From<InstanceMissing> for ReplicaCreationError {
@@ -79,12 +77,6 @@ impl From<InstanceMissing> for ReplicaCreationError {
 impl From<instance::ReplicaExists> for ReplicaCreationError {
     fn from(error: instance::ReplicaExists) -> Self {
         Self::ReplicaExists(error.0)
-    }
-}
-
-impl From<CollectionMissing> for ReplicaCreationError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
     }
 }
 

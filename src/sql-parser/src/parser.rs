@@ -1816,6 +1816,9 @@ impl<'a> Parser<'a> {
             if self.peek_keyword(REPLICA) {
                 self.parse_create_cluster_replica()
                     .map_parser_err(StatementKind::CreateClusterReplica)
+            } else if self.peek_keyword(SHADOW) {
+                self.parse_create_cluster_shadow()
+                    .map_parser_err(StatementKind::CreateClusterShadow)
             } else {
                 self.parse_create_cluster()
                     .map_parser_err(StatementKind::CreateCluster)
@@ -3575,6 +3578,30 @@ impl<'a> Parser<'a> {
             CreateClusterReplicaStatement {
                 of_cluster,
                 definition: ReplicaDefinition { name, options },
+            },
+        ))
+    }
+
+    fn parse_create_cluster_shadow(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.next_token();
+        let of_cluster = self.parse_identifier()?;
+        self.expect_token(&Token::Dot)?;
+        let name = self.parse_identifier()?;
+
+        let image = if self.parse_keyword(IMAGE) {
+            Some(self.parse_literal_string()?)
+        } else {
+            None
+        };
+
+        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+
+        Ok(Statement::CreateClusterShadow(
+            CreateClusterShadowStatement {
+                of_cluster,
+                name,
+                image,
+                options,
             },
         ))
     }

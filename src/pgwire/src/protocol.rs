@@ -40,9 +40,8 @@ use mz_sql::session::user::{
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::{self};
+use tokio::{select, time};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, warn, Instrument};
 
@@ -1496,6 +1495,7 @@ where
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::CreatedCluster { .. }
             | ExecuteResponse::CreatedClusterReplica { .. }
+            | ExecuteResponse::CreatedClusterShadow { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }

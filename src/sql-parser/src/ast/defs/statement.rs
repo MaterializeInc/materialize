@@ -61,6 +61,7 @@ pub enum Statement<T: AstInfo> {
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
+    CreateClusterShadow(CreateClusterShadowStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
@@ -127,6 +128,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::CreateClusterShadow(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
@@ -194,6 +196,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateRole => "create_role",
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
+        StatementKind::CreateClusterShadow => "create_cluster_shadow",
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
@@ -1623,6 +1626,35 @@ impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
     }
 }
 impl_display_t!(CreateClusterReplicaStatement);
+
+/// `CREATE CLUSTER SHADOW ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateClusterShadowStatement<T: AstInfo> {
+    /// Name of the shadow replica's cluster.
+    pub of_cluster: Ident,
+    /// Name of the created shadow replica.
+    pub name: Ident,
+    /// A custom image to run this replica on.
+    pub image: Option<String>,
+    /// The comma-separated options.
+    pub options: Vec<ReplicaOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateClusterShadowStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CLUSTER SHADOW ");
+        f.write_node(&self.of_cluster);
+        f.write_str(".");
+        f.write_node(&self.name);
+        if let Some(image) = &self.image {
+            f.write_str(" IMAGE ");
+            f.write_str(image);
+        }
+        f.write_str(" ");
+        f.write_node(&display::comma_separated(&self.options));
+    }
+}
+impl_display_t!(CreateClusterShadowStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ReplicaOptionName {

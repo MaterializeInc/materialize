@@ -24,7 +24,8 @@ use mz_sql::names::ObjectId;
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
+    CreateClusterReplicaPlan, CreateClusterShadowPlan, CreateClusterUnmanagedPlan,
+    CreateClusterVariant, PlanClusterOption,
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
@@ -485,6 +486,57 @@ impl Coordinator {
             .create_replicas(replicas_to_start)
             .await
             .expect("creating replicas must not fail");
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(super) async fn sequence_create_cluster_shadow(
+        &mut self,
+        session: &Session,
+        CreateClusterShadowPlan {
+            name,
+            cluster_id,
+            config,
+            image,
+        }: CreateClusterShadowPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mz_sql::plan::ReplicaConfig::Managed { size, availability_zone, compute, disk } = config else {
+            return Err(AdapterError::Unsupported("unmanaged shadow replica"));
+        };
+
+        let location = SerializedReplicaLocation::Managed {
+            size,
+            availability_zone,
+            disk,
+        };
+        let logging = if let Some(config) = compute.introspection {
+            ReplicaLogging {
+                log_logging: config.debugging,
+                interval: Some(config.interval),
+            }
+        } else {
+            ReplicaLogging::default()
+        };
+        let config = ReplicaConfig {
+            location: self.catalog().concretize_replica_location(
+                location,
+                &self
+                    .catalog()
+                    .system_config()
+                    .allowed_cluster_replica_sizes(),
+                None,
+            )?,
+            compute: ComputeReplicaConfig {
+                logging,
+                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
+            },
+        };
+
+        self.controller
+            .create_shadow(cluster_id, name, config, image)
+            .await
+            .expect("creating shadow must not fail");
+
+        Ok(ExecuteResponse::CreatedClusterShadow)
     }
 
     pub(super) async fn sequence_alter_cluster(

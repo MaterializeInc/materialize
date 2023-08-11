@@ -517,7 +517,7 @@ impl<'a> DataflowBuilder<'a> {
             from_desc: mview.desc.clone(),
             connection: ComputeSinkConnection::Persist(PersistSinkConnection {
                 value_desc: mview.desc.clone(),
-                storage_metadata: (),
+                storage_metadata: None,
             }),
             with_snapshot: true,
             up_to: Antichain::default(),

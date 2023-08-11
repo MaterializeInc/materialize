@@ -990,6 +990,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedRole
         | ExecuteResponse::CreatedCluster { .. }
         | ExecuteResponse::CreatedClusterReplica { .. }
+        | ExecuteResponse::CreatedClusterShadow { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedSecret { .. }

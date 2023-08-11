@@ -308,6 +308,7 @@ pub fn generate_required_role_membership(
         | Plan::CreateRole(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
+        | Plan::CreateClusterShadow(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -424,6 +425,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => Vec::new(),
         Plan::CreateClusterReplica(plan) => vec![ObjectId::Cluster(plan.cluster_id)],
+        Plan::CreateClusterShadow(plan) => vec![ObjectId::Cluster(plan.cluster_id)],
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(plan::CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan { replace, .. }) => replace
@@ -1091,6 +1093,12 @@ fn generate_required_privileges(
             cluster_id: _,
             name: _,
             config: _,
+        })
+        | Plan::CreateClusterShadow(plan::CreateClusterShadowPlan {
+            cluster_id: _,
+            name: _,
+            config: _,
+            image: _,
         })
         | Plan::DiscardTemp
         | Plan::DiscardAll
