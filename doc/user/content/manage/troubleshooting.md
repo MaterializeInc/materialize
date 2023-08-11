@@ -41,8 +41,7 @@ JOIN auctions ON bids.auction_id = auctions.id
 WHERE bids.bid_time < auctions.end_time
 GROUP BY auctions.item
 ```
-
-```noftm
+```
                                         Optimized Plan
 -----------------------------------------------------------------------------------------------
  Explained Query:                                                                             +
@@ -126,8 +125,7 @@ FROM mz_internal.mz_scheduling_elapsed AS mse,
 WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
 ORDER BY elapsed_ns DESC
 ```
-<p></p>
-```noftm
+```
  id  |                  name                  |  elapsed_time
 -----+----------------------------------------+-----------------
  354 | Dataflow: materialize.qck.num_bids     | 00:11:05.107351
@@ -174,8 +172,7 @@ FROM mz_internal.mz_scheduling_elapsed AS mse,
 WHERE mse.id = mdo.id AND mdo.id = mdod.id AND mdo.id IN (SELECT id FROM leaves)
 ORDER BY elapsed_ns DESC
 ```
-<p></p>
-```noftm
+```
  id  |               name               |             dataflow_name              |  elapsed_time
 -----+----------------------------------+----------------------------------------+-----------------
  431 | ArrangeBy[[Column(0)]]           | Dataflow: materialize.qck.num_bids     | 00:06:17.074208
@@ -245,8 +242,7 @@ FROM histograms
 WHERE duration > '100 millisecond'::interval
 ORDER BY duration DESC
 ```
-<p></p>
-```noftm
+```
  id  |                 name                 |             dataflow_name              | count |    duration
 -----+--------------------------------------+----------------------------------------+-------+-----------------
  234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:01.073741
@@ -306,8 +302,7 @@ COPY(SUBSCRIBE(
     ORDER BY dataflow_name ASC, duration DESC
 ) WITH (SNAPSHOT = false, PROGRESS)) TO STDOUT;
 ```
-<p></p>
-```noftm
+```
 1691667343000	t	\N	\N	\N	\N	\N	\N
 1691667344000	t	\N	\N	\N	\N	\N	\N
 1691667344000	f	-1	431	ArrangeBy[[Column(0)]]	Dataflow: materialize.qck.num_bids	7673	00:00:00.104800
@@ -341,8 +336,7 @@ FROM mz_internal.mz_arrangement_sizes AS mas,
 WHERE mas.operator_id = mdo.id AND mdo.id = mdod.id
 ORDER BY mas.records DESC
 ```
-<p></p>
-```noftm
+```
  id  |          name          |             dataflow_name              | records
 -----+------------------------+----------------------------------------+---------
  431 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids     |  748128
