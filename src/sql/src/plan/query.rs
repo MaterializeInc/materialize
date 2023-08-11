@@ -1633,14 +1633,12 @@ fn plan_set_expr(
             // what schema to use. As a result Materialize will fail to boot.
             //
             // Some `SHOW` commands are ok, like `SHOW CLUSTERS`, and there are probably other ways
-            // around this issue. Such as expanding the `SHOW` command in the SQL definition. For
-            // now we just disallow any `SHOW` commands in views.
+            // around this issue. Such as expanding the `SHOW` command in the SQL definition.
+            // However, banning show commands in views gives us more flexibility to change their
+            // output.
             //
-            // Ideally, the `SHOW` commands that use the current schema would expand to use the
-            // `current_schema()` function, instead of hard-coding the current schema id, so that
-            // planning can correctly identify that they are unmaterializable. However, that's a
-            // little tricky because `current_schema()` returns a schema name not id, which is what
-            // we need.
+            // TODO(jkosh44) Add message to error that prints out an equivalent view definition
+            // with all show commands expanded into their equivalent SELECT statements.
             if qcx.lifetime == QueryLifetime::Static {
                 return Err(PlanError::ShowCommandInView);
             }
