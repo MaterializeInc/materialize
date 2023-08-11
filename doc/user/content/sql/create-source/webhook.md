@@ -73,7 +73,7 @@ the time of creation.
 {{< note >}}
 
 This is a public URL that is open to the internet and has no security. To validate that requests
-are legitimate see [Validating Requests](#validating-requests). For limits imposed on this endpoint
+are legitimate see [Request Validation](#request-validation). For limits imposed on this endpoint
 see [Request Limits](#request-limits).
 
 {{< /note >}}
