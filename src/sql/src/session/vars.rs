@@ -69,7 +69,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::string::ToString;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic};
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -788,6 +788,13 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
 static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
     usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
+
+const VARIABLE_LENGTH_ROW_ENCODING: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("variable_length_row_encoding"),
+    value: &false,
+    description: "Determines whether `repr::row::VARIABLE_LENGTH_ENCODING` is set. See that module for details.",
+    internal: true,
+};
 
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
@@ -1974,6 +1981,7 @@ impl SystemVars {
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+            .with_var(&VARIABLE_LENGTH_ROW_ENCODING)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT);
@@ -2183,6 +2191,9 @@ impl SystemVars {
                 .lock()
                 .expect("lock poisoned")
                 .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+        } else if name == VARIABLE_LENGTH_ROW_ENCODING.name {
+            let value = *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING);
+            mz_repr::VARIABLE_LENGTH_ROW_ENCODING.store(value, atomic::Ordering::SeqCst);
         }
     }
 
@@ -2192,6 +2203,7 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
+        self.propagate_var_change(VARIABLE_LENGTH_ROW_ENCODING.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -2534,6 +2546,15 @@ impl SystemVars {
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
+
+    // Do not add a function that looks like this!
+    // `VARIABLE_LENGTH_ROW_ENCODING` should not be checked directly.
+    // If you thought you wanted to call this function,
+    // you probably wanted to check that variable instead.
+    //
+    // pub fn variable_length_row_encoding(&self) -> bool {
+    //     *self.expect_value(&*VARIABLE_LENGTH_ROW_ENCODING)
+    // }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)

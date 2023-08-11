@@ -119,13 +119,14 @@ pub use crate::row::encoding::{
     RowEncoder,
 };
 pub use crate::row::{
-    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
-    RowArena, RowPacker, RowRef,
+    datum_list_size, datum_size, datum_size_deterministic, datums_size, datums_size_deterministic,
+    row_size_deterministic, DatumList, DatumMap, ProtoRow, Row, RowArena, RowPacker, RowRef,
 };
 pub use crate::scalar::{
     arb_datum, arb_range_type, ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum,
     PropDict, PropList, ProtoScalarType, ScalarBaseType, ScalarType,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
+pub use row::VARIABLE_LENGTH_ENCODING as VARIABLE_LENGTH_ROW_ENCODING;
 
 pub mod statement_logging;

@@ -14,6 +14,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 use std::str;
+use std::sync::atomic::{self, AtomicBool};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
@@ -46,6 +47,12 @@ use crate::{Datum, Timestamp};
 pub(crate) mod encoding;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
+
+/// Whether to encode rows with variable-length integers and
+/// timestamps. This is thought to incur a slight (a few percent)
+/// regression in CPU efficiency, in exchange for improved memory
+/// usage.
+pub static VARIABLE_LENGTH_ENCODING: AtomicBool = AtomicBool::new(false);
 
 /// A packed representation for `Datum`s.
 ///
@@ -373,6 +380,9 @@ enum Tag {
     Null,
     False,
     True,
+    Int16,
+    Int32,
+    Int64,
     UInt8,
     UInt32,
     Float32,
@@ -403,79 +413,91 @@ enum Tag {
     Range,
     MzAclItem,
     AclItem,
+    // Only ever used if the `VARIABLE_LENGTH_ENCODING` global is set.
     // Everything except leap seconds and times beyond the range of
     // i64 nanoseconds. (Note that Materialize does not support leap
     // seconds, but this module does).
     CheapTimestamp,
+    // Only ever used if the `VARIABLE_LENGTH_ENCODING` global is set.
     // Everything except leap seconds and times beyond the range of
     // i64 nanoseconds. (Note that Materialize does not support leap
     // seconds, but this module does).
     CheapTimestampTz,
-    // ORDER MATTERS for all the IntN_K tags,
-    // because we use arithmetic to figure out which tag to use during encoding.
-    Int16_0_NonNegative,
-    Int16_8_NonNegative,
-    Int16_NonNegative,
+    // The remaining tags are for variable-length signed integer encoding.
+    // They are only ever used if the `VARIABLE_LENGTH_ENCODING` global is set.
+    // The basic idea is that `NonNegativeIntN_K` is used to encode a datum of type
+    // IntN whose actual value is positive and fits in K bytes, and similarly for
+    // NegativeIntN_K with negative values.
+    //
+    // The order of these tags matters, because we want to be able to choose the
+    // tag for a given datum quickly, with arithmetic, rather than slowly, with a
+    // stack of `if` statements.
+    //
+    // Separate tags for non-negative and negative numbers are used to avoid having to
+    // waste one bit in the actual data space to encode the sign.
+    NonNegativeInt16_0, // i.e., 0
+    NonNegativeInt16_8,
+    NonNegativeInt16_16,
 
-    Int32_0_NonNegative,
-    Int32_8_NonNegative,
-    Int32_16_NonNegative,
-    Int32_24_NonNegative,
-    Int32_NonNegative,
+    NonNegativeInt32_0,
+    NonNegativeInt32_8,
+    NonNegativeInt32_16,
+    NonNegativeInt32_24,
+    NonNegativeInt32_32,
 
-    Int64_0_NonNegative,
-    Int64_8_NonNegative,
-    Int64_16_NonNegative,
-    Int64_24_NonNegative,
-    Int64_32_NonNegative,
-    Int64_40_NonNegative,
-    Int64_48_NonNegative,
-    Int64_56_NonNegative,
-    Int64_NonNegative,
+    NonNegativeInt64_0,
+    NonNegativeInt64_8,
+    NonNegativeInt64_16,
+    NonNegativeInt64_24,
+    NonNegativeInt64_32,
+    NonNegativeInt64_40,
+    NonNegativeInt64_48,
+    NonNegativeInt64_56,
+    NonNegativeInt64_64,
 
-    Int16_0_Negative,
-    Int16_8_Negative,
-    Int16_Negative,
+    NegativeInt16_0, // i.e., -1
+    NegativeInt16_8,
+    NegativeInt16_16,
 
-    Int32_0_Negative,
-    Int32_8_Negative,
-    Int32_16_Negative,
-    Int32_24_Negative,
-    Int32_Negative,
+    NegativeInt32_0,
+    NegativeInt32_8,
+    NegativeInt32_16,
+    NegativeInt32_24,
+    NegativeInt32_32,
 
-    Int64_0_Negative,
-    Int64_8_Negative,
-    Int64_16_Negative,
-    Int64_24_Negative,
-    Int64_32_Negative,
-    Int64_40_Negative,
-    Int64_48_Negative,
-    Int64_56_Negative,
-    Int64_Negative,
+    NegativeInt64_0,
+    NegativeInt64_8,
+    NegativeInt64_16,
+    NegativeInt64_24,
+    NegativeInt64_32,
+    NegativeInt64_40,
+    NegativeInt64_48,
+    NegativeInt64_56,
+    NegativeInt64_64,
 }
 
 impl Tag {
     fn actual_int_length(self) -> usize {
         use Tag::*;
         match self {
-            Int16_0_NonNegative | Int32_0_NonNegative | Int64_0_NonNegative => 0,
-            Int16_8_NonNegative | Int32_8_NonNegative | Int64_8_NonNegative => 1,
-            Int16_NonNegative | Int32_16_NonNegative | Int64_16_NonNegative => 2,
-            Int32_24_NonNegative | Int64_24_NonNegative => 3,
-            Int32_NonNegative | Int64_32_NonNegative => 4,
-            Int64_40_NonNegative => 5,
-            Int64_48_NonNegative => 6,
-            Int64_56_NonNegative => 7,
-            Int64_NonNegative => 8,
-            Int16_0_Negative | Int32_0_Negative | Int64_0_Negative => 0,
-            Int16_8_Negative | Int32_8_Negative | Int64_8_Negative => 1,
-            Int16_Negative | Int32_16_Negative | Int64_16_Negative => 2,
-            Int32_24_Negative | Int64_24_Negative => 3,
-            Int32_Negative | Int64_32_Negative => 4,
-            Int64_40_Negative => 5,
-            Int64_48_Negative => 6,
-            Int64_56_Negative => 7,
-            Int64_Negative => 8,
+            NonNegativeInt16_0 | NonNegativeInt32_0 | NonNegativeInt64_0 => 0,
+            NonNegativeInt16_8 | NonNegativeInt32_8 | NonNegativeInt64_8 => 1,
+            NonNegativeInt16_16 | NonNegativeInt32_16 | NonNegativeInt64_16 => 2,
+            NonNegativeInt32_24 | NonNegativeInt64_24 => 3,
+            NonNegativeInt32_32 | NonNegativeInt64_32 => 4,
+            NonNegativeInt64_40 => 5,
+            NonNegativeInt64_48 => 6,
+            NonNegativeInt64_56 => 7,
+            NonNegativeInt64_64 => 8,
+            NegativeInt16_0 | NegativeInt32_0 | NegativeInt64_0 => 0,
+            NegativeInt16_8 | NegativeInt32_8 | NegativeInt64_8 => 1,
+            NegativeInt16_16 | NegativeInt32_16 | NegativeInt64_16 => 2,
+            NegativeInt32_24 | NegativeInt64_24 => 3,
+            NegativeInt32_32 | NegativeInt64_32 => 4,
+            NegativeInt64_40 => 5,
+            NegativeInt64_48 => 6,
+            NegativeInt64_56 => 7,
+            NegativeInt64_64 => 8,
 
             _ => panic!(),
         }
@@ -535,12 +557,12 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
     byte
 }
 
-unsafe fn read_byte_array_sign_extending<const N: usize, const Fill: u8>(
+unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
     data: &[u8],
     offset: &mut usize,
     length: usize,
 ) -> [u8; N] {
-    let mut raw = [Fill; N];
+    let mut raw = [FILL; N];
     for i in 0..length {
         debug_assert!(i < raw.len());
         debug_assert!(*offset + i < data.len());
@@ -604,7 +626,11 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
-        Tag::Int16_0_NonNegative | Tag::Int16_NonNegative | Tag::Int16_8_NonNegative => {
+        Tag::Int16 => {
+            let i = i16::from_le_bytes(read_byte_array(data, offset));
+            Datum::Int16(i)
+        }
+        Tag::NonNegativeInt16_0 | Tag::NonNegativeInt16_16 | Tag::NonNegativeInt16_8 => {
             let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
@@ -612,11 +638,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             ));
             Datum::Int16(i)
         }
-        Tag::Int32_0_NonNegative
-        | Tag::Int32_NonNegative
-        | Tag::Int32_8_NonNegative
-        | Tag::Int32_16_NonNegative
-        | Tag::Int32_24_NonNegative => {
+        Tag::Int32 => {
+            let i = i32::from_le_bytes(read_byte_array(data, offset));
+            Datum::Int32(i)
+        }
+        Tag::NonNegativeInt32_0
+        | Tag::NonNegativeInt32_32
+        | Tag::NonNegativeInt32_8
+        | Tag::NonNegativeInt32_16
+        | Tag::NonNegativeInt32_24 => {
             let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
@@ -624,15 +654,19 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             ));
             Datum::Int32(i)
         }
-        Tag::Int64_0_NonNegative
-        | Tag::Int64_NonNegative
-        | Tag::Int64_8_NonNegative
-        | Tag::Int64_16_NonNegative
-        | Tag::Int64_24_NonNegative
-        | Tag::Int64_32_NonNegative
-        | Tag::Int64_40_NonNegative
-        | Tag::Int64_48_NonNegative
-        | Tag::Int64_56_NonNegative => {
+        Tag::Int64 => {
+            let i = i64::from_le_bytes(read_byte_array(data, offset));
+            Datum::Int64(i)
+        }
+        Tag::NonNegativeInt64_0
+        | Tag::NonNegativeInt64_64
+        | Tag::NonNegativeInt64_8
+        | Tag::NonNegativeInt64_16
+        | Tag::NonNegativeInt64_24
+        | Tag::NonNegativeInt64_32
+        | Tag::NonNegativeInt64_40
+        | Tag::NonNegativeInt64_48
+        | Tag::NonNegativeInt64_56 => {
             let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
@@ -640,7 +674,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             ));
             Datum::Int64(i)
         }
-        Tag::Int16_0_Negative | Tag::Int16_Negative | Tag::Int16_8_Negative => {
+        Tag::NegativeInt16_0 | Tag::NegativeInt16_16 | Tag::NegativeInt16_8 => {
             let i = i16::from_le_bytes(read_byte_array_extending_negative(
                 data,
                 offset,
@@ -648,11 +682,11 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             ));
             Datum::Int16(i)
         }
-        Tag::Int32_0_Negative
-        | Tag::Int32_Negative
-        | Tag::Int32_8_Negative
-        | Tag::Int32_16_Negative
-        | Tag::Int32_24_Negative => {
+        Tag::NegativeInt32_0
+        | Tag::NegativeInt32_32
+        | Tag::NegativeInt32_8
+        | Tag::NegativeInt32_16
+        | Tag::NegativeInt32_24 => {
             let i = i32::from_le_bytes(read_byte_array_extending_negative(
                 data,
                 offset,
@@ -660,15 +694,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             ));
             Datum::Int32(i)
         }
-        Tag::Int64_0_Negative
-        | Tag::Int64_Negative
-        | Tag::Int64_8_Negative
-        | Tag::Int64_16_Negative
-        | Tag::Int64_24_Negative
-        | Tag::Int64_32_Negative
-        | Tag::Int64_40_Negative
-        | Tag::Int64_48_Negative
-        | Tag::Int64_56_Negative => {
+        Tag::NegativeInt64_0
+        | Tag::NegativeInt64_64
+        | Tag::NegativeInt64_8
+        | Tag::NegativeInt64_16
+        | Tag::NegativeInt64_24
+        | Tag::NegativeInt64_32
+        | Tag::NegativeInt64_40
+        | Tag::NegativeInt64_48
+        | Tag::NegativeInt64_56 => {
             let i = i64::from_le_bytes(read_byte_array_extending_negative(
                 data,
                 offset,
@@ -961,7 +995,7 @@ where
     (64 - n_sign_bits + 7) / 8
 }
 
-fn push_datum<D>(data: &mut D, datum: Datum)
+fn push_datum<D, const VAR: bool>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
 {
@@ -970,37 +1004,52 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::Int16_0_Negative
-            } else {
-                Tag::Int16_0_NonNegative
-            }) + mbs;
+            if VAR {
+                let mbs = min_bytes_signed(i);
+                let tag = u8::from(if i.is_negative() {
+                    Tag::NegativeInt16_0
+                } else {
+                    Tag::NonNegativeInt16_0
+                }) + mbs;
 
-            data.push(tag.into());
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+                data.push(tag.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            } else {
+                data.push(Tag::Int16.into());
+                data.extend_from_slice(&i.to_le_bytes());
+            }
         }
         Datum::Int32(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::Int32_0_Negative
-            } else {
-                Tag::Int32_0_NonNegative
-            }) + mbs;
+            if VAR {
+                let mbs = min_bytes_signed(i);
+                let tag = u8::from(if i.is_negative() {
+                    Tag::NegativeInt32_0
+                } else {
+                    Tag::NonNegativeInt32_0
+                }) + mbs;
 
-            data.push(tag.into());
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+                data.push(tag.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            } else {
+                data.push(Tag::Int32.into());
+                data.extend_from_slice(&i.to_le_bytes());
+            }
         }
         Datum::Int64(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::Int64_0_Negative
-            } else {
-                Tag::Int64_0_NonNegative
-            }) + mbs;
+            if VAR {
+                let mbs = min_bytes_signed(i);
+                let tag = u8::from(if i.is_negative() {
+                    Tag::NegativeInt64_0
+                } else {
+                    Tag::NonNegativeInt64_0
+                }) + mbs;
 
-            data.push(tag.into());
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+                data.push(tag.into());
+                data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            } else {
+                data.push(Tag::Int64.into());
+                data.extend_from_slice(&i.to_le_bytes());
+            }
         }
         Datum::UInt8(i) => {
             data.push(Tag::UInt8.into());
@@ -1036,9 +1085,15 @@ where
         }
         Datum::Timestamp(t) => {
             let datetime = t.to_naive();
-            if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::CheapTimestamp.into());
-                data.extend_from_slice(&nanos.to_le_bytes());
+            if VAR {
+                if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                    data.push(Tag::CheapTimestamp.into());
+                    data.extend_from_slice(&nanos.to_le_bytes());
+                } else {
+                    data.push(Tag::Timestamp.into());
+                    push_naive_date(data, datetime.date());
+                    push_time(data, datetime.time());
+                }
             } else {
                 data.push(Tag::Timestamp.into());
                 push_naive_date(data, datetime.date());
@@ -1047,9 +1102,15 @@ where
         }
         Datum::TimestampTz(t) => {
             let datetime = t.to_naive();
-            if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::CheapTimestampTz.into());
-                data.extend_from_slice(&nanos.to_le_bytes());
+            if VAR {
+                if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                    data.push(Tag::CheapTimestampTz.into());
+                    data.extend_from_slice(&nanos.to_le_bytes());
+                } else {
+                    data.push(Tag::TimestampTz.into());
+                    push_naive_date(data, datetime.date());
+                    push_time(data, datetime.time());
+                }
             } else {
                 data.push(Tag::TimestampTz.into());
                 push_naive_date(data, datetime.date());
@@ -1158,7 +1219,7 @@ where
                     if let Some(bound) = bound {
                         match bound.datum() {
                             Datum::Null => panic!("cannot push Datum::Null into range"),
-                            d => push_datum(data, d),
+                            d => push_datum::<D, VAR>(data, d),
                         }
                     }
                 }
@@ -1176,7 +1237,7 @@ where
 }
 
 /// Return the number of bytes these Datums would use if packed as a Row.
-pub fn row_size<'a, I>(a: I) -> usize
+pub fn row_size_deterministic<'a, I, const VAR: bool>(a: I) -> usize
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -1184,7 +1245,7 @@ where
     // return the size of the datums if they were packed into a Row. Although
     // a.data().len() happens to give the correct answer (and is faster), data()
     // is documented as for debugging only.
-    let sz = datums_size(a);
+    let sz = datums_size_deterministic::<_, _, VAR>(a);
     let size_of_row = std::mem::size_of::<Row>();
     // The Row struct attempts to inline data until it can't fit in the
     // preallocated size. Otherwise it spills to heap, and uses the Row to point
@@ -1197,16 +1258,43 @@ where
 }
 
 /// Number of bytes required by the datum.
-///
 /// This is used to optimistically pre-allocate buffers for packing rows.
 pub fn datum_size(datum: &Datum) -> usize {
+    if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
+        datum_size_deterministic::<true>(datum)
+    } else {
+        datum_size_deterministic::<false>(datum)
+    }
+}
+
+/// Number of bytes required by the datum, given the value of
+/// `VARIABLE_LENGTH_ENCODING`.
+pub fn datum_size_deterministic<const VAR: bool>(datum: &Datum) -> usize {
     match datum {
         Datum::Null => 1,
         Datum::False => 1,
         Datum::True => 1,
-        Datum::Int16(i) => 1 + usize::from(min_bytes_signed(*i)),
-        Datum::Int32(i) => 1 + usize::from(min_bytes_signed(*i)),
-        Datum::Int64(i) => 1 + usize::from(min_bytes_signed(*i)),
+        Datum::Int16(i) => {
+            1 + if VAR {
+                usize::from(min_bytes_signed(*i))
+            } else {
+                2
+            }
+        }
+        Datum::Int32(i) => {
+            1 + if VAR {
+                usize::from(min_bytes_signed(*i))
+            } else {
+                4
+            }
+        }
+        Datum::Int64(i) => {
+            1 + if VAR {
+                usize::from(min_bytes_signed(*i))
+            } else {
+                8
+            }
+        }
         Datum::UInt8(_) => 1 + size_of::<u8>(),
         Datum::UInt16(_) => 1 + size_of::<u16>(),
         Datum::UInt32(_) => 1 + size_of::<u32>(),
@@ -1216,14 +1304,14 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Date(_) => 1 + size_of::<i32>(),
         Datum::Time(_) => 1 + 8,
         Datum::Timestamp(t) => {
-            1 + if checked_timestamp_nanos(t.to_naive()).is_some() {
+            1 + if VAR && checked_timestamp_nanos(t.to_naive()).is_some() {
                 8
             } else {
                 16
             }
         }
         Datum::TimestampTz(t) => {
-            1 + if checked_timestamp_nanos(t.naive_utc()).is_some() {
+            1 + if VAR && checked_timestamp_nanos(t.naive_utc()).is_some() {
                 8
             } else {
                 16
@@ -1292,12 +1380,29 @@ pub fn datum_size(datum: &Datum) -> usize {
 ///
 /// This method can be used to right-size the allocation for a `Row`
 /// before calling [`RowPacker::extend`].
+pub fn datums_size_deterministic<'a, I, D, const VAR: bool>(iter: I) -> usize
+where I: IntoIterator<Item = D>,
+D: Borrow<Datum<'a>>,
+{
+    iter.into_iter()
+        .map(|d| datum_size_deterministic::<VAR>(d.borrow()))
+        .sum()
+}
+
+/// Number of bytes required by a sequence of datums.
+///
+/// This method can be used to right-size the allocation for a `Row`
+/// before calling [`RowPacker::extend`].
 pub fn datums_size<'a, I, D>(iter: I) -> usize
 where
     I: IntoIterator<Item = D>,
     D: Borrow<Datum<'a>>,
 {
-    iter.into_iter().map(|d| datum_size(d.borrow())).sum()
+    if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
+        datums_size_deterministic::<_, _, true>(iter)
+    } else {
+        datums_size_deterministic::<_, _, false>(iter)
+    }
 }
 
 /// Number of bytes required by a list of datums. This computes the size that would be required if
@@ -1415,7 +1520,11 @@ impl RowPacker<'_> {
     where
         D: Borrow<Datum<'a>>,
     {
-        push_datum(&mut self.row.data, *datum.borrow())
+        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
+            push_datum::<_, true>(&mut self.row.data, *datum.borrow());
+        } else {
+            push_datum::<_, false>(&mut self.row.data, *datum.borrow());
+        }
     }
 
     /// Extend an existing `Row` with additional `Datum`s.
@@ -1425,8 +1534,14 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        for datum in iter {
-            push_datum(&mut self.row.data, *datum.borrow())
+        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
+            for datum in iter {
+                push_datum::<_, true>(&mut self.row.data, *datum.borrow())
+            }
+        } else {
+            for datum in iter {
+                push_datum::<_, false>(&mut self.row.data, *datum.borrow())
+            }
         }
     }
 
@@ -1441,8 +1556,14 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = Result<D, E>>,
         D: Borrow<Datum<'a>>,
     {
-        for datum in iter {
-            self.push(*datum?.borrow());
+        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
+            for datum in iter {
+                push_datum::<_, true>(&mut self.row.data, *datum?.borrow());
+            }
+        } else {
+            for datum in iter {
+                push_datum::<_, false>(&mut self.row.data, *datum?.borrow());
+            }
         }
         Ok(())
     }

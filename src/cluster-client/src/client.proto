@@ -21,4 +21,5 @@ message ProtoTimelyConfig {
     uint64 process = 2;
     repeated string addresses = 3;
     uint32 idle_arrangement_merge_effort = 4;
+    // bool variable_length_row_encoding = 5;
 }

@@ -3779,6 +3779,7 @@ dependencies = [
  "mz-persist-client",
  "mz-pid-file",
  "mz-prof",
+ "mz-repr",
  "mz-service",
  "mz-storage",
  "mz-storage-client",
