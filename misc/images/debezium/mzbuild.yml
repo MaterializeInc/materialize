@@ -7,11 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
-
-$ mysql-execute name=mysql
-USE test;
-CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 INTEGER, f3 BIGINT UNSIGNED);
-INSERT INTO t1 VALUES (123, 123, 123);
-INSERT INTO t1 VALUES (234, 234, 234);
-COMMIT;
+name: debezium
+description: Kafka Connect with Debezium and Confluent Avro converters.

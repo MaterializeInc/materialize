@@ -49,7 +49,8 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "decimal.handling.mode": "double"
+  "decimal.handling.mode": "double",
+  "topic.prefix": "postgres"
 }
 
 # PUT requests do not take effect immediately, we need to sleep
@@ -90,7 +91,8 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
   "provide.transaction.metadata": "true",
-  "decimal.handling.mode": "string"
+  "decimal.handling.mode": "string",
+  "topic.prefix": "postgres"
 }
 
 > SELECT mz_internal.mz_sleep(10)
@@ -128,7 +130,8 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "decimal.handling.mode": "precise"
+  "decimal.handling.mode": "precise",
+  "topic.prefix": "postgres"
 }
 
 > SELECT mz_internal.mz_sleep(10)

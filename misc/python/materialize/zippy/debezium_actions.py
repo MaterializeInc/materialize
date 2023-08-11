@@ -108,7 +108,8 @@ class CreateDebeziumSource(Action):
                         "database.history.kafka.bootstrap.servers": "kafka:9092",
                         "database.history.kafka.topic": "schema-changes.history",
                         "truncate.handling.mode": "include",
-                        "decimal.handling.mode": "precise"
+                        "decimal.handling.mode": "precise",
+                        "topic.prefix": "postgres"
                       }}
                     }}
 

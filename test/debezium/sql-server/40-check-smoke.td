@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ schema-registry-wait subject=sql-server.dbo.t1-value
+$ schema-registry-wait subject=sql-server.test.dbo.t1-value
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
@@ -31,7 +31,7 @@ $ schema-registry-wait subject=sql-server.transaction-value
 
 # TODO: make sqlserver debezium tx_metadata work.  It doesn't send the END message
 > CREATE SOURCE t1
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.t1')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.t1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
