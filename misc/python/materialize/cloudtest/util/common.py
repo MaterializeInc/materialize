@@ -43,7 +43,9 @@ def is_subdict(
     smaller_dict: dict[str, Any],
     key_path: str = "",
 ) -> bool:
-    def is_sublist(larger_list: list[Any], smaller_list: list[Any], key_path: str = ""):
+    def is_sublist(
+        larger_list: list[Any], smaller_list: list[Any], key_path: str = ""
+    ) -> bool:
         # All members of list must exist in larger_dict's list,
         # but if they are dicts, they are allowed to be subdicts,
         # rather than exact matches.

@@ -60,7 +60,7 @@ def wait_for_connectable(
     address: Union[Tuple[Any, int], str],
     max_attempts: int = 30,
 ) -> None:
-    def f():
+    def f() -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect(address)
 

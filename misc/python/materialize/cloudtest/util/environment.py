@@ -78,7 +78,7 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
     environment_assignment = f"{config.auth.organization_id}-0"
     environment = f"environment-{environment_assignment}"
 
-    def delete_environment():
+    def delete_environment() -> None:
         delete(
             config,
             config.controllers.region_api_server.configured_base_url(),

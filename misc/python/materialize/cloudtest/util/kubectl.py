@@ -163,7 +163,7 @@ def kubectl_get_retry(
     resource_name: str,
     max_attempts: int,
 ) -> Dict[str, Any]:
-    def f():
+    def f() -> Any:
         return kubectl_get(context, namespace, resource_type, resource_name)
 
     return retry(

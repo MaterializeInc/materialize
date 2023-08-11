@@ -57,10 +57,10 @@ class EnvironmentConfig:
     refresh_auth_fn: Callable[[], AuthConfig]
     auth: AuthConfig = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.refresh_auth()
 
-    def refresh_auth(self):
+    def refresh_auth(self) -> None:
         self.auth = self.refresh_auth_fn()
 
 
