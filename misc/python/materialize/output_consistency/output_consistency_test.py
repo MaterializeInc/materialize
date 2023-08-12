@@ -199,6 +199,9 @@ class OutputConsistencyTest:
 
 def connect(host: str, port: int, user: str, password: str | None = None) -> Connection:
     try:
+        print(
+            f"Connecting to database (host={host}, port={port}, user={user}, password={'****' if password else 'None'})"
+        )
         return pg8000.connect(host=host, port=port, user=user, password=password)
     except InterfaceError:
         print(f"Connecting to database failed (host={host}, port={port}, user={user})!")
