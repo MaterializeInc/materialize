@@ -64,7 +64,7 @@ LEFT JOIN mz_roles AS roles ON defaults.role_id = roles.id
 LEFT JOIN mz_roles AS grantees ON defaults.grantee = grantees.id
 LEFT JOIN mz_databases AS databases ON defaults.database_id = databases.id
 LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
-WHERE grantees.name IS NULL OR grantees.name <> 'mz_introspection'
+WHERE grantees.name IS NULL OR grantees.name <> 'mz_support'
 ORDER BY role_name, grantee_name
 
 # Test altering default privileges
@@ -190,7 +190,7 @@ COMPLETE 0
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON TABLES TO r1, r2
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type   PUBLIC  U
@@ -200,7 +200,7 @@ materialize  NULL  NULL  table  r2      r
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL PRIVILEGES ON TABLES TO r3
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type   PUBLIC  U
@@ -3862,7 +3862,7 @@ COMPLETE 0
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON SCHEMAS TO r1, r2
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type    PUBLIC  U
@@ -3872,7 +3872,7 @@ materialize  NULL  NULL  schema  r2      U
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL ON SCHEMAS TO r3
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type    PUBLIC  U
@@ -3883,7 +3883,7 @@ materialize  NULL  NULL  schema  r3      UC
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 GRANT CREATE ON SCHEMAS TO r4
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type    PUBLIC  U
@@ -3896,7 +3896,7 @@ materialize  d2    NULL  schema  r4      C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT CREATE ON SCHEMAS TO r8
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -3911,7 +3911,7 @@ materialize  d2    NULL  schema  r4      C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 GRANT CREATE ON SCHEMAS TO r10
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -3928,7 +3928,7 @@ materialize  d2    NULL  schema  r4      C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON SCHEMAS TO PUBLIC
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -3946,7 +3946,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON SCHEMAS TO r1
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -3964,7 +3964,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 CREATE SCHEMA materialize.sch
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  =C/materialize
@@ -3972,7 +3972,7 @@ sch  r2=U/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA sch
@@ -3980,7 +3980,7 @@ DROP SCHEMA sch
 statement ok
 CREATE SCHEMA d1.sch
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  =C/materialize
@@ -3989,7 +3989,7 @@ sch  r4=C/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d1.sch
@@ -3997,7 +3997,7 @@ DROP SCHEMA d1.sch
 statement ok
 CREATE SCHEMA d2.sch
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  =C/materialize
@@ -4006,7 +4006,7 @@ sch  r4=C/materialize
 sch  r1=UC/materialize
 sch  r3=UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d2.sch
@@ -4016,12 +4016,12 @@ CREATE SCHEMA materialize.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r8=C/r6
 sch  r6=UC/r6
-sch  mz_introspection=U/r6
+sch  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP SCHEMA materialize.sch
@@ -4033,12 +4033,12 @@ CREATE SCHEMA materialize.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r8=C/r7
 sch  r7=UC/r7
-sch  mz_introspection=U/r7
+sch  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP SCHEMA materialize.sch
@@ -4050,12 +4050,12 @@ CREATE SCHEMA d1.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r10=C/r9
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d1.sch
@@ -4067,12 +4067,12 @@ CREATE SCHEMA d2.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r10=C/r9
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d2.sch
@@ -4084,7 +4084,7 @@ COMPLETE 0
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON SCHEMAS FROM r1, r2
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -4101,7 +4101,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON SCHEMAS FROM r3
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -4117,7 +4117,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d1, d2 REVOKE CREATE ON SCHEMAS FROM r4
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  schema  r8      C
@@ -4131,7 +4131,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE CREATE ON SCHEMAS FROM r8
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r9           d1    NULL  schema  r10     C
@@ -4143,7 +4143,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r9 IN DATABASE d1, d2 REVOKE CREATE ON SCHEMAS FROM r10
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type    PUBLIC  U
@@ -4153,7 +4153,7 @@ materialize  NULL  NULL  schema  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON SCHEMAS FROM PUBLIC
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type    PUBLIC  U
@@ -4170,11 +4170,11 @@ PUBLIC NULL  NULL  type   PUBLIC  U
 statement ok
 CREATE SCHEMA materialize.sch
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA sch
@@ -4182,11 +4182,11 @@ DROP SCHEMA sch
 statement ok
 CREATE SCHEMA d1.sch
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d1.sch
@@ -4194,11 +4194,11 @@ DROP SCHEMA d1.sch
 statement ok
 CREATE SCHEMA d2.sch
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP SCHEMA d2.sch
@@ -4208,11 +4208,11 @@ CREATE SCHEMA materialize.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r6=UC/r6
-sch  mz_introspection=U/r6
+sch  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP SCHEMA materialize.sch
@@ -4224,11 +4224,11 @@ CREATE SCHEMA materialize.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r7=UC/r7
-sch  mz_introspection=U/r7
+sch  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP SCHEMA materialize.sch
@@ -4240,11 +4240,11 @@ CREATE SCHEMA d1.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d1.sch
@@ -4256,11 +4256,11 @@ CREATE SCHEMA d2.sch
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name = 'sch'
 ----
 sch  r9=UC/r9
-sch  mz_introspection=U/r9
+sch  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP SCHEMA d2.sch
@@ -4274,7 +4274,7 @@ COMPLETE 0
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON DATABASES TO r1, r2
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type      PUBLIC  U
@@ -4284,7 +4284,7 @@ materialize  NULL  NULL  database  r2      U
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT ALL ON DATABASES TO r3
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type      PUBLIC  U
@@ -4295,7 +4295,7 @@ materialize  NULL  NULL  database  r3      UC
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 GRANT CREATE ON DATABASES TO r8
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  database  r8      C
@@ -4308,7 +4308,7 @@ materialize  NULL  NULL  database  r3      UC
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON DATABASES TO PUBLIC
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  database  r8      C
@@ -4322,7 +4322,7 @@ materialize  NULL  NULL  database  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT CREATE ON DATABASES TO r1
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  database  r8      C
@@ -4336,7 +4336,7 @@ materialize  NULL  NULL  database  PUBLIC  C
 statement ok
 CREATE DATABASE d
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  =C/materialize
@@ -4344,7 +4344,7 @@ d  r2=U/materialize
 d  r1=UC/materialize
 d  r3=UC/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 statement ok
 DROP DATABASE d
@@ -4354,12 +4354,12 @@ CREATE DATABASE d
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r8=C/r6
 d  r6=UC/r6
-d  mz_introspection=U/r6
+d  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP DATABASE d
@@ -4371,12 +4371,12 @@ CREATE DATABASE d
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r8=C/r7
 d  r7=UC/r7
-d  mz_introspection=U/r7
+d  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP DATABASE d
@@ -4388,11 +4388,11 @@ CREATE DATABASE d
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r9=UC/r9
-d  mz_introspection=U/r9
+d  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP DATABASE d
@@ -4404,7 +4404,7 @@ COMPLETE 0
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON DATABASES FROM r1, r2
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  database  r8      C
@@ -4417,7 +4417,7 @@ materialize  NULL  NULL  database  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON DATABASES FROM r3
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  database  r8      C
@@ -4429,7 +4429,7 @@ materialize  NULL  NULL  database  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE CREATE ON DATABASES FROM r8
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type      PUBLIC  U
@@ -4456,11 +4456,11 @@ PUBLIC NULL  NULL  type   PUBLIC  U
 statement ok
 CREATE DATABASE d
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 statement ok
 DROP DATABASE d
@@ -4470,11 +4470,11 @@ CREATE DATABASE d
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r6=UC/r6
-d  mz_introspection=U/r6
+d  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP DATABASE d
@@ -4486,11 +4486,11 @@ CREATE DATABASE d
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r7=UC/r7
-d  mz_introspection=U/r7
+d  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP DATABASE d
@@ -4506,7 +4506,7 @@ query TT
 SELECT name, unnest(privileges)::text FROM mz_databases WHERE name = 'd'
 ----
 d  r9=UC/r9
-d  mz_introspection=U/r9
+d  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP DATABASE d
@@ -4582,7 +4582,7 @@ materialize  NULL  NULL  cluster  PUBLIC  C
 statement ok
 CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  =C/materialize
@@ -4590,7 +4590,7 @@ c  r2=U/materialize
 c  r1=UC/materialize
 c  r3=UC/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4600,12 +4600,12 @@ CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r6
 c  r6=UC/r6
-c  mz_introspection=U/r6
+c  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4617,12 +4617,12 @@ CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r8=C/r7
 c  r7=UC/r7
-c  mz_introspection=U/r7
+c  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4634,11 +4634,11 @@ CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
-c  mz_introspection=U/r9
+c  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -4650,7 +4650,7 @@ COMPLETE 0
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CLUSTERS FROM r1, r2
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  cluster  r8      C
@@ -4663,7 +4663,7 @@ materialize  NULL  NULL  cluster  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON CLUSTERS FROM r3
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 r6           NULL  NULL  cluster  r8      C
@@ -4675,7 +4675,7 @@ materialize  NULL  NULL  cluster  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r6, r7 REVOKE CREATE ON CLUSTERS FROM r8
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type     PUBLIC  U
@@ -4685,7 +4685,7 @@ materialize  NULL  NULL  cluster  PUBLIC  C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON CLUSTERS FROM PUBLIC
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type     PUBLIC  U
@@ -4694,7 +4694,7 @@ materialize  NULL  NULL  cluster  r1      C
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE CREATE ON CLUSTERS FROM r1
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC NULL  NULL  type  PUBLIC  U
@@ -4702,11 +4702,11 @@ PUBLIC NULL  NULL  type  PUBLIC  U
 statement ok
 CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 DROP CLUSTER c
@@ -4716,11 +4716,11 @@ CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r6=UC/r6
-c  mz_introspection=U/r6
+c  mz_support=U/r6
 
 simple conn=r6,user=r6
 DROP CLUSTER c
@@ -4732,11 +4732,11 @@ CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r7=UC/r7
-c  mz_introspection=U/r7
+c  mz_support=U/r7
 
 simple conn=r7,user=r7
 DROP CLUSTER c
@@ -4748,11 +4748,11 @@ CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
 ----
 c  r9=UC/r9
-c  mz_introspection=U/r9
+c  mz_support=U/r9
 
 simple conn=r9,user=r9
 DROP CLUSTER c
@@ -4894,7 +4894,7 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT INSERT ON TABLES TO r1;
 ----
 COMPLETE 0
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC  NULL  NULL  table  r1      a
@@ -4913,7 +4913,7 @@ CREATE TABLE t ();
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_tables WHERE name = 't'
 ----
 t  r1=a/r2
@@ -4940,7 +4940,7 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE INSERT ON TABLES FROM r1;
 ----
 COMPLETE 0
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC  NULL  NULL  type   PUBLIC  U
@@ -4990,7 +4990,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC GRANT CREATE ON CLUSTERS TO materialize
 ----
 COMPLETE 0
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC  NULL  NULL  type     PUBLIC      U
@@ -5020,7 +5020,7 @@ GRANT r1 TO materialize
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 GRANT SELECT ON TABLES TO materialize
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC  NULL  NULL  type   PUBLIC       U
@@ -5037,7 +5037,7 @@ PUBLIC  NULL  NULL  type   PUBLIC  U
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT SELECT ON TABLES TO r1
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type   PUBLIC  U
@@ -5104,7 +5104,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT DELETE ON CLUSTERS TO PUBLIC
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE mz_introspection GRANT SELECT ON TABLES TO PUBLIC
 ----
-db error: ERROR: role name "mz_introspection" is reserved
+db error: ERROR: unknown role 'mz_introspection'
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE mz_support GRANT SELECT ON TABLES TO PUBLIC
+----
+db error: ERROR: role name "mz_support" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
 
 statement error system schema 'mz_catalog' cannot be modified
@@ -5113,8 +5118,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog GRANT INSERT 
 statement error role name "mz_system" is reserved
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT INSERT ON TABLES TO mz_system
 
-statement error role name "mz_introspection" is reserved
-ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CLUSTERS FROM mz_introspection
+statement error role name "mz_support" is reserved
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON CLUSTERS FROM mz_support
 
 # Test that we don't retain dangling pointers in default privileges
 
@@ -5124,7 +5129,7 @@ CREATE DATABASE d
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE d GRANT SELECT ON TABLES TO PUBLIC
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL  NULL  type   PUBLIC  U
@@ -5144,7 +5149,7 @@ CREATE SCHEMA s
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA s GRANT SELECT ON TABLES TO PUBLIC
 
-query TTTTTT
+query TTTTTT rowsort
 SELECT * FROM default_privileges
 ----
 PUBLIC       NULL         NULL  type   PUBLIC  U

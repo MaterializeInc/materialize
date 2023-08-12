@@ -44,7 +44,7 @@ use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
     self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
+    SerializedReplicaLocation, SerializedReplicaLogging, SystemObjectMapping,
 };
 use crate::coord::timeline;
 
@@ -61,7 +61,7 @@ pub use stash::{
 };
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
-pub const MZ_INTROSPECTION_ROLE_ID: RoleId = RoleId::System(2);
+pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
 
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
@@ -155,8 +155,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
     SerializedReplicaConfig {
         location: SerializedReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
-            availability_zone: bootstrap_args.default_availability_zone.clone(),
-            az_user_specified: false,
+            availability_zone: None,
             disk: false,
         },
         logging: default_logging_config(),
@@ -175,7 +174,6 @@ fn default_logging_config() -> SerializedReplicaLogging {
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
-    pub default_availability_zone: String,
     pub bootstrap_role: Option<String>,
 }
 
@@ -355,9 +353,9 @@ impl Connection {
             .map(RustType::from_proto)
             .map_ok(|(k, v): (RoleKey, RoleValue)| Role {
                 id: k.id,
-                name: v.role.name,
-                attributes: v.role.attributes,
-                membership: v.role.membership,
+                name: v.name,
+                attributes: v.attributes,
+                membership: v.membership,
             })
             .collect::<Result<_, _>>()?;
 
@@ -872,7 +870,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         items: TableTransaction::new(items, |a: &ItemValue, b| {
             a.schema_id == b.schema_id && a.name == b.name
         })?,
-        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.role.name == b.role.name)?,
+        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
         clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
         cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
@@ -1027,11 +1025,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn insert_user_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+    pub(crate) fn insert_user_role(
+        &mut self,
+        name: String,
+        attributes: RoleAttributes,
+        membership: RoleMembership,
+    ) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
-        let name = role.name.clone();
-        match self.roles.insert(RoleKey { id }, RoleValue { role }) {
+        match self.roles.insert(
+            RoleKey { id },
+            RoleValue {
+                name: name.clone(),
+                attributes,
+                membership,
+            },
+        ) {
             Ok(_) => Ok(id),
             Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(name))),
         }
@@ -1303,7 +1312,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub(crate) fn remove_role(&mut self, name: &str) -> Result<(), Error> {
-        let roles = self.roles.delete(|_k, v| v.role.name == name);
+        let roles = self.roles.delete(|_k, v| v.name == name);
         assert!(
             roles.iter().all(|(k, _)| k.id.is_user()),
             "cannot delete non-user roles"
@@ -1449,10 +1458,10 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub(crate) fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
+    pub(crate) fn update_role(&mut self, id: RoleId, role: catalog::Role) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
-                Some(RoleValue { role: role.clone() })
+                Some(RoleValue::from(role.clone()))
             } else {
                 None
             }
@@ -1997,7 +2006,19 @@ pub struct RoleKey {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
-    role: SerializedRole,
+    name: String,
+    attributes: RoleAttributes,
+    membership: RoleMembership,
+}
+
+impl From<catalog::Role> for RoleValue {
+    fn from(role: catalog::Role) -> Self {
+        RoleValue {
+            name: role.name,
+            attributes: role.attributes,
+            membership: role.membership,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]

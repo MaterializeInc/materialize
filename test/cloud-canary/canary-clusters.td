@@ -14,7 +14,7 @@
 > SET cluster=cluster1;
 
 > SHOW CLUSTERS LIKE 'cluster1';
-cluster1
+cluster1 "replica1 (3xsmall), replica2 (3xsmall)"
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'cluster1';
 cluster1 replica1 3xsmall true

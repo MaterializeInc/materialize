@@ -1052,12 +1052,6 @@ def workflow_test_github_19610(c: Composition) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
-            port=6877,
-            user="mz_system",
-        )
-
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -1162,12 +1156,6 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
             port=6877,
             user="mz_system",
         )
@@ -2116,12 +2104,12 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     assert count == 1, f"unexpected create_instance count: {count}"
     count = metrics.get_command_count("allow_compaction")
     assert count > 0, f"unexpected allow_compaction count: {count}"
-    count = metrics.get_command_count("create_dataflows")
-    assert count > 0, f"unexpected create_dataflows count: {count}"
+    count = metrics.get_command_count("create_dataflow")
+    assert count > 0, f"unexpected create_dataflow count: {count}"
     count = metrics.get_command_count("peek")
     assert count <= 2, f"unexpected peek count: {count}"
-    count = metrics.get_command_count("cancel_peeks")
-    assert count == 0, f"unexpected cancel_peeks count: {count}"
+    count = metrics.get_command_count("cancel_peek")
+    assert count == 0, f"unexpected cancel_peek count: {count}"
     count = metrics.get_command_count("initialization_complete")
     assert count == 0, f"unexpected initialization_complete count: {count}"
     count = metrics.get_command_count("update_configuration")

@@ -91,7 +91,8 @@ The `mz_clusters` table contains a row for each cluster in the system.
 | `managed`            | [`boolean`]          | Whether the cluster has automatically managed replicas.                                                            |
 | `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. If the cluster is unmanaged, `NULL`.        |
 | `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. If the cluster is unmanaged, `NULL`.     |
-| `disk`               | [`boolean`]          | If the replicas have a local disk.
+| `disk`               | [`boolean`]          | If the replicas have a local disk.                                                                                 |
+| `availability_zones` | [`list`]             | The AWS availability zones of the cluster.                                                                         |
 
 ### `mz_columns`
 

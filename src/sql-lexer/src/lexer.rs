@@ -58,6 +58,9 @@ static ALLOCATOR: LockedAllocator<FreeListAllocator> =
 #[wasm_bindgen(typescript_custom_section)]
 const LEX_TS_DEF: &'static str = r#"export function lex(query: string): PosToken[];"#;
 
+// Maximum allowed identifier length in bytes.
+pub const MAX_IDENTIFIER_LENGTH: usize = 255;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LexerError {
     /// The error message.
@@ -210,7 +213,7 @@ fn lex_inner(query: &str) -> Result<Vec<PosToken>, LexerError> {
             '\'' => Token::String(lex_string(buf)?),
             'x' | 'X' if buf.consume('\'') => Token::HexString(lex_string(buf)?),
             'e' | 'E' if buf.consume('\'') => lex_extended_string(buf)?,
-            'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX => lex_ident(buf),
+            'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX => lex_ident(buf)?,
             '"' => lex_quoted_ident(buf)?,
             '0'..='9' => lex_number(buf)?,
             '.' if matches!(buf.peek(), Some('0'..='9')) => lex_number(buf)?,
@@ -266,14 +269,23 @@ fn lex_multiline_comment(buf: &mut LexBuf) -> Result<(), LexerError> {
     bail!(pos, "unterminated multiline comment")
 }
 
-fn lex_ident(buf: &mut LexBuf) -> Token {
+fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     buf.prev();
+    let pos: usize = buf.pos();
     let word = buf.take_while(
         |ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '$' | '_' | '\u{80}'..=char::MAX),
     );
     match word.parse() {
-        Ok(kw) => Token::Keyword(kw),
-        Err(_) => Token::Ident(word.to_lowercase()),
+        Ok(kw) => Ok(Token::Keyword(kw)),
+        Err(_) => {
+            if word.len() > MAX_IDENTIFIER_LENGTH {
+                bail!(
+                    pos,
+                    "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
+                )
+            }
+            Ok(Token::Ident(word.to_lowercase()))
+        }
     }
 }
 
@@ -288,6 +300,12 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
             Some(c) => s.push(c),
             None => bail!(pos, "unterminated quoted identifier"),
         }
+    }
+    if s.len() > MAX_IDENTIFIER_LENGTH {
+        bail!(
+            pos,
+            "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
+        )
     }
     Ok(Token::Ident(s))
 }

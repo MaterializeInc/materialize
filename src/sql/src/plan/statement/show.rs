@@ -283,6 +283,14 @@ pub fn show_schemas<'a>(
     ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
+pub fn show_roles<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let query = "SELECT name FROM mz_catalog.mz_roles WHERE id NOT LIKE 's%'".to_string();
+    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -299,7 +307,10 @@ pub fn show_objects<'a>(
         ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
-        ShowObjectType::Role => bail_unsupported!("SHOW ROLES"),
+        ShowObjectType::Role => {
+            assert!(from.is_none(), "parser should reject from");
+            show_roles(scx, filter)
+        }
         ShowObjectType::Cluster => {
             assert!(from.is_none(), "parser should reject from");
             show_clusters(scx, filter)
@@ -627,13 +638,24 @@ pub fn show_columns<'a>(
     )
 }
 
+// The rationale for which fields to include in the tuples are those
+// that are mandatory when creating a replica as part of the CREATE
+// CLUSTER command, i.e., name and size.
 pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
-
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    let query = "
+SELECT
+    mc.name,
+    pg_catalog.string_agg(mcr.name || ' (' || mcr.size || ')', ', ' ORDER BY mcr.name)
+        AS replicas
+FROM
+    mz_catalog.mz_clusters mc
+        LEFT JOIN mz_catalog.mz_cluster_replicas mcr ON mc.id = mcr.cluster_id
+GROUP BY mc.name"
+        .to_string();
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "replicas"]))
 }
 
 pub fn show_cluster_replicas<'a>(

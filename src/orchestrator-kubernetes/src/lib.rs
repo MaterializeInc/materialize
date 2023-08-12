@@ -86,14 +86,16 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
-    EphemeralVolumeSource, ObjectFieldSelector, ObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodAffinityTerm,
-    PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
+    EphemeralVolumeSource, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+    ObjectFieldSelector, ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
+    PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
+    Secret, Service as K8sService, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint,
+    Volume, VolumeMount, WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
-use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
@@ -102,9 +104,9 @@ use maplit::btreemap;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
-    NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics,
-    ServiceStatus,
+    scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
+    NamespacedOrchestrator, NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics, ServiceStatus,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -219,6 +221,8 @@ impl Orchestrator for KubernetesOrchestrator {
                 kubernetes_namespace: self.kubernetes_namespace.clone(),
                 namespace: namespace.into(),
                 config: self.config.clone(),
+                // TODO(guswynn): make this configurable.
+                scheduling_config: Default::default(),
                 service_infos: std::sync::Mutex::new(BTreeMap::new()),
             })
         }))
@@ -241,6 +245,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
+    scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
     service_infos: std::sync::Mutex<BTreeMap<String, ServiceInfo>>,
 }
 
@@ -351,14 +356,14 @@ impl k8s_openapi::Metadata for MetricValueList {
 }
 
 impl NamespacedKubernetesOrchestrator {
-    /// Return a `ListParams` instance that limits results to the namespace
+    /// Return a `wather::Config` instance that limits results to the namespace
     /// assigned to this orchestrator.
-    fn list_pod_params(&self) -> ListParams {
+    fn watch_pod_params(&self) -> watcher::Config {
         let ns_selector = format!(
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
         );
-        ListParams::default().labels(&ns_selector)
+        watcher::Config::default().labels(&ns_selector)
     }
     /// Convert a higher-level label key to the actual one we
     /// will give to Kubernetes
@@ -740,12 +745,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             cpu_limit,
             scale,
             labels: labels_in,
-            availability_zone,
-            anti_affinity,
+            availability_zones,
+            other_replicas_selector,
+            replicas_selector,
             disk,
             disk_limit,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
+        // This is extremely cheap to clone, so just look into the lock once.
+        let scheduling_config: ServiceSchedulingConfig =
+            self.scheduling_config.read().expect("poisoned").clone();
+
         let name = format!("{}-{id}", self.namespace);
         // The match labels should be the minimal set of labels that uniquely
         // identify the pods in the stateful set. Changing these after the
@@ -760,6 +770,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
         }
+
+        labels.insert(self.make_label_key("scale"), scale.to_string());
+
         for port in &ports_in {
             labels.insert(
                 format!("environmentd.materialize.cloud/port-{}", port.name),
@@ -823,27 +836,131 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .collect::<BTreeMap<_, _>>();
         let mut args = args(&listen_addrs);
 
-        let anti_affinity = anti_affinity
-            .map(|label_selectors| -> Result<_, anyhow::Error> {
-                let label_selector_requirements = label_selectors
-                    .into_iter()
-                    .map(|ls| self.label_selector_to_k8s(ls))
-                    .collect::<Result<Vec<_>, _>>()?;
+        // This constrains the orchestrator (for those orchestrators that support
+        // anti-affinity, today just k8s) to never schedule pods for different replicas
+        // of the same cluster on the same node. Pods from the _same_ replica are fine;
+        // pods from different clusters are also fine.
+        //
+        // The point is that if pods of two replicas are on the same node, that node
+        // going down would kill both replicas, and so the replication factor of the
+        // cluster in question is illusory.
+        let anti_affinity = Some({
+            let label_selector_requirements = other_replicas_selector
+                .clone()
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ls = LabelSelector {
+                match_expressions: Some(label_selector_requirements),
+                ..Default::default()
+            };
+            let pat = PodAffinityTerm {
+                label_selector: Some(ls),
+                topology_key: "kubernetes.io/hostname".to_string(),
+                ..Default::default()
+            };
+
+            if !scheduling_config.soften_replication_anti_affinity {
+                PodAntiAffinity {
+                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
+                    ..Default::default()
+                }
+            } else {
+                PodAntiAffinity {
+                    preferred_during_scheduling_ignored_during_execution: Some(vec![
+                        WeightedPodAffinityTerm {
+                            weight: scheduling_config.soften_replication_anti_affinity_weight,
+                            pod_affinity_term: pat,
+                        },
+                    ]),
+                    ..Default::default()
+                }
+            }
+        });
+
+        let pod_affinity = if let Some(weight) = scheduling_config.multi_pod_az_affinity_weight {
+            // `match_labels` sufficiently selects pods in the same replica.
+            let ls = LabelSelector {
+                match_labels: Some(match_labels.clone()),
+                ..Default::default()
+            };
+            let pat = PodAffinityTerm {
+                label_selector: Some(ls),
+                topology_key: "topology.kubernetes.io/zone".to_string(),
+                ..Default::default()
+            };
+
+            Some(PodAffinity {
+                preferred_during_scheduling_ignored_during_execution: Some(vec![
+                    WeightedPodAffinityTerm {
+                        weight,
+                        pod_affinity_term: pat,
+                    },
+                ]),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let topology_spread = if scheduling_config.topology_spread.enabled {
+            let config = &scheduling_config.topology_spread;
+
+            if !config.ignore_non_singular_scale || scale <= 1 {
+                let label_selector_requirements = (if config.ignore_non_singular_scale {
+                    let mut replicas_selector_ignoring_scale = replicas_selector.clone();
+
+                    replicas_selector_ignoring_scale.push(mz_orchestrator::LabelSelector {
+                        label_name: "scale".into(),
+                        logic: mz_orchestrator::LabelSelectionLogic::Eq {
+                            value: "1".to_string(),
+                        },
+                    });
+
+                    replicas_selector_ignoring_scale
+                } else {
+                    replicas_selector
+                })
+                .into_iter()
+                .map(|ls| self.label_selector_to_k8s(ls))
+                .collect::<Result<Vec<_>, _>>()?;
                 let ls = LabelSelector {
                     match_expressions: Some(label_selector_requirements),
                     ..Default::default()
                 };
-                let pat = PodAffinityTerm {
+
+                let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    topology_key: "kubernetes.io/hostname".to_string(),
+                    min_domains: None,
+                    max_skew: config.max_skew,
+                    topology_key: "topology.kubernetes.io/zone".to_string(),
+                    when_unsatisfiable: if config.soft {
+                        "ScheduleAnyway".to_string()
+                    } else {
+                        "DoNotSchedule".to_string()
+                    },
+                    // TODO(guswynn): restore these once they are supported.
+                    // Consider node affinities when calculating topology spread. This is the
+                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_affinity_policy>,
+                    // made explicit.
+                    // node_affinity_policy: Some("Honor".to_string()),
+                    // Do not consider node taints when calculating topology spread. This is the
+                    // default: <https://docs.rs/k8s-openapi/latest/k8s_openapi/api/core/v1/struct.TopologySpreadConstraint.html#structfield.node_taints_policy>,
+                    // made explicit.
+                    // node_taints_policy: Some("Ignore".to_string()),
+                    match_label_keys: None,
+                    // Once the above are restorted, we should't have `..Default::default()` here because the specifics of these fields are
+                    // subtle enough where we want compilation failures when we upgrade
                     ..Default::default()
                 };
-                Ok(PodAntiAffinity {
-                    required_during_scheduling_ignored_during_execution: Some(vec![pat]),
-                    ..Default::default()
-                })
-            })
-            .transpose()?;
+                Some(vec![constraint])
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let pod_annotations = btreemap! {
             // Prevent the cluster-autoscaler from evicting these pods in attempts to scale down
             // and terminate nodes.
@@ -859,12 +976,38 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .clone()
             .into_iter()
             .collect();
-        if let Some(availability_zone) = availability_zone {
-            node_selector.insert(
-                "materialize.cloud/availability-zone".to_string(),
-                availability_zone,
-            );
-        }
+
+        let node_affinity = if let Some(availability_zones) = availability_zones {
+            let selector = NodeSelectorTerm {
+                match_expressions: Some(vec![NodeSelectorRequirement {
+                    key: "materialize.cloud/availability-zone".to_string(),
+                    operator: "In".to_string(),
+                    values: Some(availability_zones),
+                }]),
+                match_fields: None,
+            };
+
+            if scheduling_config.soften_az_affinity {
+                Some(NodeAffinity {
+                    preferred_during_scheduling_ignored_during_execution: Some(vec![
+                        PreferredSchedulingTerm {
+                            preference: selector,
+                            weight: scheduling_config.soften_az_affinity_weight,
+                        },
+                    ]),
+                    required_during_scheduling_ignored_during_execution: None,
+                })
+            } else {
+                Some(NodeAffinity {
+                    preferred_during_scheduling_ignored_during_execution: None,
+                    required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                        node_selector_terms: vec![selector],
+                    }),
+                })
+            }
+        } else {
+            None
+        };
 
         node_selector.insert("materialize.cloud/disk".to_string(), disk.to_string());
 
@@ -1091,8 +1234,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_account: self.config.service_account.clone(),
                 affinity: Some(Affinity {
                     pod_anti_affinity: anti_affinity,
+                    pod_affinity,
+                    node_affinity,
                     ..Default::default()
                 }),
+                topology_spread_constraints: topology_spread,
                 tolerations,
                 // Setting a 0s termination grace period has the side effect of
                 // automatically starting a new pod when the previous pod is
@@ -1317,7 +1463,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let stream = watcher(self.pod_api.clone(), self.list_pod_params())
+        let stream = watcher(self.pod_api.clone(), self.watch_pod_params())
             .touched_objects()
             .filter_map(|object| async move {
                 match object {
@@ -1331,6 +1477,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             });
         Box::pin(stream)
+    }
+
+    fn update_scheduling_config(&self, config: ServiceSchedulingConfig) {
+        *self.scheduling_config.write().expect("poisoned") = config;
     }
 }
 

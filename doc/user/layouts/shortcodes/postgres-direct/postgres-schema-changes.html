@@ -1,22 +1,25 @@
-Materialize supports changes to PostgreSQL sources' ingested tables (known as
-"subsources") in the following ways:
+Materialize supports schema changes in the upstream PostgreSQL database as
+follows:
 
 #### Compatible schema changes
 
-- Adding columns to tables. Materialize will not ingest these columns.
+- Adding columns to tables. Materialize will **not ingest** these columns unless
+  you use [`ALTER SOURCE...{DROP | ADD} SUBSOURCE`](/sql/alter-source/) to
+  first drop the affected subsource, and then add the table back to the
+  source.
 - Dropping columns that were added after the source was created. These columns
-are never ingested, so can be dropped without issue.
+  are never ingested, so you can drop them without issue.
 - Adding or removing `NOT NULL` constraints to tables that were nullable when
-the source was created.
+  the source was created.
 
 #### Incompatible schema changes
 
-- All other changes to tables' schemas are considered "definite errors," and
-Materialize will prevent you from reading from the subsource after it detects
-this change occurred.
+All other schema changes to tables in the publication will set the corresponding
+subsource into an error state, which prevents you from reading from the
+subsource(s).
 
-However, if you make an incompatible schema change to a subsource's upstream
-table, you use use [`ALTER SOURCE`](/sql/alter-source/) to first drop the
-subsource (`DROP SUBSOURCE`), and then add it back to the source (`ADD
-SUBSOURCE`). When you add the subsource, it will have the Postgres table's
-current schema.
+To handle incompatible [schema changes](#schema-changes), use [`ALTER SOURCE...
+{DROP | ADD} SUBSOURCE`](/sql/alter-source/) to first drop the affected
+subsource, and then add the table back to the source. When you add the
+subsource, it will have the updated schema from the corresponding upstream
+table.

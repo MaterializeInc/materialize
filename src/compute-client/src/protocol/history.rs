@@ -12,7 +12,6 @@
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use timely::progress::Antichain;
 
@@ -67,11 +66,8 @@ where
             .for_command(&command)
             .borrow()
             .inc();
-        if let ComputeCommand::CreateDataflows(dataflows) = &command {
-            self.metrics
-                .dataflow_count
-                .borrow()
-                .add(u64::cast_from(dataflows.len()));
+        if matches!(command, ComputeCommand::CreateDataflow(_)) {
+            self.metrics.dataflow_count.borrow().inc();
         }
 
         self.commands.push(command);
@@ -120,19 +116,17 @@ where
                 ComputeCommand::UpdateConfiguration(params) => {
                     final_configuration.update(params);
                 }
-                ComputeCommand::CreateDataflows(dataflows) => {
-                    live_dataflows.extend(dataflows);
+                ComputeCommand::CreateDataflow(dataflow) => {
+                    live_dataflows.push(dataflow);
                 }
-                ComputeCommand::AllowCompaction(frontiers) => {
-                    for (id, frontier) in frontiers {
-                        final_frontiers.insert(id, frontier.clone());
-                    }
+                ComputeCommand::AllowCompaction { id, frontier } => {
+                    final_frontiers.insert(id, frontier.clone());
                 }
                 ComputeCommand::Peek(peek) => {
                     live_peeks.push(peek);
                 }
-                ComputeCommand::CancelPeeks { uuids } => {
-                    live_cancels.extend(uuids);
+                ComputeCommand::CancelPeek { uuid } => {
+                    live_cancels.insert(uuid);
                 }
             }
         }
@@ -201,22 +195,18 @@ where
         if !final_configuration.all_unset() {
             self.push_inner(ComputeCommand::UpdateConfiguration(final_configuration));
         }
-        if !live_dataflows.is_empty() {
-            self.push_inner(ComputeCommand::CreateDataflows(live_dataflows));
+        for dataflow in live_dataflows {
+            self.push_inner(ComputeCommand::CreateDataflow(dataflow));
         }
         for peek in live_peeks {
             self.push_inner(ComputeCommand::Peek(peek));
         }
-        if !live_cancels.is_empty() {
-            self.push_inner(ComputeCommand::CancelPeeks {
-                uuids: live_cancels,
-            });
+        for uuid in live_cancels {
+            self.push_inner(ComputeCommand::CancelPeek { uuid });
         }
         // Allow compaction only after emmitting peek commands.
-        if !final_frontiers.is_empty() {
-            self.push_inner(ComputeCommand::AllowCompaction(
-                final_frontiers.into_iter().collect(),
-            ));
+        for (id, frontier) in final_frontiers {
+            self.push_inner(ComputeCommand::AllowCompaction { id, frontier });
         }
         if initialization_complete {
             self.push_inner(ComputeCommand::InitializationComplete);
@@ -227,15 +217,10 @@ where
 
     /// Retain only those peeks present in `peeks` and discard the rest.
     pub fn retain_peeks<V>(&mut self, peeks: &BTreeMap<uuid::Uuid, V>) {
-        for command in self.commands.iter_mut() {
-            if let ComputeCommand::CancelPeeks { uuids } = command {
-                uuids.retain(|uuid| peeks.contains_key(uuid));
-            }
-        }
         self.commands.retain(|command| {
             let retain = match command {
                 ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
-                ComputeCommand::CancelPeeks { uuids } => !uuids.is_empty(),
+                ComputeCommand::CancelPeek { uuid } => peeks.contains_key(uuid),
                 _ => true,
             };
             if !retain {

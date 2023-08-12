@@ -13,15 +13,29 @@ from typing import Optional
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
-from materialize.cloudtest.k8s import K8sPod
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
 
 
 class Testdrive(K8sPod):
-    def __init__(self, release_mode: bool, aws_region: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        release_mode: bool,
+        aws_region: Optional[str] = None,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
+        materialize_internal_url: str = "postgres://mz_system@environmentd:6877/materialize",
+        kafka_addr: str = "redpanda:9092",
+        schema_registry_url: str = "http://redpanda:8081",
+    ) -> None:
+        super().__init__(namespace)
         self.aws_region = aws_region
+        self.materialize_url = materialize_url
+        self.materialize_internal_url = materialize_internal_url
+        self.kafka_addr = kafka_addr
+        self.schema_registry_url = schema_registry_url
 
-        metadata = V1ObjectMeta(name="testdrive")
+        metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
         # Pass through AWS credentials from the host
         env = [
@@ -51,22 +65,18 @@ class Testdrive(K8sPod):
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
         default_timeout: str = "300s",
-        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
-        materialize_internal_url: str = "postgres://materialize:materialize@environmentd:6877/materialize",
-        kafka_addr: str = "redpanda:9092",
-        schema_registry_url: str = "http://redpanda:8081",
     ) -> None:
-        wait(condition="condition=Ready", resource="pod/testdrive")
+        self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
             "exec",
             "-it",
             "testdrive",
             "--",
             "testdrive",
-            f"--materialize-url={materialize_url}",
-            f"--materialize-internal-url={materialize_internal_url}",
-            f"--kafka-addr={kafka_addr}",
-            f"--schema-registry-url={schema_registry_url}",
+            f"--materialize-url={self.materialize_url}",
+            f"--materialize-internal-url={self.materialize_internal_url}",
+            f"--kafka-addr={self.kafka_addr}",
+            f"--schema-registry-url={self.schema_registry_url}",
             f"--default-timeout={default_timeout}",
             "--var=replicas=1",
             "--var=default-storage-size=1",

@@ -106,9 +106,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
               USER postgres,
               PASSWORD SECRET pgpass
               )
-
-            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-            ALTER SYSTEM SET enable_with_mutually_recursive = true
             """
         )
     )

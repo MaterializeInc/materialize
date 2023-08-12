@@ -12,11 +12,6 @@
 # PR https://github.com/MaterializeInc/materialize/pull/7715
 #
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
@@ -47,7 +42,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -74,7 +69,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -95,7 +90,7 @@ Explained Query:
           ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -119,7 +114,7 @@ Explained Query:
           ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -146,7 +141,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -183,7 +178,7 @@ Explained Query:
                     Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (differential join)
 
 EOF
 
@@ -219,7 +214,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (differential join, lookup)
 
 EOF
 
@@ -247,7 +242,7 @@ Explained Query:
                       Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (differential join)
 
 EOF
 
@@ -292,7 +287,7 @@ Explained Query:
                   Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -320,7 +315,7 @@ Explained Query:
           ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -346,7 +341,7 @@ Explained Query:
             ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -376,7 +371,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -399,7 +394,7 @@ Explained Query:
         ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -421,7 +416,7 @@ Explained Query:
         ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -467,7 +462,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -524,7 +519,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -576,7 +571,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -623,7 +618,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -658,7 +653,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -703,7 +698,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (differential join, differential join, differential join)
 
 EOF
 
@@ -744,7 +739,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup, lookup)
 
 EOF
 
@@ -780,7 +775,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -821,7 +816,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup, lookup)
 
 EOF
 
@@ -847,7 +842,7 @@ Explained Query:
           ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -872,7 +867,7 @@ Explained Query:
         ReadExistingIndex materialize.public.t1 lookup_values=[(1); (2)] // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -904,7 +899,7 @@ Explained Query:
               ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -944,7 +939,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (differential join, lookup)
 
 EOF
 
@@ -970,7 +965,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1006,7 +1001,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1028,7 +1023,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1050,7 +1045,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1075,7 +1070,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1097,7 +1092,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1124,7 +1119,7 @@ Explained Query:
         ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -1152,7 +1147,7 @@ Explained Query:
               ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -1186,7 +1181,7 @@ Explained Query:
               ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -1219,7 +1214,7 @@ Explained Query:
             ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -1249,7 +1244,7 @@ Explained Query:
         ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -1272,7 +1267,7 @@ Explained Query:
       ReadExistingIndex materialize.public.t1 lookup_value=(1) // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup)
 
 EOF
 
@@ -1301,7 +1296,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup, lookup)
 
 EOF
 
@@ -1342,7 +1337,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup, lookup)
 
 EOF
 
@@ -1365,7 +1360,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (lookup, lookup)
 
 EOF
 
@@ -1406,7 +1401,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1446,7 +1441,7 @@ Explained Query:
           Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 
@@ -1540,7 +1535,7 @@ Explained Query:
         Get materialize.public.t1 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1
+  - materialize.public.i1 (*** full scan ***)
 
 EOF
 

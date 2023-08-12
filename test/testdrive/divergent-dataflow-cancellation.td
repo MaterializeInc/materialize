@@ -14,9 +14,6 @@
 # sources. This also serves to verify that logging is correctly cleaned up under
 # active dataflow cancellation.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-
 > CREATE VIEW divergent AS
   WITH MUTUALLY RECURSIVE
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)
@@ -93,7 +90,7 @@ contains: canceling statement due to statement timeout
 > SELECT count(*)
   FROM mz_internal.mz_compute_frontiers_per_worker
   WHERE worker_id = 0
-19
+25
 
 > SELECT count(*) FROM mz_internal.mz_compute_import_frontiers_per_worker
 0
@@ -112,6 +109,10 @@ contains: canceling statement due to statement timeout
 
 > SELECT count(*) FROM mz_internal.mz_dataflow_operators_per_worker
 0
+
+# This source never sees retractions.
+> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_shutdown_durations_histogram_raw
+true
 
 > SELECT count(*) FROM mz_internal.mz_message_counts_received_raw
 0

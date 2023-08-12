@@ -133,6 +133,11 @@ pub struct RocksDBTuningParameters {
 
     /// The interval to persist stats into rocksdb.
     pub stats_persist_interval_seconds: u32,
+
+    /// The optional block cache size in MiB for optimizing rocksdb for point lookups.
+    /// If not provided there will be no optimization.
+    /// <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L82-L85>
+    pub point_lookup_block_cache_size_mb: Option<u32>,
 }
 
 impl Default for RocksDBTuningParameters {
@@ -151,6 +156,7 @@ impl Default for RocksDBTuningParameters {
             retry_max_duration: defaults::DEFAULT_RETRY_DURATION,
             stats_log_interval_seconds: defaults::DEFAULT_STATS_LOG_INTERVAL_S,
             stats_persist_interval_seconds: defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
+            point_lookup_block_cache_size_mb: None,
         }
     }
 }
@@ -169,6 +175,7 @@ impl RocksDBTuningParameters {
         retry_max_duration: Duration,
         stats_log_interval_seconds: u32,
         stats_persist_interval_seconds: u32,
+        point_lookup_block_cache_size_mb: Option<u32>,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -200,6 +207,7 @@ impl RocksDBTuningParameters {
             retry_max_duration,
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
+            point_lookup_block_cache_size_mb,
         })
     }
 }
@@ -314,6 +322,7 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             retry_max_duration: Some(self.retry_max_duration.into_proto()),
             stats_log_interval_seconds: self.stats_log_interval_seconds,
             stats_persist_interval_seconds: self.stats_persist_interval_seconds,
+            point_lookup_block_cache_size_mb: self.point_lookup_block_cache_size_mb,
         }
     }
 
@@ -380,6 +389,7 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
                 .into_rust_if_some("ProtoRocksDbTuningParameters::retry_max_duration")?,
             stats_log_interval_seconds: proto.stats_log_interval_seconds,
             stats_persist_interval_seconds: proto.stats_persist_interval_seconds,
+            point_lookup_block_cache_size_mb: proto.point_lookup_block_cache_size_mb,
         })
     }
 }
@@ -410,6 +420,7 @@ pub struct RocksDBConfig {
     pub retry_max_duration: Duration,
     pub stats_log_interval_seconds: u32,
     pub stats_persist_interval_seconds: u32,
+    pub point_lookup_block_cache_size_mb: Option<u32>,
     pub dynamic: RocksDBDynamicConfig,
 }
 
@@ -433,6 +444,7 @@ impl RocksDBConfig {
             retry_max_duration,
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
+            point_lookup_block_cache_size_mb,
         } = params;
 
         Self {
@@ -446,6 +458,7 @@ impl RocksDBConfig {
             retry_max_duration,
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
+            point_lookup_block_cache_size_mb,
             dynamic: RocksDBDynamicConfig {
                 batch_size: Arc::new(AtomicUsize::new(batch_size)),
             },
@@ -467,6 +480,7 @@ impl RocksDBConfig {
             retry_max_duration,
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
+            point_lookup_block_cache_size_mb,
         } = params;
 
         self.compaction_style = compaction_style;
@@ -479,6 +493,7 @@ impl RocksDBConfig {
         self.retry_max_duration = retry_max_duration;
         self.stats_log_interval_seconds = stats_log_interval_seconds;
         self.stats_persist_interval_seconds = stats_persist_interval_seconds;
+        self.point_lookup_block_cache_size_mb = point_lookup_block_cache_size_mb;
 
         // SeqCst is probably not required here, but its the easiest to reason about
         self.dynamic.batch_size.store(batch_size, Ordering::SeqCst);
@@ -552,6 +567,7 @@ mod tests {
             defaults::DEFAULT_RETRY_DURATION,
             defaults::DEFAULT_STATS_LOG_INTERVAL_S,
             defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
+            None,
         )
         .unwrap();
 

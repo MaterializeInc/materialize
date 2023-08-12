@@ -180,10 +180,6 @@ pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
-/// A dummy availability zone to use when no availability zones are explicitly
-/// specified.
-pub const DUMMY_AVAILABILITY_ZONE: &str = "";
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -889,6 +885,10 @@ impl Coordinator {
         self.controller.compute.update_configuration(compute_config);
         let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
+        let orchestrator_scheduling_config =
+            flags::orchestrator_scheduling_config(self.catalog().system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(orchestrator_scheduling_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
@@ -1209,11 +1209,10 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
-                        let dataflow_plan =
-                            vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
+                        let dataflow_plan = self.must_finalize_dataflow(dataflow, idx.cluster_id);
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.cluster_id, dataflow_plan)
+                            .create_dataflow(idx.cluster_id, dataflow_plan)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
@@ -1708,7 +1707,7 @@ pub async fn serve(
         cluster_replica_sizes,
         default_storage_cluster_size,
         system_parameter_defaults,
-        mut availability_zones,
+        availability_zones,
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
@@ -1731,12 +1730,6 @@ pub async fn serve(
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
         coord_bail!("availability zones must be unique");
-    }
-    // Later on, we choose an AZ for every replica, so we need to have at least
-    // one. If we're using an orchestrator that doesn't have the notion of AZs,
-    // just create a fake, blank one.
-    if availability_zones.is_empty() {
-        availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
 
     let aws_principal_context = if aws_account_id.is_some()

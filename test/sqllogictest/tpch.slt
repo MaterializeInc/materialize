@@ -195,7 +195,7 @@ Explained Query:
               Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -296,14 +296,14 @@ Explained Query:
           Get materialize.public.supplier // { arity: 7 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.pk_region_regionkey
-  - materialize.public.pk_part_partkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.fk_partsupp_partkey
-  - materialize.public.fk_partsupp_suppkey
+  - materialize.public.pk_nation_nationkey (delta join, delta join)
+  - materialize.public.fk_nation_regionkey (delta join, delta join)
+  - materialize.public.pk_region_regionkey (delta join, delta join)
+  - materialize.public.pk_part_partkey (delta join 1st input)
+  - materialize.public.pk_supplier_suppkey (delta join, delta join)
+  - materialize.public.fk_supplier_nationkey (delta join, delta join)
+  - materialize.public.fk_partsupp_partkey (delta join, delta join)
+  - materialize.public.fk_partsupp_suppkey (delta join, delta join)
 
 EOF
 
@@ -352,10 +352,10 @@ Explained Query:
                 Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (delta join 1st input)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join)
 
 EOF
 
@@ -408,8 +408,8 @@ Explained Query:
                     Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_orders_orderkey (delta join 1st input)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -465,12 +465,12 @@ Explained Query:
               Get materialize.public.region // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.pk_region_regionkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_customer_nationkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.fk_nation_regionkey (differential join)
+  - materialize.public.pk_region_regionkey (differential join)
+  - materialize.public.pk_supplier_suppkey (*** full scan ***)
+  - materialize.public.fk_customer_nationkey (differential join)
+  - materialize.public.fk_orders_custkey (differential join)
+  - materialize.public.fk_lineitem_orderkey (differential join)
 
 EOF
 
@@ -506,7 +506,7 @@ Explained Query:
             Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -584,15 +584,15 @@ Explained Query:
           Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_customer_nationkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
-  - materialize.public.fk_lineitem_suppkey
+  - materialize.public.pk_nation_nationkey (delta join, delta join)
+  - materialize.public.pk_supplier_suppkey (delta join 1st input)
+  - materialize.public.fk_supplier_nationkey (delta join 1st input)
+  - materialize.public.pk_customer_custkey (delta join)
+  - materialize.public.fk_customer_nationkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join)
+  - materialize.public.fk_lineitem_suppkey (delta join)
 
 EOF
 
@@ -672,19 +672,19 @@ Explained Query:
                   Get materialize.public.region // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.pk_region_regionkey
-  - materialize.public.pk_part_partkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_customer_nationkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
-  - materialize.public.fk_lineitem_partkey
-  - materialize.public.fk_lineitem_suppkey
+  - materialize.public.pk_nation_nationkey (delta join, delta join)
+  - materialize.public.fk_nation_regionkey (delta join)
+  - materialize.public.pk_region_regionkey (delta join)
+  - materialize.public.pk_part_partkey (delta join 1st input)
+  - materialize.public.pk_supplier_suppkey (delta join)
+  - materialize.public.fk_supplier_nationkey (delta join)
+  - materialize.public.pk_customer_custkey (delta join)
+  - materialize.public.fk_customer_nationkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join)
+  - materialize.public.fk_lineitem_partkey (delta join)
+  - materialize.public.fk_lineitem_suppkey (delta join)
 
 EOF
 
@@ -751,16 +751,16 @@ Explained Query:
               Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.pk_part_partkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.pk_partsupp_partkey_suppkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
-  - materialize.public.fk_lineitem_partkey
-  - materialize.public.fk_lineitem_suppkey
-  - materialize.public.fk_lineitem_partsuppkey
+  - materialize.public.pk_nation_nationkey (delta join)
+  - materialize.public.pk_part_partkey (delta join 1st input)
+  - materialize.public.pk_supplier_suppkey (delta join)
+  - materialize.public.fk_supplier_nationkey (delta join)
+  - materialize.public.pk_partsupp_partkey_suppkey (delta join)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join)
+  - materialize.public.fk_lineitem_partkey (delta join)
+  - materialize.public.fk_lineitem_suppkey (delta join)
+  - materialize.public.fk_lineitem_partsuppkey (delta join)
 
 EOF
 
@@ -822,12 +822,12 @@ Explained Query:
                 Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_customer_nationkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_nation_nationkey (delta join)
+  - materialize.public.pk_customer_custkey (delta join 1st input)
+  - materialize.public.fk_customer_nationkey (delta join 1st input)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (delta join)
 
 EOF
 
@@ -894,10 +894,10 @@ Explained Query:
                 Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.fk_partsupp_suppkey
+  - materialize.public.pk_nation_nationkey (delta join)
+  - materialize.public.pk_supplier_suppkey (delta join)
+  - materialize.public.fk_supplier_nationkey (delta join)
+  - materialize.public.fk_partsupp_suppkey (delta join 1st input)
 
 EOF
 
@@ -947,8 +947,8 @@ Explained Query:
               Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_orders_orderkey (differential join)
+  - materialize.public.fk_lineitem_orderkey (differential join)
 
 EOF
 
@@ -1013,8 +1013,8 @@ Explained Query:
                 Get materialize.public.orders // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_orders_custkey
+  - materialize.public.pk_customer_custkey (differential join)
+  - materialize.public.fk_orders_custkey (differential join)
 
 EOF
 
@@ -1062,8 +1062,8 @@ Explained Query:
                 Get materialize.public.part // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_part_partkey
-  - materialize.public.fk_lineitem_partkey
+  - materialize.public.pk_part_partkey (differential join)
+  - materialize.public.fk_lineitem_partkey (differential join)
 
 EOF
 
@@ -1127,8 +1127,8 @@ Explained Query:
               Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_supplier_suppkey (differential join)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -1212,9 +1212,9 @@ Explained Query:
                 Get materialize.public.part // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_part_partkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_partsupp_partkey
+  - materialize.public.pk_part_partkey (differential join)
+  - materialize.public.pk_supplier_suppkey (*** full scan ***)
+  - materialize.public.fk_partsupp_partkey (differential join)
 
 EOF
 
@@ -1287,8 +1287,8 @@ Explained Query:
         Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_part_partkey
-  - materialize.public.fk_lineitem_partkey
+  - materialize.public.pk_part_partkey (differential join)
+  - materialize.public.fk_lineitem_partkey (differential join, differential join)
 
 EOF
 
@@ -1369,10 +1369,10 @@ Explained Query:
           Get materialize.public.lineitem // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_customer_custkey (delta join 1st input)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_orders_custkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (differential join, delta join)
 
 EOF
 
@@ -1441,8 +1441,8 @@ Explained Query:
                   Get materialize.public.part // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_part_partkey
-  - materialize.public.fk_lineitem_partkey
+  - materialize.public.pk_part_partkey (differential join)
+  - materialize.public.fk_lineitem_partkey (differential join)
 
 EOF
 
@@ -1551,11 +1551,11 @@ Explained Query:
                 Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.pk_part_partkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.fk_partsupp_partkey
-  - materialize.public.fk_lineitem_partsuppkey
+  - materialize.public.pk_nation_nationkey (differential join)
+  - materialize.public.pk_part_partkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (differential join)
+  - materialize.public.fk_partsupp_partkey (differential join)
+  - materialize.public.fk_lineitem_partsuppkey (differential join)
 
 EOF
 
@@ -1671,12 +1671,12 @@ Explained Query:
                 Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey
-  - materialize.public.pk_supplier_suppkey
-  - materialize.public.fk_supplier_nationkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
-  - materialize.public.fk_lineitem_suppkey
+  - materialize.public.pk_nation_nationkey (delta join)
+  - materialize.public.pk_supplier_suppkey (delta join 1st input)
+  - materialize.public.fk_supplier_nationkey (delta join 1st input)
+  - materialize.public.pk_orders_orderkey (delta join)
+  - materialize.public.fk_lineitem_orderkey (differential join, differential join, delta join)
+  - materialize.public.fk_lineitem_suppkey (delta join)
 
 EOF
 
@@ -1781,8 +1781,8 @@ Explained Query:
           Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
+  - materialize.public.pk_customer_custkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
 
 EOF
 

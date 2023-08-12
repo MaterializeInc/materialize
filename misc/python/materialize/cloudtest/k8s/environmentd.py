@@ -37,11 +37,13 @@ try:
 except ImportError:
     from semver import VersionInfo as Version
 
-from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 
 
 class EnvironmentdService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
@@ -61,6 +63,7 @@ class MaterializedAliasService(K8sService):
     """Some testdrive tests expect that Mz is accessible as 'materialized'"""
 
     def __init__(self) -> None:
+        super().__init__()
         self.service = V1Service(
             api_version="v1",
             kind="Service",
@@ -112,11 +115,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             # TODO: these should be the same as in mzcompose
             V1EnvVar(
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value="enable_envelope_upsert_in_subscribe=true",
-            ),
-            V1EnvVar(
-                name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value="enable_disk_cluster_replicas=true",
+                value=(
+                    "enable_envelope_upsert_in_subscribe=true;"
+                    "enable_disk_cluster_replicas=true;"
+                    "enable_with_mutually_recursive=true"
+                ),
             ),
         ]
 

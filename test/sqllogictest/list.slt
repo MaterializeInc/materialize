@@ -2619,7 +2619,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2639,7 +2639,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2657,7 +2657,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2678,7 +2678,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2697,7 +2697,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2716,7 +2716,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2735,7 +2735,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2754,7 +2754,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2773,7 +2773,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2792,7 +2792,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2813,7 +2813,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2826,7 +2826,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2839,7 +2839,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2861,7 +2861,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2877,7 +2877,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2893,7 +2893,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF
 
@@ -2920,6 +2920,6 @@ Explained Query:
                 Get materialize.public.m3 // { arity: 11 }
 
 Used Indexes:
-  - materialize.public.m3_primary_idx
+  - materialize.public.m3_primary_idx (*** full scan ***)
 
 EOF

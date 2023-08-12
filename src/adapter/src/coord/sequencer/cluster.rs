@@ -9,13 +9,13 @@
 
 //! Coordinator functionality to sequence cluster-related plans
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ClusterId, CreateReplicaConfig, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
-    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+    ClusterId, CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaId,
+    ReplicaLocation, ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
@@ -27,7 +27,6 @@ use mz_sql::plan::{
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
-use rand::seq::SliceRandom;
 
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, Op, SerializedReplicaLocation,
@@ -35,66 +34,6 @@ use crate::catalog::{
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
-
-/// Helper to select availability zones based on the least-populated zone.
-pub struct AzHelper {
-    n_replicas_per_az: BTreeMap<String, usize>,
-}
-
-impl AzHelper {
-    pub(crate) fn new(availability_zones: impl IntoIterator<Item = impl ToString>) -> Self {
-        let n_replicas_per_az = availability_zones
-            .into_iter()
-            .map(|s| (s.to_string(), 0))
-            .collect::<BTreeMap<_, _>>();
-        Self { n_replicas_per_az }
-    }
-
-    // Utility function used by both `sequence_create_cluster` and
-    // `sequence_create_cluster_replica`. Chooses the availability zone for a
-    // replica arbitrarily based on some state (currently: the number of
-    // replicas of the given cluster per AZ).
-    pub(crate) fn choose_az(&self) -> String {
-        let min = *self
-            .n_replicas_per_az
-            .values()
-            .min()
-            .expect("Must have at least one availability zone");
-        let argmins = self
-            .n_replicas_per_az
-            .iter()
-            .filter_map(|(k, v)| (*v == min).then_some(k))
-            .collect::<Vec<_>>();
-        let arbitrary_argmin = argmins
-            .choose(&mut rand::thread_rng())
-            .expect("Must have at least one value corresponding to `min`");
-
-        (*arbitrary_argmin).clone()
-    }
-
-    /// Select an availability zone and increment its count.
-    fn choose_az_and_increment(&mut self) -> String {
-        let az = self.choose_az();
-        self.increment(&az);
-        az
-    }
-
-    /// Increments the count for a specific availability zone.
-    ///
-    /// Panics if the availability zone does not exist.
-    fn increment(&mut self, az: &str) {
-        self.try_increment(az)
-            .expect("Availability zone must exist");
-    }
-
-    /// Try to increment the count for an availability zone. Returns `None` if it doesn't exist, and
-    /// the count after incrementing otherwise.
-    fn try_increment(&mut self, az: &str) -> Option<usize> {
-        let count = self.n_replicas_per_az.get_mut(az)?;
-        *count += 1;
-        Some(*count)
-    }
-}
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
@@ -172,12 +111,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_managed_cluster");
 
-        let (azs, az_user_specified) = if availability_zones.is_empty() {
-            (self.catalog().state().availability_zones(), false)
-        } else {
-            (&*availability_zones, true)
-        };
-        let mut az_helper = AzHelper::new(azs);
+        self.ensure_valid_azs(availability_zones.iter())?;
 
         let allowed_replica_sizes = &self
             .catalog()
@@ -204,11 +138,14 @@ impl Coordinator {
                 cluster_id,
                 id,
                 replica_name,
-                az_user_specified,
                 &compute,
                 &size,
                 &mut ops,
-                &mut az_helper,
+                if availability_zones.is_empty() {
+                    None
+                } else {
+                    Some(availability_zones.as_ref())
+                },
                 disk,
                 *session.current_role_id(),
             )?;
@@ -226,19 +163,16 @@ impl Coordinator {
         cluster_id: ClusterId,
         id: ReplicaId,
         name: String,
-        az_user_specified: bool,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
         ops: &mut Vec<Op>,
-        az_helper: &mut AzHelper,
+        azs: Option<&[String]>,
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let availability_zone = az_helper.choose_az_and_increment();
         let location = SerializedReplicaLocation::Managed {
             size: size.clone(),
-            availability_zone,
-            az_user_specified,
+            availability_zone: None,
             disk,
         };
 
@@ -258,6 +192,7 @@ impl Coordinator {
                     .catalog()
                     .system_config()
                     .allowed_cluster_replica_sizes(),
+                azs,
             )?,
             compute: ComputeReplicaConfig {
                 logging,
@@ -275,6 +210,22 @@ impl Coordinator {
         Ok(())
     }
 
+    fn ensure_valid_azs<'a, I: IntoIterator<Item = &'a String>>(
+        &self,
+        azs: I,
+    ) -> Result<(), AdapterError> {
+        let cat_azs = self.catalog().state().availability_zones();
+        for az in azs.into_iter() {
+            if !cat_azs.contains(az) {
+                return Err(AdapterError::InvalidClusterReplicaAz {
+                    az: az.to_string(),
+                    expected: cat_azs.to_vec(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_unmanaged_cluster(
         &mut self,
@@ -285,22 +236,17 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_unmanaged_cluster");
 
-        let azs = self.catalog().state().availability_zones();
-        let mut az_helper = AzHelper::new(azs);
-        for (_name, r) in replicas.iter() {
+        self.ensure_valid_azs(replicas.iter().filter_map(|(_, r)| {
             if let mz_sql::plan::ReplicaConfig::Managed {
                 availability_zone: Some(az),
                 ..
-            } = r
+            } = &r
             {
-                az_helper.try_increment(az).ok_or_else(|| {
-                    AdapterError::InvalidClusterReplicaAz {
-                        az: az.to_string(),
-                        expected: azs.to_vec(),
-                    }
-                })?;
+                Some(az)
+            } else {
+                None
             }
-        }
+        }))?;
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
@@ -341,13 +287,9 @@ impl Coordinator {
                     compute,
                     disk,
                 } => {
-                    let (availability_zone, user_specified) = availability_zone
-                        .map(|az| (az, true))
-                        .unwrap_or_else(|| (az_helper.choose_az_and_increment(), false));
                     let location = SerializedReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
-                        az_user_specified: user_specified,
                         disk,
                     };
                     (compute, location)
@@ -370,6 +312,7 @@ impl Coordinator {
                         .catalog()
                         .system_config()
                         .allowed_cluster_replica_sizes(),
+                    None,
                 )?,
                 compute: ComputeReplicaConfig {
                     logging,
@@ -462,37 +405,16 @@ impl Coordinator {
                 compute,
                 disk,
             } => {
-                let (availability_zone, user_specified) = match availability_zone {
+                let availability_zone = match availability_zone {
                     Some(az) => {
-                        let azs = self.catalog().state().availability_zones();
-                        if !azs.contains(&az) {
-                            return Err(AdapterError::InvalidClusterReplicaAz {
-                                az,
-                                expected: azs.to_vec(),
-                            });
-                        }
-                        (az, true)
+                        self.ensure_valid_azs([&az])?;
+                        Some(az)
                     }
-                    None => {
-                        // Choose the least popular AZ among all replicas of this cluster as the default
-                        // if none was specified. If there is a tie for "least popular", pick the first one.
-                        // That is globally unbiased (for Materialize, not necessarily for this customer)
-                        // because we shuffle the AZs on boot in `crate::serve`.
-                        let cluster = self.catalog().get_cluster(cluster_id);
-                        let azs = self.catalog().state().availability_zones();
-                        let mut az_helper = AzHelper::new(azs);
-                        for r in cluster.replicas_by_id.values() {
-                            if let Some(az) = r.config.location.availability_zone() {
-                                az_helper.increment(az);
-                            }
-                        }
-                        (az_helper.choose_az(), false)
-                    }
+                    None => None,
                 };
                 let location = SerializedReplicaLocation::Managed {
                     size,
                     availability_zone,
-                    az_user_specified: user_specified,
                     disk,
                 };
                 (compute, location)
@@ -515,6 +437,9 @@ impl Coordinator {
                     .catalog()
                     .system_config()
                     .allowed_cluster_replica_sizes(),
+                // Planning ensures all replicas in this codepath
+                // are unmanaged.
+                None,
             )?,
             compute: ComputeReplicaConfig {
                 logging,
@@ -761,12 +686,6 @@ impl Coordinator {
         self.catalog
             .ensure_valid_replica_size(allowed_replica_sizes, new_size)?;
 
-        let (azs, az_user_specified) = if new_availability_zones.is_empty() {
-            (self.catalog().state().availability_zones(), false)
-        } else {
-            (&**new_availability_zones, true)
-        };
-        let mut az_helper = AzHelper::new(azs);
         let mut create_cluster_replicas = vec![];
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
@@ -799,6 +718,8 @@ impl Coordinator {
             || new_logging != logging
             || new_disk != disk
         {
+            self.ensure_valid_azs(new_availability_zones.iter())?;
+
             // tear down all replicas, create new ones
             for name in (0..*replication_factor).map(managed_cluster_replica_name) {
                 let replica = cluster.replica_id_by_name.get(&name);
@@ -815,11 +736,10 @@ impl Coordinator {
                     cluster_id,
                     id,
                     name,
-                    az_user_specified,
                     &compute,
                     new_size,
                     &mut ops,
-                    &mut az_helper,
+                    Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
                 )?;
@@ -840,15 +760,6 @@ impl Coordinator {
             }
         } else if new_replication_factor > replication_factor {
             // Adjust size up
-
-            // Update availability zone counts based on current configuration.
-            for az in cluster
-                .replicas_by_id
-                .values()
-                .flat_map(|r| r.config.location.availability_zone())
-            {
-                az_helper.increment(az);
-            }
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
@@ -857,11 +768,12 @@ impl Coordinator {
                     cluster_id,
                     id,
                     name,
-                    az_user_specified,
                     &compute,
                     new_size,
                     &mut ops,
-                    &mut az_helper,
+                    // AVAILABILITY ZONES hasn't changed, so existing replicas don't need to be
+                    // rescheduled.
+                    Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
                 )?;
@@ -894,7 +806,7 @@ impl Coordinator {
         let ClusterVariantManaged {
             size: new_size,
             replication_factor: new_replication_factor,
-            availability_zones: _,
+            availability_zones: new_availability_zones,
             logging: _,
             idle_arrangement_merge_effort: _,
             disk: new_disk,
@@ -919,6 +831,8 @@ impl Coordinator {
         let mut sizes = BTreeSet::new();
         let mut disks = BTreeSet::new();
 
+        self.ensure_valid_azs(new_availability_zones.iter())?;
+
         // Validate per-replica configuration
         for replica in cluster.replicas_by_id.values() {
             names.insert(replica.name.clone());
@@ -929,6 +843,17 @@ impl Coordinator {
                 ReplicaLocation::Managed(location) => {
                     sizes.insert(location.size.clone());
                     disks.insert(location.disk);
+
+                    if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
+                        &location.availability_zones
+                    {
+                        if !new_availability_zones.contains(az) {
+                            coord_bail!(
+                                "unmanaged replica has availability zone {az} which is not \
+                                in managed {new_availability_zones:?}"
+                            )
+                        }
+                    }
                 }
             }
         }

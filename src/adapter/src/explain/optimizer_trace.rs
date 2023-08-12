@@ -85,7 +85,7 @@ impl OptimizerTrace {
         config: ExplainConfig,
         catalog: ConnCatalog,
         row_set_finishing: Option<RowSetFinishing>,
-        used_indexes: Vec<mz_repr::GlobalId>,
+        used_indexes: UsedIndexes,
         fast_path_plan: Option<FastPathPlan>,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
@@ -108,7 +108,7 @@ impl OptimizerTrace {
         let mut context = ExplainContext {
             config: &config,
             humanizer: &catalog,
-            used_indexes: UsedIndexes::new(used_indexes),
+            used_indexes,
             finishing: row_set_finishing,
             duration: Duration::default(),
         };

@@ -32,7 +32,7 @@ message ProtoComputeResponse {
     }
 
     oneof kind {
-        mz_storage_client.client.ProtoFrontierUppersKind frontier_uppers = 1;
+        mz_storage_client.client.ProtoTrace frontier_upper = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoSubscribeResponseKind subscribe_response = 3;
     }

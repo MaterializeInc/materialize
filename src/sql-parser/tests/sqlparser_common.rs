@@ -93,7 +93,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName, Statement};
 use mz_sql_parser::parser::{
     self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
 };
@@ -130,12 +130,27 @@ fn datadriven() {
                     return "expected exactly one statement\n".to_string();
                 }
                 let stmt = s.into_element().ast;
-                let parsed = match parser::parse_statements(&stmt.to_string()) {
-                    Ok(parsed) => parsed.into_element().ast,
-                    Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
-                };
-                if parsed != stmt {
-                    panic!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
+                for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
+                    let mut parsed = match parser::parse_statements(&printed) {
+                        Ok(parsed) => parsed.into_element().ast,
+                        Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
+                    };
+                    match (&mut parsed, &stmt) {
+                        // DECLARE remembers the original SQL. Erase that here so it can differ if
+                        // needed (for example, quoting identifiers vs not). This is ok because we
+                        // still compare that the resulting ASTs are identical, and it's valid for
+                        // those to come from different original strings.
+                        (Statement::Declare(parsed), Statement::Declare(stmt)) => {
+                            parsed.sql = stmt.sql.clone();
+                        }
+                        _ => {}
+                    }
+                    if parsed != stmt {
+                        panic!(
+                            "reparse comparison failed:\n{:?}\n!=\n{:?}\n{printed}\n",
+                            stmt, parsed
+                        );
+                    }
                 }
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", stmt)
@@ -153,30 +168,27 @@ fn datadriven() {
         let input = tc.input.trim();
         match parser::parse_expr(input) {
             Ok(s) => {
-                match parser::parse_expr(&s.to_string()) {
-                    Ok(parsed) => {
-                        // TODO: We always coerce the double colon operator into a Cast expr instead
-                        // of keeping it as an Op (see parse_pg_cast). Expr::Cast always prints
-                        // itself as double colon. We're thus unable to perfectly roundtrip
-                        // `CAST(..)`. We could fix this by keeping "::" as a binary operator and
-                        // teaching func.rs how to handle it, similar to how that file handles "~~"
-                        // (without the parser converting that operator directly into an
-                        // Expr::Like).
-                        if !matches!(parsed, Expr::Cast { .. }) {
-                            if parsed != s {
-                                panic!(
-                                    "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n",
+                for printed in [s.to_ast_string(), s.to_ast_string_stable()] {
+                    match parser::parse_expr(&printed) {
+                        Ok(parsed) => {
+                            // TODO: We always coerce the double colon operator into a Cast expr instead
+                            // of keeping it as an Op (see parse_pg_cast). Expr::Cast always prints
+                            // itself as double colon. We're thus unable to perfectly roundtrip
+                            // `CAST(..)`. We could fix this by keeping "::" as a binary operator and
+                            // teaching func.rs how to handle it, similar to how that file handles "~~"
+                            // (without the parser converting that operator directly into an
+                            // Expr::Like).
+                            if !matches!(parsed, Expr::Cast { .. }) {
+                                if parsed != s {
+                                    panic!(
+                                    "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
                                     s, parsed
                                 );
+                                }
                             }
                         }
+                        Err(err) => panic!("reparse failed: {printed}: {err}\n{s:?}"),
                     }
-                    // TODO: Some functions (EXTRACT) have special syntax: `extract('year' FROM d)`.
-                    // We drop this syntax and convert them into regular functions that don't know
-                    // they are special when printing. It'd be great to change this so we can
-                    // reparse test these!
-                    Err(_) if matches!(s, Expr::Function(_)) => {}
-                    Err(err) => panic!("reparse failed: {s}: {err}\n{s:?}"),
                 }
 
                 if tc.args.get("roundtrip").is_some() {

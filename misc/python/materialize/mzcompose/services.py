@@ -52,6 +52,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
+    "enable_with_mutually_recursive": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     # Following values are set based on Load Test environment to

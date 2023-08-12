@@ -30,11 +30,15 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fmt::Formatter;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
+use mz_proto::{RustType, TryFromProtoError};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -49,6 +53,8 @@ pub mod tracing;
 
 #[cfg(feature = "tracing_")]
 pub use crate::explain::tracing::trace_plan;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.explain.rs"));
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -522,15 +528,97 @@ impl fmt::Display for Attributes {
 
 /// A set of indexes that are used in the explained plan.
 #[derive(Debug)]
-pub struct UsedIndexes(Vec<GlobalId>);
+pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
 
 impl UsedIndexes {
-    pub fn new(values: Vec<GlobalId>) -> UsedIndexes {
+    pub fn new(values: Vec<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
         UsedIndexes(values)
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl Default for UsedIndexes {
+    fn default() -> Self {
+        UsedIndexes(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq)]
+pub enum IndexUsageType {
+    /// Read the entire index.
+    FullScan,
+    /// `IndexedFilter`, e.g., something like `WHERE x = 42`.
+    Lookup,
+    /// Differential join. Only records that have a match are read.
+    DifferentialJoin,
+    /// Delta join; the bool indicates whether it's the first input of the join.
+    /// In a snapshot, the first input is scanned, the others only get lookups.
+    /// When later input batches are arriving, all inputs are fully read.
+    DeltaJoin(bool),
+    /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
+    /// situation that I know of when it occurs is if one index is used to directly build another
+    /// index (probably one with a different key). Note that we won't be able to actually observe
+    /// this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or `EXPLAIN CREATE INDEX`.
+    /// (`export_index` inserts the `ArrangeBy`.)
+    PlanRoot,
+    /// We saw a dangling `ArrangeBy`, i.e., where we have no idea what the arrangement will be used
+    /// for. This is an internal error. Can be a bug either in `CollectIndexRequests`, or some
+    /// other transform that messed up the plan. It's also possible that somebody is trying to add
+    /// an `ArrangeBy` marking for some operator other than a `Join`. (Which is fine, but please
+    /// update `CollectIndexRequests`.)
+    Unknown,
+}
+
+impl std::fmt::Display for IndexUsageType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                IndexUsageType::FullScan => "*** full scan ***",
+                IndexUsageType::Lookup => "lookup",
+                IndexUsageType::DifferentialJoin => "differential join",
+                IndexUsageType::DeltaJoin(true) => "delta join 1st input",
+                IndexUsageType::DeltaJoin(false) => "delta join",
+                IndexUsageType::PlanRoot => "plan root",
+                IndexUsageType::Unknown => "*** unknown -- INTERNAL ERROR ***",
+            }
+        )
+    }
+}
+
+impl RustType<ProtoIndexUsageType> for IndexUsageType {
+    fn into_proto(&self) -> ProtoIndexUsageType {
+        use crate::explain::proto_index_usage_type::Kind::*;
+        ProtoIndexUsageType {
+            kind: Some(match self {
+                IndexUsageType::FullScan => FullScan(()),
+                IndexUsageType::Lookup => Lookup(()),
+                IndexUsageType::DifferentialJoin => DifferentialJoin(()),
+                IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
+                IndexUsageType::PlanRoot => PlanRoot(()),
+                IndexUsageType::Unknown => Unknown(()),
+            }),
+        }
+    }
+    fn from_proto(proto: ProtoIndexUsageType) -> Result<Self, TryFromProtoError> {
+        use crate::explain::proto_index_usage_type::Kind::*;
+
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIndexUsageType::Kind"))?;
+
+        match kind {
+            FullScan(()) => Ok(IndexUsageType::FullScan),
+            Lookup(()) => Ok(IndexUsageType::Lookup),
+            DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
+            DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
+            PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
+            Unknown(()) => Ok(IndexUsageType::Unknown),
+        }
     }
 }
 

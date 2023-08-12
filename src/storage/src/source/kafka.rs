@@ -111,6 +111,7 @@ impl SourceRender for KafkaSourceConnection {
         connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<PartitionId, MzOffset>>>
             + 'static,
+        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<
             G,
@@ -133,6 +134,49 @@ impl SourceRender for KafkaSourceConnection {
             let health_cap = capabilities.pop().unwrap();
             let mut data_cap = capabilities.pop().unwrap();
             assert!(capabilities.is_empty());
+
+            // Start offsets is a map from partition to the next offset to read
+            // from.
+            let mut start_offsets: BTreeMap<_, i64> = self
+                .start_offsets.clone()
+                .into_iter()
+                .filter(|(pid, _offset)| config.responsible_for(pid))
+                .map(|(k, v)| (k, v))
+                .collect();
+
+            let mut partition_capabilities = BTreeMap::new();
+            let mut max_pid = None;
+            let resume_upper = Antichain::from_iter(
+                config.source_resume_uppers[&config.id]
+                    .iter()
+                    .map(Partitioned::<_, _>::decode_row),
+            );
+            for ts in resume_upper.elements() {
+                if let Some(pid) = ts.partition() {
+                    max_pid = std::cmp::max(max_pid, Some(*pid));
+                    if config.responsible_for(pid) {
+                        let restored_offset = i64::try_from(ts.timestamp().offset)
+                            .expect("restored kafka offsets must fit into i64");
+                        if let Some(start_offset) = start_offsets.get_mut(pid) {
+                            *start_offset = std::cmp::max(restored_offset, *start_offset);
+                        } else {
+                            start_offsets.insert(*pid, restored_offset);
+                        }
+
+                        let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
+                        partition_capabilities.insert(*pid, data_cap.delayed(&part_ts));
+                    }
+                }
+            }
+            let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+            data_cap.downgrade(&future_ts);
+
+            info!(
+                source_id = config.id.to_string(),
+                worker_id = config.worker_id,
+                num_workers = config.worker_count,
+                "instantiating Kafka source reader at offsets {start_offsets:?}"
+            );
 
             let group_id = self.group_id(config.id);
             let KafkaSourceConnection {
@@ -213,47 +257,15 @@ impl SourceRender for KafkaSourceConnection {
                 }
             };
 
-            // Start offsets is a map from partition to the next offset to read
-            // from.
-            let mut start_offsets: BTreeMap<_, i64> = self
-                .start_offsets
-                .into_iter()
-                .filter(|(pid, _offset)| config.responsible_for(pid))
-                .map(|(k, v)| (k, v))
-                .collect();
-
-            let mut partition_capabilities = BTreeMap::new();
-            let mut max_pid = None;
-            let resume_upper = Antichain::from_iter(
-                config.source_resume_uppers[&config.id]
-                    .iter()
-                    .map(Partitioned::<_, _>::decode_row),
-            );
-            for ts in resume_upper.elements() {
-                if let Some(pid) = ts.partition() {
-                    max_pid = std::cmp::max(max_pid, Some(*pid));
-                    if config.responsible_for(pid) {
-                        let restored_offset = i64::try_from(ts.timestamp().offset)
-                            .expect("restored kafka offsets must fit into i64");
-                        if let Some(start_offset) = start_offsets.get_mut(pid) {
-                            *start_offset = std::cmp::max(restored_offset, *start_offset);
-                        } else {
-                            start_offsets.insert(*pid, restored_offset);
-                        }
-
-                        let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
-                        partition_capabilities.insert(*pid, data_cap.delayed(&part_ts));
-                    }
-                }
-            }
-            let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
-            data_cap.downgrade(&future_ts);
-
+            // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
+            // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
+            // `resume_upper`, which is necessary for this basic form of backpressure to work.
+            start_signal.await;
             info!(
                 source_id = config.id.to_string(),
                 worker_id = config.worker_id,
                 num_workers = config.worker_count,
-                "instantiating Kafka source reader at offsets {start_offsets:?}"
+                "kafka worker noticed rehydration is finished, starting partition queues..."
             );
 
             let partition_info = Arc::new(Mutex::new(None));

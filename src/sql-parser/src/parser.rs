@@ -931,6 +931,8 @@ impl<'a> Parser<'a> {
         Ok(Expr::NullIf { l_expr, r_expr })
     }
 
+    // Parse calls to extract(), which can take the form:
+    // - extract(field from 'interval')
     fn parse_extract_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {

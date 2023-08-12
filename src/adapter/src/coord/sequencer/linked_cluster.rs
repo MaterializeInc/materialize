@@ -25,7 +25,6 @@ use mz_sql::plan::SourceSinkClusterConfig;
 use crate::catalog::{
     self, ClusterConfig, ClusterVariant, SerializedReplicaLocation, LINKED_CLUSTER_REPLICA_NAME,
 };
-use crate::coord::sequencer::cluster::AzHelper;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -83,14 +82,9 @@ impl Coordinator {
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let availability_zone = {
-            let azs = self.catalog().state().availability_zones();
-            AzHelper::new(azs).choose_az()
-        };
         let location = SerializedReplicaLocation::Managed {
             size: size.to_string(),
-            availability_zone,
-            az_user_specified: false,
+            availability_zone: None,
             disk,
         };
         let location = self.catalog().concretize_replica_location(
@@ -99,6 +93,7 @@ impl Coordinator {
                 .catalog()
                 .system_config()
                 .allowed_cluster_replica_sizes(),
+            None,
         )?;
         let logging = {
             ReplicaLogging {

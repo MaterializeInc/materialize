@@ -75,7 +75,7 @@
 
 //! Integration tests for Materialize server.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
@@ -104,6 +104,7 @@ use mz_ore::{
 };
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
+use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::Url;
@@ -383,10 +384,10 @@ fn test_http_sql() {
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
             let fixtimestamp = tc.args.get("fixtimestamp").is_some();
-            ws.write_message(msg).unwrap();
+            ws.send(msg).unwrap();
             let mut responses = String::new();
             loop {
-                let resp = ws.read_message().unwrap();
+                let resp = ws.read().unwrap();
                 match resp {
                     Message::Text(mut msg) => {
                         if fixtimestamp {
@@ -873,27 +874,61 @@ fn test_storage_usage_doesnt_update_between_restarts() {
     }
 }
 
+// Test that all rows for a single collection use the same timestamp.
 #[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
-    let config =
-        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
+    let storage_interval_s = 2;
+    let config = util::Config::default()
+        .with_storage_usage_collection_interval(Duration::from_secs(storage_interval_s));
     let server = util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Retry because it may take some time for the initial snapshot to be taken.
-    Retry::default().max_duration(Duration::from_secs(10)).retry(|_| {
-        let rows = client
-            .query(
-                "SELECT collection_timestamp, SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage GROUP BY collection_timestamp ORDER BY collection_timestamp;",
-                &[],
-            )
-            .map_err(|e| e.to_string()).unwrap();
-        if rows.len() == 1 {
-            Ok(())
-        } else {
-            Err(format!("expected a single timestamp, instead found {}", rows.len()))
+    let rows = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let rows = client
+                    .query(
+                        "SELECT EXTRACT(EPOCH FROM collection_timestamp)::integer, ARRAY_AGG(object_id) \
+                FROM mz_catalog.mz_storage_usage \
+                GROUP BY collection_timestamp \
+                ORDER BY collection_timestamp ASC;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap();
+
+                if rows.is_empty() {
+                    Err("expected some timestamp, instead found None".to_string())
+                } else {
+                    Ok(rows)
+                }
+            })
+            .unwrap();
+
+    // The timestamp is selected after the storage usage is collected, so depending on how long
+    // each collection takes, the timestamps can be arbitrarily close together or far apart. If
+    // there are multiple timestamps, we ensure that they each contain the full set of object
+    // IDs.
+    let object_ids_by_timestamp: Vec<BTreeSet<_>> = rows
+        .into_iter()
+        .map(|row| row.get::<_, Array<String>>(1))
+        .map(|array| array.into_iter().collect())
+        .collect();
+    let mut prev = None;
+    for object_ids in object_ids_by_timestamp {
+        match prev {
+            None => {
+                prev = Some(object_ids);
+            }
+            Some(ref prev_object_ids) => {
+                assert_eq!(
+                    prev_object_ids, &object_ids,
+                    "found different storage collection timestamps, that contained non-matching \
+                        object IDs. {prev_object_ids:?} and {object_ids:?}"
+                );
+            }
         }
-    }).unwrap();
+    }
 }
 
 #[mz_ore::test]
@@ -1059,10 +1094,10 @@ fn test_max_request_size() {
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string())).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
-        let err = ws.read_message().unwrap_err();
+        let err = ws.read().unwrap_err();
         assert!(matches!(
             err,
             Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
@@ -1126,9 +1161,9 @@ fn test_max_statement_batch_size() {
         util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string())).unwrap();
 
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
         match msg {
@@ -1180,10 +1215,10 @@ fn test_ws_passes_options() {
     // set from the options map we passed with the auth.
     let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
@@ -1222,7 +1257,7 @@ fn test_ws_notifies_for_bad_options() {
     util::auth_with_ws(&mut ws, options).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
@@ -1408,24 +1443,24 @@ fn test_max_connections_on_all_interfaces() {
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     // The specific error isn't forwarded to the client, the connection is just closed.
-    match ws.read_message() {
+    match ws.read() {
         Ok(Message::Text(msg)) => {
             assert_eq!(
                 msg,
                 r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#
             );
             assert_eq!(
-                ws.read_message().unwrap(),
+                ws.read().unwrap(),
                 Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
             );
             assert_eq!(
-                ws.read_message().unwrap(),
+                ws.read().unwrap(),
                 Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
             );
-            tracing::info!("data: {:?}", ws.read_message().unwrap());
+            tracing::info!("data: {:?}", ws.read().unwrap());
         }
         Ok(msg) => panic!("unexpected msg: {msg:?}"),
         Err(e) => panic!("{e}"),
@@ -1697,10 +1732,10 @@ fn test_cancel_ws() {
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     loop {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         if let Ok(msg) = msg.into_text() {
             if msg.contains("query canceled") {
                 break;
@@ -1975,10 +2010,10 @@ fn test_github_20262() {
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-    ws.write_message(Message::Text(subscribe)).unwrap();
+    ws.send(Message::Text(subscribe)).unwrap();
     cancel();
-    ws.write_message(Message::Text(commit)).unwrap();
-    ws.write_message(Message::Text(select)).unwrap();
+    ws.send(Message::Text(commit)).unwrap();
+    ws.send(Message::Text(select)).unwrap();
 
     let mut expect = VecDeque::from([
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
@@ -1997,7 +2032,7 @@ fn test_github_20262() {
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
     ]);
     while !expect.is_empty() {
-        if let Message::Text(text) = ws.read_message().unwrap() {
+        if let Message::Text(text) = ws.read().unwrap() {
             let next = expect.pop_front().unwrap();
             assert_eq!(text, next);
         }

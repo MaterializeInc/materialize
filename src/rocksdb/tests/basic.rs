@@ -73,19 +73,35 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_ore::metrics::HistogramVecExt;
-use mz_rocksdb::{InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBMetrics};
-use prometheus::{HistogramOpts, HistogramVec};
+use mz_ore::metrics::{CounterVecExt, HistogramVecExt};
+use mz_rocksdb::{
+    InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics, RocksDBSharedMetrics,
+};
+use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts};
 
-fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
+fn shared_metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error> {
     let fake_hist_vec =
         HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
 
-    Ok(Box::new(RocksDBMetrics {
+    Ok(Box::new(RocksDBSharedMetrics {
         multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
-        multi_get_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
-        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["three".to_string()]),
-        multi_put_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+    }))
+}
+
+fn instance_metrics_for_tests() -> Result<Box<RocksDBInstanceMetrics>, anyhow::Error> {
+    let face_counter_vec =
+        IntCounterVec::new(Opts::new("fake_counter", "fake_help"), &["fake_label"])?;
+
+    Ok(Box::new(RocksDBInstanceMetrics {
+        multi_get_size: face_counter_vec.get_delete_on_drop_counter(vec!["two".to_string()]),
+        multi_get_result_count: face_counter_vec
+            .get_delete_on_drop_counter(vec!["three".to_string()]),
+        multi_get_result_bytes: face_counter_vec
+            .get_delete_on_drop_counter(vec!["four".to_string()]),
+        multi_get_count: face_counter_vec.get_delete_on_drop_counter(vec!["five".to_string()]),
+        multi_put_count: face_counter_vec.get_delete_on_drop_counter(vec!["six".to_string()]),
+        multi_put_size: face_counter_vec.get_delete_on_drop_counter(vec!["seven".to_string()]),
     }))
 }
 
@@ -99,7 +115,8 @@ async fn basic() -> Result<(), anyhow::Error> {
         t.path(),
         InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
         RocksDBConfig::default(),
-        metrics_for_tests()?,
+        shared_metrics_for_tests()?,
+        instance_metrics_for_tests()?,
         bincode::DefaultOptions::new(),
     )
     .await?;

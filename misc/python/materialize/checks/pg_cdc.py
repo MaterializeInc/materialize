@@ -204,7 +204,7 @@ class PgCdcBase:
                         ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
 
                     Used Indexes:
-                      - materialize.public.postgres_source_tablea_primary_idx
+                      - materialize.public.postgres_source_tablea_primary_idx (*** full scan ***)
                     """
                 )
                 if self.base_version >= MzVersion.parse("0.50.0-dev")

@@ -16,6 +16,7 @@ import "expr/src/scalar.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
+import "repr/src/explain.proto";
 
 package mz_compute_client.types.dataflows;
 
@@ -31,6 +32,8 @@ message ProtoDataflowDescription {
         ProtoIndexDesc index_desc = 2;
         mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
         bool monotonic = 4;
+        repeated mz_repr.explain.ProtoIndexUsageType usage_types = 5;
+        bool has_usage_types = 6;
     }
 
     message ProtoIndexExport {

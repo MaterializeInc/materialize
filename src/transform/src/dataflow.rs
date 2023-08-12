@@ -16,10 +16,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_compute_client::types::dataflows::DataflowDesc;
+use mz_compute_client::types::dataflows::{DataflowDesc, IndexImport};
 use mz_expr::visit::Visit;
-use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
-use tracing::warn;
+use mz_expr::{
+    CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject, MirRelationExpr,
+    MirScalarExpr, RECURSION_LIMIT,
+};
+use mz_ore::soft_panic_or_log;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_repr::explain::IndexUsageType;
+use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
 use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformArgs, TransformError};
@@ -81,7 +87,7 @@ pub fn optimize_dataflow(
 
     optimize_dataflow_monotonic(dataflow)?;
 
-    optimize_dataflow_index_imports(dataflow, indexes)?;
+    prune_and_annotate_dataflow_index_imports(dataflow, indexes)?;
 
     mz_repr::explain::trace_plan(dataflow);
 
@@ -412,8 +418,16 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
             monotonic_ids.insert(source_id.clone());
         }
     }
-    for (_index_id, (index_desc, _, is_monotonic)) in dataflow.index_imports.iter() {
-        if *is_monotonic {
+    for (
+        _index_id,
+        IndexImport {
+            desc: index_desc,
+            monotonic,
+            ..
+        },
+    ) in dataflow.index_imports.iter()
+    {
+        if *monotonic {
             monotonic_ids.insert(index_desc.on_id.clone());
         }
     }
@@ -434,76 +448,382 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 }
 
 /// Restricts the indexes imported by `dataflow` to only the ones it needs.
+/// Additionally, it annotates each index import by how the index will be used, i.e., it fills in
+/// `IndexImport::usage_types`.
 ///
-/// The input `dataflow` should import all indexes belonging to all views it
+/// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
+///
+/// Should be called on a [DataflowDesc] only once.
 #[tracing::instrument(
     target = "optimizer",
     level = "debug",
     skip_all,
-    fields(path.segment ="index_imports")
+    fields(path.segment = "index_imports")
 )]
-fn optimize_dataflow_index_imports(
+fn prune_and_annotate_dataflow_index_imports(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
-    // Generate (a mapping of views used by exports and objects to build) ->
-    // (indexes from that view that have been explicitly chosen to be used)
-    let mut indexes_by_view = BTreeMap::new();
-    for sink_desc in dataflow.sink_exports.iter() {
-        indexes_by_view
-            .entry(sink_desc.1.from)
-            .or_insert_with(BTreeSet::new);
+    // This will be a mapping of
+    // (ids used by exports and objects to build) ->
+    // (arrangement keys and usage types on that id that have been explicitly requested by the MIR
+    // plans)
+    let mut index_reqs_by_id = BTreeMap::new();
+
+    // First, insert `sink_exports` and `index_exports` into `index_reqs_by_id` to account for the
+    // (currently only theoretical) possibility that we are using an index that we are also building
+    // ourselves.
+    for (_id, sink_desc) in dataflow.sink_exports.iter() {
+        index_reqs_by_id
+            .entry(sink_desc.from)
+            .or_insert_with(Vec::new);
     }
-    for (_, (index_desc, _)) in dataflow.index_exports.iter() {
-        indexes_by_view
+    for (_id, (index_desc, _)) in dataflow.index_exports.iter() {
+        index_reqs_by_id
             .entry(index_desc.on_id)
-            .or_insert_with(BTreeSet::new);
+            .or_insert_with(Vec::new);
     }
+
+    // Go through the MIR plans of `objects_to_build` and collect which arrangements are requested
+    // for which we also have an available index.
     for build_desc in dataflow.objects_to_build.iter_mut() {
-        build_desc
-            .plan
-            .as_inner_mut()
-            .visit_post(&mut |e| match e {
-                MirRelationExpr::Get {
-                    id: Id::Global(id), ..
-                } => {
-                    indexes_by_view.entry(*id).or_insert_with(BTreeSet::new);
-                }
-                MirRelationExpr::ArrangeBy { input, keys } => {
-                    if let MirRelationExpr::Get {
-                        id: Id::Global(id), ..
-                    } = &**input
-                    {
-                        for key in keys {
-                            if indexes.indexes_on(*id).find(|k| k == &key).is_some() {
-                                indexes_by_view.get_mut(id).unwrap().insert(key.clone());
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            })?;
+        CollectIndexRequests::new(indexes, &mut index_reqs_by_id)
+            .collect_index_reqs(build_desc.plan.as_inner_mut())?;
     }
-    for (id, keys) in indexes_by_view.iter_mut() {
-        if keys.is_empty() {
-            // If a dataflow uses a view that has indexes, but it has not
-            // chosen to use any specific index of that view, pick an arbitrary
-            // index to read from.
+
+    // Add full index scans, i.e., where an index exists, but either no specific key was requested
+    // or the requested key didn't match an existing index in the above code.
+    for (id, requests_with_matching_indexes) in index_reqs_by_id.iter_mut() {
+        if requests_with_matching_indexes.is_empty() {
+            // Pick an arbitrary index to be fully scanned.
+            // TODO: There are various edge cases where a better choice would be possible:
+            // - Some indexes might be less skewed than others.
+            // - Some indexes might have an error, while others don't.
+            //   https://github.com/MaterializeInc/materialize/issues/15557
+            // - Some indexes might have less extra data in their keys, which won't be used in a
+            //   full scan.
             if let Some(key) = indexes.indexes_on(*id).next() {
-                keys.insert(key.to_owned());
+                requests_with_matching_indexes.push((key.to_owned(), IndexUsageType::FullScan));
             }
         }
     }
-    dataflow.index_imports.retain(|_, (index_desc, _, _)| {
-        if let Some(keys) = indexes_by_view.get(&index_desc.on_id) {
-            keys.contains(&index_desc.key)
-        } else {
-            false
+
+    // Annotate index imports by their usage types
+    for (
+        _index_id,
+        IndexImport {
+            desc: index_desc,
+            typ: _,
+            monotonic: _,
+            usage_types,
+        },
+    ) in dataflow.index_imports.iter_mut()
+    {
+        if let Some(requested_accesses) = index_reqs_by_id.get(&index_desc.on_id) {
+            assert!(usage_types.is_none()); // We should be called on a dataflow only once
+            *usage_types = Some(Vec::new());
+            assert!(!requested_accesses.is_empty()); // See above at the "Add full index scans"
+            for (req_key, req_usage_type) in requested_accesses {
+                if *req_key == index_desc.key {
+                    usage_types.as_mut().unwrap().push(req_usage_type.clone());
+                }
+            }
         }
-    });
+    }
+
+    // Prune index imports to only those that are used
+    dataflow
+        .index_imports
+        .retain(|_, index_import| match &index_import.usage_types {
+            None => false,
+            Some(usage_types) => {
+                !usage_types.is_empty()
+                // (can be empty here when an other index on this same object is used)
+            }
+        });
 
     mz_repr::explain::trace_plan(dataflow);
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct CollectIndexRequests<'a> {
+    // We were told about these indexes being available.
+    indexes_available: &'a dyn IndexOracle,
+    // We'll be collecting index requests here.
+    index_reqs_by_id: &'a mut BTreeMap<GlobalId, Vec<(Vec<MirScalarExpr>, IndexUsageType)>>,
+    // As we recurse down a MirRelationExpr, we'll need to keep track of the context of the
+    // current node (see docs on `IndexUsageContext` about what context we keep).
+    // Moreover, we need to propagate this context from cte uses to cte definitions.
+    // `context_across_lets` will keep track of the contexts that reached each use of a LocalId
+    // added together.
+    context_across_lets: BTreeMap<LocalId, Vec<IndexUsageContext>>,
+    recursion_guard: RecursionGuard,
+}
+
+impl<'a> CheckedRecursion for CollectIndexRequests<'a> {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
+
+impl<'a> CollectIndexRequests<'a> {
+    fn new(
+        indexes_available: &'a dyn IndexOracle,
+        index_reqs_by_id: &'a mut BTreeMap<GlobalId, Vec<(Vec<MirScalarExpr>, IndexUsageType)>>,
+    ) -> CollectIndexRequests<'a> {
+        CollectIndexRequests {
+            indexes_available,
+            index_reqs_by_id,
+            context_across_lets: BTreeMap::new(),
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+
+    pub fn collect_index_reqs(
+        &mut self,
+        expr: &MirRelationExpr,
+    ) -> Result<(), RecursionLimitError> {
+        assert!(self.context_across_lets.is_empty());
+        self.collect_index_reqs_inner(
+            expr,
+            &IndexUsageContext::from_usage_type(IndexUsageType::PlanRoot),
+        )?;
+        assert!(self.context_across_lets.is_empty());
+        Ok(())
+    }
+
+    fn collect_index_reqs_inner(
+        &mut self,
+        expr: &MirRelationExpr,
+        contexts: &Vec<IndexUsageContext>,
+    ) -> Result<(), RecursionLimitError> {
+        // See comment on `IndexUsageContext`.
+        Ok(match expr {
+            MirRelationExpr::Let { id, value, body } => {
+                let shadowed_context = self.context_across_lets.insert(id.clone(), Vec::new());
+                // No shadowing in MIR
+                assert!(shadowed_context.is_none());
+                // We go backwards: Recurse on the body and then the value.
+                self.collect_index_reqs_inner(body, contexts)?;
+                // The above call filled in the entry for `id` in `context_across_lets` (if it
+                // was referenced). Anyhow, at least an empty entry should exist, because we started
+                // above with inserting it.
+                self.collect_index_reqs_inner(
+                    value,
+                    &self.context_across_lets.get(id).unwrap().clone(),
+                )?;
+                // Clean up the id from the saved contexts.
+                self.context_across_lets.remove(id);
+            }
+            MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits: _,
+                body,
+            } => {
+                for id in ids {
+                    let shadowed_context = self.context_across_lets.insert(id.clone(), Vec::new());
+                    assert!(shadowed_context.is_none()); // No shadowing in MIR
+                }
+                // We go backwards: Recurse on the body first.
+                self.collect_index_reqs_inner(body, contexts)?;
+                // Reset the contexts of the ids (of the current LetRec), because an arrangement
+                // from a value can't be used in the body.
+                for id in ids {
+                    *self.context_across_lets.get_mut(id).unwrap() = Vec::new();
+                }
+                // Recurse on the values in reverse order.
+                // Note that we do only one pass, i.e., we won't see context through a Get that
+                // refers to the previous iteration. But this is ok, because we can't reuse
+                // arrangements across iterations anyway.
+                for (id, value) in ids.iter().zip(values.iter()).rev() {
+                    self.collect_index_reqs_inner(
+                        value,
+                        &self.context_across_lets.get(id).unwrap().clone(),
+                    )?;
+                }
+                // Clean up the ids from the saved contexts.
+                for id in ids {
+                    self.context_across_lets.remove(id);
+                }
+            }
+            MirRelationExpr::Get {
+                id: Id::Local(local_id),
+                ..
+            } => {
+                // Add the current context to the vector of contexts of `local_id`.
+                // (The unwrap is safe, because the Let and LetRec cases start with inserting an
+                // empty entry.)
+                self.context_across_lets
+                    .get_mut(local_id)
+                    .unwrap()
+                    .extend(contexts.iter().cloned());
+                // No recursive call here, because Get has no inputs.
+            }
+            MirRelationExpr::Join {
+                inputs,
+                implementation,
+                ..
+            } => {
+                match implementation {
+                    JoinImplementation::Differential(..) => {
+                        for input in inputs {
+                            self.collect_index_reqs_inner(
+                                input,
+                                &IndexUsageContext::from_usage_type(
+                                    IndexUsageType::DifferentialJoin,
+                                ),
+                            )?;
+                        }
+                    }
+                    JoinImplementation::DeltaQuery(..) => {
+                        // For Delta joins, the first input is special, see
+                        // https://github.com/MaterializeInc/materialize/issues/6789
+                        self.collect_index_reqs_inner(
+                            &inputs[0],
+                            &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(true)),
+                        )?;
+                        for input in &inputs[1..] {
+                            self.collect_index_reqs_inner(
+                                input,
+                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(
+                                    false,
+                                )),
+                            )?;
+                        }
+                    }
+                    JoinImplementation::IndexedFilter(..) => {
+                        for input in inputs {
+                            self.collect_index_reqs_inner(
+                                input,
+                                &IndexUsageContext::from_usage_type(IndexUsageType::Lookup),
+                            )?;
+                        }
+                    }
+                    JoinImplementation::Unimplemented => {
+                        soft_panic_or_log!(
+                            "CollectIndexRequests encountered an Unimplemented join"
+                        );
+                    }
+                }
+            }
+            MirRelationExpr::ArrangeBy { input, keys } => {
+                let mut new_contexts = contexts.clone();
+                IndexUsageContext::add_keys(&mut new_contexts, keys);
+                self.collect_index_reqs_inner(input, &new_contexts)?;
+            }
+            MirRelationExpr::Get {
+                id: Id::Global(global_id),
+                ..
+            } => {
+                self.index_reqs_by_id
+                    .entry(*global_id)
+                    .or_insert_with(Vec::new);
+                for context in contexts {
+                    match &context.requested_keys {
+                        None => {
+                            // We have some index usage context, but didn't see an `ArrangeBy`.
+                            match context.usage_type {
+                                IndexUsageType::FullScan => {
+                                    // Not possible, because we add these later, only after
+                                    // `CollectIndexRequests` has already run.
+                                    unreachable!()
+                                },
+                                // You can find more info on why the following join cases shouldn't
+                                // happen in comments of the Join lowering to LIR.
+                                IndexUsageType::Lookup => soft_panic_or_log!("CollectIndexRequests encountered an IndexedFilter join without an ArrangeBy"),
+                                IndexUsageType::DifferentialJoin => soft_panic_or_log!("CollectIndexRequests encountered a Differential join without an ArrangeBy"),
+                                IndexUsageType::DeltaJoin(_) => soft_panic_or_log!("CollectIndexRequests encountered a Delta join without an ArrangeBy"),
+                                IndexUsageType::PlanRoot => {
+                                    // This is ok: happens when the entire query is a `Get`.
+                                },
+                                IndexUsageType::Unknown => {
+                                    // Not possible, because we create IndexUsageType::Unknown
+                                    // only when we see an `ArrangeBy`.
+                                    unreachable!()
+                                },
+                            }
+                        }
+                        Some(requested_keys) => {
+                            for requested_key in requested_keys {
+                                if self
+                                    .indexes_available
+                                    .indexes_on(*global_id)
+                                    .find(|available_key| available_key == &requested_key)
+                                    .is_some()
+                                {
+                                    self.index_reqs_by_id
+                                        .get_mut(global_id)
+                                        .unwrap()
+                                        .push((requested_key.clone(), context.usage_type.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Nothing interesting at this node, empty the context.
+                let empty_context = Vec::new();
+                // And recurse.
+                for child in expr.children() {
+                    self.collect_index_reqs_inner(child, &empty_context)?;
+                }
+            }
+        })
+    }
+}
+
+/// This struct will save info about parent nodes as we are descending down a `MirRelationExpr`.
+/// We always start with filling in `usage_type` when we see an operation that uses an arrangement,
+/// and then we fill in `requested_keys` when we see an `ArrangeBy`. So, the pattern that we are
+/// looking for is
+/// ```text
+/// <operation that uses an index>
+///   ArrangeBy <requested_keys>
+///     Get <global_id>
+/// ```
+/// When we reach a `Get` to a global id, we access this context struct to see if the rest of the
+/// pattern is present above the `Get`.
+///
+/// Note that we usually put this struct in a Vec, because we track context across local let
+/// bindings, which means that a node can have multiple parents.
+#[derive(Debug, Clone)]
+struct IndexUsageContext {
+    usage_type: IndexUsageType,
+    requested_keys: Option<BTreeSet<Vec<MirScalarExpr>>>,
+}
+
+impl IndexUsageContext {
+    pub fn from_usage_type(usage_type: IndexUsageType) -> Vec<Self> {
+        vec![IndexUsageContext {
+            usage_type,
+            requested_keys: None,
+        }]
+    }
+
+    // Add the keys of an ArrangeBy into the context.
+    // Soft_panics if haven't already seen something that indicates what the index will be used for.
+    pub fn add_keys(contexts: &mut Vec<IndexUsageContext>, keys_to_add: &Vec<Vec<MirScalarExpr>>) {
+        if contexts.is_empty() {
+            // No join above us, and we are not at the root. Why does this ArrangeBy even exist?
+            soft_panic_or_log!("CollectIndexRequests encountered a dangling ArrangeBy");
+            // Anyhow, let's create a context with an Unknown index usage, so that we have a place
+            // to note down the requested keys below.
+            *contexts = IndexUsageContext::from_usage_type(IndexUsageType::Unknown);
+        }
+        for context in contexts {
+            if context.requested_keys.is_none() {
+                context.requested_keys = Some(BTreeSet::new());
+            }
+            context
+                .requested_keys
+                .as_mut()
+                .unwrap()
+                .extend(keys_to_add.iter().cloned());
+        }
+    }
 }

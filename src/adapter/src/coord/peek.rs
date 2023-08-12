@@ -19,7 +19,7 @@ use std::num::NonZeroUsize;
 use futures::TryFutureExt;
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_client::types::dataflows::{DataflowDescription, IndexImport};
 use mz_controller::clusters::ClusterId;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
@@ -204,7 +204,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                 mz_expr::MirRelationExpr::Get { id, .. } => {
                     // Just grab any arrangement
                     // Nothing to be done if an arrangement does not exist
-                    for (index_id, (desc, _typ, _monotonic)) in dataflow_plan.index_imports.iter() {
+                    for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
                         if Id::Global(desc.on_id) == *id {
                             return Ok(Some(FastPathPlan::PeekExisting(
                                 *index_id,
@@ -220,7 +220,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                     {
                         // We should only get excited if we can track down an index for `id`.
                         // If `keys` is non-empty, that means we think one exists.
-                        for (index_id, (desc, _typ, _monotonic)) in
+                        for (index_id, IndexImport { desc, .. }) in
                             dataflow_plan.index_imports.iter()
                         {
                             if desc.on_id == *id && &desc.key == key {
@@ -374,7 +374,7 @@ impl crate::coord::Coordinator {
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .active_compute()
-                    .create_dataflows(compute_instance, vec![dataflow])
+                    .create_dataflow(compute_instance, dataflow)
                     .unwrap_or_terminate("cannot fail to create dataflows");
                 self.initialize_compute_read_policies(
                     output_ids,
@@ -494,15 +494,15 @@ impl crate::coord::Coordinator {
             for (uuid, compute_instance) in &uuids {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
             }
+            let mut compute = self.controller.active_compute();
             for (compute_instance, uuids) in inverse {
                 // It's possible that this compute instance no longer exists because it was dropped
                 // while the peek was in progress. In this case we ignore the error and move on
                 // because the dataflow no longer exists.
                 // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
-                let _ = self
-                    .controller
-                    .active_compute()
-                    .cancel_peeks(compute_instance, uuids);
+                for uuid in uuids {
+                    let _ = compute.cancel_peek(compute_instance, uuid);
+                }
             }
 
             uuids

@@ -59,7 +59,7 @@ pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Configures a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ReplicaConfig {
     /// The location of the replica.
     pub location: ReplicaLocation,
@@ -104,7 +104,7 @@ fn test_replica_allocation_deserialization() {
 }
 
 /// Configures the location of a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum ReplicaLocation {
     /// An unmanaged replica.
     Unmanaged(UnmanagedReplicaLocation),
@@ -113,15 +113,6 @@ pub enum ReplicaLocation {
 }
 
 impl ReplicaLocation {
-    /// Returns the availability zone specified by this replica location, if
-    /// any.
-    pub fn availability_zone(&self) -> Option<&str> {
-        match self {
-            ReplicaLocation::Unmanaged(_) => None,
-            ReplicaLocation::Managed(m) => Some(&m.availability_zone),
-        }
-    }
-
     /// Returns the number of processes specified by this replica location.
     pub fn num_processes(&self) -> usize {
         match self {
@@ -169,18 +160,40 @@ pub struct UnmanagedReplicaLocation {
     pub workers: usize,
 }
 
+/// Information about availability zone constraints for replicas.
+#[derive(Clone, Debug)]
+pub enum ManagedReplicaAvailabilityZones {
+    /// Specified if the `Replica` is from `MANAGED` cluster,
+    /// and specifies if there is an `AVAILABILITY ZONES`
+    /// constraint. Empty lists are represented as `None`.
+    FromCluster(Option<Vec<String>>),
+    /// Specified if the `Replica` is from a non-`MANAGED` cluster,
+    /// and specifies if there is a specific `AVAILABILITY ZONE`.
+    FromReplica(Option<String>),
+}
+
 /// The location of a managed replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagedReplicaLocation {
     /// The resource allocation for the replica.
     pub allocation: ReplicaAllocation,
     /// SQL size parameter used for allocation
     pub size: String,
-    /// The replica's availability zone
-    pub availability_zone: String,
-    /// `true` if the AZ was specified by the user and must be respected;
-    /// `false` if it was picked arbitrarily by Materialize.
-    pub az_user_specified: bool,
+    /// The replica's availability zones, if specified.
+    ///
+    /// This is either the replica's specific `AVAILABILITY ZONE`,
+    /// or the zones placed here during replica concretization
+    /// from the `MANAGED` cluster config.
+    ///
+    /// We skip serialization (which is used for some validation
+    /// in tests) as the latter case is a "virtual" piece of information,
+    /// that exists only at runtime.
+    ///
+    /// An empty list of availability zones is concretized as `None`,
+    /// as the on-disk serialization of `MANAGED CLUSTER AVAILABILITY ZONES`
+    /// is an empty list if none are specified
+    #[serde(skip)]
+    pub availability_zones: ManagedReplicaAvailabilityZones,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
 }
@@ -547,33 +560,38 @@ where
                         ("cluster-id".into(), cluster_id.to_string()),
                         ("type".into(), "cluster".into()),
                         ("replica-role".into(), role_label.into()),
-                        ("scale".into(), location.allocation.scale.to_string()),
                         ("workers".into(), location.allocation.workers.to_string()),
                         ("size".into(), location.size.to_string()),
                     ]),
-                    availability_zone: Some(location.availability_zone),
-                    // This constrains the orchestrator (for those orchestrators that support
-                    // anti-affinity, today just k8s) to never schedule pods for different replicas
-                    // of the same cluster on the same node. Pods from the _same_ replica are fine;
-                    // pods from different clusters are also fine.
-                    //
-                    // The point is that if pods of two replicas are on the same node, that node
-                    // going down would kill both replicas, and so the replication factor of the
-                    // cluster in question is illusory.
-                    anti_affinity: Some(vec![
+                    availability_zones: match location.availability_zones {
+                        ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
+                        ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+                    },
+                    // This provides the orchestrator with some label selectors that
+                    // are used to constraint the scheduling of replicas, based on
+                    // its internal configuration.
+                    other_replicas_selector: vec![
                         LabelSelector {
                             label_name: "cluster-id".to_string(),
                             logic: LabelSelectionLogic::Eq {
                                 value: cluster_id.to_string(),
                             },
                         },
+                        // Select other replicas (but not oneself)
                         LabelSelector {
                             label_name: "replica-id".into(),
                             logic: LabelSelectionLogic::NotEq {
                                 value: replica_id.to_string(),
                             },
                         },
-                    ]),
+                    ],
+                    replicas_selector: vec![LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    }],
                     disk_limit: location.allocation.disk_limit,
                     disk: location.disk,
                 },

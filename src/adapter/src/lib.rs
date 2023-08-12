@@ -133,6 +133,6 @@ pub use crate::coord::timestamp_selection::{
 };
 pub use crate::coord::ExecuteContext;
 pub use crate::coord::ExecuteContextExtra;
-pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
+pub use crate::coord::{serve, Config};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;

@@ -478,6 +478,13 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         self.inner.watch_services()
     }
+
+    fn update_scheduling_config(
+        &self,
+        config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+    ) {
+        self.inner.update_scheduling_config(config)
+    }
 }
 
 /// Specifies the format of a stderr log message.

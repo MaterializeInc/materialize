@@ -53,46 +53,46 @@ CREATE VIEW item_privileges (name, type, privilege) AS SELECT name, type, unnest
 
 ## Test built-in objects
 
-query TT
+query TT rowsort
 SELECT * FROM database_privileges
 ----
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
 materialize  materialize=UC/mz_system
-materialize  mz_introspection=U/mz_system
+materialize  mz_support=U/mz_system
 
-query TT
-SELECT name, privilege FROM schema_privileges ORDER BY name
+query TT rowsort
+SELECT name, privilege FROM schema_privileges ORDER BY name, privilege
 ----
 information_schema  =U/mz_system
 information_schema  mz_system=UC/mz_system
-information_schema  mz_introspection=U/mz_system
+information_schema  mz_support=U/mz_system
 mz_catalog          =U/mz_system
 mz_catalog          mz_system=UC/mz_system
-mz_catalog          mz_introspection=U/mz_system
+mz_catalog          mz_support=U/mz_system
 mz_internal         =U/mz_system
 mz_internal         mz_system=UC/mz_system
-mz_internal         mz_introspection=U/mz_system
+mz_internal         mz_support=U/mz_system
 pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
-pg_catalog          mz_introspection=U/mz_system
+pg_catalog          mz_support=U/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
 public              materialize=UC/mz_system
-public              mz_introspection=U/mz_system
+public              mz_support=U/mz_system
 
-query TT
-SELECT * FROM cluster_privileges ORDER BY name
+query TT rowsort
+SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
 default           =U/mz_system
 default           mz_system=UC/mz_system
 default           materialize=UC/mz_system
-default           mz_introspection=U/mz_system
+default           mz_support=U/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
-mz_introspection  mz_introspection=UC/mz_system
+mz_introspection  mz_support=UC/mz_system
 mz_system         mz_system=UC/mz_system
-mz_system         mz_introspection=U/mz_system
+mz_system         mz_support=U/mz_system
 
 ### The materialize privilege comes from the views created above
 query T
@@ -186,40 +186,40 @@ conn  materialize=U/materialize
 statement ok
 CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
 
-query TT
+query TT rowsort
 SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 CREATE DATABASE d;
 
-query TT
+query TT rowsort
 SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
-query TT
-SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY name
+query TT rowsort
+SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY name, privilege
 ----
 public  =U/mz_system
 public  =U/materialize
 public  mz_system=UC/mz_system
 public  materialize=UC/mz_system
 public  materialize=UC/materialize
-public  mz_introspection=U/mz_system
-public  mz_introspection=U/materialize
+public  mz_support=U/mz_system
+public  mz_support=U/materialize
 
 statement ok
 CREATE SCHEMA sch;
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 # Changing the owner of an object should change the grantor of all privileges to the new owner and
 # transfer the privileges of the old owner to the new owner.
@@ -305,33 +305,33 @@ ALTER CLUSTER c OWNER TO joe
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=UC/joe
-c  mz_introspection=U/joe
+c  mz_support=U/joe
 
 simple conn=mz_system,user=mz_system
 ALTER DATABASE d OWNER TO joe
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  joe=UC/joe
-d  mz_introspection=U/joe
+d  mz_support=U/joe
 
 simple conn=mz_system,user=mz_system
 ALTER SCHEMA sch OWNER TO joe
 ----
 COMPLETE 0
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=UC/joe
-sch  mz_introspection=U/joe
+sch  mz_support=U/joe
 
 ## Switch the owners back to materialize
 
@@ -1684,12 +1684,12 @@ false
 statement ok
 GRANT USAGE on CLUSTER c TO joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1710,23 +1710,23 @@ true
 statement ok
 GRANT USAGE on CLUSTER c TO joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=U/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on CLUSTER c TO PUBLIC
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  joe=U/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 simple conn=joe8,user=joe
 GRANT USAGE on CLUSTER c TO other
@@ -1739,12 +1739,12 @@ DROP ROLE joe
 statement ok
 REVOKE USAGE on CLUSTER c FROM joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1765,12 +1765,12 @@ true
 statement ok
 REVOKE USAGE on CLUSTER c FROM joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  =UC/materialize
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1784,11 +1784,11 @@ GRANT joe TO child
 statement ok
 REVOKE CREATE, USAGE ON CLUSTER c FROM PUBLIC
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
-c  mz_introspection=U/materialize
+c  mz_support=U/materialize
 
 query B
 SELECT has_cluster_privilege('joe', 'c', 'USAGE')
@@ -1838,12 +1838,12 @@ false
 statement ok
 GRANT USAGE on DATABASE d TO joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -1874,23 +1874,23 @@ true
 statement ok
 GRANT USAGE on DATABASE d TO joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  joe=U/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on DATABASE d TO PUBLIC
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  joe=U/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 simple conn=joe9,user=joe
 GRANT USAGE on DATABASE d TO other
@@ -1903,12 +1903,12 @@ DROP ROLE joe
 statement ok
 REVOKE USAGE on DATABASE d FROM joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -1939,12 +1939,12 @@ true
 statement ok
 REVOKE USAGE on DATABASE d FROM joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  =UC/materialize
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -1958,11 +1958,11 @@ GRANT joe TO child
 statement ok
 REVOKE CREATE, USAGE ON DATABASE d FROM PUBLIC
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
-d  mz_introspection=U/materialize
+d  mz_support=U/materialize
 
 query B
 SELECT has_database_privilege('joe', 'd', 'USAGE')
@@ -2022,12 +2022,12 @@ false
 statement ok
 GRANT USAGE on SCHEMA sch TO joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -2058,23 +2058,23 @@ true
 statement ok
 GRANT USAGE on SCHEMA sch TO joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=U/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 GRANT USAGE, CREATE on SCHEMA sch TO PUBLIC
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  joe=U/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 simple conn=joe10,user=joe
 GRANT USAGE on SCHEMA sch TO other
@@ -2087,12 +2087,12 @@ DROP ROLE joe
 statement ok
 REVOKE USAGE on SCHEMA sch FROM joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -2123,12 +2123,12 @@ true
 statement ok
 REVOKE USAGE on SCHEMA sch FROM joe
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  =UC/materialize
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 statement ok
 DROP ROLE joe
@@ -2142,11 +2142,11 @@ GRANT joe TO child
 statement ok
 REVOKE CREATE, USAGE ON SCHEMA sch FROM PUBLIC
 
-query TT
+query TT rowsort
 SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
-sch  mz_introspection=U/materialize
+sch  mz_support=U/materialize
 
 query B
 SELECT has_schema_privilege('joe', 'sch', 'USAGE')
@@ -2548,13 +2548,18 @@ mz_system=RBN/mz_system
 simple conn=mz_system,user=mz_system
 GRANT SELECT on v1 TO mz_introspection
 ----
-db error: ERROR: role name "mz_introspection" is reserved
+db error: ERROR: unknown role 'mz_introspection'
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT on v1 TO mz_support
+----
+db error: ERROR: role name "mz_support" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
 
 simple conn=mz_system,user=mz_system
-REVOKE SELECT on v1 FROM mz_introspection
+REVOKE SELECT on v1 FROM mz_support
 ----
-db error: ERROR: role name "mz_introspection" is reserved
+db error: ERROR: role name "mz_support" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
 
 simple conn=mz_system,user=mz_system

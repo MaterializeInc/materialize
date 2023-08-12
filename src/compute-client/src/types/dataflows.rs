@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::explain::IndexUsageType;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_client::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
@@ -40,7 +41,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
     /// (id of new index, description of index, relationtype of base source/view, monotonic)
-    pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType, bool)>,
+    pub index_imports: BTreeMap<GlobalId, IndexImport>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
@@ -105,11 +106,19 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     pub fn import_index(
         &mut self,
         id: GlobalId,
-        description: IndexDesc,
+        desc: IndexDesc,
         typ: RelationType,
         monotonic: bool,
     ) {
-        self.index_imports.insert(id, (description, typ, monotonic));
+        self.index_imports.insert(
+            id,
+            IndexImport {
+                desc,
+                typ,
+                monotonic,
+                usage_types: None,
+            },
+        );
     }
 
     /// Imports a source and makes it available as `id`.
@@ -199,7 +208,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 return source.typ.arity();
             }
         }
-        for (desc, typ, _monotonic) in self.index_imports.values() {
+        for IndexImport { desc, typ, .. } in self.index_imports.values() {
             if &desc.on_id == id {
                 return typ.arity();
             }
@@ -281,7 +290,7 @@ where
     /// This method includes identifiers for e.g. intermediate views, and should be filtered
     /// if one only wants sources and indexes.
     ///
-    /// This method is safe for mutually recursive view defintions.
+    /// This method is safe for mutually recursive view definitions.
     pub fn depends_on(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
         let mut out = BTreeSet::new();
         self.depends_on_into(collection_id, &mut out);
@@ -302,7 +311,7 @@ where
         // for the collection will be used, if one exists, so we have to report
         // the dependency on all of them.
         let mut found_index = false;
-        for (index_id, (desc, _typ, _monotonic)) in &self.index_imports {
+        for (index_id, IndexImport { desc, .. }) in &self.index_imports {
             if desc.on_id == collection_id {
                 // The collection is provided by an imported index. Report the
                 // dependency on the index.
@@ -422,27 +431,43 @@ impl ProtoMapEntry<GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)> for
     }
 }
 
-impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType, bool)> for ProtoIndexImport {
+impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
     fn from_rust<'a>(
-        (id, (index_desc, typ, monotonic)): (&'a GlobalId, &'a (IndexDesc, RelationType, bool)),
+        (
+            id,
+            IndexImport {
+                desc,
+                typ,
+                monotonic,
+                usage_types,
+            },
+        ): (&'a GlobalId, &'a IndexImport),
     ) -> Self {
         ProtoIndexImport {
             id: Some(id.into_proto()),
-            index_desc: Some(index_desc.into_proto()),
+            index_desc: Some(desc.into_proto()),
             typ: Some(typ.into_proto()),
             monotonic: monotonic.into_proto(),
+            usage_types: usage_types.as_ref().unwrap_or(&Vec::new()).into_proto(),
+            has_usage_types: usage_types.is_some(),
         }
     }
 
-    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType, bool)), TryFromProtoError> {
+    fn into_rust(self) -> Result<(GlobalId, IndexImport), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoIndex::id")?,
-            (
-                self.index_desc
+            IndexImport {
+                desc: self
+                    .index_desc
                     .into_rust_if_some("ProtoIndexImport::index_desc")?,
-                self.typ.into_rust_if_some("ProtoIndexImport::typ")?,
-                self.monotonic.into_rust()?,
-            ),
+                typ: self.typ.into_rust_if_some("ProtoIndexImport::typ")?,
+                monotonic: self.monotonic.into_rust()?,
+                usage_types: if !self.has_usage_types.into_rust()? {
+                    None
+                } else {
+                    Some(self.usage_types.into_rust()?)
+                },
+            },
         ))
     }
 }
@@ -544,11 +569,12 @@ fn any_source_import(
 proptest::prop_compose! {
     fn any_dataflow_index_import()(
         id in any::<GlobalId>(),
-        index in any::<IndexDesc>(),
+        desc in any::<IndexDesc>(),
         typ in any::<RelationType>(),
         monotonic in any::<bool>(),
-    ) -> (GlobalId, (IndexDesc, RelationType, bool)) {
-        (id, (index, typ, monotonic))
+        usage_types in any::<Option<Vec<IndexUsageType>>>(),
+    ) -> (GlobalId, IndexImport) {
+        (id, IndexImport {desc, typ, monotonic, usage_types})
     }
 }
 
@@ -590,6 +616,20 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
             key: proto.key.into_rust()?,
         })
     }
+}
+
+/// Information about an imported index, and how it will be used by the dataflow.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct IndexImport {
+    /// Description of index.
+    pub desc: IndexDesc,
+    /// Schema and keys of the object the index is on.
+    pub typ: RelationType,
+    /// Whether the index will supply monotonic data.
+    pub monotonic: bool,
+    /// What kind of operation (full scan, lookup, ...) will access the index. Filled by
+    /// `prune_and_annotate_dataflow_index_imports`.
+    pub usage_types: Option<Vec<IndexUsageType>>,
 }
 
 /// An association of a global identifier to an expression.

@@ -367,6 +367,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  operator_id  uint8
 2  records  numeric
 3  batches  numeric
+4  size  numeric
+5  capacity  numeric
+6  allocations  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_delays_histogram' ORDER BY position
@@ -421,6 +424,17 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  address  list
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_arrangement_sizes' ORDER BY position
+----
+1  id  uint8
+2  name  text
+3  records  numeric
+4  batches  numeric
+5  size  numeric
+6  capacity  numeric
+7  allocations  numeric
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_channels' ORDER BY position
 ----
 1  id  uint8
@@ -459,12 +473,21 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  parent_id  uint8
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_arrangement_sizes' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_shutdown_durations_histogram' ORDER BY position
 ----
-1  id  uint8
-2  name  text
-3  records  numeric
-4  batches  numeric
+1  duration_ns  uint8
+2  count  numeric
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_expected_group_size_advice' ORDER BY position
+----
+1  dataflow_id  uint8
+2  dataflow_name  text
+3  region_id  uint8
+4  region_name  text
+5  levels  bigint
+6  to_cut  bigint
+7  hint  double␠precision
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_message_counts' ORDER BY position
@@ -472,6 +495,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  channel_id  uint8
 2  sent  numeric
 3  received  numeric
+4  batch_sent  numeric
+5  batch_received  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_peek_durations_histogram' ORDER BY position
@@ -485,6 +510,10 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id  uint8
 2  name  text
 3  records  numeric
+4  batches  numeric
+5  size  numeric
+6  capacity  numeric
+7  allocations  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_records_per_dataflow_operator' ORDER BY position
@@ -493,6 +522,10 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  name  text
 3  dataflow_id  uint8
 4  records  numeric
+5  batches  numeric
+6  size  numeric
+7  capacity  numeric
+8  allocations  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_scheduling_elapsed' ORDER BY position
@@ -507,6 +540,23 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  requested_ns  uint8
 3  count  numeric
 
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_fully_qualified_names' ORDER BY position
+----
+1  id  text
+2  name  text
+3  object_type  text
+4  schema_name  text
+5  database_name  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
+----
+1  id  text
+2  object_type  text
+3  event_type  text
+4  occurred_at  timestamp␠with␠time␠zone
+
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
 ----
@@ -514,6 +564,9 @@ mz_active_peeks
 mz_active_peeks_per_worker
 mz_aggregates
 mz_arrangement_batches_raw
+mz_arrangement_heap_allocations_raw
+mz_arrangement_heap_capacity_raw
+mz_arrangement_heap_size_raw
 mz_arrangement_records_raw
 mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
@@ -557,16 +610,24 @@ mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operator_reachability_raw
 mz_dataflow_operators
 mz_dataflow_operators_per_worker
+mz_dataflow_shutdown_durations_histogram
+mz_dataflow_shutdown_durations_histogram_per_worker
+mz_dataflow_shutdown_durations_histogram_raw
 mz_dataflows
 mz_dataflows_per_worker
+mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
 mz_kafka_sources
+mz_message_batch_counts_received_raw
+mz_message_batch_counts_sent_raw
 mz_message_counts
 mz_message_counts_per_worker
 mz_message_counts_received_raw
 mz_message_counts_sent_raw
 mz_object_dependencies
+mz_object_fully_qualified_names
+mz_object_lifetimes
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker

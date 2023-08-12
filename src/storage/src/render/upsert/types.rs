@@ -75,7 +75,7 @@ use std::time::Instant;
 
 use bincode::Options;
 use itertools::Itertools;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropGauge;
 use mz_rocksdb::RocksDBConfig;
@@ -323,6 +323,10 @@ pub struct MergeStats {
     /// If the current call to `merge_snapshot_chunk` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
+    /// The number of inserts i.e. +1 diff
+    pub inserts: u64,
+    /// The number of deletes i.e. -1 diffs
+    pub deletes: u64,
 }
 
 impl std::ops::AddAssign for MergeStats {
@@ -330,6 +334,8 @@ impl std::ops::AddAssign for MergeStats {
         self.updates += rhs.updates;
         self.values_diff += rhs.values_diff;
         self.size_diff += rhs.size_diff;
+        self.inserts += rhs.inserts;
+        self.deletes += rhs.deletes;
     }
 }
 
@@ -349,8 +355,12 @@ pub struct PutStats {
 /// Statistics for a single call to `multi_get`.
 #[derive(Clone, Default, Debug)]
 pub struct GetStats {
-    /// The number of puts/deletes processed
+    /// The number of gets processed
     pub processed_gets: u64,
+    /// The total size in bytes returned
+    pub processed_gets_size: u64,
+    /// The number of non-empty records returned
+    pub returned_gets: u64,
 }
 
 /// A trait that defines the fundamental primitives required by a state-backing of
@@ -450,6 +460,8 @@ impl UpsertStateBackend for InMemoryHashMap {
             stats.processed_gets += 1;
             let value = self.state.get(&key).cloned();
             let size = value.as_ref().map(|v| v.memory_size());
+            stats.processed_gets_size += size.unwrap_or(0);
+            stats.returned_gets += size.map(|_| 1).unwrap_or(0);
             *result_out = UpsertValueAndSize { value, size };
         }
         Ok(stats)
@@ -465,7 +477,8 @@ pub(crate) struct RocksDBParams {
     pub(crate) instance_path: PathBuf,
     pub(crate) env: rocksdb::Env,
     pub(crate) tuning_config: RocksDBConfig,
-    pub(crate) metrics: Arc<mz_rocksdb::RocksDBMetrics>,
+    pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
+    pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
 }
 
 pub struct AutoSpillBackend {
@@ -496,7 +509,8 @@ impl AutoSpillBackend {
             instance_path,
             env,
             tuning_config,
-            metrics,
+            shared_metrics,
+            instance_metrics,
         } = rocksdb_params;
         tracing::info!("spilling to disk for upsert at {:?}", instance_path);
 
@@ -505,7 +519,8 @@ impl AutoSpillBackend {
                 instance_path,
                 mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
                 tuning_config.clone(),
-                Arc::clone(metrics),
+                Arc::clone(shared_metrics),
+                Arc::clone(instance_metrics),
                 upsert_bincode_opts(),
             )
             .await
@@ -697,6 +712,11 @@ where
 
             for (key, value, diff) in self.merge_scratch.drain(..) {
                 stats.updates += 1;
+                if diff > 0 {
+                    stats.inserts += 1;
+                } else if diff < 0 {
+                    stats.deletes += 1;
+                }
                 let entry = self.merge_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);
 
@@ -730,9 +750,15 @@ where
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics
+        self.worker_metrics
             .merge_snapshot_updates
-            .observe(f64::cast_lossy(stats.updates));
+            .inc_by(stats.updates);
+        self.worker_metrics
+            .merge_snapshot_inserts
+            .inc_by(stats.inserts);
+        self.worker_metrics
+            .merge_snapshot_deletes
+            .inc_by(stats.deletes);
 
         self.snapshot_stats += stats;
         // Updating the metrics
@@ -794,9 +820,9 @@ where
         self.metrics
             .multi_put_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics
+        self.worker_metrics
             .multi_put_size
-            .observe(f64::cast_lossy(stats.processed_puts));
+            .inc_by(stats.processed_puts);
 
         self.stats.update_envelope_state_bytes_by(stats.size_diff);
         self.stats.update_envelope_state_count_by(stats.values_diff);
@@ -825,9 +851,15 @@ where
         self.metrics
             .multi_get_latency
             .observe(now.elapsed().as_secs_f64());
-        self.metrics
+        self.worker_metrics
             .multi_get_size
-            .observe(f64::cast_lossy(stats.processed_gets));
+            .inc_by(stats.processed_gets);
+        self.worker_metrics
+            .multi_get_result_count
+            .inc_by(stats.returned_gets);
+        self.worker_metrics
+            .multi_get_result_bytes
+            .inc_by(stats.processed_gets_size);
 
         Ok(())
     }

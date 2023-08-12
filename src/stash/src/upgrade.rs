@@ -46,21 +46,14 @@ use crate::{
     COLLECTION_CONFIG, USER_VERSION_KEY,
 };
 
-pub(crate) mod v15_to_v16;
-pub(crate) mod v16_to_v17;
-pub(crate) mod v17_to_v18;
-pub(crate) mod v18_to_v19;
-pub(crate) mod v19_to_v20;
-pub(crate) mod v20_to_v21;
-pub(crate) mod v21_to_v22;
-pub(crate) mod v22_to_v23;
-pub(crate) mod v23_to_v24;
-pub(crate) mod v24_to_v25;
 pub(crate) mod v25_to_v26;
 pub(crate) mod v26_to_v27;
 pub(crate) mod v27_to_v28;
 pub(crate) mod v28_to_v29;
 pub(crate) mod v29_to_v30;
+pub(crate) mod v30_to_v31;
+pub(crate) mod v31_to_v32;
+pub(crate) mod v32_to_v33;
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.

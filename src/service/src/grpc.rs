@@ -41,6 +41,9 @@ use crate::params::GrpcClientParameters;
 
 include!(concat!(env!("OUT_DIR"), "/mz_service.params.rs"));
 
+// Use with generated servers Server::new(Svc).max_decoding_message_size
+pub const MAX_GRPC_MESSAGE_SIZE: usize = usize::MAX;
+
 pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
 
 pub type ClientTransport = InterceptedService<Channel, VersionAttachInterceptor>;
@@ -193,7 +196,9 @@ where
     where
         Self: Sized,
     {
-        let inner = tonic::client::Grpc::new(inner);
+        let inner = tonic::client::Grpc::new(inner)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
         let codec = StatCodec::new(stats_collector);
         BidiProtoClient { inner, path, codec }
     }

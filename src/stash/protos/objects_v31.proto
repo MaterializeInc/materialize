@@ -18,7 +18,7 @@
 
 syntax = "proto3";
 
-package objects_v24;
+package objects_v31;
 
 message ConfigKey {
     string key = 1;
@@ -283,6 +283,7 @@ message ClusterConfig {
         repeated string availability_zones = 3;
         ReplicaLogging logging = 4;
         ReplicaMergeEffort idle_arrangement_merge_effort = 5;
+        bool disk = 6;
     }
 
     oneof variant {
@@ -304,6 +305,7 @@ message ReplicaConfig {
         string size = 1;
         string availability_zone = 2;
         bool az_user_specified = 3;
+        bool disk = 4;
     }
 
     oneof location {
@@ -324,9 +326,6 @@ message RoleId {
 
 message RoleAttributes {
     bool inherit = 1;
-    bool create_role = 2;
-    bool create_db = 3;
-    bool create_cluster = 4;
 }
 
 message RoleMembership {
@@ -420,6 +419,7 @@ message AuditLogEventV1 {
         OBJECT_TYPE_TABLE = 13;
         OBJECT_TYPE_TYPE = 14;
         OBJECT_TYPE_VIEW = 15;
+        OBJECT_TYPE_SYSTEM = 16;
     }
 
     message IdFullNameV1 {
@@ -463,6 +463,7 @@ message AuditLogEventV1 {
         StringWrapper replica_id = 3;
         string replica_name = 4;
         string logical_size = 5;
+        bool disk = 6;
     }
 
     message DropClusterReplicaV1 {
@@ -492,6 +493,13 @@ message AuditLogEventV1 {
         StringWrapper new_size = 4;
     }
 
+    message AlterSetClusterV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+        StringWrapper old_cluster = 3;
+        StringWrapper new_cluster = 4;
+    }
+
     message GrantRoleV1 {
         string role_id = 1;
         string member_id = 2;
@@ -517,6 +525,27 @@ message AuditLogEventV1 {
         string executed_by = 4;
     }
 
+    message UpdatePrivilegeV1 {
+        string object_id = 1;
+        string grantee_id = 2;
+        string grantor_id = 3;
+        string privileges = 4;
+    }
+
+    message AlterDefaultPrivilegeV1 {
+        string role_id = 1;
+        StringWrapper database_id = 2;
+        StringWrapper schema_id = 3;
+        string grantee_id= 4;
+        string privileges = 5;
+    }
+
+    message UpdateOwnerV1 {
+        string object_id = 1;
+        string old_owner_id = 2;
+        string new_owner_id = 3;
+    }
+
     message SchemaV1 {
         string id = 1;
         string name = 2;
@@ -529,23 +558,32 @@ message AuditLogEventV1 {
         StringWrapper database_name = 3;
     }
 
+    message UpdateItemV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+    }
+
     uint64 id = 1;
     EventType event_type = 2;
     ObjectType object_type = 3;
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
 
-    // next-id: 22
+    // next-id: 27
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
         CreateSourceSinkV1 create_source_sink_v1 = 8;
         CreateSourceSinkV2 create_source_sink_v2 = 9;
         AlterSourceSinkV1 alter_source_sink_v1 = 10;
+        AlterSetClusterV1 alter_set_cluster_v1 = 25;
         GrantRoleV1 grant_role_v1 = 11;
         GrantRoleV2 grant_role_v2 = 12;
         RevokeRoleV1 revoke_role_v1 = 13;
         RevokeRoleV2 revoke_role_v2 = 14;
+        UpdatePrivilegeV1 update_privilege_v1 = 22;
+        AlterDefaultPrivilegeV1 alter_default_privilege_v1 = 23;
+        UpdateOwnerV1 update_owner_v1 = 24;
         IdFullNameV1 id_full_name_v1 = 15;
         RenameClusterV1 rename_cluster_v1 = 20;
         RenameClusterReplicaV1 rename_cluster_replica_v1 = 21;
@@ -553,5 +591,6 @@ message AuditLogEventV1 {
         IdNameV1 id_name_v1 = 17;
         SchemaV1 schema_v1 = 18;
         SchemaV2 schema_v2 = 19;
+        UpdateItemV1 update_item_v1 = 26;
     }
 }

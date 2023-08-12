@@ -59,7 +59,7 @@ u1  default  false  NULL  NULL
 
 
 query T rowsort
-SHOW CLUSTERS
+SELECT name FROM (SHOW CLUSTERS)
 ----
 mz_system
 mz_introspection

@@ -12,11 +12,11 @@ mode cockroach
 reset-server
 
 # Verify initial roles.
-query TTB
+query TTB rowsort
 SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%'
 ----
-s1 mz_system true
-s2 mz_introspection true
+s1  mz_system  true
+s2  mz_support  true
 
 query TB
 SELECT name, inherit FROM mz_roles WHERE id LIKE 'u%'
@@ -57,49 +57,49 @@ CREATE ROLE rj
 statement error CREATE USER is not supported, for more information consult the documentation at
 CREATE USER fms
 
-query TB
+query TB rowsort
 SELECT name, inherit FROM mz_roles
 ----
-rj  true
-mz_system  true
 materialize  true
-mz_introspection  true
+mz_support  true
+mz_system  true
+rj  true
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
 statement error unknown role 'bad'
 DROP ROLE rj, bad
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
-rj
-mz_system
 materialize
-mz_introspection
+mz_support
+mz_system
+rj
 
 # ...unless IF EXISTS is specified.
 statement ok
 DROP ROLE IF EXISTS rj, bad
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
-mz_system
 materialize
-mz_introspection
+mz_support
+mz_system
 
 # Verify that the single name version of DROP ROLE works too.
 statement ok
 CREATE ROLE nlb
 
-query T
+query T rowsort
 SELECT name FROM mz_roles
 ----
-nlb
-mz_system
 materialize
-mz_introspection
+mz_support
+mz_system
+nlb
 
 statement ok
 DROP ROLE nlb
@@ -108,8 +108,8 @@ query T
 SELECT name FROM mz_roles
 ----
 mz_system
+mz_support
 materialize
-mz_introspection
 
 statement ok
 DROP ROLE IF EXISTS nlb
@@ -133,7 +133,7 @@ CREATE ROLE mz_foo
 statement ok
 CREATE ROLE foo
 
-query TB
+query TB rowsort
 SELECT name, inherit FROM mz_roles WHERE name = 'foo'
 ----
 foo true
@@ -236,3 +236,29 @@ db error: ERROR: system cluster 'mz_system' cannot be modified
 
 statement error role name "external_foo" is reserved
 CREATE ROLE external_foo
+
+# Test SHOW ROLES
+
+query T
+SHOW ROLES
+----
+materialize
+
+statement ok
+CREATE ROLE foo
+
+query T
+SHOW ROLES
+----
+foo
+materialize
+
+query T
+SHOW ROLES WHERE name = 'foo'
+----
+foo
+
+query T
+SHOW ROLES LIKE 'f%'
+----
+foo

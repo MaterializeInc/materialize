@@ -137,7 +137,6 @@ impl Coordinator {
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::must_ship_dataflows`]
     ///
     /// # Panics
     ///
@@ -147,65 +146,36 @@ impl Coordinator {
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) {
-        self.must_ship_dataflows(vec![dataflow], instance).await
-    }
-
-    /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the dataflows fail to ship.
-    async fn must_ship_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDesc>,
-        instance: ComputeInstanceId,
-    ) {
-        self.ship_dataflows(dataflows, instance)
+        self.ship_dataflow(dataflow, instance)
             .await
-            .expect("failed to ship dataflows");
+            .expect("failed to ship dataflow");
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::ship_dataflows`]
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
     /// [`Self::must_ship_dataflow`].
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDesc,
+        mut dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) -> Result<(), AdapterError> {
-        self.ship_dataflows(vec![dataflow], instance).await
-    }
-
-    /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    ///
-    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::must_ship_dataflows`].
-    async fn ship_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDesc>,
-        instance: ComputeInstanceId,
-    ) -> Result<(), AdapterError> {
-        let mut output_ids = Vec::new();
-        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for mut dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.export_ids());
-            // If the only outputs of the dataflow are sinks, we might
-            // be able to turn off the computation early, if they all
-            // have non-trivial `up_to`s.
-            if dataflow.index_exports.is_empty() {
-                dataflow.until = Antichain::from_elem(Timestamp::MIN);
-                for (_, sink) in &dataflow.sink_exports {
-                    dataflow.until.join_assign(&sink.up_to);
-                }
+        // If the only outputs of the dataflow are sinks, we might
+        // be able to turn off the computation early, if they all
+        // have non-trivial `up_to`s.
+        if dataflow.index_exports.is_empty() {
+            dataflow.until = Antichain::from_elem(Timestamp::MIN);
+            for (_, sink) in &dataflow.sink_exports {
+                dataflow.until.join_assign(&sink.up_to);
             }
-            let plan = self.finalize_dataflow(dataflow, instance)?;
-            dataflow_plans.push(plan);
         }
+
+        let output_ids = dataflow.export_ids().collect();
+        let plan = self.finalize_dataflow(dataflow, instance)?;
+
         self.controller
             .active_compute()
-            .create_dataflows(instance, dataflow_plans)
+            .create_dataflow(instance, plan)
             .unwrap_or_terminate("dataflow creation cannot fail");
         self.initialize_compute_read_policies(
             output_ids,
@@ -942,7 +912,7 @@ fn role_oid_memberships_inner<'a>(
 impl Coordinator {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
-        // must_ship_dataflow, must_ship_dataflows, and must_finalize_dataflow are not allowed
+        // must_ship_dataflow and must_finalize_dataflow are not allowed
         // to have a `Result` return because these functions are called after
         // `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors
@@ -954,9 +924,6 @@ impl Coordinator {
 
         let df = DataflowDesc::new("".into());
         let _: () = self.must_ship_dataflow(df.clone(), compute_instance).await;
-        let _: () = self
-            .must_ship_dataflows(vec![df.clone()], compute_instance)
-            .await;
         let _: DataflowDescription<mz_compute_client::plan::Plan> =
             self.must_finalize_dataflow(df, compute_instance);
     }

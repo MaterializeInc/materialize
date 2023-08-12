@@ -21,6 +21,51 @@ use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::Data;
 use timely::dataflow::Scope;
 
+use crate::extensions::arrange::ArrangementSize;
+
+/// Extension trait for the `reduce_abelian` differential dataflow method.
+pub(crate) trait MzReduce<G: Scope, K: Data, V: Data, R: Semigroup>:
+    ReduceCore<G, K, V, R>
+where
+    G::Timestamp: Lattice + Ord,
+{
+    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
+    fn mz_reduce_abelian<L, T2>(
+        &self,
+        name: &str,
+        enable_arrangement_size_logging: bool,
+        logic: L,
+    ) -> Arranged<G, TraceAgent<T2>>
+    where
+        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
+        T2::Val: Data,
+        T2::R: Abelian,
+        T2::Batch: Batch,
+        L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        Arranged<G, TraceAgent<T2>>: ArrangementSize,
+    {
+        // Allow access to `reduce_abelian` since we're within Mz's wrapper.
+        #[allow(clippy::disallowed_methods)]
+        let arranged = self.reduce_abelian::<_, T2>(name, logic);
+        if enable_arrangement_size_logging {
+            arranged.log_arrangement_size()
+        } else {
+            arranged
+        }
+    }
+}
+
+impl<G, K, V, T1, R> MzReduce<G, K, V, R> for Arranged<G, T1>
+where
+    G::Timestamp: Lattice + Ord,
+    G: Scope,
+    K: Data,
+    V: Data,
+    R: Semigroup,
+    T1: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
+{
+}
+
 /// Extension trait for `ReduceCore`, currently providing a reduction based
 /// on an operator-pair approach.
 pub trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
@@ -36,31 +81,7 @@ where
         &self,
         name1: &str,
         name2: &str,
-        logic1: L1,
-        logic2: L2,
-    ) -> (Arranged<G, TraceAgent<T1>>, Arranged<G, TraceAgent<T2>>)
-    where
-        T1: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T1::Val: Data,
-        T1::R: Abelian,
-        T1::Batch: Batch,
-        L1: FnMut(&K, &[(&V, R)], &mut Vec<(T1::Val, T1::R)>) + 'static,
-        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T2::Val: Data,
-        T2::R: Abelian,
-        T2::Batch: Batch,
-        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static;
-}
-
-impl<G: Scope, K: Data, V: Data, Tr, R: Semigroup> ReduceExt<G, K, V, R> for Arranged<G, Tr>
-where
-    G::Timestamp: Lattice + Ord,
-    Tr: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
-{
-    fn reduce_pair<L1, T1, L2, T2>(
-        &self,
-        name1: &str,
-        name2: &str,
+        enable_arrangement_size_logging: bool,
         logic1: L1,
         logic2: L2,
     ) -> (Arranged<G, TraceAgent<T1>>, Arranged<G, TraceAgent<T2>>)
@@ -75,9 +96,41 @@ where
         T2::R: Abelian,
         T2::Batch: Batch,
         L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        Arranged<G, TraceAgent<T1>>: ArrangementSize,
+        Arranged<G, TraceAgent<T2>>: ArrangementSize;
+}
+
+impl<G: Scope, K: Data, V: Data, Tr, R: Semigroup> ReduceExt<G, K, V, R> for Arranged<G, Tr>
+where
+    G::Timestamp: Lattice + Ord,
+    Tr: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
+{
+    fn reduce_pair<L1, T1, L2, T2>(
+        &self,
+        name1: &str,
+        name2: &str,
+        enable_arrangement_size_logging: bool,
+        logic1: L1,
+        logic2: L2,
+    ) -> (Arranged<G, TraceAgent<T1>>, Arranged<G, TraceAgent<T2>>)
+    where
+        T1: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
+        T1::Val: Data,
+        T1::R: Abelian,
+        T1::Batch: Batch,
+        L1: FnMut(&K, &[(&V, R)], &mut Vec<(T1::Val, T1::R)>) + 'static,
+        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
+        T2::Val: Data,
+        T2::R: Abelian,
+        T2::Batch: Batch,
+        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        Arranged<G, TraceAgent<T1>>: ArrangementSize,
+        Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
-        let arranged1 = self.reduce_abelian::<L1, T1>(name1, logic1);
-        let arranged2 = self.reduce_abelian::<L2, T2>(name2, logic2);
+        let arranged1 =
+            self.mz_reduce_abelian::<L1, T1>(name1, enable_arrangement_size_logging, logic1);
+        let arranged2 =
+            self.mz_reduce_abelian::<L2, T2>(name2, enable_arrangement_size_logging, logic2);
         (arranged1, arranged2)
     }
 }

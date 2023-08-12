@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-
 > SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
@@ -701,6 +698,8 @@ ReduceMinsMaxes
 "ArrangeAccumulable"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3)]]"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3)]]-errors"
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
 "ArrangeBy[[Column(0), Column(2)]]"
 "ArrangeBy[[Column(0)]]"
 "ArrangeBy[[Column(0)]]"
@@ -826,6 +825,9 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange Timely(Reachability)"
+"ArrangeByKey Compute(ArrangementHeapAllocations)"
+"ArrangeByKey Compute(ArrangementHeapCapacity)"
+"ArrangeByKey Compute(ArrangementHeapSize)"
 "ArrangeByKey Compute(DataflowCurrent)"
 "ArrangeByKey Compute(DataflowDependency)"
 "ArrangeByKey Compute(FrontierCurrent)"
@@ -833,10 +835,13 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "ArrangeByKey Compute(ImportFrontierCurrent)"
 "ArrangeByKey Compute(PeekCurrent)"
 "ArrangeByKey Compute(PeekDuration)"
+"ArrangeByKey Compute(ShutdownDuration)"
 "ArrangeByKey Differential(ArrangementBatches)"
 "ArrangeByKey Differential(ArrangementRecords)"
 "ArrangeByKey Differential(Sharing)"
 "ArrangeByKey Timely(Addresses)"
+"ArrangeByKey Timely(BatchesReceived)"
+"ArrangeByKey Timely(BatchesSent)"
 "ArrangeByKey Timely(Channels)"
 "ArrangeByKey Timely(Elapsed)"
 "ArrangeByKey Timely(Histogram)"
