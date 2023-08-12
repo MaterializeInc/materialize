@@ -82,6 +82,8 @@ class ValidationError(ValidationMessage):
         value2: Any,
         sql1: str | None = None,
         sql2: str | None = None,
+        sql_error1: str | None = None,
+        sql_error2: str | None = None,
         description: str | None = None,
         col_index: int | None = None,
         location: str | None = None,
@@ -95,6 +97,8 @@ class ValidationError(ValidationMessage):
         self.strategy2 = strategy2
         self.sql1 = sql1
         self.sql2 = sql2
+        self.sql_error1 = sql_error1
+        self.sql_error2 = sql_error2
         self.col_index = col_index
         self.location = location
 
@@ -108,6 +112,16 @@ class ValidationError(ValidationMessage):
             f"\n  Value 1{strategy1_desc}: '{self.value1}' (type: {type(self.value1)})"
             f"\n  Value 2{strategy2_desc}: '{self.value2}' (type: {type(self.value2)})"
         )
+
+        if self.error_type == ValidationErrorType.SUCCESS_MISMATCH:
+            if self.sql_error1 is not None:
+                value_and_strategy_desc = value_and_strategy_desc + (
+                    f"\n  Error 1: '{self.sql_error1}'"
+                )
+            if self.sql_error2 is not None:
+                value_and_strategy_desc = value_and_strategy_desc + (
+                    f"\n  Error 2: '{self.sql_error2}'"
+                )
 
         sql_desc = f"\n  Query 1: {self.sql1}\n  Query 2: {self.sql2}"
         return f"{self.error_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"

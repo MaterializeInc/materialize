@@ -96,6 +96,12 @@ class ResultComparator:
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
                     value2=outcome2.__class__.__name__,
+                    sql_error1=outcome1.error_message
+                    if isinstance(outcome1, QueryFailure)
+                    else None,
+                    sql_error2=outcome2.error_message
+                    if isinstance(outcome2, QueryFailure)
+                    else None,
                     strategy1=outcome1.strategy,
                     strategy2=outcome2.strategy,
                     sql1=outcome1.sql,
@@ -192,6 +198,8 @@ class ResultComparator:
                     "Error message differs",
                     value1=norm_error_message_1,
                     value2=norm_error_message_2,
+                    sql_error1=failure1.error_message,
+                    sql_error2=failure2.error_message,
                     strategy1=failure1.strategy,
                     strategy2=failure2.strategy,
                     sql1=failure1.sql,
