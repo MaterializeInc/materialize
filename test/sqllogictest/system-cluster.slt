@@ -90,7 +90,7 @@ Explained Query:
   With
     cte l1 =
       ReadExistingIndex mz_catalog.mz_sources lookup_value=("u3")
-        cte l0 =
+    cte l0 =
       Project (#0..=#4, #6)
         Join on=(#4 = #5) type=differential
           ArrangeBy keys=[[#4]]
@@ -99,6 +99,7 @@ Explained Query:
                 Get mz_catalog.mz_sources
           ArrangeBy keys=[[#0]]
             Get mz_catalog.mz_clusters
+
 Used Indexes:
   - mz_internal.mz_show_sources_ind
   - mz_internal.mz_clusters_ind
@@ -152,7 +153,7 @@ Explained Query:
       ArrangeBy keys=[[#3]]
         Project (#3, #4, #6, #8)
           ReadExistingIndex mz_catalog.mz_sinks lookup_value=("u3")
-            ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0]]
         Get mz_catalog.mz_clusters
 
 Used Indexes:
