@@ -7,7 +7,7 @@ menu:
 ---
 
 This guide walks you through the steps required to monitor the performance and
-overall health of your Materialize region using [Grafana cloud](https://grafana.com/).
+overall health of your Materialize region using [Grafana](https://grafana.com/).
 
 ## Before you begin
 
@@ -138,7 +138,7 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
    </details>
 
 {{< /tab >}}
-{{< tab "Self-serve">}}
+{{< tab "Self-managed">}}
 1. Follow the [instructions to install and run Prometheus](https://prometheus.io/docs/prometheus/latest/installation/)
    in your host.
 
