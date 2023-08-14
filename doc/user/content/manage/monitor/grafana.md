@@ -178,11 +178,10 @@ defined in the sample `config.yml`.
 
 1. **Log in** to your Grafana account.
 
-2. Navigate to **Dashboards**, and select **New Dashboard**.
+2. Navigate to **Dashboards**, click **New** and select the option **Import**.
 
-3. To use the sample dashboard, navigate to ⚙️ in the upper right corner, and
-   select **Import dashboard JSON**. Copy and paste the contents of the provided
-   sample `.json` file.
+3. To use the sample dashboard, copy and paste the contents of the provided
+   sample `.json` file in the **Import via panel json** text field, click **Load** and then **Import**.
 
     <br>
 
