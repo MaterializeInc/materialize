@@ -480,7 +480,7 @@ steps:
     label: "Checks upgrade from previous version, whole-Mz restart"
     timeout_in_minutes: 60
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
