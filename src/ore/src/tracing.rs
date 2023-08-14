@@ -339,23 +339,24 @@ where
 
             if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
                 if last_log_in_epoch_seconds
-                    .compare_exchange_weak(last_log, now, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange_weak(last_log, now, Ordering::Relaxed, Ordering::Relaxed)
                     .is_err()
                 {
                     return;
                 }
+                use crate::error::ErrorExt;
                 match err {
                     Error::Trace(err) => {
-                        warn!("{}", err);
+                        warn!("OpenTelemetry error: {}", err.display_with_causes());
                     }
                     Error::Metric(err) => {
-                        warn!("{}", err);
+                        warn!("OpenTelemetry error: {}", err.display_with_causes());
                     }
                     Error::Log(err) => {
-                        warn!("{}", err);
+                        warn!("OpenTelemetry error: {}", err.display_with_causes());
                     }
                     Error::Other(err) => {
-                        warn!("{}", err);
+                        warn!("OpenTelemetry error: {}", err);
                     }
                     _ => {
                         warn!("unknown OpenTelemetry error");
