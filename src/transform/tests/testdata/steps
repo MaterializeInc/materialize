@@ -68,7 +68,7 @@ With
       Get x
 
 ====
-No change: FoldConstants { limit: Some(10000) }, ThresholdElision, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
+No change: FoldConstants { limit: Some(10000) }, ThresholdElision, NormalizeLets { inline_mfp: false }, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
 Final:
 Return
@@ -113,7 +113,7 @@ Applied Fixpoint { name: "fix_joins", transforms: [JoinImplementation { recursio
 (Join [(ArrangeBy (get u1) [[#0]]) (ArrangeBy (get x) [[(CallBinary AddInt64 #0 (1 Int64))]])] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [0 [#0] (false 1 false null (false false false 0 false) 0)] [[1 [(CallBinary AddInt64 #0 (1 Int64))] (false 1 false null (false false false 0 false) 1)]]))
 
 ====
-No change: CanonicalizeMfp, RelationCSE { anf: ANF, normalize_lets: NormalizeLets { inline_mfp: false } }, FoldConstants { limit: Some(10000) }, ThresholdElision, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
+No change: CanonicalizeMfp, RelationCSE { anf: ANF, normalize_lets: NormalizeLets { inline_mfp: false } }, FoldConstants { limit: Some(10000) }, ThresholdElision, NormalizeLets { inline_mfp: false }, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
 Final:
 (Join [(ArrangeBy (get u1) [[#0]]) (ArrangeBy (get x) [[(CallBinary AddInt64 #0 (1 Int64))]])] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [0 [#0] (false 1 false null (false false false 0 false) 0)] [[1 [(CallBinary AddInt64 #0 (1 Int64))] (false 1 false null (false false false 0 false) 1)]]))
