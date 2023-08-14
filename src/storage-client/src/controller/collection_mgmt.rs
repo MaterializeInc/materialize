@@ -192,7 +192,13 @@ where
                             let min_time_to_complete = Instant::now() + DEFAULT_TICK;
 
                             // Reset the interval which is used to periodically bump the uppers
-                            // because the uppers will get bumped with the following update.
+                            // because the uppers will get bumped with the following update. This
+                            // makes it such that we will write at most once every `interval`.
+                            //
+                            // For example, let's say our `DEFAULT_TICK` interval is 10, so at
+                            // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
+                            // update at `t + 3` we want to shift this window so we bump the uppers
+                            // at `t + 13`, `t + 23`, ... which reseting the interval accomplishes.
                             interval.reset();
 
                             let (rows, responders): (Vec<_>, Vec<_>) = batch
