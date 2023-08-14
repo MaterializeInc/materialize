@@ -11,7 +11,7 @@ import os
 import uuid
 from typing import Any, Dict
 
-from materialize.cloudtest.util.jwt import JWK_PUBLIC_KEY
+from materialize.cloudtest.util.jwt_key import JWK_PUBLIC_KEY
 
 
 def docker_env() -> Dict[Any, str]:

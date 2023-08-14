@@ -14,7 +14,7 @@ from psycopg2.extensions import connection
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.environment import wait_for_environmentd
-from materialize.cloudtest.util.http import post
+from materialize.cloudtest.util.web_request import post
 
 
 def sql_query(

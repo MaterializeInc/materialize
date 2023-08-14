@@ -15,12 +15,12 @@ from requests import Response
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.controller import wait_for_connectable
-from materialize.cloudtest.util.http import delete, get, patch
 from materialize.cloudtest.util.kubectl import (
     kubectl_get,
     kubectl_get_or_none,
     kubectl_get_retry,
 )
+from materialize.cloudtest.util.web_request import delete, get, patch
 
 
 def create_environment_assignment(
