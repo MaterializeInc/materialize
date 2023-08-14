@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +31,7 @@ use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
+use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry::sdk::{trace, Resource};
@@ -38,7 +40,7 @@ use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{warn, Event, Level, Subscriber};
+use tracing::{error, warn, Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -318,6 +320,51 @@ where
             .with_exporter(exporter)
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
+
+        // Create our own error handler to:
+        //   1. Rate limit the number of error logs. By default the OTel library will emit
+        //      an enormous number of duplicate logs if any errors occur, one per batch
+        //      send attempt, until the error is resolved.
+        //   2. Log the errors via our tracing layer, so they are formatted consistently
+        //      with the rest of our logs, rather than the direct `eprintln` used by the
+        //      OTel library.
+        const OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS: u64 = 30;
+        let last_log_in_epoch_seconds = AtomicU64::default();
+        opentelemetry::global::set_error_handler(move |err| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Failed to get duration since Unix epoch")
+                .as_secs();
+
+            let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
+
+            if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
+                if !last_log_in_epoch_seconds
+                    .compare_exchange_weak(last_log, now, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    return;
+                }
+                match err {
+                    Error::Trace(err) => {
+                        warn!("{}", err);
+                    }
+                    Error::Metric(err) => {
+                        warn!("{}", err);
+                    }
+                    Error::Log(err) => {
+                        warn!("{}", err);
+                    }
+                    Error::Other(err) => {
+                        warn!("{}", err);
+                    }
+                    _ => {
+                        warn!("unknown OpenTelemetry error");
+                    }
+                }
+            }
+        })
+        .expect("valid error handler");
 
         // By default we turn off tracing from the following crates, because they
         // have long-lived Spans, which OpenTelemetry does not handle well.
