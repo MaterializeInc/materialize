@@ -50,7 +50,6 @@ SERVICES = [
     Mz(
         region=REGION,
         environment=ENVIRONMENT,
-        username=USERNAME,
         app_password=APP_PASSWORD,
     ),
 ]
