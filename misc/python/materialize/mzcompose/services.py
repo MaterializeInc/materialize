@@ -1054,8 +1054,8 @@ class Mz(Service):
                     "default": {
                         "app-password": app_password,
                         "region": region,
-                        "admin-endpoint": f"https://{environment}.cloud.materialize.com",
-                        "cloud-endpoint": f"https://admin.{environment}.cloud.materialize.com",
+                        "cloud-endpoint": f"https://{environment}.cloud.materialize.com",
+                        "admin-endpoint": f"https://admin.{environment}.cloud.materialize.com",
                     },
                 },
             },
