@@ -77,8 +77,8 @@ where
         let err_collection = err_collection.leave();
 
         let region_name = match sink.connection {
-            ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
-            ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+            ComputeSinkConnection::Subscribe(_) => format!("Region: SubscribeSink({:?})", sink_id),
+            ComputeSinkConnection::Persist(_) => format!("Region: PersistSink({:?})", sink_id),
         };
         self.scope
             .parent
