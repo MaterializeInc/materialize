@@ -165,11 +165,11 @@ revoked.
 
 We will add the following functions:
 
-- `current_role()`
+- `current_role`
     - Returns the current role of the session.
-- `current_user()`
-    - Alias for `current_role()`.
-- `session_user()`
+- `current_user`
+    - Alias for `current_role`.
+- `session_user`
     - Returns the role that initiated the database connection.
 
 NOTE: Since we won't support `SET ROLE` yet, these functions will all behave identically.

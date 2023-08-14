@@ -1526,9 +1526,9 @@ fn plan_set_expr(
             // now we just disallow any `SHOW` commands in views.
             //
             // Ideally, the `SHOW` commands that use the current schema would expand to use the
-            // `current_schema()` function, instead of hard-coding the current schema id, so that
+            // `current_schema` function, instead of hard-coding the current schema id, so that
             // planning can correctly identify that they are unmaterializable. However, that's a
-            // little tricky because `current_schema()` returns a schema name not id, which is what
+            // little tricky because `current_schema` returns a schema name not id, which is what
             // we need.
             if qcx.lifetime == QueryLifetime::Static {
                 return Err(PlanError::ShowCommandInView);

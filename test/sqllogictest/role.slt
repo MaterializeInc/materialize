@@ -226,7 +226,7 @@ SELECT pg_get_userbyid(4294967295);
 # Test concurrently dropped role
 
 simple conn=foo,user=foo
-SELECT current_user();
+SELECT current_user;
 ----
 foo
 COMPLETE 1
@@ -235,7 +235,7 @@ statement ok
 DROP ROLE foo
 
 simple conn=foo,user=foo
-SELECT current_user();
+SELECT current_user;
 ----
 db error: ERROR: role u4 was concurrently dropped
 DETAIL: Please disconnect and re-connect with a valid role.

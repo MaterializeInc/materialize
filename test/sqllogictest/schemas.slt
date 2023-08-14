@@ -39,7 +39,7 @@ show search_path
 "ba r", foo, "x, y", "a, b"
 
 query T
-SELECT current_schema()
+SELECT current_schema
 ----
 NULL
 
@@ -60,7 +60,7 @@ statement ok
 SET cluster = noexist
 
 query T
-SELECT current_schema()
+SELECT current_schema
 ----
 NULL
 
@@ -85,7 +85,7 @@ CREATE SCHEMA foo
 ----
 
 query T
-SELECT current_schema()
+SELECT current_schema
 ----
 foo
 
@@ -116,7 +116,7 @@ show search_path
 pg_catalog
 
 query T
-SELECT current_schema()
+SELECT current_schema
 ----
 pg_catalog
 

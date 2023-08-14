@@ -723,15 +723,15 @@
     description: >-
       Returns the name of the current database.
     unmaterializable: true
-  - signature: 'current_role() -> text'
+  - signature: 'current_role -> text'
     description: >-
       Alias for `current_user`.
     unmaterializable: true
-  - signature: 'current_user() -> text'
+  - signature: 'current_user -> text'
     description: >-
       Returns the name of the user who executed the containing query.
     unmaterializable: true
-  - signature: 'session_user() -> text'
+  - signature: 'session_user -> text'
     description: >-
       Returns the name of the user who initiated the database connection.
     unmaterializable: true
@@ -757,7 +757,7 @@
   functions:
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
-  - signature: 'current_schema() -> text'
+  - signature: 'current_schema -> text'
     description: >-
       Returns the name of the first non-implicit schema on the search path, or
       `NULL` if the search path is empty.

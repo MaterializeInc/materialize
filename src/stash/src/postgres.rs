@@ -540,7 +540,7 @@ impl Stash {
                     r#"
             SELECT EXISTS (
                 SELECT 1 FROM pg_tables
-                WHERE schemaname = current_schema() AND tablename = 'fence'
+                WHERE schemaname = current_schema AND tablename = 'fence'
             )"#,
                     &[],
                 )

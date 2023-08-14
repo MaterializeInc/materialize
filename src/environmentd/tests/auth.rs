@@ -488,7 +488,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     .build()
                     .unwrap();
                 let res = query_http_api(
-                    "SELECT pg_catalog.current_user()",
+                    "SELECT pg_catalog.current_user",
                     &uri,
                     headers,
                     configure,
@@ -554,7 +554,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     .unwrap();
 
                 ws.write_message(Message::Text(
-                    r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+                    r#"{"query": "SELECT pg_catalog.current_user"}"#.into(),
                 ))
                 .unwrap();
 
