@@ -131,10 +131,11 @@ ORDER BY elapsed_ns DESC
 -----+----------------------------------------+-----------------
  354 | Dataflow: materialize.qck.num_bids     | 02:05:25.756836
  578 | Dataflow: materialize.qck.num_bids_idx | 00:15:04.838741
- (3 rows)
+ (2 rows)
 ```
 
-The result shows the time Materialize spend keeping the materialized view `num_bids` up to date.
+These results show that Materialize spend the most time keeping the materialized view `num_bids` up to date.
+Followed by the work on the index `avg_bids_idx` that has been defined on the materialized view.
 
 ### Finding expensive operators within a dataflow
 
@@ -186,10 +187,9 @@ ORDER BY elapsed_ns DESC
 ...
 ```
 
-From the results of this query we can see that most of the elapsed time of the dataflow is caused by the time it takes to maintain the updates in the corresponding arrangements of the dataflow.
+From the results of this query we can see that most of the elapsed time of the dataflow is caused by the time it takes to maintain the updates in one of the arrangements of the dataflow of the materialized view.
 
-## Why is Materialize unresponsive and where is it currently spending time?
-
+## Why is Materialize unresponsive or slow?
 
 A large class of problems can be identified by using [`elapsed_time`](#where-is-materialize-spending-compute-time) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
