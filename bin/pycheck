@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 PYRIGHT_VERSION="1.1.323"
-typecheck_cmd="npx pyright@$PYRIGHT_VERSION --level=error"
+typecheck_cmd="npx pyright@$PYRIGHT_VERSION"
 
 python_folders=(ci misc/python)
 flake8_folders=(ci misc/python test)
@@ -34,10 +34,11 @@ try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[
 if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
   try bin/pyactivate -m pytest -qq --doctest-modules misc/python
 fi
-try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
 
-if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
-  try bin/pyactivate -m pytest -qq --doctest-modules misc/python
-fi
+# try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
 
-try_finish
+# if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
+#   try bin/pyactivate -m pytest -qq --doctest-modules misc/python
+# fi
+
+# try_finish

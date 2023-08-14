@@ -107,7 +107,7 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
     if roots:
         (local_deps, areas) = filter_to_roots(areas, local_deps, roots)
 
-    diagram_file = MZ_ROOT / diagram_file
+    diagram_file = str(MZ_ROOT / diagram_file)
     with NamedTemporaryFile(mode="w+", prefix="mz-arch-diagram-") as out:
         write_dot_graph(member_meta, local_deps, areas, out)
 
@@ -135,13 +135,13 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
 def filter_to_roots(
     areas: DepBuilder, local_deps: DepMap, roots: List[str]
 ) -> Tuple[DepMap, DepBuilder]:
-    new_deps: DefaultDict[str, Set[str]] = defaultdict(set)
+    new_deps = defaultdict(set)
 
     try:
         add_deps(local_deps, new_deps, roots)
     except KeyError as e:
         raise click.ClickException(f"Unknown crate {e}")
-    new_deps = {root: list(deps) for root, deps in new_deps.items()}
+    new_dep_map: DepMap = {root: list(deps) for root, deps in new_deps.items()}
 
     filtered_crates = set()
     for root, deps in new_deps.items():
@@ -154,7 +154,7 @@ def filter_to_roots(
             if child in filtered_crates:
                 new_areas[area].append(child)
 
-    return (new_deps, new_areas)
+    return (new_dep_map, new_areas)
 
 
 def add_deps(
@@ -201,7 +201,7 @@ def write_dot_graph(
     out.flush()
 
 
-def add_hover_style(diagram_file: Path) -> None:
+def add_hover_style(diagram_file: Path | str) -> None:
     found_svg = False
     with open(diagram_file, "r") as fh:
         lines = fh.readlines()

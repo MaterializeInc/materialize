@@ -9,7 +9,7 @@
 
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Type, TypeVar, Union
+from typing import Dict, List, Optional, Set, Type, TypeVar, Union, Sequence
 
 from materialize.mzcompose import Composition
 
@@ -25,24 +25,26 @@ class Capability:
 
     @classmethod
     def format_str(cls) -> str:
-        assert False
+        raise NotImplementedError()
 
 
-T = TypeVar("T", bound="Capability")
+T = TypeVar("T", bound=Capability)
 ActionOrFactory = Union[Type["Action"], "ActionFactory"]
 
 
 class Capabilities:
     """A set of `Capability`s."""
 
+    _capabilities: Sequence[Capability]
+
     def __init__(self) -> None:
-        self._capabilities: List[Capability] = []
+        self._capabilities = []
 
-    def _extend(self, capabilities: List[Capability]) -> None:
+    def _extend(self, capabilities: Sequence[Capability]) -> None:
         """Add new capabilities."""
-        self._capabilities.extend(capabilities)
+        self._capabilities = list(*self._capabilities, *capabilities)
 
-    def remove_capability_instance(self, capability: T) -> None:
+    def remove_capability_instance(self, capability: Capability) -> None:
         """Remove a specific capability."""
 
         self._capabilities = [
@@ -62,7 +64,11 @@ class Capabilities:
 
     def get(self, capability: Type[T]) -> List[T]:
         """Get all capabilities of the specified type."""
-        return [cap for cap in self._capabilities if type(cap) == capability]
+        matches: List[T] = [
+            # NOTE: unfortunately pyright can't handle this
+            cap for cap in self._capabilities if type(cap) == capability  # type: ignore
+        ]
+        return matches
 
     def get_free_capability_name(
         self, capability: Type[T], max_objects: int
@@ -92,7 +98,7 @@ class Action:
         pass
 
     @classmethod
-    def requires(self) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
+    def requires(cls) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
         """Compute the capability classes that this action requires."""
         return set()
 
@@ -109,7 +115,7 @@ class Action:
         assert False
 
     @classmethod
-    def require_explicit_mention(self) -> bool:
+    def require_explicit_mention(cls) -> bool:
         """Only use if explicitly mentioned by name in a Scenario."""
         return False
 
@@ -124,7 +130,7 @@ class ActionFactory:
         assert False
 
     @classmethod
-    def requires(self) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
+    def requires(cls) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
         """Compute the capability classes that this Action Factory requires."""
         return set()
 

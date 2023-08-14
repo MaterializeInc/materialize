@@ -21,7 +21,7 @@ class MzStart(Action):
     """Starts a Mz instance (all components are running in the same container)."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -49,7 +49,7 @@ class MzStop(Action):
     """Stops the entire Mz instance (all components are running in the same container)."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -63,7 +63,7 @@ class MzRestart(Action):
     """Restarts the entire Mz instance (all components are running in the same container)."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -75,7 +75,7 @@ class KillClusterd(Action):
     """Kills the clusterd processes in the environmentd container. The process orchestrator will restart them."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, ViewExists}
 
     def run(self, c: Composition) -> None:

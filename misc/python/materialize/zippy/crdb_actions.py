@@ -29,7 +29,7 @@ class CockroachRestart(Action):
     """Restart the CockroachDB instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {CockroachIsRunning}
 
     def run(self, c: Composition) -> None:

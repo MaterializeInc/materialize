@@ -13,7 +13,7 @@ from psycopg import Cursor, ProgrammingError
 class Operation:
     def execute(self, cursor: Cursor) -> None:
         try:
-            cursor.execute(self.sql_statement())
+            cursor.execute(self.sql_statement().encode('utf8'))
             cursor.fetchall()
         except ProgrammingError as e:
             assert "the last operation didn't produce a result" in str(e)

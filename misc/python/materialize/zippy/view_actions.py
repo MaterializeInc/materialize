@@ -26,7 +26,7 @@ class CreateViewParameterized(ActionFactory):
     """Emits CreateView Actions within the constraints specified in the constructor."""
 
     @classmethod
-    def requires(self) -> List[Set[Type[Capability]]]:
+    def requires(cls) -> List[Set[Type[Capability]]]:
         return [
             {MzIsRunning, SourceExists},
             {MzIsRunning, TableExists},
@@ -126,7 +126,7 @@ class ValidateView(Action):
     """Validates a view."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, StoragedRunning, ViewExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
