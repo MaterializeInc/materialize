@@ -9,8 +9,8 @@
 
 from typing import Any, List, Optional, Sequence
 
-import psycopg2  # type: ignore
-from psycopg2.extensions import connection  # type: ignore
+import psycopg2
+from psycopg2.extensions import connection
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.environment import wait_for_environmentd
@@ -23,7 +23,7 @@ def sql_query(
     vars: Optional[Sequence[Any]] = None,
 ) -> List[List[Any]]:
     cur = conn.cursor()
-    cur.execute(query, vars)
+    cur.execute(query, vars)  # type: ignore
     return [list(row) for row in cur]
 
 
@@ -33,7 +33,7 @@ def sql_execute(
     vars: Optional[Sequence[Any]] = None,
 ) -> None:
     cur = conn.cursor()
-    cur.execute(query, vars)
+    cur.execute(query, vars)  # type: ignore[no-untyped-call]
 
 
 def sql_query_pgwire(config: EnvironmentConfig, query: str) -> List[List[Any]]:
