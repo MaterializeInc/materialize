@@ -2044,6 +2044,18 @@ impl MirScalarExpr {
             .chain(third)
             .chain(variadic.into_iter().flatten())
     }
+
+    /// Visits all subexpressions in breadth-first search order.
+    pub fn visit_bfs<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Self),
+    {
+        let mut worklist = vec![self];
+        while let Some(e) = worklist.pop() {
+            f(e);
+            worklist.extend(e.children());
+        }
+    }
 }
 
 /// Filter characteristics that are used for ordering join inputs.
