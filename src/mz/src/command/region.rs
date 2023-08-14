@@ -31,7 +31,7 @@ use tokio::time::sleep;
 /// In cases where the organization has already enabled the region
 /// the command will try to run a version update. Resulting
 /// in a downtime for a short period.
-pub async fn enable(cx: RegionContext) -> Result<(), Error> {
+pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
@@ -39,7 +39,7 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
 
     loading_spinner.set_message("Enabling the region...");
     cx.cloud_client()
-        .create_region(None, vec![], cloud_provider.clone())
+        .create_region(version, vec![], cloud_provider.clone())
         .await?;
 
     loading_spinner.set_message("Waiting for the region to be online...");

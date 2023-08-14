@@ -88,7 +88,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     try:
         print(f"Enabling region using Mz version {VERSION} ...")
         try:
-            c.run("mz", "region", "enable", REGION, "--version", VERSION)
+            c.run("mz", "region", "enable", "--version", VERSION)
         except UIError:
             # Work around https://github.com/MaterializeInc/materialize/issues/17219
             pass
@@ -115,15 +115,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable", REGION)
+    c.run("mz", "region", "disable")
 
 
 def cloud_hostname(c: Composition) -> str:
     print("Obtaining hostname of cloud instance ...")
-    region_status = c.run("mz", "region", "status", REGION, capture=True)
+    region_status = c.run("mz", "region", "show", capture=True)
     sql_line = region_status.stdout.split("\n")[2]
     cloud_url = sql_line.split("\t")[1].strip()
-    cloud_hostname = urllib.parse.urlparse(cloud_url).hostname
+    # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
+    cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
     return str(cloud_hostname)
 
 

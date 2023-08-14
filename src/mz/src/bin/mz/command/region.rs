@@ -33,7 +33,10 @@ pub struct RegionCommand {
 #[derive(Debug, clap::Subcommand)]
 pub enum RegionSubcommand {
     /// Enable a region.
-    Enable,
+    Enable {
+        #[clap(hide = true, short, long)]
+        version: Option<String>,
+    },
     /// Disable a region.
     #[clap(hide = true)]
     Disable,
@@ -49,7 +52,7 @@ pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
         .activate_profile(cmd.profile.profile)?
         .activate_region(cmd.region.region)?;
     match cmd.subcommand {
-        RegionSubcommand::Enable => mz::command::region::enable(cx).await,
+        RegionSubcommand::Enable { version } => mz::command::region::enable(cx, version).await,
         RegionSubcommand::Disable => mz::command::region::disable(cx).await,
         RegionSubcommand::List => mz::command::region::list(cx).await,
         RegionSubcommand::Show => mz::command::region::show(cx).await,
