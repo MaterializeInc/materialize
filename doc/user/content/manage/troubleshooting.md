@@ -191,7 +191,7 @@ From the results of this query we can see that most of the elapsed time of the d
 
 ## Why is Materialize unresponsive or slow?
 
-A large class of problems can be identified by using [`elapsed_time`](#where-is-materialize-spending-compute-time) to estimate the most expensive dataflows and operators.
+A large class of problems can be identified by using [`elapsed_time`](#finding-expensive-operators-within-a-dataflow) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
 Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
 If you want to see what operator is taking the most time **right now**,
