@@ -19,7 +19,7 @@ from materialize import ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
-from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
+from materialize.cloudtest.k8s.debezium import create_debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
@@ -28,7 +28,7 @@ from materialize.cloudtest.k8s.environmentd import (
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
 from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
-from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
+from materialize.cloudtest.k8s.redpanda import create_redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
 from materialize.cloudtest.k8s.testdrive import Testdrive
@@ -68,8 +68,8 @@ class MaterializeApplication(Application):
         return [
             *COCKROACH_RESOURCES,
             *POSTGRES_RESOURCES,
-            *REDPANDA_RESOURCES,
-            *DEBEZIUM_RESOURCES,
+            *create_redpanda_resources(),
+            *create_debezium_resources(),
             *SSH_RESOURCES,
             Minio(),
             VpcEndpointsClusterRole(),
