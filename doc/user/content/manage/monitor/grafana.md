@@ -174,7 +174,7 @@ For more details on how to configure, run and troubleshoot Prometheus, see the [
 ## Step 3. Build a monitoring dashboard
 
 With the Prometheus SQL Exporter running SQL queries againt your Materialize
-region and exporting the results as metrics, and the Grafana Agent routing
+region and exporting the results as metrics, and a scraper routing
 these metrics to your Grafana account, you're ready to build a monitoring
 dashboard!
 
