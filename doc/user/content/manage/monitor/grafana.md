@@ -104,7 +104,7 @@ which has been tried and tested in production environments.
 ## Step 2. Set up a metrics scraper
 
 To scrape the metrics available in the Prometheus SQL Exporter endpoint, you
-must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud, or [Prometheus](https://prometheus.io/download/) for the self-managed version:
+must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud, or [Prometheus](https://prometheus.io/download/) for the self-hosted version:
 
 {{< tabs >}}
 {{< tab "Grafana Cloud">}}
@@ -175,7 +175,7 @@ For more details on how to configure, run and troubleshoot Prometheus, see the [
 
 With the Prometheus SQL Exporter running SQL queries againt your Materialize
 region and exporting the results as metrics, and a scraper routing
-these metrics to your Grafana account, you're ready to build a monitoring
+these metrics to Grafana, you're ready to build a monitoring
 dashboard!
 
 **Tip:** use [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/local/misc/dashboards/dashboard.json)
