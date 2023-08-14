@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from pathlib import Path
 from typing import List
 
 from kubernetes.client import (
@@ -39,16 +40,14 @@ from materialize.mzcompose.services import Cockroach
 
 
 class CockroachConfigMap(K8sConfigMap):
-    def __init__(self, namespace: str):
+    def __init__(self, namespace: str, path_to_setup_script: Path):
         super().__init__(namespace)
         self.config_map = V1ConfigMap(
             metadata=V1ObjectMeta(
                 name="cockroach-init",
             ),
             data={
-                "setup_materialize.sql": (
-                    ROOT / "misc" / "cockroach" / "setup_materialize.sql"
-                ).read_text(),
+                "setup_materialize.sql": path_to_setup_script.read_text(),
             },
         )
 
@@ -125,9 +124,10 @@ class CockroachStatefulSet(K8sStatefulSet):
 
 def create_cockroach_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
+    path_to_setup_script: Path = ROOT / "misc" / "cockroach" / "setup_materialize.sql",
 ) -> List[K8sResource]:
     return [
-        CockroachConfigMap(namespace),
+        CockroachConfigMap(namespace, path_to_setup_script),
         CockroachService(namespace),
         CockroachStatefulSet(namespace),
     ]
