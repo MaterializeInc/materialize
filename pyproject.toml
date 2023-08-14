@@ -47,3 +47,12 @@ extraPaths = ["misc/python"]
 venvPath = "./misc/python"
 venv = "venv"
 exclude = ["./misc/python/venv"]
+
+reportMissingImports = true
+reportMissingModuleSource = "warning"
+reportMissingTypeStubs = true
+typeCheckingMode = "strict"
+ignore = [
+  # Rust build artifacts are not subject to our static analysis.
+  "target/",
+]

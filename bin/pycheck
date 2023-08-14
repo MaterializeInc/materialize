@@ -17,23 +17,26 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-mypy_folders=(ci misc/python)
+PYRIGHT_VERSION="1.1.323"
+typecheck_cmd="npx pyright@$PYRIGHT_VERSION --level=error"
+
+python_folders=(ci misc/python)
 flake8_folders=(ci misc/python test)
 
-try bin/pyactivate -m mypy "${mypy_folders[@]}"
+try $typecheck_cmd "${python_folders[@]}"
 if ! try_last_failed; then
-    # mzcompose.py files need to be passed to mypy individually to avoid
-    # duplicate module warnings. We don't check these if the previous `mypy`
+    # mzcompose.py files need to be passed to the typechecker individually to avoid
+    # duplicate module warnings. We don't check these if the previous `pyright`
     # invocation failed, though, or we'll get a ton of duplicate warnings.
     for file in $(git_files "**/mzcompose.py"); do
-        try bin/pyactivate -m mypy "$file"
+        try $typecheck_cmd "$file"
     done
 
     for file in $(git_files "test/**.py"); do
         if [[ $file == *"mzcompose"* ]]; then
             continue
         fi
-        try bin/pyactivate -m mypy "$file"
+        try $typecheck_cmd "$file"
     done
 fi
 try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
