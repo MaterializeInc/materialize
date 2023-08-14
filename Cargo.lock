@@ -3352,11 +3352,18 @@ name = "mz"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "axum",
  "clap",
+ "csv",
  "dirs",
+ "hyper",
  "indicatif",
+ "maplit",
  "mz-build-info",
+ "mz-cloud-api",
+ "mz-frontegg-auth",
+ "mz-frontegg-client",
  "mz-ore",
  "once_cell",
  "open",
@@ -3366,8 +3373,13 @@ dependencies = [
  "rpassword",
  "security-framework",
  "serde",
+ "serde-aux",
+ "serde_json",
+ "tabled",
+ "thiserror",
  "tokio",
  "toml",
+ "toml_edit",
  "url",
  "uuid",
  "workspace-hack",
@@ -5816,6 +5828,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
+name = "papergrid"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1526bb6aa9f10ec339fb10360f22c57edf81d5678d0278e93bc12a47ffbe4b01"
+dependencies = [
+ "bytecount",
+ "fnv",
+ "unicode-width",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7034,6 +7057,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-aux"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3dfe1b7eb6f9dcf011bd6fad169cdeaae75eda0d61b1a99a3f015b41b0cae39"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "serde-value"
 version = "0.7.0"
 source = "git+https://github.com/MaterializeInc/serde-value.git#62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
@@ -7101,6 +7135,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
 dependencies = [
  "regex",
+ "serde",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96426c9936fd7a0124915f9185ea1d20aa9445cc9821142f0a73bc9207a2e186"
+dependencies = [
  "serde",
 ]
 
@@ -7537,6 +7580,30 @@ dependencies = [
  "once_cell",
  "rayon",
  "winapi",
+]
+
+[[package]]
+name = "tabled"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56c3ee73732ffceaea7b8f6b719ce3bb17f253fa27461ffeaf568ebd0cdb4b85"
+dependencies = [
+ "papergrid",
+ "tabled_derive",
+ "unicode-width",
+]
+
+[[package]]
+name = "tabled_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "beca1b4eaceb4f2755df858b88d9b9315b7ccfd1ffd0d7a48a52602301f01a57"
+dependencies = [
+ "heck",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
 ]
 
 [[package]]
@@ -7977,6 +8044,9 @@ name = "toml_datetime"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cda73e2f1397b1262d6dfdcef8aafae14d1de7748d66822d3bfeeb6d03e5e4b"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "toml_edit"
@@ -7985,6 +8055,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8123f27e969974a3dfba720fdb560be359f57b44302d280ba72e76a74480e8a"
 dependencies = [
  "indexmap 2.0.0",
+ "serde",
+ "serde_spanned",
  "toml_datetime",
  "winnow",
 ]
@@ -8823,6 +8895,7 @@ dependencies = [
  "phf_shared",
  "postgres",
  "postgres-types",
+ "predicates",
  "proc-macro2",
  "prost",
  "prost-reflect",
@@ -8854,6 +8927,8 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
+ "toml_datetime",
+ "toml_edit",
  "tower",
  "tower-http",
  "tracing",

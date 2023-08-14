@@ -1034,7 +1034,6 @@ class Mz(Service):
         name: str = "mz",
         region: str = "aws/us-east-1",
         environment: str = "staging",
-        username: str,
         app_password: str,
     ) -> None:
         # We must create the temporary config file in a location
@@ -1050,13 +1049,13 @@ class Mz(Service):
         )
         toml.dump(
             {
-                "current_profile": "default",
+                "profile": "default",
                 "profiles": {
                     "default": {
-                        "email": username,
                         "app-password": app_password,
                         "region": region,
-                        "endpoint": f"https://{environment}.cloud.materialize.com/",
+                        "cloud-endpoint": f"https://{environment}.cloud.materialize.com",
+                        "admin-endpoint": f"https://admin.{environment}.cloud.materialize.com",
                     },
                 },
             },
@@ -1067,7 +1066,7 @@ class Mz(Service):
             name=name,
             config={
                 "mzbuild": "mz",
-                "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
+                "volumes": [f"{config.name}:/root/.config/materialize/mz.toml"],
             },
         )
 
