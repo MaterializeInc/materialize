@@ -125,7 +125,7 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
             password: <PASSWORD>
    ```
 
-   **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/cloud/agent.yml)
+   **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/cloud/agent.yaml)
    for all available configuration options.
 
    For more details on how to configure, run and troubleshoot Grafana Agents, see the [Grafana documentation](https://grafana.com/docs/agent/latest/).
