@@ -27,7 +27,7 @@ from materialize.cloudtest.k8s.environmentd import (
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
-from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
+from materialize.cloudtest.k8s.postgres import create_postgres_resources
 from materialize.cloudtest.k8s.redpanda import create_redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
@@ -67,7 +67,7 @@ class MaterializeApplication(Application):
     ) -> List[K8sResource]:
         return [
             *COCKROACH_RESOURCES,
-            *POSTGRES_RESOURCES,
+            *create_postgres_resources(),
             *create_redpanda_resources(),
             *create_debezium_resources(),
             *SSH_RESOURCES,
