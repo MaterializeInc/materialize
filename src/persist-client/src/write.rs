@@ -454,11 +454,16 @@ where
         let desc = Description::new(lower, upper, since);
 
         let (mut parts, mut num_updates) = (Vec::new(), 0);
+        let mut runs = vec![];
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
-            parts.extend_from_slice(&batch.batch.parts);
+            for run in batch.batch.runs() {
+                parts.extend_from_slice(run);
+                runs.push(parts.len());
+            }
             num_updates += batch.batch.len;
         }
+        runs.pop(); // We mark the end of each run above, but the last one is implicit
 
         let heartbeat_timestamp = (self.cfg.now)();
         let res = self
@@ -468,7 +473,7 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
-                    runs: vec![],
+                    runs,
                 },
                 &self.writer_id,
                 &self.debug_state,
