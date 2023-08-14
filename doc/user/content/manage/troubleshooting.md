@@ -24,46 +24,49 @@ Materialize dataflows act on collections of data. To provide fast access to the 
 To make these concepts a bit more tangible, let's look at the example from the [getting started guide](https://materialize.com/docs/get-started/quickstart/).
 
 ```sql
-SELECT auctions.item, avg(bids.amount) AS average_bid
-FROM bids
-JOIN auctions ON bids.auction_id = auctions.id
-WHERE bids.bid_time < auctions.end_time
-GROUP BY auctions.item
+CREATE SOURCE auction_house
+  FROM LOAD GENERATOR AUCTION
+  (TICK INTERVAL '100ms')
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall');
+
+CREATE MATERIALIZED VIEW num_bids AS
+  SELECT auctions.item, count(bids.id) AS number_of_bids
+  FROM bids
+  JOIN auctions ON bids.auction_id = auctions.id
+  WHERE bids.bid_time < auctions.end_time
+  GROUP BY auctions.item;
+
+CREATE INDEX num_bids_idx ON num_bids (item);
 ```
 
-This query from the guide joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the average `bids.amount` per auction. To understand how this SQL query is translated to a dataflow, we can use `EXPLAIN` to display the plan used to evaluate the join.
+The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use `EXPLAIN` to display the plan used to evaluate the join.
+Note that you can also explain the plan of queries and common views with `EXPLAIN` and `EXPLAIN VIEW`, respectively.
 
 ```sql
-EXPLAIN
-SELECT auctions.item, avg(bids.amount) AS average_bid
-FROM bids
-JOIN auctions ON bids.auction_id = auctions.id
-WHERE bids.bid_time < auctions.end_time
-GROUP BY auctions.item
+EXPLAIN MATERIALIZED VIEW num_bids
 ```
 ```
-                                        Optimized Plan
------------------------------------------------------------------------------------------------
- Explained Query:                                                                             +
-   Project (#0, #3)                                                                           +
-     Map ((bigint_to_double(#1) / bigint_to_double(case when (#2 = 0) then null else #2 end)))+
-       Reduce group_by=[#1] aggregates=[sum(#0), count(*)]                                    +
-         Project (#1, #4)                                                                     +
-           Filter (#2 < #5)                                                                   +
-             Join on=(#0 = #3) type=differential                                              +
-               ArrangeBy keys=[[#0]]                                                          +
-                 Project (#2..=#4)                                                            +
-                   Get materialize.qck.bids                                                   +
-               ArrangeBy keys=[[#0]]                                                          +
-                 Project (#0, #2, #3)                                                         +
-                   Get materialize.qck.auctions                                               +
+                Optimized Plan
+-----------------------------------------------
+ materialize.public.num_bids:                 +
+   Reduce group_by=[#0] aggregates=[count(*)] +
+     Project (#3)                             +
+       Filter (#1 < #4)                       +
+         Join on=(#0 = #2) type=differential  +
+           ArrangeBy keys=[[#0]]              +
+             Project (#2, #4)                 +
+               Get materialize.public.bids    +
+           ArrangeBy keys=[[#0]]              +
+             Project (#0, #2, #3)             +
+               Get materialize.public.auctions+
 
 (1 row)
 ```
 
 The plan describes the specific operators that are used to evaluate the query.
-Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join on`, `Map`).
-Others are specific to differential dataflow (`Get`, `ArrangeBy`).
+Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join on`, `Project`).
+Others are specific to Materialize (`Get`, `ArrangeBy`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
 `Filter` filters records, `Join on` joins records from two or more inputs, `Map` applies a function to transform records, etc.
@@ -127,13 +130,11 @@ ORDER BY elapsed_ns DESC
  id  |                  name                  |  elapsed_time
 -----+----------------------------------------+-----------------
  354 | Dataflow: materialize.qck.num_bids     | 02:05:25.756836
- 180 | Dataflow: materialize.qck.avg_bids_idx | 01:52:57.291972
  578 | Dataflow: materialize.qck.num_bids_idx | 00:15:04.838741
  (3 rows)
 ```
 
-These results show that the system spend the most time keeping the materialized view `num_bids` (from the quick start) up to date.
-Followed by the work on the index `avg_bids_idx` that has been defined on a view from the query above.
+The result shows the time Materialize spend keeping the materialized view `num_bids` up to date.
 
 ### Finding expensive operators within a dataflow
 
@@ -176,15 +177,11 @@ ORDER BY elapsed_ns DESC
 ```
  id  |                      name                       |             dataflow_name              |  elapsed_time
 -----+-------------------------------------------------+----------------------------------------+-----------------
- 257 | ArrangeBy[[Column(0)]]                          | Dataflow: materialize.qck.avg_bids_idx | 01:13:05.729748
  431 | ArrangeBy[[Column(0)]]                          | Dataflow: materialize.qck.num_bids     | 01:12:58.964875
- 268 | ArrangeBy[[Column(0)]]                          | Dataflow: materialize.qck.avg_bids_idx | 00:06:09.343848
  442 | ArrangeBy[[Column(0)]]                          | Dataflow: materialize.qck.num_bids     | 00:06:06.080178
  528 | shard_source_fetch(u517)                        | Dataflow: materialize.qck.num_bids     | 00:04:04.076344
- 226 | persist_source_backpressure(backpressure(u510)) | Dataflow: materialize.qck.avg_bids_idx | 00:03:35.647347
  594 | shard_source_fetch(u517)                        | Dataflow: materialize.qck.num_bids_idx | 00:03:34.803234
  590 | persist_source_backpressure(backpressure(u517)) | Dataflow: materialize.qck.num_bids_idx | 00:03:33.626036
- 230 | shard_source_fetch(u510)                        | Dataflow: materialize.qck.avg_bids_idx | 00:03:23.202628
  400 | persist_source_backpressure(backpressure(u510)) | Dataflow: materialize.qck.num_bids     | 00:03:03.575832
 ...
 ```
@@ -193,12 +190,12 @@ From the results of this query we can see that most of the elapsed time of the d
 
 ## Why is Materialize unresponsive and where is it currently spending time?
 
-The `elapsed_time` is a good indicator for the most expensive dataflows and operators.
-A large class of problems can be identified by just looking at this metric.
+
+A large class of problems can be identified by using [`elapsed_time`](#where-is-materialize-spending-compute-time) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
 Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
-If you are interested in what operator is taking the most time right now,
-it can be a bit challenging to get that information from the `elapsed_time` metric.
+If you want to see what operator is taking the most time **right now**,
+the `elapsed_time` metric is not enough.
 
 The relation `mz_compute_operator_durations_histogram` also tracks the time operators are busy,
 but instead of aggregating `elapsed_time` since an operator got created,
@@ -207,9 +204,7 @@ This information can show you two things: operators that block progress for othe
 
 If there is a very expensive operator that blocks progress for all other operators,
 it will become visible in the histogram.
-The offending operator will be scheduled much longer at a time compared to other operators.
-Therefore the values of the time buckets in the histogram will be much higher
-compared to the other operators.
+The offending operator will be scheduled in much longer intervals compared to other operators, which reflects in the histogram as larger time buckets.
 
 ```sql
 -- Extract raw scheduling histogram information for operators
@@ -249,17 +244,11 @@ ORDER BY duration DESC
  id  |                 name                 |             dataflow_name              | count |    duration
 -----+--------------------------------------+----------------------------------------+-------+-----------------
  408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     1 | 00:00:01.073741
- 234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:01.073741
  408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     1 | 00:00:00.53687
- 234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:00.53687
- 255 | FormArrangementKey                   | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:00.268435
  374 | persist_source::decode_and_mfp(u509) | Dataflow: materialize.qck.num_bids     |     1 | 00:00:00.268435
  408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     2 | 00:00:00.268435
- 200 | persist_source::decode_and_mfp(u509) | Dataflow: materialize.qck.avg_bids_idx |     1 | 00:00:00.268435
- 234 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.avg_bids_idx |     2 | 00:00:00.268435
  429 | FormArrangementKey                   | Dataflow: materialize.qck.num_bids     |     2 | 00:00:00.134217
- 255 | FormArrangementKey                   | Dataflow: materialize.qck.avg_bids_idx |     2 | 00:00:00.134217
- (11 rows)
+ (5 rows)
 ```
 
 Note that this relation contains a lot of information.
@@ -316,7 +305,7 @@ COPY(SUBSCRIBE(
 ```
 
 In this way you can see that currently the only operator that is doing more than 100 milliseconds worth of work
-is the `ArrangeBy` operator form the materialized view `num_bids`.
+is the `ArrangeBy` operator from the materialized view `num_bids`.
 
 
 ## Why is Materialize using so much memory?
