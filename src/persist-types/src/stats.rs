@@ -1897,8 +1897,6 @@ mod tests {
         // everything else.
         trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|name| name == "b");
 
-        println!("{stats:?}");
-
         assert_eq!(stats.elements.len(), 1);
         assert_eq!(stats.elements[0].name, "context");
 
