@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List
 
 from kubernetes.client import (
     V1ConfigMap,
@@ -29,15 +30,17 @@ from kubernetes.client import (
 )
 
 from materialize import ROOT
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_config_map import K8sConfigMap
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mzcompose.services import Cockroach
 
 
 class CockroachConfigMap(K8sConfigMap):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, namespace: str):
+        super().__init__(namespace)
         self.config_map = V1ConfigMap(
             metadata=V1ObjectMeta(
                 name="cockroach-init",
@@ -51,8 +54,8 @@ class CockroachConfigMap(K8sConfigMap):
 
 
 class CockroachService(K8sService):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, namespace: str):
+        super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=26257)
 
         self.service = V1Service(
@@ -66,6 +69,9 @@ class CockroachService(K8sService):
 
 
 class CockroachStatefulSet(K8sStatefulSet):
+    def __init__(self, namespace: str):
+        super().__init__(namespace)
+
     def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="cockroach", labels={"app": "cockroach"})
         label_selector = V1LabelSelector(match_labels={"app": "cockroach"})
@@ -117,8 +123,11 @@ class CockroachStatefulSet(K8sStatefulSet):
         )
 
 
-COCKROACH_RESOURCES = [
-    CockroachConfigMap(),
-    CockroachService(),
-    CockroachStatefulSet(),
-]
+def create_cockroach_resources(
+    namespace: str = DEFAULT_K8S_NAMESPACE,
+) -> List[K8sResource]:
+    return [
+        CockroachConfigMap(namespace),
+        CockroachService(namespace),
+        CockroachStatefulSet(namespace),
+    ]

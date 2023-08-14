@@ -18,7 +18,7 @@ from pg8000.exceptions import InterfaceError
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
-from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
+from materialize.cloudtest.k8s.cockroach import create_cockroach_resources
 from materialize.cloudtest.k8s.debezium import create_debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
@@ -66,7 +66,7 @@ class MaterializeApplication(Application):
         self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
     ) -> List[K8sResource]:
         return [
-            *COCKROACH_RESOURCES,
+            *create_cockroach_resources(),
             *create_postgres_resources(),
             *create_redpanda_resources(),
             *create_debezium_resources(),
