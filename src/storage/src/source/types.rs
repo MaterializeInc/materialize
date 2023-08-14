@@ -495,6 +495,9 @@ pub struct UpsertMetrics {
     pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
@@ -540,6 +543,15 @@ impl UpsertMetrics {
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
             merge_snapshot_deletes: base
                 .merge_snapshot_deletes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_inserts: base
+                .upsert_inserts
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_updates: base
+                .upsert_updates
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_deletes: base
+                .upsert_deletes
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_size: base
                 .multi_get_size
