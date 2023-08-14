@@ -517,6 +517,9 @@ name                                           type   size  cluster
 ------------------------------------------------------------------
 mz_active_peeks_per_worker                   log   <null>   <null>
 mz_arrangement_batches_raw                   log   <null>   <null>
+mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_arrangement_heap_capacity_raw             log   <null>   <null>
+mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_records_raw                   log   <null>   <null>
 mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
@@ -529,7 +532,10 @@ mz_dataflow_addresses_per_worker             log   <null>   <null>
 mz_dataflow_channels_per_worker              log   <null>   <null>
 mz_dataflow_operator_reachability_raw        log   <null>   <null>
 mz_dataflow_operators_per_worker             log   <null>   <null>
+mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
 mz_frontiers                                 source <null>  <null>
+mz_message_batch_counts_received_raw         log   <null>   <null>
+mz_message_batch_counts_sent_raw             log   <null>   <null>
 mz_message_counts_received_raw               log   <null>   <null>
 mz_message_counts_sent_raw                   log   <null>   <null>
 mz_peek_durations_histogram_raw              log   <null>   <null>
