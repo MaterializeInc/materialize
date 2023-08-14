@@ -34,7 +34,7 @@ GROUP BY auctions.item
 This query from the guide joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the average `bids.amount` per auction. To understand how this SQL query is translated to a dataflow, we can use `EXPLAIN` to display the plan used to evaluate the join.
 
 ```sql
-EXPLAIN 
+EXPLAIN
 SELECT auctions.item, avg(bids.amount) AS average_bid
 FROM bids
 JOIN auctions ON bids.auction_id = auctions.id
@@ -62,7 +62,7 @@ GROUP BY auctions.item
 ```
 
 The plan describes the specific operators that are used to evaluate the query.
-Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join on`, `Map`). 
+Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join on`, `Map`).
 Others are specific to differential dataflow (`Get`, `ArrangeBy`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
@@ -144,7 +144,7 @@ Removing the condition `list_length(address) = 1` will include the regions and o
 But be aware that every row shows aggregated times for all the element it contains.
 The `elapsed_time` reported for the dataflows above also includes the elapsed time for all the regions and operators they contain.
 
-But because the parent child relationship is not always obvious, 
+But because the parent child relationship is not always obvious,
 the results containing a mixture of dataflows, regions, and operators can be a bit hard to interpret.
 The following query therefore only returns operators from the  `mz_scheduling_elapsed` relation.
 You can further drill down by adding a filter condition that matches the name of a specific dataflow.
@@ -197,7 +197,7 @@ The `elapsed_time` is a good indicator for the most expensive dataflows and oper
 A large class of problems can be identified by just looking at this metric.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
 Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
-If you are interested in what operator is taking the most time right now, 
+If you are interested in what operator is taking the most time right now,
 it can be a bit challenging to get that information from the `elapsed_time` metric.
 
 The relation `mz_compute_operator_durations_histogram` also tracks the time operators are busy,
