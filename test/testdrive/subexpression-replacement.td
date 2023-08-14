@@ -89,12 +89,12 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null = col_not_null + 1) AND (col_not_null = col_not_null + 1);
 "Explained Query (fast path):  Filter (#1 = (#1 + 1))    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
 
-# TODO (materialize#6043):  Avoid simplifying mz_sleep.
+# TODO (https://github.com/MaterializeInc/materialize/issues/6262):  Avoid simplifying mz_sleep.
 
 > EXPLAIN SELECT * FROM t1
   WHERE mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null)
   AND (mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null) = true);
-"Explained Query (fast path):  Filter (mz_sleep(integer_to_double(#1)) > mz_sleep(integer_to_double(#1)))    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Project (#0, #1)    Filter (#2 > #2)      Map (mz_sleep(integer_to_double(#1)))        ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # IN list inside the expression
 
