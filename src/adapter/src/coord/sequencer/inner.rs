@@ -3634,7 +3634,13 @@ impl Coordinator {
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
             let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
-            let timeout_dur = *ctx.session().vars().statement_timeout();
+            let mut timeout_dur = *ctx.session().vars().statement_timeout();
+
+            // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
+            if timeout_dur == Duration::ZERO {
+                timeout_dur = Duration::MAX;
+            }
+
             let make_diffs = move |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
                 let arena = RowArena::new();
                 // Use 2x row len incase there's some assignments.

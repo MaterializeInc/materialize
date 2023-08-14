@@ -3983,15 +3983,11 @@ impl Value for Duration {
             }
         };
 
-        let d = if d == 0 {
-            Duration::from_secs(u64::MAX)
-        } else {
-            f(d.checked_mul(m).ok_or(VarError::InvalidParameterValue {
-                parameter: param.into(),
-                values: vec![s.to_string()],
-                reason: "expected value to fit in u64".to_string(),
-            })?)
-        };
+        let d = f(d.checked_mul(m).ok_or(VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: vec![s.to_string()],
+            reason: "expected value to fit in u64".to_string(),
+        })?);
         Ok(d)
     }
 
@@ -4040,7 +4036,7 @@ fn test_value_duration() {
         }
     }
     inner("1", Duration::from_millis(1), Some("1ms"));
-    inner("0", Duration::from_secs(u64::MAX), None);
+    inner("0", Duration::from_secs(0), Some("0s"));
     inner("1ms", Duration::from_millis(1), None);
     inner("1000ms", Duration::from_millis(1000), Some("1s"));
     inner("1001ms", Duration::from_millis(1001), None);
@@ -4059,8 +4055,7 @@ fn test_value_duration() {
     inner("  1   s ", Duration::from_secs(1), None);
     inner("1s ", Duration::from_secs(1), None);
     inner("   1s", Duration::from_secs(1), None);
-    inner("0s", Duration::from_secs(u64::MAX), Some("0"));
-    inner("0d", Duration::from_secs(u64::MAX), Some("0"));
+    inner("0d", Duration::from_secs(0), Some("0s"));
     inner(
         "18446744073709551615",
         Duration::from_millis(u64::MAX),
