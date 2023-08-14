@@ -68,9 +68,6 @@ class CockroachService(K8sService):
 
 
 class CockroachStatefulSet(K8sStatefulSet):
-    def __init__(self, namespace: str):
-        super().__init__(namespace)
-
     def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="cockroach", labels={"app": "cockroach"})
         label_selector = V1LabelSelector(match_labels={"app": "cockroach"})

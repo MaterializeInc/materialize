@@ -17,9 +17,6 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 class K8sConfigMap(K8sResource):
     config_map: V1ConfigMap
 
-    def __init__(self, namespace: str):
-        super().__init__(namespace)
-
     def kind(self) -> str:
         return "configmap"
 

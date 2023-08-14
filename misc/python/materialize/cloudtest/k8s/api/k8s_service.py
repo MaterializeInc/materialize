@@ -21,9 +21,6 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 class K8sService(K8sResource):
     service: V1Service
 
-    def __init__(self, namespace: str):
-        super().__init__(namespace)
-
     def kind(self) -> str:
         return "service"
 
