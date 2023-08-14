@@ -15,7 +15,6 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_ore::cast::CastFrom;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::ser::{SerializeMap, SerializeStruct};
