@@ -335,7 +335,6 @@ where
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .expect("Failed to get duration since Unix epoch")
                 .as_secs();
-
             let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
 
             if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
