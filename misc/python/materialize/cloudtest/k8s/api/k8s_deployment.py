@@ -17,7 +17,7 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 class K8sDeployment(K8sResource):
     deployment: V1Deployment
 
-    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE):
+    def __init__(self, namespace: str):
         super().__init__(namespace)
 
     def kind(self) -> str:

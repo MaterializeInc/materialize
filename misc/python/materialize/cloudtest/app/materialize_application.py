@@ -30,7 +30,7 @@ from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
 from materialize.cloudtest.k8s.postgres import create_postgres_resources
 from materialize.cloudtest.k8s.redpanda import create_redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
-from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
+from materialize.cloudtest.k8s.ssh import create_ssh_resources
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.util.wait import wait
@@ -70,7 +70,7 @@ class MaterializeApplication(Application):
             *create_postgres_resources(),
             *create_redpanda_resources(),
             *create_debezium_resources(),
-            *SSH_RESOURCES,
+            *create_ssh_resources(),
             Minio(),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
