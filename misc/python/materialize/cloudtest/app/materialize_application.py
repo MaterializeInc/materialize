@@ -18,8 +18,8 @@ from pg8000.exceptions import InterfaceError
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
-from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
-from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
+from materialize.cloudtest.k8s.cockroach import cockroach_resources
+from materialize.cloudtest.k8s.debezium import debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
@@ -27,10 +27,10 @@ from materialize.cloudtest.k8s.environmentd import (
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
-from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
-from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
+from materialize.cloudtest.k8s.postgres import postgres_resources
+from materialize.cloudtest.k8s.redpanda import redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
-from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
+from materialize.cloudtest.k8s.ssh import ssh_resources
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.util.wait import wait
@@ -66,11 +66,11 @@ class MaterializeApplication(Application):
         self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
     ) -> List[K8sResource]:
         return [
-            *COCKROACH_RESOURCES,
-            *POSTGRES_RESOURCES,
-            *REDPANDA_RESOURCES,
-            *DEBEZIUM_RESOURCES,
-            *SSH_RESOURCES,
+            *cockroach_resources(),
+            *postgres_resources(),
+            *redpanda_resources(),
+            *debezium_resources(),
+            *ssh_resources(),
             Minio(),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),

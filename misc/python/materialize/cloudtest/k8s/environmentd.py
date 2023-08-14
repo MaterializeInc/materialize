@@ -32,6 +32,8 @@ from kubernetes.client import (
     V1VolumeMount,
 )
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+
 try:
     from semver.version import Version
 except ImportError:
@@ -42,8 +44,8 @@ from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 
 
 class EnvironmentdService(K8sService):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
@@ -62,15 +64,15 @@ class EnvironmentdService(K8sService):
 class MaterializedAliasService(K8sService):
     """Some testdrive tests expect that Mz is accessible as 'materialized'"""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
             metadata=V1ObjectMeta(name="materialized"),
             spec=V1ServiceSpec(
                 type="ExternalName",
-                external_name="environmentd.default.svc.cluster.local",
+                external_name=f"environmentd.{namespace}.svc.cluster.local",
             ),
         )
 
@@ -82,13 +84,18 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         release_mode: bool = True,
         coverage_mode: bool = False,
         log_filter: Optional[str] = None,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+        minio_namespace: str = DEFAULT_K8S_NAMESPACE,
+        cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
         self.env: Dict[str, str] = {}
-        super().__init__()
+        self.minio_namespace = minio_namespace
+        self.cockroach_namespace = cockroach_namespace
+        super().__init__(namespace)
 
     def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})
@@ -148,7 +155,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
 
-        s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
+        s3_endpoint = urllib.parse.quote(
+            f"http://minio-service.{self.minio_namespace}:9000"
+        )
 
         args = [
             "--availability-zone=1",
@@ -162,9 +171,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
-            "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
-            "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=adapter",
-            "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
+            f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
+            f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
+            f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
