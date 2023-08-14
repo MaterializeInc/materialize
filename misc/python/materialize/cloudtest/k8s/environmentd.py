@@ -32,6 +32,8 @@ from kubernetes.client import (
     V1VolumeMount,
 )
 
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+
 try:
     from semver.version import Version
 except ImportError:
@@ -42,8 +44,8 @@ from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 
 
 class EnvironmentdService(K8sService):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
@@ -62,8 +64,8 @@ class EnvironmentdService(K8sService):
 class MaterializedAliasService(K8sService):
     """Some testdrive tests expect that Mz is accessible as 'materialized'"""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
@@ -82,13 +84,14 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         release_mode: bool = True,
         coverage_mode: bool = False,
         log_filter: Optional[str] = None,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
         self.env: Dict[str, str] = {}
-        super().__init__()
+        super().__init__(namespace)
 
     def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})

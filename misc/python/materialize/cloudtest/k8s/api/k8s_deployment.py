@@ -10,7 +10,6 @@
 
 from kubernetes.client import V1Deployment
 
-from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
