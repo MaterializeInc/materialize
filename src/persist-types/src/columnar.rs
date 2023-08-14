@@ -41,8 +41,8 @@
 //! overhead.
 //!
 //! The Data trait has associated types for the exclusive "builder" type for the
-//! column and for the shared "reader" type. These implement also implement some
-//! common traits to make relationships between types more structured.
+//! column and for the shared "reader" type. These also implement some common traits
+//! to make relationships between types more structured.
 //!
 //! Finally, the [Schema] trait maps an implementor of [Codec] to the underlying
 //! column structure. It also provides a [PartEncoder] and [PartDecoder] for
