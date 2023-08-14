@@ -138,8 +138,7 @@ For more details on how to configure, run and troubleshoot Datadog Agents, see t
 ## Step 3. Build a monitoring dashboard
 
 With the Prometheus SQL Exporter running SQL queries againt your Materialize
-region and exporting the results as metrics, and the Datadog Agent routing
-these metrics to your Datadog account, you're ready to build a monitoring
+region and exporting the results as metrics, you're ready to build a monitoring
 dashboard!
 
 **Tip:** use [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/datadog/dashboard.json)
@@ -148,9 +147,9 @@ defined in the sample `config.yml`.
 
 1. **Log in** to your Datadog account.
 
-1. Navigate to **Dashboards**, and select **New Dashboard**.
+2. Navigate to **Dashboards**, and select **New Dashboard**.
 
-1. To use the sample dashboard, navigate to ⚙️ in the upper right corner, and
+3. To use the sample dashboard, navigate to ⚙️ in the upper right corner, and
    select **Import dashboard JSON**. Copy and paste the contents of the provided
    sample `.json` file.
 
