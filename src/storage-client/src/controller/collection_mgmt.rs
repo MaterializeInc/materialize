@@ -82,6 +82,8 @@ where
         if let Some((_writer, task)) = guard.get(&id) {
             // The collection is already registered and the task is still running so nothing to do.
             if !task.is_finished() {
+                // TODO(parkmycar): Panic here if we never see this error in production.
+                tracing::error!("Registered a collection twice! {id:?}");
                 return;
             }
         }
