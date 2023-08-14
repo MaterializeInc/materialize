@@ -40,7 +40,7 @@ use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{error, warn, Event, Level, Subscriber};
+use tracing::{warn, Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
