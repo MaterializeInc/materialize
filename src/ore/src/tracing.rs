@@ -338,9 +338,9 @@ where
             let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
 
             if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
-                if !last_log_in_epoch_seconds
+                if last_log_in_epoch_seconds
                     .compare_exchange_weak(last_log, now, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
+                    .is_err()
                 {
                     return;
                 }
