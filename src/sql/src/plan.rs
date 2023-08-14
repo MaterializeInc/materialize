@@ -759,6 +759,13 @@ impl SubscribeFrom {
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
         }
     }
+
+    pub fn contains_temporal(&self) -> bool {
+        match self {
+            SubscribeFrom::Id(_) => false,
+            SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
+        }
+    }
 }
 
 #[derive(Debug)]
