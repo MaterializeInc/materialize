@@ -83,7 +83,7 @@ class Testdrive(K8sPod):
             "--var=default-replica-size=1",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
             # S3 sources are not compatible with Minio unfortunately
-            # "--aws-endpoint=http://minio-service.default:9000",
+            # f"--aws-endpoint=http://minio-service.{self.namespace()}:9000",
             # "--aws-access-key-id=minio",
             # "--aws-secret-access-key=minio123",
             *(["--no-reset"] if no_reset else []),

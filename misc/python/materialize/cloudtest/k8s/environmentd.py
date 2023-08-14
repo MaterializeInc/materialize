@@ -72,7 +72,7 @@ class MaterializedAliasService(K8sService):
             metadata=V1ObjectMeta(name="materialized"),
             spec=V1ServiceSpec(
                 type="ExternalName",
-                external_name="environmentd.default.svc.cluster.local",
+                external_name=f"environmentd.{namespace}.svc.cluster.local",
             ),
         )
 
@@ -85,12 +85,16 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         coverage_mode: bool = False,
         log_filter: Optional[str] = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
+        minio_namespace: str = DEFAULT_K8S_NAMESPACE,
+        cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
         self.env: Dict[str, str] = {}
+        self.minio_namespace = minio_namespace
+        self.cockroach_namespace = cockroach_namespace
         super().__init__(namespace)
 
     def generate_stateful_set(self) -> V1StatefulSet:
@@ -151,7 +155,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
 
-        s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
+        s3_endpoint = urllib.parse.quote(
+            f"http://minio-service.{self.minio_namespace}:9000"
+        )
 
         args = [
             "--availability-zone=1",
@@ -165,9 +171,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
-            "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
-            "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=adapter",
-            "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
+            f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
+            f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
+            f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
