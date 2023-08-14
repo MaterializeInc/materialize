@@ -122,7 +122,7 @@ class CockroachStatefulSet(K8sStatefulSet):
         )
 
 
-def create_cockroach_resources(
+def cockroach_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
     path_to_setup_script: Path = ROOT / "misc" / "cockroach" / "setup_materialize.sql",
 ) -> List[K8sResource]:

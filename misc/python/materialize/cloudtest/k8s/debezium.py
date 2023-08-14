@@ -103,7 +103,7 @@ class DebeziumService(K8sService):
         )
 
 
-def create_debezium_resources(
+def debezium_resources(
     debezium_namespace: str = DEFAULT_K8S_NAMESPACE,
     redpanda_namespace: str = DEFAULT_K8S_NAMESPACE,
 ) -> List[K8sResource]:

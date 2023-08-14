@@ -87,7 +87,7 @@ class PostgresDeployment(K8sDeployment):
         )
 
 
-def create_postgres_resources(
+def postgres_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
 ) -> List[K8sResource]:
     return [
