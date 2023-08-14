@@ -185,4 +185,4 @@ defined in the sample `config.yml`.
 
     <br>
 
-    <img width="1728" alt="Template Grafana monitoring dashboard" src="https://imgur.com/JN2PVUz.png">
+    <img width="1728" alt="Template Grafana monitoring dashboard" src="https://github.com/joacoc/materialize/assets/11491779/500fdc03-546c-4f56-b2c3-dc4e92e04328">
