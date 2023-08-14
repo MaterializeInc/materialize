@@ -15,7 +15,7 @@ SERVICES = [
     Service(
         "prometheus",
         {
-            "image": "prom/prometheus:v2.41.0",
+            "image": "prom/prometheus:v2.46.0",
             "ports": ["9090:9090"],
             "volumes": [
                 "./prometheus.yml:/etc/prometheus/prometheus.yml",
@@ -26,9 +26,22 @@ SERVICES = [
         },
     ),
     Service(
+        "tempo",
+        {
+            "image": "grafana/tempo:2.2.0",
+            "ports": ["4317:4317", "3200:3200"],
+            "command": ["-config.file=/etc/tempo.yaml"],
+            "volumes": [
+                "./tempo.yaml:/etc/tempo.yaml",
+                "../../mzdata/tempo:/tmp/tempo",
+            ],
+            "allow_host_ports": True,
+        },
+    ),
+    Service(
         "grafana",
         {
-            "image": "grafana/grafana:9.3.2",
+            "image": "grafana/grafana:10.0.3",
             "ports": ["3000:3000"],
             "environment": [
                 "GF_AUTH_ANONYMOUS_ENABLED=true",
@@ -44,11 +57,12 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    # Create the `mzdata/prometheus` directory that will be bind mounted into
-    # the container before invoking Docker Compose, since otherwise the Docker
-    # daemon will create the directory as root, and `environmentd` won't be
-    # able to write to it.
-    (MZ_ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
+    # Create the `mzdata/prometheus|tempo` directories that will be bind mounted into
+    # the container before invoking Docker Compose, since otherwise the Docker daemon
+    # will create the directory as root, and `environmentd` won't be able to write to it.
+    (ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
+    (ROOT / "mzdata" / "tempo").mkdir(parents=True, exist_ok=True)
     c.up()
     print(f"Prometheus running at http://localhost:{c.default_port('prometheus')}")
+    print(f"Tempo running at http://localhost:{c.default_port('tempo')}")
     print(f"Grafana running at http://localhost:{c.default_port('grafana')}")
