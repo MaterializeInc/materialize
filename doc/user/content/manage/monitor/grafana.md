@@ -118,6 +118,10 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
    **Filename:** agent.yaml
    ```yaml
       ...
+      scrape_configs:
+         - job_name: node
+         static_configs:
+         - targets: ['<EXPORTER_HOST>:9237']
       remote_write:
          - url: <REMOTE_WRITE_URL>
          basic_auth:
@@ -151,7 +155,7 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
       - job_name: sql_exporter
          scrape_interval: 15s
          static_configs:
-            - targets: ['sql-exporter:9237']
+            - targets: ['<EXPORTER_HOST>:9237']
             labels:
                instance: sql_exporter
    ```
