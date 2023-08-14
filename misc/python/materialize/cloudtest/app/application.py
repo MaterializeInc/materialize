@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
-from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class Application:
@@ -36,11 +36,14 @@ class Application:
     def acquire_images(self) -> None:
         raise NotImplementedError
 
-    def kubectl(self, *args: str) -> str:
+    def kubectl(self, *args: str, namespace: Optional[str] = None) -> str:
         try:
-            return subprocess.check_output(
-                ["kubectl", "--context", self.context(), *args], text=True
-            )
+            cmd = ["kubectl", "--context", self.context(), *args]
+
+            if namespace is not None:
+                cmd.extend(["--namespace", namespace])
+
+            return subprocess.check_output(cmd, text=True)
         except subprocess.CalledProcessError as e:
             print(
                 dedent(

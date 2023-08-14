@@ -18,10 +18,10 @@
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
-/src/adapter                        @MaterializeInc/surfaces
+/src/adapter                        @MaterializeInc/adapter
 /src/adapter/src/flags.rs
 /src/alloc                          @benesch
-/src/audit-log                      @MaterializeInc/surfaces
+/src/audit-log                      @MaterializeInc/adapter
 /src/avro                           @umanwizard
 /src/avro-derive                    @umanwizard
 /src/build-id                       @umanwizard
@@ -34,18 +34,18 @@
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute
 /src/controller                     @MaterializeInc/compute @MaterializeInc/storage
-/src/environmentd                   @MaterializeInc/surfaces
+/src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute
-/src/frontegg-auth                  @MaterializeInc/surfaces
-/src/http-util                      @MaterializeInc/surfaces
+/src/frontegg-auth                  @MaterializeInc/adapter
+/src/http-util                      @MaterializeInc/adapter
 /src/interchange                    @MaterializeInc/storage
 /src/kafka-util                     @MaterializeInc/storage
 /src/kinesis-util                   @MaterializeInc/storage
 /src/lowertest                      @MaterializeInc/compute
 /src/lowertest-derive               @MaterializeInc/compute
 /src/metabase                       @benesch
-/src/mz                             @MaterializeInc/surfaces @MaterializeInc/devex
+/src/mz                             @MaterializeInc/adapter @MaterializeInc/devex
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
 /src/orchestrator-kubernetes        @benesch
@@ -55,10 +55,10 @@
 /src/persist                        @MaterializeInc/persist
 /src/persist-client                 @MaterializeInc/persist
 /src/persist-types                  @MaterializeInc/persist
-/src/pgcopy                         @MaterializeInc/surfaces
-/src/pgrepr                         @MaterializeInc/surfaces
-/src/pgtest                         @MaterializeInc/surfaces
-/src/pgwire                         @MaterializeInc/surfaces
+/src/pgcopy                         @MaterializeInc/adapter
+/src/pgrepr                         @MaterializeInc/adapter
+/src/pgtest                         @MaterializeInc/adapter
+/src/pgwire                         @MaterializeInc/adapter
 /src/pid-file                       @benesch
 /src/postgres-util                  @MaterializeInc/storage
 /src/prof                           @umanwizard
@@ -71,20 +71,20 @@
 /src/secrets                        @MaterializeInc/cloud
 /src/segment                        @benesch
 /src/service                        @MaterializeInc/storage @MaterializeInc/compute
-/src/sql                            @MaterializeInc/surfaces
+/src/sql                            @MaterializeInc/adapter
 /src/sql/src/session/vars.rs
 # HirRelationExpr is the boundary between the `sql` crate and the compute
 # layer, and is jointly owned by the two teams.
-/src/sql/src/plan/expr.rs           @MaterializeInc/surfaces @MaterializeInc/compute
+/src/sql/src/plan/expr.rs           @MaterializeInc/adapter @MaterializeInc/compute
 # The lowering of HirRelationExpr to MirRelationExpr is part of the compute
 # layer, despite being located in the `sql` crate.
 /src/sql/src/plan/lowering.rs       @MaterializeInc/compute
-/src/sql-lexer                      @MaterializeInc/surfaces
-/src/sql-parser                     @MaterializeInc/surfaces
-/src/sqllogictest                   @MaterializeInc/surfaces
+/src/sql-lexer                      @MaterializeInc/adapter
+/src/sql-parser                     @MaterializeInc/adapter
+/src/sqllogictest                   @MaterializeInc/adapter
 /src/ssh-util                       @MaterializeInc/storage
-/src/stash                          @MaterializeInc/surfaces
-/src/stash-debug                    @MaterializeInc/surfaces
+/src/stash                          @MaterializeInc/adapter
+/src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
 /src/test-macro                     @MaterializeInc/qa
@@ -94,3 +94,4 @@
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
+/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/qa

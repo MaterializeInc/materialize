@@ -29,12 +29,15 @@ from kubernetes.client import (
 )
 
 from materialize import ROOT
-from materialize.cloudtest.k8s import K8sConfigMap, K8sService, K8sStatefulSet
+from materialize.cloudtest.k8s.api.k8s_config_map import K8sConfigMap
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mzcompose.services import Cockroach
 
 
 class CockroachConfigMap(K8sConfigMap):
     def __init__(self) -> None:
+        super().__init__()
         self.config_map = V1ConfigMap(
             metadata=V1ObjectMeta(
                 name="cockroach-init",
@@ -49,6 +52,7 @@ class CockroachConfigMap(K8sConfigMap):
 
 class CockroachService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         service_port = V1ServicePort(name="sql", port=26257)
 
         self.service = V1Service(

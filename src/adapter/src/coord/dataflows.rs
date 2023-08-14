@@ -18,13 +18,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
-use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
+use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection,
 };
+use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -51,14 +53,45 @@ use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
 use crate::{rbac, AdapterError};
 
+/// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
+/// to exist after this has been made.
+#[derive(Debug, Clone)]
+pub struct ComputeInstanceSnapshot {
+    instance_id: ComputeInstanceId,
+    collections: BTreeSet<GlobalId>,
+}
+
+impl ComputeInstanceSnapshot {
+    pub fn new(controller: &Controller, id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
+        controller
+            .compute
+            .instance_ref(id)
+            .map(|instance| ComputeInstanceSnapshot {
+                instance_id: id,
+                collections: BTreeSet::from_iter(instance.collections().map(|(id, _state)| *id)),
+            })
+    }
+
+    /// Return the ID of this compute instance.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance_id
+    }
+
+    /// Reports whether the instance contains the indicated collection.
+    pub fn contains_collection(&self, id: &GlobalId) -> bool {
+        self.collections.contains(id)
+    }
+}
+
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
-pub struct DataflowBuilder<'a, T> {
+#[derive(Debug)]
+pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeInstanceRef<'a, T>,
+    pub compute: ComputeInstanceSnapshot,
     recursion_guard: RecursionGuard,
 }
 
@@ -88,24 +121,22 @@ pub enum EvalTime {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
-            .controller
-            .compute
-            .instance_ref(instance)
+            .instance_snapshot(instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog().state(),
-            compute,
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-        }
+        DataflowBuilder::new(self.catalog().state(), compute)
+    }
+
+    /// Return a reference-less snapshot to the indicated compute instance.
+    pub fn instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        ComputeInstanceSnapshot::new(&self.controller, id)
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::must_ship_dataflows`]
     ///
     /// # Panics
     ///
@@ -115,65 +146,36 @@ impl Coordinator {
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) {
-        self.must_ship_dataflows(vec![dataflow], instance).await
-    }
-
-    /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the dataflows fail to ship.
-    async fn must_ship_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDesc>,
-        instance: ComputeInstanceId,
-    ) {
-        self.ship_dataflows(dataflows, instance)
+        self.ship_dataflow(dataflow, instance)
             .await
-            .expect("failed to ship dataflows");
+            .expect("failed to ship dataflow");
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::ship_dataflows`]
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
     /// [`Self::must_ship_dataflow`].
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDesc,
+        mut dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) -> Result<(), AdapterError> {
-        self.ship_dataflows(vec![dataflow], instance).await
-    }
-
-    /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    ///
-    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::must_ship_dataflows`].
-    async fn ship_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDesc>,
-        instance: ComputeInstanceId,
-    ) -> Result<(), AdapterError> {
-        let mut output_ids = Vec::new();
-        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for mut dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.export_ids());
-            // If the only outputs of the dataflow are sinks, we might
-            // be able to turn off the computation early, if they all
-            // have non-trivial `up_to`s.
-            if dataflow.index_exports.is_empty() {
-                dataflow.until = Antichain::from_elem(Timestamp::MIN);
-                for (_, sink) in &dataflow.sink_exports {
-                    dataflow.until.join_assign(&sink.up_to);
-                }
+        // If the only outputs of the dataflow are sinks, we might
+        // be able to turn off the computation early, if they all
+        // have non-trivial `up_to`s.
+        if dataflow.index_exports.is_empty() {
+            dataflow.until = Antichain::from_elem(Timestamp::MIN);
+            for (_, sink) in &dataflow.sink_exports {
+                dataflow.until.join_assign(&sink.up_to);
             }
-            let plan = self.finalize_dataflow(dataflow, instance)?;
-            dataflow_plans.push(plan);
         }
+
+        let output_ids = dataflow.export_ids().collect();
+        let plan = self.finalize_dataflow(dataflow, instance)?;
+
         self.controller
             .active_compute()
-            .create_dataflows(instance, dataflow_plans)
+            .create_dataflow(instance, plan)
             .unwrap_or_terminate("dataflow creation cannot fail");
         self.initialize_compute_read_policies(
             output_ids,
@@ -267,6 +269,9 @@ impl Coordinator {
             dataflow,
             self.catalog()
                 .system_config()
+                .enable_consolidate_after_union_negate(),
+            self.catalog()
+                .system_config()
                 .enable_monotonic_oneshot_selects(),
         )
         .map_err(AdapterError::Internal)
@@ -288,24 +293,22 @@ pub fn dataflow_import_id_bundle(
 
 impl CatalogTxn<'_, mz_repr::Timestamp> {
     /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self
-            .dataflow_client
-            .compute
-            .instance_ref(instance)
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        let snapshot = ComputeInstanceSnapshot::new(self.dataflow_client, instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog,
+        DataflowBuilder::new(self.catalog, snapshot)
+    }
+}
+
+impl<'a> DataflowBuilder<'a> {
+    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+        Self {
+            catalog,
             compute,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
-}
 
-impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(
@@ -327,8 +330,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             // NOTE(benesch): is the above TODO still true? The dataflow layer
             // has gotten increasingly smart about index selection. Maybe it's
             // now fine to present all indexes?
-            let index_oracle = self.index_oracle();
-            let mut valid_indexes = index_oracle.indexes_on(*id).peekable();
+            let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
                 // Deduplicate indexes by keys, in case we have redundant indexes.
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
@@ -439,11 +441,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(
-            &mut dataflow,
-            &self.index_oracle(),
-            &mz_transform::EmptyStatisticsOracle,
-        )?;
+        mz_transform::optimize_dataflow(&mut dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(dataflow)
     }
@@ -479,11 +477,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(
-            dataflow,
-            &self.index_oracle(),
-            &mz_transform::EmptyStatisticsOracle,
-        )?;
+        mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(())
     }
@@ -626,7 +620,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 }
 
-impl<'a, T> CheckedRecursion for DataflowBuilder<'a, T> {
+impl<'a> CheckedRecursion for DataflowBuilder<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
@@ -918,7 +912,7 @@ fn role_oid_memberships_inner<'a>(
 impl Coordinator {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
-        // must_ship_dataflow, must_ship_dataflows, and must_finalize_dataflow are not allowed
+        // must_ship_dataflow and must_finalize_dataflow are not allowed
         // to have a `Result` return because these functions are called after
         // `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors
@@ -930,9 +924,6 @@ impl Coordinator {
 
         let df = DataflowDesc::new("".into());
         let _: () = self.must_ship_dataflow(df.clone(), compute_instance).await;
-        let _: () = self
-            .must_ship_dataflows(vec![df.clone()], compute_instance)
-            .await;
         let _: DataflowDescription<mz_compute_client::plan::Plan> =
             self.must_finalize_dataflow(df, compute_instance);
     }

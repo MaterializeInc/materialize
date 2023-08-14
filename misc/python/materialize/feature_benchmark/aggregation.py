@@ -23,7 +23,10 @@ class Aggregation:
         self._data.append(measurement.value)
 
     def aggregate(self) -> Any:
-        return self.func()([*self._data])
+        if len(self._data) == 0:
+            return None
+        else:
+            return self.func()([*self._data])
 
     def func(self) -> Callable:
         assert False

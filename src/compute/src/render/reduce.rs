@@ -734,6 +734,8 @@ where
             // Build a series of stages for the reduction
             // Arrange the final result into (key, Row)
             let error_logger = self.error_logger();
+            // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
+            // view mz_internal.mz_expected_group_size_advice.
             let arranged =
                 partial.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
             // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
@@ -802,6 +804,8 @@ where
         R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
     {
         let error_logger = self.error_logger();
+        // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
+        // view mz_internal.mz_expected_group_size_advice.
         let arranged_input = input
             .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
 

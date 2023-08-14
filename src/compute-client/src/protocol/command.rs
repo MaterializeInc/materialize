@@ -9,8 +9,6 @@
 
 //! Compute protocol commands.
 
-use std::collections::BTreeSet;
-
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -18,8 +16,9 @@ use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
-use mz_storage_client::client::ProtoAllowCompaction;
+use mz_storage_client::client::ProtoCompaction;
 use mz_storage_client::controller::CollectionMetadata;
+use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -98,21 +97,16 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// rather than as [`ComputeParameters`].
     UpdateConfiguration(ComputeParameters),
 
-    /// `CreateDataflows` instructs the replica to create and start maintaining dataflows according
-    /// to the given [`DataflowDescription`]s.
+    /// `CreateDataflow` instructs the replica to create and start maintaining a dataflow according
+    /// to the given [`DataflowDescription`].
     ///
-    /// If a `CreateDataflows` command defines multiple dataflows, the list of
-    /// [`DataflowDescription`]s must be topologically ordered according to the dependency
-    /// relation.
-    ///
-    /// Each [`DataflowDescription`] must have the following properties:
+    /// The [`DataflowDescription`] must have the following properties:
     ///
     ///   * Dataflow imports are valid:
     ///     * Imported storage collections specified in [`source_imports`] exist and are readable by
     ///       the compute replica.
     ///     * Imported indexes specified in [`index_imports`] have been created on the replica
-    ///       previously, either by previous `CreateDataflows` commands, or by the same
-    ///       `CreateDataflows` command.
+    ///       previously, by previous `CreateDataflow` commands.
     ///   * Dataflow imports are readable at the specified [`as_of`]. In other words: The `since`s of
     ///     imported collections are not beyond the dataflow [`as_of`].
     ///   * Dataflow exports have unique IDs, i.e., the IDs of exports from dataflows a replica is
@@ -124,32 +118,32 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// exhibit undefined behavior, such as panicking or production of incorrect results. A replica
     /// should prefer panicking over producing incorrect results.
     ///
-    /// After receiving a `CreateDataflows` command, for created dataflows that export indexes or
-    /// storage sinks, the replica must produce [`FrontierUppers`] responses that report the
+    /// After receiving a `CreateDataflow` command, if the created dataflow exports indexes or
+    /// storage sinks, the replica must produce [`FrontierUpper`] responses that report the
     /// advancement of the `upper` frontiers of these compute collections.
     ///
-    /// After receiving a `CreateDataflows` command, for created dataflows that export subscribes,
-    /// the replica must produce [`SubscribeResponse`]s that report the progress and results of the
+    /// After receiving a `CreateDataflow` command, if the created dataflow exports subscribes, the
+    /// replica must produce [`SubscribeResponse`]s that report the progress and results of the
     /// subscribes.
     ///
     /// [`objects_to_build`]: DataflowDescription::objects_to_build
     /// [`source_imports`]: DataflowDescription::source_imports
     /// [`index_imports`]: DataflowDescription::index_imports
     /// [`as_of`]: DataflowDescription::as_of
-    /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
+    /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
+    CreateDataflow(DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
-    /// the compute collections exported by the replica’s dataflow.
+    /// a compute collection exported by one of the replica’s dataflow.
     ///
-    /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct. The replica gains the liberty of compacting the
-    /// corresponding maintained traces up through that frontier.
+    /// The command names a collection and provides a frontier after which accumulations must be
+    /// correct. The replica gains the liberty of compacting the corresponding maintained trace up
+    /// through that frontier.
     ///
-    /// It is invalid to send an `AllowCompaction` command that references compute collections that
-    /// were not created by a corresponding `CreateDataflows` command before. Doing so may cause
+    /// It is invalid to send an `AllowCompaction` command that references a compute collection
+    /// that was not created by a corresponding `CreateDataflow` command before. Doing so may cause
     /// the replica to exhibit undefined behavior.
     ///
     /// The `AllowCompaction` command only informs about external read requirements, not internal
@@ -157,7 +151,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// all times, so local dataflow inputs are not compacted beyond times at which they are still
     /// being read from.
     ///
-    /// The read frontiers transmitted through `AllowCompactions` may be beyond the corresponding
+    /// The read frontiers transmitted through `AllowCompaction`s may be beyond the corresponding
     /// collections' current `upper` frontiers. This signals that external readers are not
     /// interested in times up to the specified new read frontiers. Consequently, an empty read
     /// frontier signals that external readers are not interested in updates from the corresponding
@@ -167,18 +161,21 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// compute collections.
     ///
     /// A replica that receives an `AllowCompaction` command with the empty frontier must
-    /// eventually respond with a [`FrontierUppers`] response reporting the empty frontier for the
+    /// eventually respond with a [`FrontierUpper`] response reporting the empty frontier for the
     /// same collection. ([#16275])
     ///
-    /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
+    /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+    AllowCompaction {
+        id: GlobalId,
+        frontier: Antichain<T>,
+    },
 
     /// `Peek` instructs the replica to perform a peek at an index.
     ///
     /// The [`Peek`] description must have the following properties:
     ///
-    ///   * The target index has previously been created by a corresponding `CreateDataflows`
+    ///   * The target index has previously been created by a corresponding `CreateDataflow`
     ///     command.
     ///   * The [`Peek::uuid`] is unique, i.e., the UUIDs of peeks a replica gets instructed to
     ///     perform do not repeat (within a single protocol iteration).
@@ -203,25 +200,24 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`Canceled`]: super::response::PeekResponse::Canceled
     Peek(Peek<T>),
 
-    /// `CancelPeeks` instructs the replica to cancel the identified pending peeks.
+    /// `CancelPeek` instructs the replica to cancel the identified pending peek.
     ///
-    /// It is invalid to send a `CancelPeeks` command that references peeks that were not created
+    /// It is invalid to send a `CancelPeek` command that references a peek that was not created
     /// by a corresponding `Peek` command before. Doing so may cause the replica to exhibit
     /// undefined behavior.
     ///
-    /// If a replica cancels a peek in response to a `CancelPeeks` command, it must respond with a
+    /// If a replica cancels a peek in response to a `CancelPeek` command, it must respond with a
     /// [`PeekResponse::Canceled`]. The replica may also decide to fulfill the peek instead and
     /// return a different [`PeekResponse`], or it may already have returned a response to the
     /// specified peek. In these cases it must *not* return another [`PeekResponse`].
     ///
     /// [`PeekResponse`]: super::response::PeekResponse
     /// [`PeekResponse::Canceled`]: super::response::PeekResponse::Canceled
-    CancelPeeks {
-        /// The identifiers of the peek requests to cancel.
+    CancelPeek {
+        /// The identifier of the peek request to cancel.
         ///
-        /// Values in this set must match [`Peek::uuid`] values transmitted in previous `Peek`
-        /// commands.
-        uuids: BTreeSet<Uuid>,
+        /// This Value must match a [`Peek::uuid`] value transmitted in a previous `Peek` command.
+        uuid: Uuid,
     },
 }
 
@@ -240,20 +236,15 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
                 }
-                ComputeCommand::CreateDataflows(dataflows) => {
-                    CreateDataflows(ProtoCreateDataflows {
-                        dataflows: dataflows.into_proto(),
-                    })
-                }
-                ComputeCommand::AllowCompaction(collections) => {
-                    AllowCompaction(ProtoAllowCompaction {
-                        collections: collections.into_proto(),
+                ComputeCommand::CreateDataflow(dataflow) => CreateDataflow(dataflow.into_proto()),
+                ComputeCommand::AllowCompaction { id, frontier } => {
+                    AllowCompaction(ProtoCompaction {
+                        id: Some(id.into_proto()),
+                        frontier: Some(frontier.into_proto()),
                     })
                 }
                 ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
-                ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
-                    uuids: uuids.into_proto(),
-                }),
+                ComputeCommand::CancelPeek { uuid } => CancelPeek(uuid.into_proto()),
             }),
         }
     }
@@ -275,15 +266,18 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
             }
-            Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
-                Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
+            Some(CreateDataflow(dataflow)) => {
+                Ok(ComputeCommand::CreateDataflow(dataflow.into_rust()?))
             }
-            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(ComputeCommand::AllowCompaction(collections.into_rust()?))
+            Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
+                Ok(ComputeCommand::AllowCompaction {
+                    id: id.into_rust_if_some("ProtoAllowCompaction::id")?,
+                    frontier: frontier.into_rust_if_some("ProtoAllowCompaction::frontier")?,
+                })
             }
             Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
-            Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
-                uuids: uuids.into_rust()?,
+            Some(CancelPeek(uuid)) => Ok(ComputeCommand::CancelPeek {
+                uuid: uuid.into_rust()?,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
@@ -298,47 +292,23 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-                any::<LoggingConfig>()
-                    .prop_map(ComputeCommand::CreateInstance)
-                    .boxed(),
-                any::<ComputeParameters>()
-                    .prop_map(ComputeCommand::UpdateConfiguration)
-                    .boxed(),
-                proptest::collection::vec(
-                    any::<
-                        DataflowDescription<
-                            crate::plan::Plan,
-                            CollectionMetadata,
-                            mz_repr::Timestamp,
-                        >,
-                    >(),
-                    1..4,
-                )
-                .prop_map(ComputeCommand::CreateDataflows)
+            any::<LoggingConfig>()
+                .prop_map(ComputeCommand::CreateInstance)
                 .boxed(),
-                proptest::collection::vec(
-                    (
-                        any::<GlobalId>(),
-                        proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
-                    ),
-                    1..4,
-                )
-                .prop_map(|collections| {
-                    ComputeCommand::AllowCompaction(
-                        collections
-                            .into_iter()
-                            .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
-                            .collect(),
-                    )
-                })
+            any::<ComputeParameters>()
+                .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-                any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
-                proptest::collection::vec(any_uuid(), 1..6)
-                    .prop_map(|uuids| ComputeCommand::CancelPeeks {
-                        uuids: BTreeSet::from_iter(uuids.into_iter()),
-                    })
-                    .boxed(),
-            ])
+            any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>()
+                .prop_map(ComputeCommand::CreateDataflow)
+                .boxed(),
+            (any::<GlobalId>(), any_antichain())
+                .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
+                .boxed(),
+            any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
+            any_uuid()
+                .prop_map(|uuid| ComputeCommand::CancelPeek { uuid })
+                .boxed(),
+        ])
     }
 }
 

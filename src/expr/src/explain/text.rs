@@ -21,7 +21,7 @@ use mz_repr::{GlobalId, Row};
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
 use crate::{
-    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
+    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, LocalId, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
@@ -567,9 +567,21 @@ impl MirRelationExpr {
             }
             Join {
                 implementation: JoinImplementation::IndexedFilter(id, _key, literal_constraints),
+                inputs,
                 ..
             } => {
-                Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()))?;
+                let cse_id = match inputs.get(1).unwrap() {
+                    // If the constant input is actually a Get, then let `fmt_indexed_filter` know.
+                    Get { id, .. } => {
+                        if let Id::Local(local_id) = id {
+                            Some(local_id)
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    _ => None,
+                };
+                Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()), cse_id)?;
                 self.fmt_attributes(f, ctx)?;
             }
             Reduce {
@@ -712,6 +724,7 @@ impl MirRelationExpr {
         ctx: &mut C,
         id: &GlobalId,               // The id of the index
         constants: Option<Vec<Row>>, // The values that we are looking up
+        cse_id: Option<&LocalId>,    // Sometimes, RelationCSE pulls out the const input
     ) -> fmt::Result
     where
         C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain::ExprHumanizer>,
@@ -727,10 +740,17 @@ impl MirRelationExpr {
                 ctx.as_mut(),
                 humanized_index
             )?;
-            if constants.len() == 1 {
-                write!(f, "value={}", constants.get(0).unwrap())?;
+            if let Some(cse_id) = cse_id {
+                // If we were to simply print `constants` here, then the EXPLAIN output would look
+                // weird: It would look like as if there was a dangling cte, because we (probably)
+                // wouldn't be printing any Get that refers to that cte.
+                write!(f, "values=<Get {}>", cse_id)?;
             } else {
-                write!(f, "values=[{}]", separated("; ", constants))?;
+                if constants.len() == 1 {
+                    write!(f, "value={}", constants.get(0).unwrap())?;
+                } else {
+                    write!(f, "values=[{}]", separated("; ", constants))?;
+                }
             }
         } else {
             write!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;

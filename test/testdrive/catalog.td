@@ -529,6 +529,7 @@ mz_dataflow_addresses_per_worker             log   <null>
 mz_dataflow_channels_per_worker              log   <null>
 mz_dataflow_operator_reachability_raw        log   <null>
 mz_dataflow_operators_per_worker             log   <null>
+mz_frontiers                                 source <null>
 mz_message_counts_received_raw               log   <null>
 mz_message_counts_sent_raw                   log   <null>
 mz_peek_durations_histogram_raw              log   <null>
@@ -545,7 +546,6 @@ name
 ----
 mz_aggregates
 mz_cluster_links
-mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
@@ -594,8 +594,12 @@ mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operators
 mz_dataflows
 mz_dataflows_per_worker
+mz_expected_group_size_advice
+mz_global_frontiers
 mz_message_counts
 mz_message_counts_per_worker
+mz_object_fully_qualified_names
+mz_object_lifetimes
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
@@ -642,11 +646,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-50
+49
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-81
+84
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -321,6 +321,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             metrics.push(ServiceProcessMetrics {
                 cpu_nano_cores,
                 memory_bytes,
+                // Process orchestrator does not support this right now.
+                disk_usage_bytes: None,
             });
         }
         Ok(metrics)
@@ -338,8 +340,10 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             cpu_limit: _,
             scale,
             labels,
-            availability_zone: _,
-            anti_affinity: _,
+            // Scheduling constraints are entirely ignored by the process orchestrator.
+            availability_zones: _,
+            other_replicas_selector: _,
+            replicas_selector: _,
             disk,
             disk_limit: _,
         }: ServiceConfig<'_>,
@@ -465,6 +469,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 yield service_event_rx.recv().await.err_into();
             }
         })
+    }
+
+    fn update_scheduling_config(
+        &self,
+        _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+    ) {
+        // This orchestrator ignores scheduling constraints.
     }
 }
 

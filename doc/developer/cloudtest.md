@@ -63,6 +63,9 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     ./setup
     ```
 
+4. On macOS, configure Docker to use "gRPC FUSE" as file sharing implementation for the containers
+   (Docker settings, tab "General"). This will speed up the execution of cloudtests.
+
 # Running tests
 
 To run all short tests:
@@ -148,7 +151,7 @@ is instantiated once per `pytest` invocation
 ## Waiting for a resource to reach a particular state
 
 ```
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.util.wait import wait
 
 wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
 ```

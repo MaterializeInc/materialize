@@ -330,6 +330,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
     Union {
         /// The input collections
         inputs: Vec<Plan<T>>,
+        /// Whether to consolidate the output, e.g., cancel negated records.
+        consolidate_output: bool,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -380,7 +382,7 @@ impl<T> Plan<T> {
             | ArrangeBy { input, .. } => {
                 first = Some(&mut **input);
             }
-            Join { inputs, .. } | Union { inputs } => {
+            Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
             }
         }
@@ -512,8 +514,11 @@ impl Arbitrary for Plan {
                     })
                     .boxed(),
                 // Plan::Union
-                prop::collection::vec(inner.clone(), 0..2)
-                    .prop_map(|x| Plan::Union { inputs: x })
+                (prop::collection::vec(inner.clone(), 0..2), any::<bool>())
+                    .prop_map(|(x, b)| Plan::Union {
+                        inputs: x,
+                        consolidate_output: b,
+                    })
                     .boxed(),
                 //Plan::ArrangeBy
                 (
@@ -692,8 +697,12 @@ impl RustType<ProtoPlan> for Plan {
                     }
                     .into(),
                 ),
-                Plan::Union { inputs } => Union(ProtoPlanUnion {
+                Plan::Union {
+                    inputs,
+                    consolidate_output,
+                } => Union(ProtoPlanUnion {
                     inputs: inputs.into_proto(),
+                    consolidate_output: consolidate_output.into_proto(),
                 }),
                 Plan::ArrangeBy {
                     input,
@@ -831,6 +840,7 @@ impl RustType<ProtoPlan> for Plan {
             },
             Union(proto) => Plan::Union {
                 inputs: proto.inputs.into_rust()?,
+                consolidate_output: proto.consolidate_output.into_rust()?,
             },
             ArrangeBy(proto) => Plan::ArrangeBy {
                 input: proto.input.into_rust_if_some("ProtoPlanArrangeBy::input")?,
@@ -1084,9 +1094,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     .unwrap_or_else(AvailableCollections::new_raw);
 
                 // Seek out an arrangement key that might be constrained to a literal.
-                // TODO: Improve key selection heuristic.
-                // Note that most (actually all, as far as I know) of the cases that used to be
-                // handled by this code are instead handled by `CanonicalizeMfp`.
+                // Note: this code has very little use nowadays, as its job was mostly taken over
+                // by `LiteralConstraints` (see in the below longer comment).
                 let key_val = in_keys
                     .arranged
                     .iter()
@@ -1098,6 +1107,20 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Determine the plan of action for the `Get` stage.
                 let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
+                    // This code path used to handle looking up literals from indexes, but it's
+                    // mostly deprecated, as this is nowadays performed by the `LiteralConstraints`
+                    // MIR transform instead. However, it's still called in a couple of tricky
+                    // special cases:
+                    // - `LiteralConstraints` handles only Gets of global ids, so this code still
+                    //   gets to handle Filters on top of Gets of local ids.
+                    // - Lowering does a `MapFilterProject::extract_from_expression`, while
+                    //   `LiteralConstraints` does
+                    //   `MapFilterProject::extract_non_errors_from_expr_mut`.
+                    // - It might happen that new literal constraint optimization opportunities
+                    //   appear somewhere near the end of the MIR optimizer after
+                    //   `LiteralConstraints` has already run.
+                    // (Also note that a similar literal constraint handling machinery is also
+                    // present when handling the leftover MFP after this big match.)
                     mfp.permute(permutation.clone(), thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
                     GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
@@ -1302,9 +1325,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         let start: usize = 1;
                         let order = vec![(0usize, key.clone(), None)];
                         // All columns of the constant input will be part of the arrangement key.
-                        // Note that currently nothing else would make this arrangement exist, so
-                        // this will end up in `missing`, and thus we'll insert an LIR ArrangeBy
-                        // later.
                         let source_arrangement = (
                             (0..key.len())
                                 .map(MirScalarExpr::Column)
@@ -1367,15 +1387,28 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     if missing != Default::default() {
                         if is_delta {
                             // join_implementation.rs produced a sub-optimal plan here;
-                            // we shouldn't plan delta joins at all if not all of the required arrangements
-                            // are available. Print an error message, to increase the chances that
-                            // the user will tell us about this.
+                            // we shouldn't plan delta joins at all if not all of the required
+                            // arrangements are available. Soft panic in CI and log an error in
+                            // production to increase the chances that we will catch all situations
+                            // that violate this constraint.
                             soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
 Dataflow info: {}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
                         } else {
-                            // It's fine and expected that linear joins don't have all their arrangements available up front,
-                            // so no need to print an error here.
+                            soft_panic_or_log!("Arrangements depended on by a non-delta join are absent: {:?}
+Dataflow info: {}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
+                            // Nowadays MIR transforms take care to insert MIR ArrangeBys for each
+                            // Join input. (Earlier, they were missing in the following cases:
+                            //  - They were const-folded away for constant inputs. This is not
+                            //    happening since
+                            //    https://github.com/MaterializeInc/materialize/pull/16351
+                            //  - They were not being inserted for the constant input of
+                            //    `IndexedFilter`s. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/20920
+                            //  - They were not being inserted for the first input of Differential
+                            //    joins. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/16099)
                         }
                         let raw_plan = std::mem::replace(
                             input_plan,
@@ -1552,7 +1585,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     })
                     .collect();
                 // Return the plan and no arrangements.
-                let plan = Plan::Union { inputs: plans };
+                let plan = Plan::Union {
+                    inputs: plans,
+                    consolidate_output: false,
+                };
                 (plan, AvailableCollections::new_raw())
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
@@ -1691,6 +1727,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
+        enable_consolidate_after_union_negate: bool,
         enable_monotonic_oneshot_selects: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
@@ -1698,6 +1735,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
+
+        if enable_consolidate_after_union_negate {
+            Self::refine_union_negate_consolidation(&mut dataflow);
+        }
 
         if enable_monotonic_oneshot_selects {
             Self::refine_single_time_operator_selection(&mut dataflow);
@@ -1854,6 +1895,37 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 };
                 mfp.optimize();
                 source.arguments.operators = Some(mfp);
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
+    }
+
+    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_union_negate_consolidation")
+    )]
+    fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                match expression {
+                    Plan::Union {
+                        inputs,
+                        consolidate_output,
+                    } => {
+                        if inputs
+                            .iter()
+                            .any(|input| matches!(input, Plan::Negate { .. }))
+                        {
+                            *consolidate_output = true;
+                        }
+                    }
+                    _ => {}
+                }
+                todo.extend(expression.children_mut());
             }
         }
         mz_repr::explain::trace_plan(dataflow);
@@ -2103,7 +2175,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         threshold_plan: threshold_plan.clone(),
                     })
                     .collect(),
-                Plan::Union { inputs } => {
+                Plan::Union {
+                    inputs,
+                    consolidate_output,
+                } => {
                     let mut inputs_parts = vec![Vec::new(); parts];
                     for input in inputs.into_iter() {
                         for (index, input_part) in
@@ -2114,7 +2189,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     inputs_parts
                         .into_iter()
-                        .map(|inputs| Plan::Union { inputs })
+                        .map(|inputs| Plan::Union {
+                            inputs,
+                            consolidate_output,
+                        })
                         .collect()
                 }
                 Plan::ArrangeBy {
@@ -2166,7 +2244,11 @@ impl<T> CollectionPlan for Plan<T> {
                 }
                 body.depends_on_into(out);
             }
-            Plan::Join { inputs, plan: _ } | Plan::Union { inputs } => {
+            Plan::Join { inputs, plan: _ }
+            | Plan::Union {
+                inputs,
+                consolidate_output: _,
+            } => {
                 for input in inputs {
                     input.depends_on_into(out);
                 }
@@ -2213,6 +2295,8 @@ impl<T> CollectionPlan for Plan<T> {
 /// Returns bucket sizes, descending, suitable for hierarchical decomposition of an operator, based
 /// on the expected number of rows that will have the same group key.
 fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64> {
+    // NOTE(vmarcos): The fan-in of 16 defined below is used in the tuning advice built-in view
+    // mz_internal.mz_expected_group_size_advice.
     let mut buckets = vec![];
     let mut current = 16;
 

@@ -68,19 +68,22 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
-use mz_transform::{EmptyStatisticsOracle, Optimizer};
+use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc,
+    self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
     StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::coord::dataflows::{
+    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
+    ExprPrepStyle,
+};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
@@ -1935,11 +1938,8 @@ impl Coordinator {
                     (ctx, PeekStage::Optimize(next))
                 }
                 PeekStage::Optimize(stage) => {
-                    let next = return_if_err!(
-                        self.peek_stage_optimize(ctx.session_mut(), stage).await,
-                        ctx
-                    );
-                    (ctx, PeekStage::Timestamp(next))
+                    self.peek_stage_optimize(ctx, stage).await;
+                    return;
                 }
                 PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
                     Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
@@ -2034,9 +2034,71 @@ impl Coordinator {
         })
     }
 
-    async fn peek_stage_optimize(
-        &mut self,
+    async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
+        // Generate data structures that can be moved to another task where we will perform possibly
+        // expensive optimizations.
+        let catalog = self.owned_catalog();
+        let compute = ComputeInstanceSnapshot::new(&self.controller, stage.cluster_id)
+            .expect("compute instance does not exist");
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+        // TODO: Is there a way to avoid making two dataflow_builders (the second is in
+        // optimize_peek)?
+        let id_bundle = self
+            .dataflow_builder(stage.cluster_id)
+            .sufficient_collections(&stage.source_ids);
+        // Although we have added `sources.depends_on()` to the validity already, also add the
+        // sufficient collections for safety.
+        stage.validity.dependency_ids.extend(id_bundle.iter());
+
+        let stats = {
+            match self.determine_timestamp(
+                ctx.session(),
+                &id_bundle,
+                &stage.when,
+                stage.cluster_id,
+                &stage.timeline_context,
+                None,
+            ) {
+                Err(_) => Box::new(EmptyStatisticsOracle),
+                Ok(query_as_of) => self
+                    .statistics_oracle(
+                        ctx.session(),
+                        &stage.source_ids,
+                        query_as_of.timestamp_context.antichain(),
+                        true,
+                    )
+                    .await
+                    .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle)),
+            }
+        };
+
+        mz_ore::task::spawn_blocking(
+            || "optimize peek",
+            move || match Self::optimize_peek(
+                catalog.state(),
+                compute,
+                ctx.session(),
+                stats,
+                id_bundle,
+                stage,
+            ) {
+                Ok(stage) => {
+                    let stage = PeekStage::Timestamp(stage);
+                    // Ignore errors if the coordinator has shut down.
+                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                }
+                Err(err) => ctx.retire(Err(err)),
+            },
+        );
+    }
+
+    fn optimize_peek(
+        catalog: &CatalogState,
+        compute: ComputeInstanceSnapshot,
         session: &Session,
+        stats: Box<dyn StatisticsOracle>,
+        id_bundle: CollectionIdBundle,
         PeekStageOptimize {
             validity,
             source,
@@ -2052,11 +2114,9 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
         }: PeekStageOptimize,
     ) -> Result<PeekStageTimestamp, AdapterError> {
-        let source = self.view_optimizer.optimize(source)?;
-
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
+        let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+        let source = optimizer.optimize(source)?;
+        let mut builder = DataflowBuilder::new(catalog, compute);
 
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
@@ -2069,7 +2129,6 @@ impl Coordinator {
             .collect();
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
-        let mut builder = self.dataflow_builder(cluster_id);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
 
         // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
@@ -2078,10 +2137,9 @@ impl Coordinator {
             logical_time: EvalTime::Deferred,
             session,
         };
-        let state = self.catalog().state();
         dataflow.visit_children(
-            |r| prep_relation_expr(state, r, style),
-            |s| prep_scalar_expr(state, s, style),
+            |r| prep_relation_expr(catalog, r, style),
+            |s| prep_scalar_expr(catalog, s, style),
         )?;
 
         dataflow.export_index(
@@ -2093,26 +2151,8 @@ impl Coordinator {
             typ.clone(),
         );
 
-        let query_as_of = self
-            .determine_timestamp(
-                session,
-                &id_bundle,
-                &when,
-                cluster_id,
-                &timeline_context,
-                None,
-            )?
-            .timestamp_context
-            .antichain();
-
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(
-            &mut dataflow,
-            &builder.index_oracle(),
-            self.statistics_oracle(session, &source_ids, query_as_of, true)
-                .await?
-                .as_ref(),
-        )?;
+        mz_transform::optimize_dataflow(&mut dataflow, &builder, &*stats)?;
 
         Ok(PeekStageTimestamp {
             validity,
@@ -3980,6 +4020,7 @@ impl Coordinator {
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
+                    &resolved_ids,
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
                 {
@@ -4192,6 +4233,7 @@ impl Coordinator {
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
+                    &resolved_ids,
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
                 {

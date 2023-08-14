@@ -127,6 +127,8 @@ class FeatureTestScenario:
                 # Include the header.
                 header(f"{cls.__name__} (phase 1)", drop_schema=True),
                 cls.initialize(),
+                # Ensure the feature is off, regardless of CI config.
+                alter_system_set(cls.feature_name(), "off"),
                 # We cannot create item #1 when the feature is turned off (default).
                 statement_error(cls.create_item(ordinal=1), cls.feature_error()),
                 # Turn the feature on.

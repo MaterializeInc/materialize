@@ -11,7 +11,7 @@ import json
 import time
 from textwrap import dedent
 from threading import Thread
-from typing import Dict, List, Tuple
+from typing import Dict, Optional, Tuple
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -82,7 +82,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-mv-source-sink",
         "test-query-without-default-cluster",
         "test-clusterd-death-detection",
-        "test-replica-dataflow-metrics",
+        "test-replica-metrics",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -1052,12 +1052,6 @@ def workflow_test_github_19610(c: Composition) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
-            port=6877,
-            user="mz_system",
-        )
-
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -1162,12 +1156,6 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
             port=6877,
             user="mz_system",
         )
@@ -1607,9 +1595,13 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         reused = 0
         replaced = 0
         for metric in metrics.splitlines():
-            if metric.startswith("mz_compute_reconciliation_reused_dataflows"):
+            if metric.startswith(
+                "mz_compute_reconciliation_reused_dataflows_count_total"
+            ):
                 reused += int(metric.split()[1])
-            elif metric.startswith("mz_compute_reconciliation_replaced_dataflows"):
+            elif metric.startswith(
+                "mz_compute_reconciliation_replaced_dataflows_count_total"
+            ):
                 replaced += int(metric.split()[1])
 
         return reused, replaced
@@ -2028,19 +2020,38 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
-    def for_collection(self, metric_name: str, collection_id: str) -> List[float]:
-        values = []
+    def with_name(self, metric_name: str) -> Dict[str, float]:
+        items = {}
         for key, value in self.metrics.items():
-            if (
-                key.startswith(metric_name)
-                and f'collection_id="{collection_id}"' in key
-            ):
-                values.append(float(value))
-        return values
+            if key.startswith(metric_name):
+                items[key] = float(value)
+        return items
+
+    def get_value(self, metric_name: str) -> float:
+        metrics = self.with_name(metric_name)
+        values = list(metrics.values())
+        assert len(values) == 1
+        return values[0]
+
+    def get_initial_output_duration(self, collection_id: str) -> Optional[float]:
+        metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
+        values = [
+            v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
+        ]
+        assert len(values) <= 1
+        return next(iter(values), None)
+
+    def get_command_count(self, command_type: str) -> float:
+        metrics = self.with_name("mz_compute_replica_history_command_count")
+        values = [
+            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
+        ]
+        assert len(values) <= 1
+        return values[0]
 
 
-def workflow_test_replica_dataflow_metrics(c: Composition) -> None:
-    """Test dataflow metrics exposed by replicas."""
+def workflow_test_replica_metrics(c: Composition) -> None:
+    """Test metrics exposed by replicas."""
 
     c.down(destroy_volumes=True)
     c.up("materialized")
@@ -2086,14 +2097,34 @@ def workflow_test_replica_dataflow_metrics(c: Composition) -> None:
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
-    (index_iod,) = metrics.for_collection(
-        "mz_dataflow_initial_output_duration_seconds", index_id
-    )
-    assert index_iod > 0
-    (mv_iod,) = metrics.for_collection(
-        "mz_dataflow_initial_output_duration_seconds", mv_id
-    )
-    assert mv_iod > 0
+
+    count = metrics.get_command_count("create_timely")
+    assert count == 0, f"unexpected create_timely count: {count}"
+    count = metrics.get_command_count("create_instance")
+    assert count == 1, f"unexpected create_instance count: {count}"
+    count = metrics.get_command_count("allow_compaction")
+    assert count > 0, f"unexpected allow_compaction count: {count}"
+    count = metrics.get_command_count("create_dataflow")
+    assert count > 0, f"unexpected create_dataflow count: {count}"
+    count = metrics.get_command_count("peek")
+    assert count <= 2, f"unexpected peek count: {count}"
+    count = metrics.get_command_count("cancel_peek")
+    assert count == 0, f"unexpected cancel_peek count: {count}"
+    count = metrics.get_command_count("initialization_complete")
+    assert count == 0, f"unexpected initialization_complete count: {count}"
+    count = metrics.get_command_count("update_configuration")
+    assert count == 1, f"unexpected update_configuration count: {count}"
+
+    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
+    assert count >= 2, f"unexpected dataflow count: {count}"
+
+    index_iod = metrics.get_initial_output_duration(index_id)
+    assert index_iod, f"unexpected index iod: {index_iod}"
+    mv_iod = metrics.get_initial_output_duration(mv_id)
+    assert mv_iod, f"unexpected mv iod: {mv_iod}"
+
+    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
+    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
 
     # Drop the dataflows.
     c.sql(
@@ -2108,9 +2139,5 @@ def workflow_test_replica_dataflow_metrics(c: Composition) -> None:
 
     # Check that the dataflow metrics have been cleaned up.
     metrics = fetch_metrics()
-    assert not metrics.for_collection(
-        "mz_dataflow_initial_output_duration_seconds", index_id
-    )
-    assert not metrics.for_collection(
-        "mz_dataflow_initial_output_duration_seconds", mv_id
-    )
+    assert metrics.get_initial_output_duration(index_id) is None
+    assert metrics.get_initial_output_duration(mv_id) is None

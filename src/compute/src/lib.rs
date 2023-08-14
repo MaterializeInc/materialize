@@ -84,5 +84,3 @@ pub(crate) mod render;
 pub mod server;
 pub(crate) mod sink;
 mod typedefs;
-
-pub use arrangement::manager::{TraceManager, TraceMetrics};

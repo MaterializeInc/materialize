@@ -241,7 +241,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(YEAR FROM d)
 ----
-extract('year', d)
+extract('year' FROM d)
 
 parse-scalar
 EXTRACT(MILLENIUM FROM d)
@@ -251,7 +251,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(MILLENNIUM FROM d)
 ----
-extract('millennium', d)
+extract('millennium' FROM d)
 
 parse-scalar
 EXTRACT(CENTURY FROM d)
@@ -261,7 +261,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(CENTURY FROM d)
 ----
-extract('century', d)
+extract('century' FROM d)
 
 parse-scalar
 EXTRACT(ISOYEAR FROM d)
@@ -271,7 +271,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(ISOYEAR FROM d)
 ----
-extract('isoyear', d)
+extract('isoyear' FROM d)
 
 parse-scalar
 EXTRACT(QUARTER FROM d)
@@ -281,7 +281,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(QUARTER FROM d)
 ----
-extract('quarter', d)
+extract('quarter' FROM d)
 
 parse-scalar
 EXTRACT(MONTH FROM d)
@@ -291,7 +291,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(MONTH FROM d)
 ----
-extract('month', d)
+extract('month' FROM d)
 
 parse-scalar
 EXTRACT(DAY FROM d)
@@ -301,7 +301,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(DAY FROM d)
 ----
-extract('day', d)
+extract('day' FROM d)
 
 parse-scalar
 EXTRACT(HOUR FROM d)
@@ -311,7 +311,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(HOUR FROM d)
 ----
-extract('hour', d)
+extract('hour' FROM d)
 
 parse-scalar
 EXTRACT(MINUTE FROM d)
@@ -321,7 +321,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(MINUTE FROM d)
 ----
-extract('minute', d)
+extract('minute' FROM d)
 
 parse-scalar
 EXTRACT(SECOND FROM d)
@@ -331,7 +331,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(SECOND FROM d)
 ----
-extract('second', d)
+extract('second' FROM d)
 
 parse-scalar
 EXTRACT(MILLISECONDS FROM d)
@@ -341,7 +341,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(MILLISECOND FROM d)
 ----
-extract('millisecond', d)
+extract('millisecond' FROM d)
 
 parse-scalar
 EXTRACT(MICROSECONDS FROM d)
@@ -351,7 +351,7 @@ Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Ar
 parse-scalar roundtrip
 EXTRACT(MICROSECONDS FROM d)
 ----
-extract('microseconds', d)
+extract('microseconds' FROM d)
 
 parse-scalar
 EXTRACT(TIMEZONE FROM d)
@@ -895,3 +895,68 @@ position('om', 'Thomas')
 error: Expected IN, found comma
 position('om', 'Thomas')
              ^
+
+parse-scalar roundtrip
+position('om' IN 'Thomas')
+----
+position('om' IN 'Thomas')
+
+parse-scalar roundtrip
+trim('chars' from 'string')
+----
+btrim('string', 'chars')
+
+parse-scalar
+trim('chars' from 'string')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("string")), Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim(both from 'chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim(from 'chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim('chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim(trailing 'chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("rtrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+position('str' in 'str')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("position")])), args: Args { args: [Value(String("str")), Value(String("str"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str', 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str' FROM 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str' FROM 'int' FOR 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str' FOR 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(Number("1")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str', 'int', 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })

@@ -118,7 +118,7 @@ use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Instrument, Level};
+use tracing::{info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -180,10 +180,6 @@ pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
-/// A dummy availability zone to use when no availability zones are explicitly
-/// specified.
-pub const DUMMY_AVAILABILITY_ZONE: &str = "";
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -193,7 +189,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate,
+    GroupCommitInitiate(Span),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -216,14 +212,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-
     // Like Command::Execute, but its context has already been allocated.
     Execute {
         portal_name: String,
         ctx: ExecuteContext,
         span: tracing::Span,
     },
-
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -233,6 +227,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stmt: Statement<Raw>,
         params: mz_sql::plan::Params,
+    },
+    PeekStageReady {
+        ctx: ExecuteContext,
+        stage: PeekStage,
     },
 }
 
@@ -332,7 +330,7 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
-    pub plan: mz_sql::plan::SelectPlan,
+    plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
 }
 
@@ -374,20 +372,20 @@ pub struct PeekStageTimestamp {
 #[derive(Debug)]
 pub struct PeekStageFinish {
     validity: PlanValidity,
-    pub finishing: RowSetFinishing,
-    pub copy_to: Option<CopyFormat>,
-    pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-    pub cluster_id: ClusterId,
-    pub id_bundle: Option<CollectionIdBundle>,
-    pub when: QueryWhen,
-    pub target_replica: Option<ReplicaId>,
-    pub view_id: GlobalId,
-    pub index_id: GlobalId,
-    pub timeline_context: TimelineContext,
-    pub source_ids: BTreeSet<GlobalId>,
-    pub real_time_recency_ts: Option<mz_repr::Timestamp>,
-    pub key: Vec<MirScalarExpr>,
-    pub typ: RelationType,
+    finishing: RowSetFinishing,
+    copy_to: Option<CopyFormat>,
+    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+    cluster_id: ClusterId,
+    id_bundle: Option<CollectionIdBundle>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    view_id: GlobalId,
+    index_id: GlobalId,
+    timeline_context: TimelineContext,
+    source_ids: BTreeSet<GlobalId>,
+    real_time_recency_ts: Option<mz_repr::Timestamp>,
+    key: Vec<MirScalarExpr>,
+    typ: RelationType,
 }
 
 /// An enum describing which cluster to run a statement on.
@@ -483,8 +481,6 @@ pub struct ReplicaMetadata {
     pub last_heartbeat: Option<DateTime<Utc>>,
     /// The last known CPU and memory metrics
     pub metrics: Option<Vec<ServiceProcessMetrics>>,
-    /// Write frontiers of that replica.
-    pub write_frontiers: Vec<(GlobalId, mz_repr::Timestamp)>,
 }
 
 /// Metadata about an active connection.
@@ -889,6 +885,10 @@ impl Coordinator {
         self.controller.compute.update_configuration(compute_config);
         let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
+        let orchestrator_scheduling_config =
+            flags::orchestrator_scheduling_config(self.catalog().system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(orchestrator_scheduling_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
@@ -1209,11 +1209,10 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
-                        let dataflow_plan =
-                            vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
+                        let dataflow_plan = self.must_finalize_dataflow(dataflow, idx.cluster_id);
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.cluster_id, dataflow_plan)
+                            .create_dataflow(idx.cluster_id, dataflow_plan)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
@@ -1321,6 +1320,7 @@ impl Coordinator {
         if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
             // Clean up any extraneous VpcEndpoints that shouldn't exist.
             let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
+            let existing_vpc_endpoints = BTreeSet::from_iter(existing_vpc_endpoints.into_keys());
             let desired_vpc_endpoints = privatelink_connections.keys().cloned().collect();
             let vpc_endpoints_to_remove = existing_vpc_endpoints.difference(&desired_vpc_endpoints);
             for id in vpc_endpoints_to_remove {
@@ -1616,7 +1616,11 @@ impl Coordinator {
                 }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = self.advance_timelines_interval.tick() => Message::GroupCommitInitiate,
+                _ = self.advance_timelines_interval.tick() => {
+                    let span = info_span!(parent: None, "advance_timelines_interval");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span)
+                },
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
                 // `recv()` on `Receiver` is cancellation safe:
@@ -1703,7 +1707,7 @@ pub async fn serve(
         cluster_replica_sizes,
         default_storage_cluster_size,
         system_parameter_defaults,
-        mut availability_zones,
+        availability_zones,
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
@@ -1726,12 +1730,6 @@ pub async fn serve(
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
         coord_bail!("availability zones must be unique");
-    }
-    // Later on, we choose an AZ for every replica, so we need to have at least
-    // one. If we're using an orchestrator that doesn't have the notion of AZs,
-    // just create a fake, blank one.
-    if availability_zones.is_empty() {
-        availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
 
     let aws_principal_context = if aws_account_id.is_some()

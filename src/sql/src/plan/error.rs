@@ -208,6 +208,7 @@ pub enum PlanError {
     ShowCommandInView,
     WebhookValidationDoesNotUseColumns,
     WebhookValidationNonDeterministic,
+    PgSourceUserSpecifiedDetails,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -342,6 +343,7 @@ impl PlanError {
             }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
+            Self::PgSourceUserSpecifiedDetails => Some("If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option.".into()),
             _ => None,
         }
     }
@@ -558,6 +560,9 @@ impl fmt::Display for PlanError {
             ),
             Self::WebhookValidationNonDeterministic => f.write_str(
                 "expression provided in CHECK is not deterministic"
+            ),
+            Self::PgSourceUserSpecifiedDetails => f.write_str(
+                "must not specify DETAILS option in CREATE SOURCE"
             ),
         }
     }

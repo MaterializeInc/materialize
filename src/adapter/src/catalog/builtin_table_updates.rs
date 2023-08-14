@@ -14,8 +14,8 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
-    ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
-    ReplicaLocation,
+    ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaId, ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
@@ -44,15 +44,14 @@ use mz_storage_client::types::sources::{
 
 use crate::catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
-    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS,
-    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
-    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
+    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
+    MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::builtin::{
     MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
@@ -190,26 +189,40 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
-        let (size, disk, replication_factor) = match &cluster.config.variant {
+        let (size, disk, replication_factor, azs) = match &cluster.config.variant {
             ClusterVariant::Managed(config) => (
                 Some(config.size.as_str()),
                 Some(config.disk),
                 Some(config.replication_factor),
+                if config.availability_zones.is_empty() {
+                    None
+                } else {
+                    Some(config.availability_zones.clone())
+                },
             ),
-            ClusterVariant::Unmanaged => (None, None, None),
+            ClusterVariant::Unmanaged => (None, None, None, None),
         };
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([
+            Datum::String(&id.to_string()),
+            Datum::String(name),
+            Datum::String(&cluster.owner_id.to_string()),
+            privileges,
+            cluster.is_managed().into(),
+            size.into(),
+            replication_factor.into(),
+            disk.into(),
+        ]);
+        if let Some(azs) = azs {
+            packer.push_list(azs.iter().map(|az| Datum::String(az)));
+        } else {
+            packer.push(Datum::Null);
+        }
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(name),
-                Datum::String(&cluster.owner_id.to_string()),
-                privileges,
-                cluster.is_managed().into(),
-                size.into(),
-                replication_factor.into(),
-                disk.into(),
-            ]),
+            row,
             diff,
         }
     }
@@ -225,14 +238,21 @@ impl CatalogState {
         let replica = &cluster.replicas_by_id[&id];
 
         let (size, disk, az) = match &replica.config.location {
+            // TODO(guswynn): The column should be `availability_zones`, not
+            // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
-                availability_zone,
-                az_user_specified: _,
+                availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), Some(availability_zone.as_str())),
-            ReplicaLocation::Unmanaged(_) => (None, None, None),
+            }) => (Some(&**size), Some(*disk), Some(az.as_str())),
+            ReplicaLocation::Managed(ManagedReplicaLocation {
+                size,
+                availability_zones: _,
+                allocation: _,
+                disk,
+            }) => (Some(&**size), Some(*disk), None),
+            _ => (None, None, None),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
@@ -1168,6 +1188,7 @@ impl CatalogState {
                 ServiceProcessMetrics {
                     cpu_nano_cores,
                     memory_bytes,
+                    disk_usage_bytes,
                 },
             )| {
                 Row::pack_slice(&[
@@ -1175,8 +1196,7 @@ impl CatalogState {
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
-                    // TODO(guswynn): disk usage will be filled in later.
-                    Datum::Null,
+                    (*disk_usage_bytes).into(),
                 ])
             },
         );
@@ -1224,30 +1244,6 @@ impl CatalogState {
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },
             )
-            .collect();
-        updates
-    }
-
-    pub fn pack_replica_write_frontiers_updates(
-        &self,
-        replica_id: ReplicaId,
-        updates: &[(GlobalId, mz_repr::Timestamp)],
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate> {
-        let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_FRONTIERS);
-
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let replica_id = NewReplicaId::User(replica_id);
-
-        let rows = updates.into_iter().map(|(coll_id, time)| {
-            Row::pack_slice(&[
-                Datum::String(&replica_id.to_string()),
-                Datum::String(&coll_id.to_string()),
-                Datum::MzTimestamp(*time),
-            ])
-        });
-        let updates = rows
-            .map(|row| BuiltinTableUpdate { id, row, diff })
             .collect();
         updates
     }

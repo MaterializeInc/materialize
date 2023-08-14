@@ -303,8 +303,7 @@ message ReplicaConfig {
 
     message ManagedLocation {
         string size = 1;
-        string availability_zone = 2;
-        bool az_user_specified = 3;
+        optional string availability_zone = 2;
         bool disk = 4;
     }
 
@@ -493,6 +492,13 @@ message AuditLogEventV1 {
         StringWrapper new_size = 4;
     }
 
+    message AlterSetClusterV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+        StringWrapper old_cluster = 3;
+        StringWrapper new_cluster = 4;
+    }
+
     message GrantRoleV1 {
         string role_id = 1;
         string member_id = 2;
@@ -551,19 +557,25 @@ message AuditLogEventV1 {
         StringWrapper database_name = 3;
     }
 
+    message UpdateItemV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+    }
+
     uint64 id = 1;
     EventType event_type = 2;
     ObjectType object_type = 3;
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
 
-    // next-id: 25
+    // next-id: 27
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
         CreateSourceSinkV1 create_source_sink_v1 = 8;
         CreateSourceSinkV2 create_source_sink_v2 = 9;
         AlterSourceSinkV1 alter_source_sink_v1 = 10;
+        AlterSetClusterV1 alter_set_cluster_v1 = 25;
         GrantRoleV1 grant_role_v1 = 11;
         GrantRoleV2 grant_role_v2 = 12;
         RevokeRoleV1 revoke_role_v1 = 13;
@@ -578,5 +590,6 @@ message AuditLogEventV1 {
         IdNameV1 id_name_v1 = 17;
         SchemaV1 schema_v1 = 18;
         SchemaV2 schema_v2 = 19;
+        UpdateItemV1 update_item_v1 = 26;
     }
 }

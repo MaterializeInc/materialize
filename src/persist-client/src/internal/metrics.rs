@@ -32,7 +32,9 @@ use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
+use tracing::instrument;
 
+use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
 
 /// Prometheus monitoring metrics.
@@ -2041,6 +2043,7 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
+    #[instrument(name = "blob::get", skip_all, fields(shard=blob_key_shard_id(key)))]
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let res = self
             .metrics
@@ -2058,6 +2061,7 @@ impl Blob for MetricsBlob {
         res
     }
 
+    #[instrument(name = "blob::list_keys_and_metadata", skip_all, fields(shard=blob_key_shard_id(key_prefix)))]
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,
@@ -2093,6 +2097,7 @@ impl Blob for MetricsBlob {
         res
     }
 
+    #[instrument(name = "blob::set", skip_all, fields(shard=blob_key_shard_id(key)))]
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
@@ -2108,6 +2113,7 @@ impl Blob for MetricsBlob {
         res
     }
 
+    #[instrument(name = "blob::delete", skip_all, fields(shard=blob_key_shard_id(key)))]
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let bytes = self
             .metrics
@@ -2157,6 +2163,7 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
+    #[instrument(name = "consensus::head", skip_all, fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
             .metrics
@@ -2174,6 +2181,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
+    #[instrument(name = "consensus::compare_and_set", skip_all, fields(shard=key))]
     async fn compare_and_set(
         &self,
         key: &str,
@@ -2202,6 +2210,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
+    #[instrument(name = "consensus::scan", skip_all, fields(shard=key))]
     async fn scan(
         &self,
         key: &str,
@@ -2225,6 +2234,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
+    #[instrument(name = "consensus::truncate", skip_all, fields(shard=key))]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let deleted = self
             .metrics
@@ -2238,6 +2248,11 @@ impl Consensus for MetricsConsensus {
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
     }
+}
+
+fn blob_key_shard_id(key: &str) -> Option<String> {
+    let (shard_id, _) = BlobKey::parse_ids(key).ok()?;
+    Some(shard_id.to_string())
 }
 
 /// Encode a frontier into an i64 acceptable for use in metrics.

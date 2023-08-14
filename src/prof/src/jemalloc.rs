@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use libc::size_t;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -29,9 +30,15 @@ use tokio::sync::Mutex;
 
 use crate::{ProfStartTime, StackProfile, WeightedStack};
 
+// lg_prof_sample:19 is currently the default according to `man jemalloc`,
+// but let's make that explicit in case upstream ever changes it.
+// If you change this, also change `malloc_conf`.
+pub const LG_PROF_SAMPLE: size_t = 19;
+
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]
-pub static malloc_conf: &[u8] = b"prof:true,prof_active:false\0";
+// if you change this, also change `LG_PROF_SAMPLE`
+pub static malloc_conf: &[u8] = b"prof:true,prof_active:false,lg_prof_sample:19\0";
 
 pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
     if let Some(ctl) = JemallocProfCtl::get() {
@@ -191,6 +198,10 @@ impl JemallocProfCtl {
         // SAFETY: "prof.active" is documented as being writable and taking a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", false) }?;
+        // SAFETY: "prof.reset" is documented as being writable and taking a size_t:
+        // http://jemalloc.net/jemalloc.3.html#prof.reset
+        unsafe { raw::write(b"prof.reset\0", LG_PROF_SAMPLE) }?;
+
         self.md.start_time = None;
         Ok(())
     }

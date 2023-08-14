@@ -20,7 +20,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_storage_client::client::Update;
 use tokio::sync::OwnedMutexGuard;
-use tracing::warn;
+use tracing::{warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
@@ -143,7 +143,7 @@ impl Coordinator {
     /// Send a message to the Coordinate to start a group commit.
     pub(crate) fn trigger_group_commit(&mut self) {
         self.internal_cmd_tx
-            .send(Message::GroupCommitInitiate)
+            .send(Message::GroupCommitInitiate(Span::current()))
             .expect("sending to self.internal_cmd_tx cannot fail");
         // Avoid excessive `Message::GroupCommitInitiate` by resetting the periodic table
         // advancement. The group commit triggered by the message above will already advance all
@@ -166,14 +166,19 @@ impl Coordinator {
             // what it was.
             let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000.into());
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "group_commit_initiate", async move {
-                tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
-                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::GroupCommitInitiate);
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            task::spawn(
+                || "group_commit_initiate",
+                async move {
+                    tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
+                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+                    let result =
+                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current()));
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
                 }
-            });
+                .instrument(Span::current()),
+            );
         } else {
             self.group_commit_initiate(None).await;
         }
@@ -327,20 +332,24 @@ impl Coordinator {
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "group_commit_apply", async move {
-                if let Ok(response) = append_fut.await {
-                    response.unwrap_or_terminate("cannot fail to apply appends");
-                    if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
-                        timestamp,
-                        responses,
-                        write_lock_guard,
-                    )) {
-                        warn!("Server closed with non-responded writes, {e}");
+            task::spawn(
+                || "group_commit_apply",
+                async move {
+                    if let Ok(response) = append_fut.await {
+                        response.unwrap_or_terminate("cannot fail to apply appends");
+                        if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
+                            timestamp,
+                            responses,
+                            write_lock_guard,
+                        )) {
+                            warn!("Server closed with non-responded writes, {e}");
+                        }
+                    } else {
+                        warn!("Writer terminated with writes in indefinite state");
                     }
-                } else {
-                    warn!("Writer terminated with writes in indefinite state");
                 }
-            });
+                .instrument(Span::current()),
+            );
         }
     }
 

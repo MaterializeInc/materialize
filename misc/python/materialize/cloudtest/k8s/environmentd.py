@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import operator
 import urllib.parse
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from kubernetes.client import (
     V1Container,
@@ -36,11 +37,13 @@ try:
 except ImportError:
     from semver import VersionInfo as Version
 
-from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 
 
 class EnvironmentdService(K8sService):
     def __init__(self) -> None:
+        super().__init__()
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
@@ -60,6 +63,7 @@ class MaterializedAliasService(K8sService):
     """Some testdrive tests expect that Mz is accessible as 'materialized'"""
 
     def __init__(self) -> None:
+        super().__init__()
         self.service = V1Service(
             api_version="v1",
             kind="Service",
@@ -111,11 +115,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             # TODO: these should be the same as in mzcompose
             V1EnvVar(
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value="enable_envelope_upsert_in_subscribe=true",
-            ),
-            V1EnvVar(
-                name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value="enable_disk_cluster_replicas=true",
+                value=(
+                    "enable_envelope_upsert_in_subscribe=true;"
+                    "enable_disk_cluster_replicas=true;"
+                    "enable_with_mutually_recursive=true"
+                ),
             ),
         ]
 
@@ -211,6 +215,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ]
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
+        if self._meets_maximum_version("0.63.99"):
+            args += ["--system-parameter-default=enable_managed_clusters=true"]
+
         container = V1Container(
             name="environmentd",
             image=self.image(
@@ -261,23 +268,21 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ),
         )
 
-    def _meets_minimum_version(self, minimum: str) -> bool:
-        """Determine whether environmentd is at least the `minimum` version.
+    def _meets_version(self, version: str, operator: Callable, default: bool) -> bool:
+        """Determine whether environmentd matches a given version based on a comparison operator"""
 
-        This function matches the function of the same name in MaterializeInc/cloud.
-        """
-
-        # Assume that unstable and development versions, as indicated by a
-        # missing or unparseable tag, are always recent enough to support all
-        # features.
-        #
-        # TODO: learn how to do real feature detection on arbitrary versions.
         if self.tag is None:
-            return True
+            return default
         try:
             tag_version = Version.parse(self.tag.removeprefix("v"))
         except ValueError:
-            return True
+            return default
 
-        minimum_version = Version.parse(minimum)
-        return tag_version >= minimum_version
+        version = Version.parse(version)
+        return bool(operator(tag_version, version))
+
+    def _meets_minimum_version(self, version: str) -> bool:
+        return self._meets_version(version=version, operator=operator.ge, default=True)
+
+    def _meets_maximum_version(self, version: str) -> bool:
+        return self._meets_version(version=version, operator=operator.le, default=False)

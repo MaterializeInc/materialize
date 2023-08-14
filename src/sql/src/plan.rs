@@ -140,6 +140,7 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSetCluster(AlterSetClusterPlan),
     AlterSink(AlterSinkPlan),
     AlterSource(AlterSourcePlan),
     PurifiedAlterSource {
@@ -201,6 +202,9 @@ impl Plan {
             }
             StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
+            StatementKind::AlterSetCluster => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterSetCluster]
+            }
             StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
             StatementKind::AlterSystemReset => {
@@ -343,6 +347,7 @@ impl Plan {
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
+            Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
@@ -817,6 +822,12 @@ pub struct ReadThenWritePlan {
 #[derive(Debug)]
 pub struct AlterNoopPlan {
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterSetClusterPlan {
+    pub id: GlobalId,
+    pub set_cluster: ClusterId,
 }
 
 #[derive(Debug)]

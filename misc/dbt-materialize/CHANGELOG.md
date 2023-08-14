@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* **Breaking change.** Set 255 as the maximum identifier length for relation
+    names, after [#20999](https://github.com/MaterializeInc/materialize/pull/20999)
+    introduced a `max_identifier_length` session variable that enforces this
+    limit in Materialize.
+
 * Support cancelling outstanding queries when pressing Ctrl+C.
 
 ## 1.5.1 - 2023-07-24
@@ -75,7 +80,6 @@
 ## 1.2.1 - 2022-11-01
 
 * Add `cluster` to the connection parameters returned on `dbt debug`.
-
 
 * Disallow the `cluster` option for `view` materializations. In the new
   architecture, only materialized views and indexes are associated with a

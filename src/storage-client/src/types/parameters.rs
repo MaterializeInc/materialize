@@ -46,15 +46,17 @@ pub struct StorageParameters {
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
     /// gRPC client parameters.
     pub grpc_client: GrpcClientParameters,
+    /// Configuration for basic hydration backpressure.
+    pub delay_sources_past_rehydration: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageMaxInflightBytesConfig {
-    /// The default value for the max in-flight bytes
+    /// The default value for the max in-flight bytes.
     pub max_inflight_bytes_default: Option<usize>,
-    /// Specified percentage which will be used to calculate the max in-flight from the
-    /// memory limit of the cluster in use.
-    pub max_inflight_bytes_cluster_size_percent: Option<f64>,
+    /// Fraction of the memory limit of the cluster in use to be used as the
+    /// max in-flight bytes for backpressure.
+    pub max_inflight_bytes_cluster_size_fraction: Option<f64>,
     /// Whether or not the above configs only apply to disk-using dataflows.
     pub disk_only: bool,
 }
@@ -63,7 +65,7 @@ impl Default for StorageMaxInflightBytesConfig {
     fn default() -> Self {
         Self {
             max_inflight_bytes_default: Default::default(),
-            max_inflight_bytes_cluster_size_percent: Default::default(),
+            max_inflight_bytes_cluster_size_fraction: Default::default(),
             disk_only: true,
         }
     }
@@ -73,14 +75,16 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
     fn into_proto(&self) -> ProtoStorageMaxInflightBytesConfig {
         ProtoStorageMaxInflightBytesConfig {
             max_in_flight_bytes_default: self.max_inflight_bytes_default.map(u64::cast_from),
-            max_in_flight_bytes_cluster_size_percent: self.max_inflight_bytes_cluster_size_percent,
+            max_in_flight_bytes_cluster_size_fraction: self
+                .max_inflight_bytes_cluster_size_fraction,
             disk_only: self.disk_only,
         }
     }
     fn from_proto(proto: ProtoStorageMaxInflightBytesConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_inflight_bytes_default: proto.max_in_flight_bytes_default.map(usize::cast_from),
-            max_inflight_bytes_cluster_size_percent: proto.max_in_flight_bytes_cluster_size_percent,
+            max_inflight_bytes_cluster_size_fraction: proto
+                .max_in_flight_bytes_cluster_size_fraction,
             disk_only: proto.disk_only,
         })
     }
@@ -125,6 +129,7 @@ impl StorageParameters {
             upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
             grpc_client,
+            delay_sources_past_rehydration,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -139,6 +144,7 @@ impl StorageParameters {
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.grpc_client.update(grpc_client);
+        self.delay_sources_past_rehydration = delay_sources_past_rehydration;
     }
 }
 
@@ -161,6 +167,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.storage_dataflow_max_inflight_bytes_config.into_proto(),
             ),
             grpc_client: Some(self.grpc_client.into_proto()),
+            storage_dataflow_delay_sources_past_rehydration: self.delay_sources_past_rehydration,
         }
     }
 
@@ -196,6 +203,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             grpc_client: proto
                 .grpc_client
                 .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
+            delay_sources_past_rehydration: proto.storage_dataflow_delay_sources_past_rehydration,
         })
     }
 }

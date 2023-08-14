@@ -366,7 +366,9 @@ impl<'a> PartialOrd for DatumNested<'a> {
     }
 }
 
-// All new tags MUST be added to the end of the enum.
+// Prefer adding new tags to the end of the enum. Certain behavior, like row ordering and EXPLAIN
+// PHYSICAL PLAN, rely on the ordering of this enum. Neither of these are breaking changes, but
+// it's annoying when they change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 enum Tag {

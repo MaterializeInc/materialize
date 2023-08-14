@@ -14,16 +14,6 @@ ALTER SYSTEM SET enable_table_keys = true
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t1 (a int, b text)
 
@@ -168,7 +158,7 @@ Explained Query:
       Mfp
         project=(#0)
         map=(0)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -196,7 +186,7 @@ Explained Query:
             raw=false
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
           ArrangeBy
-            raw=false
+            raw=true
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
             Constant
               - (2, "l2")

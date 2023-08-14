@@ -7,16 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t (
   a int,
@@ -222,7 +212,7 @@ Explained Query:
     ArrangeBy
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      Union
+      Union consolidate_output=true
         Get::Arrangement materialize.public.t
           project=(#0)
           key=#0
@@ -267,7 +257,7 @@ Explained Query:
         ArrangeBy
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=() }
-          Union
+          Union consolidate_output=true
             Get::Arrangement materialize.public.t
               project=(#0)
               key=#0
@@ -300,7 +290,7 @@ Explained Query:
       ArrangeBy
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        Union
+        Union consolidate_output=true
           Join::Linear
             linear_stage[0]
               closure
@@ -312,7 +302,7 @@ Explained Query:
               raw=false
               arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
             ArrangeBy
-              raw=false
+              raw=true
               arrangements[0]={ key=[#0], permutation=id, thinning=() }
               Constant
                 - (5)
@@ -415,7 +405,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, 0)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -510,7 +500,7 @@ materialize.public.hierarchical_global:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -557,7 +547,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -637,7 +627,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -751,7 +741,7 @@ materialize.public.collated_global:
       Mfp
         project=(#0..=#5)
         map=(0, null, null, null, null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -807,7 +797,7 @@ Explained Query:
       Mfp
         project=(#0..=#5)
         map=(0, null, null, null, null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()

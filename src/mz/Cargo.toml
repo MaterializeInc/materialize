@@ -2,15 +2,14 @@
 name = "mz"
 description = "The Materialize command-line interface (CLI)."
 license = "Apache-2.0"
-version = "0.1.0"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-axum = { version = "0.6.7" }
-base64 = "0.13.1"
-clap = { version = "3.2.20", features = [ "derive" ] }
-csv = "1.2.1"
+anyhow = "1.0.66"
+axum = { version = "0.6.20" }
+clap = { version = "3.2.24", features = [ "derive" ] }
 dirs = "5.0.0"
 indicatif = "0.17.2"
 maplit = "1.0.2"

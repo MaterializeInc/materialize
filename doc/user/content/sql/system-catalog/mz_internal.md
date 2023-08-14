@@ -86,13 +86,13 @@ The `mz_cluster_replica_statuses` table contains a row describing the status
 of each process in each cluster replica in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_statuses -->
-| Field                | Type                            | Meaning                                                                      |
-| -------------------- | ------------------------------- | --------                                                                     |
-| `replica_id`         | [`text`]                        | Materialize's unique ID for the cluster replica.                             |
-| `process_id`         | [`uint8`]                       | The ID of the process within the cluster replica.                            |
-| `status`             | [`text`]                        | The status of the cluster replica: `ready` or `not-ready`.                   |
-| `reason`             | [`text`]                        | If the cluster replica is in a `not-ready` state, the reason (if available). |
-| `updated_at`         | [`timestamp with time zone`]    | The time at which the status was last updated.                               |
+| Field        | Type                         | Meaning                                                                                                 |
+|--------------|------------------------------|---------------------------------------------------------------------------------------------------------|
+| `replica_id` | [`text`]                     | Materialize's unique ID for the cluster replica.                                                        |
+| `process_id` | [`uint8`]                    | The ID of the process within the cluster replica.                                                       |
+| `status`     | [`text`]                     | The status of the cluster replica: `ready` or `not-ready`.                                              |
+| `reason`     | [`text`]                     | If the cluster replica is in a `not-ready` state, the reason (if available). For example, `oom-killed`. |
+| `updated_at` | [`timestamp with time zone`] | The time at which the status was last updated.                                                          |
 
 ### `mz_cluster_replica_utilization`
 
@@ -109,22 +109,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation. |
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation. |
 | `disk_percent`   | [`double precision`] | Currently null. Reserved for later use.                    |
-
-### `mz_cluster_replica_frontiers`
-
-The `mz_cluster_replica_frontiers` table describes the frontiers of each [dataflow] in the system.
-[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to this table, but `mz_compute_frontiers`
-exposes the frontiers known to the compute replicas while `mz_cluster_replica_frontiers` contains
-the frontiers the coordinator is aware of.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
-| Field         | Type             | Meaning                                                                                                                                                  |
-| ------------- | ------------     | --------                                                                                                                                                 |
-| `replica_id`  | [`text`]         | The ID of a cluster replica.                                                                                                                             |
-| `export_id `  | [`text`]         | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                                                                                       |
 
 ### `mz_cluster_replica_heartbeats`
 
@@ -153,6 +137,52 @@ each replica, including the times at which it was created and dropped
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+
+### `mz_frontiers`
+
+The `mz_frontiers` table describes the frontiers of each source, sink, table,
+materialized view, index, and subscription in the system, as observed from the
+coordinator.
+
+For objects that are installed on replicas (e.g., materialized views and
+indexes), the `replica_id` field is always non-`NULL`. If an object is installed
+on multiple replicas, it has multiple entries describing the frontier on each
+individual replica. For objects that are not installed on replicas (e.g.,
+tables), the `replica_id` field is `NULL`.
+
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to `mz_frontiers`,
+but `mz_compute_frontiers` reports the frontiers known to the active compute
+replica, while `mz_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_frontiers` contains storage
+objects (sources, sinks, and tables) as well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_frontiers -->
+| Field         | Type             | Meaning                                                                             |
+| ------------- | ------------     | --------                                                                            |
+| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
+| `replica_id`  | [`text`]         | The ID of a cluster replica, or `NULL` if the object is not installed on a replica. |
+| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
+
+### `mz_global_frontiers`
+
+The `mz_global_frontiers` view describes the global frontiers of each source,
+sink, table, materialized view, index, and subscription in the system, as
+observed from the coordinator.
+
+For objects that are installed on replicas (e.g., materialized views and
+indexes), the global frontier is the maximum of the per-replica frontiers.
+Objects that are not installed on replicas only have a single, global frontier.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_global_frontiers -->
+| Field         | Type             | Meaning                                                                       |
+| ------------- | ------------     | --------                                                                      |
+| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription. |
+| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                            |
 
 ### `mz_kafka_sources`
 
@@ -859,6 +889,24 @@ are contained in operators under each dataflow.
 | `records` | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
 | `batches` | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
 
+### `mz_expected_group_size_advice`
+
+The `mz_expected_group_size_advice` view provides advice on opportunities to set the `EXPECTED GROUP SIZE`
+[query hint]. This hint is applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns. The
+maintainance of these query patterns is implemented inside an operator scope, called a region, through a
+hierarchical scheme for either reduction or top-k computation.
+
+<!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
+| Field           | Type        | Meaning                                                                                                             |
+|-----------------|-------------|---------------------------------------------------------------------------------------------------------------------|
+| `dataflow_id`   | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                        |
+| `dataflow_name` | [`text`]    | The internal name of the dataflow hosting the min/max reduction or top-k.                                           |
+| `region_id`     | [`uint8`] | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).               |
+| `region_name`   | [`text`]    | The internal name of the root operator scope for the min/max reduction or top-k.                                    |
+| `levels`        | [`bigint`] | The number of levels in the hierarchical scheme implemented by the region.                                           |
+| `to_cut`        | [`bigint`] | The number of levels that can be eliminated (cut) from the region's hierarchy.                                       |
+| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy.  |
+
 ### `mz_message_counts`
 
 The `mz_message_counts` view describes the messages sent and received over the [dataflow] channels in the system.
@@ -938,6 +986,32 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 | `requested_ns`  | [`uint8`]   | The requested length of the park event in nanoseconds.   |
 | `count`         | [`numeric`] | The (noncumulative) count of park events in this bucket. |
 
+### `mz_object_fully_qualified_names`
+
+The `mz_object_fully_qualified_names` table contains a row for each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
+Field          | Type       | Meaning
+---------------|------------|----------
+`id`           | [`text`]   | Materialize's unique ID for the object.
+`name`         | [`text`]   | The name of the object.
+`object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).
+
+### `mz_object_lifetimes`
+
+The `mz_object_lifetimes` table contains a row for each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
+Field          | Type                         | Meaning
+---------------|------------------------------|----------
+`id`           | [`text`]                     | Materialize's unique ID for the object.
+`object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.
+`occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred.
+
+
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
 
@@ -956,6 +1030,10 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`timestamp with time zone`]: /sql/types/timestamp
 [arrangement]: /get-started/arrangements/#arrangements
 [dataflow]: /get-started/arrangements/#dataflows
+[`MIN`]: /sql/functions/#min
+[`MAX`]: /sql/functions/#max
+[Top K]: /transform-data/patterns/top-k
+[query hint]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->

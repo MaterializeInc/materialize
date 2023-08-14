@@ -9,7 +9,7 @@
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 mz_system
 mz_introspection
 default

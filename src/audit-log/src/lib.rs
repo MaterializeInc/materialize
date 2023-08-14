@@ -310,6 +310,7 @@ pub enum EventDetails {
     DropClusterReplicaV1(DropClusterReplicaV1),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
+    AlterSetClusterV1(AlterSetClusterV1),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
     GrantRoleV2(GrantRoleV2),
@@ -325,6 +326,7 @@ pub enum EventDetails {
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
     SchemaV2(SchemaV2),
+    UpdateItemV1(UpdateItemV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -657,6 +659,41 @@ impl RustType<proto::audit_log_event_v1::AlterSourceSinkV1> for AlterSourceSinkV
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct AlterSetClusterV1 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    pub old_cluster: Option<String>,
+    pub new_cluster: Option<String>,
+}
+
+impl RustType<proto::audit_log_event_v1::AlterSetClusterV1> for AlterSetClusterV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterSetClusterV1 {
+        proto::audit_log_event_v1::AlterSetClusterV1 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+            old_cluster: self.old_cluster.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+            new_cluster: self.new_cluster.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterSetClusterV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("AlterSetClusterV1::name")?,
+            old_cluster: proto.old_cluster.map(|s| s.inner),
+            new_cluster: proto.new_cluster.map(|s| s.inner),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct GrantRoleV1 {
     pub role_id: String,
     pub member_id: String,
@@ -913,6 +950,31 @@ impl RustType<proto::audit_log_event_v1::SchemaV2> for SchemaV2 {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct UpdateItemV1 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+impl RustType<proto::audit_log_event_v1::UpdateItemV1> for UpdateItemV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdateItemV1 {
+        proto::audit_log_event_v1::UpdateItemV1 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdateItemV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdateItemV1 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("UpdateItemV1::name")?,
+        })
+    }
+}
+
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -934,6 +996,7 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::AlterSetClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RevokeRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -943,6 +1006,7 @@ impl EventDetails {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::UpdateOwnerV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::UpdateItemV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
@@ -961,6 +1025,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::CreateSourceSinkV1(details) => CreateSourceSinkV1(details.into_proto()),
             EventDetails::CreateSourceSinkV2(details) => CreateSourceSinkV2(details.into_proto()),
             EventDetails::AlterSourceSinkV1(details) => AlterSourceSinkV1(details.into_proto()),
+            EventDetails::AlterSetClusterV1(details) => AlterSetClusterV1(details.into_proto()),
             EventDetails::GrantRoleV1(details) => GrantRoleV1(details.into_proto()),
             EventDetails::GrantRoleV2(details) => GrantRoleV2(details.into_proto()),
             EventDetails::RevokeRoleV1(details) => RevokeRoleV1(details.into_proto()),
@@ -979,6 +1044,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::IdNameV1(details) => IdNameV1(details.into_proto()),
             EventDetails::SchemaV1(details) => SchemaV1(details.into_proto()),
             EventDetails::SchemaV2(details) => SchemaV2(details.into_proto()),
+            EventDetails::UpdateItemV1(details) => UpdateItemV1(details.into_proto()),
         }
     }
 
@@ -999,6 +1065,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
                 Ok(EventDetails::CreateSourceSinkV2(details.into_rust()?))
             }
             AlterSourceSinkV1(details) => Ok(EventDetails::AlterSourceSinkV1(details.into_rust()?)),
+            AlterSetClusterV1(details) => Ok(EventDetails::AlterSetClusterV1(details.into_rust()?)),
             GrantRoleV1(details) => Ok(EventDetails::GrantRoleV1(details.into_rust()?)),
             GrantRoleV2(details) => Ok(EventDetails::GrantRoleV2(details.into_rust()?)),
             RevokeRoleV1(details) => Ok(EventDetails::RevokeRoleV1(details.into_rust()?)),
@@ -1017,6 +1084,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             IdNameV1(details) => Ok(EventDetails::IdNameV1(details.into_rust()?)),
             SchemaV1(details) => Ok(EventDetails::SchemaV1(details.into_rust()?)),
             SchemaV2(details) => Ok(EventDetails::SchemaV2(details.into_rust()?)),
+            UpdateItemV1(details) => Ok(EventDetails::UpdateItemV1(details.into_rust()?)),
         }
     }
 }

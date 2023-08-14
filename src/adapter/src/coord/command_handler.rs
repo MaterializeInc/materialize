@@ -119,7 +119,8 @@ impl Coordinator {
                     ExecuteContextExtra,
                 );
 
-                let span = tracing::debug_span!(parent: &span, "message_command (execute)");
+                let span = span
+                    .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
                 self.handle_execute(portal_name, ctx).instrument(span).await;
             }
 
@@ -248,6 +249,7 @@ impl Coordinator {
                 action,
                 session,
                 tx,
+                otel_ctx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 // We reach here not through a statement execution, but from the
@@ -272,7 +274,14 @@ impl Coordinator {
                         })
                     }
                 };
+                // TODO: We need a Span that is not none for the otel_ctx to
+                // attach the parent relationship to. If we do the TODO to swap
+                // otel_ctx in `Command::Commit` for a Span, we can downgrade
+                // this to a debug_span.
+                let span = tracing::info_span!("message_command (commit)");
+                span.in_scope(|| otel_ctx.attach_as_parent());
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .instrument(span)
                     .await;
             }
 
@@ -534,6 +543,7 @@ impl Coordinator {
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
+                    | Statement::AlterSetCluster(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)
@@ -570,20 +580,14 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_) => {
-                        // Statements whose tag is trivial (known only from an unexecuted statement) can
-                        // be run in a special single-statement explicit mode. In this mode (`BEGIN;
-                        // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
-                        // delay execution until `COMMIT`.
-                        let mut resp_kind = Plan::generated_from((&stmt).into())
-                            .into_iter()
-                            .map(ExecuteResponse::generated_from)
-                            .flatten()
-                            .map(|r| r.try_into())
-                            .collect::<Vec<Result<ExecuteResponse, _>>>();
                         // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
-                        if !txn.is_implicit() && resp_kind.len() == 1 {
-                            if let Ok(resp) = resp_kind.swap_remove(0) {
+                        if !txn.is_implicit() {
+                            // Statements whose tag is trivial (known only from an unexecuted statement) can
+                            // be run in a special single-statement explicit mode. In this mode (`BEGIN;
+                            // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
+                            // delay execution until `COMMIT`.
+                            if let Ok(resp) = ExecuteResponse::try_from(&stmt) {
                                 if let Err(err) =
                                     txn.add_ops(TransactionOps::SingleStatement { stmt, params })
                                 {
@@ -664,7 +668,7 @@ impl Coordinator {
             ))),
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(ctx.session(), stmt, &params) {
+            _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
                 Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },

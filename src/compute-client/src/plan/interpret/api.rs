@@ -112,7 +112,12 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         threshold_plan: &ThresholdPlan,
     ) -> Self::Domain;
 
-    fn union(&self, ctx: &Context<Self::Domain>, inputs: Vec<Self::Domain>) -> Self::Domain;
+    fn union(
+        &self,
+        ctx: &Context<Self::Domain>,
+        inputs: Vec<Self::Domain>,
+        consolidate_output: bool,
+    ) -> Self::Domain;
 
     fn arrange_by(
         &self,
@@ -398,14 +403,17 @@ where
                     // Interpret the current node.
                     Ok(self.interpret.threshold(&self.ctx, input, threshold_plan))
                 }
-                Union { inputs } => {
+                Union {
+                    inputs,
+                    consolidate_output,
+                } => {
                     // Descend recursively into all children.
                     let inputs = inputs
                         .iter()
                         .map(|input| self.apply_rec(input, rg))
                         .collect::<Result<Vec<_>, _>>()?;
                     // Interpret the current node.
-                    Ok(self.interpret.union(&self.ctx, inputs))
+                    Ok(self.interpret.union(&self.ctx, inputs, *consolidate_output))
                 }
                 ArrangeBy {
                     input,
@@ -692,14 +700,19 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Union { inputs } => {
+                Union {
+                    inputs,
+                    consolidate_output,
+                } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
                         .iter_mut()
                         .map(|input| self.apply_rec(input, rg))
                         .collect::<Result<Vec<_>, _>>()?;
                     // Interpret the current node.
-                    let result = self.interpret.union(&self.ctx, inputs.clone());
+                    let result =
+                        self.interpret
+                            .union(&self.ctx, inputs.clone(), *consolidate_output);
                     // Mutate the current node using the given `action`.
                     (self.action)(expr, &result, &inputs);
                     // Pass the interpretation result up.

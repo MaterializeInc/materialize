@@ -43,4 +43,5 @@ message ProtoRocksDbTuningParameters {
     mz_proto.ProtoDuration retry_max_duration = 9;
     uint32 stats_log_interval_seconds = 10;
     uint32 stats_persist_interval_seconds = 11;
+    optional uint32 point_lookup_block_cache_size_mb = 12;
 }

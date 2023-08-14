@@ -15,6 +15,7 @@
 use inner::return_if_err;
 use mz_controller::clusters::ClusterId;
 use mz_expr::OptimizedMirRelationExpr;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
@@ -34,7 +35,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionStatus};
 use crate::util::{send_immediate_rows, ClientTransmitter};
-use crate::{rbac, ExecuteContext};
+use crate::{rbac, ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -51,6 +52,7 @@ use crate::{rbac, ExecuteContext};
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
+mod alter_set_cluster;
 mod cluster;
 mod inner;
 mod linked_cluster;
@@ -64,7 +66,8 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
-        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        let mut responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
         let session_catalog = self.catalog.for_session(ctx.session());
@@ -321,6 +324,10 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::AlterSetCluster(plan) => {
+                let result = self.sequence_alter_set_cluster(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::AlterItemRename(plan) => {
                 let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
                 ctx.retire(result);
@@ -554,6 +561,7 @@ impl Coordinator {
                     action: EndTransactionAction::Commit,
                     session,
                     tx: sub_tx,
+                    otel_ctx: OpenTelemetryContext::obtain(),
                 }));
                 let Ok(commit_response) = sub_rx.await else {
                     // Coordinator went away.

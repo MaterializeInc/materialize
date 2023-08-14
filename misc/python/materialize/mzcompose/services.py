@@ -52,7 +52,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
+    "enable_with_mutually_recursive": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_dangerous_functions": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
@@ -596,6 +598,7 @@ class Postgres(Service):
             "max_connections=5000",
         ],
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        volumes: List[str] = [],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
@@ -608,6 +611,7 @@ class Postgres(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+                "volumes": volumes,
             }
         )
         super().__init__(name=name, config=config)

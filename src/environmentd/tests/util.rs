@@ -788,7 +788,7 @@ pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     options: BTreeMap<String, String>,
 ) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
-    ws.write_message(Message::Text(
+    ws.send(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
             password: "".into(),
@@ -799,7 +799,7 @@ pub fn auth_with_ws(
     // Wait for initial ready response.
     let mut msgs = Vec::new();
     loop {
-        let resp = ws.read_message()?;
+        let resp = ws.read()?;
         match resp {
             Message::Text(msg) => {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();

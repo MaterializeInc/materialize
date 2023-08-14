@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -33,7 +33,6 @@ use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
 use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
@@ -42,6 +41,7 @@ use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::{CollectionMetrics, ComputeMetrics};
 use crate::render::LinearJoinImpl;
+use crate::server::ResponseSender;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -90,11 +90,12 @@ pub struct ComputeState {
 impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
-        traces: TraceManager,
+        worker_id: usize,
         persist_clients: Arc<PersistClientCache>,
         metrics: ComputeMetrics,
         tracing_handle: Arc<TracingHandle>,
     ) -> Self {
+        let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history());
 
         Self {
@@ -137,13 +138,13 @@ impl ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub struct ActiveComputeState<'a, A: Allocate> {
+pub(crate) struct ActiveComputeState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
-    pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
+    pub response_tx: &'a mut ResponseSender,
 }
 
 /// A token that keeps a sink alive.
@@ -171,13 +172,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             CreateInstance(logging) => self.handle_create_instance(logging),
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(params),
-            CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
-            AllowCompaction(list) => self.handle_allow_compaction(list),
+            CreateDataflow(dataflow) => self.handle_create_dataflow(dataflow),
+            AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
                 peek.otel_ctx.attach_as_parent();
                 self.handle_peek(peek)
             }
-            CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
+            CancelPeek { uuid } => self.handle_cancel_peek(uuid),
         }
     }
 
@@ -214,80 +215,73 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         tracing.apply(self.compute_state.tracing_handle.as_ref());
     }
 
-    fn handle_create_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDescription<Plan, CollectionMetadata>>,
-    ) {
-        for dataflow in dataflows.into_iter() {
-            // Collect the exported object identifiers, paired with their associated "collection" identifier.
-            // The latter is used to extract dependency information, which is in terms of collections ids.
-            let sink_ids = dataflow
-                .sink_exports
-                .iter()
-                .map(|(sink_id, sink)| (*sink_id, sink.from));
-            let index_ids = dataflow
-                .index_exports
-                .iter()
-                .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
-            let exported_ids = index_ids.chain(sink_ids);
+    fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {
+        // Collect the exported object identifiers, paired with their associated "collection" identifier.
+        // The latter is used to extract dependency information, which is in terms of collections ids.
+        let sink_ids = dataflow
+            .sink_exports
+            .iter()
+            .map(|(sink_id, sink)| (*sink_id, sink.from));
+        let index_ids = dataflow
+            .index_exports
+            .iter()
+            .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
+        let exported_ids = index_ids.chain(sink_ids);
 
-            let dataflow_index = self.timely_worker.next_dataflow_index();
+        let dataflow_index = self.timely_worker.next_dataflow_index();
 
-            // Initialize compute and logging state for each object.
-            let worker_id = self.timely_worker.index();
-            for (object_id, collection_id) in exported_ids {
-                let metrics = self
-                    .compute_state
-                    .metrics
-                    .for_collection(object_id, worker_id);
-                let mut collection = CollectionState::new(metrics);
+        // Initialize compute and logging state for each object.
+        let worker_id = self.timely_worker.index();
+        for (object_id, collection_id) in exported_ids {
+            let metrics = self
+                .compute_state
+                .metrics
+                .for_collection(object_id, worker_id);
+            let mut collection = CollectionState::new(metrics);
 
-                let as_of = dataflow.as_of.clone().unwrap();
-                collection.as_of = as_of.clone();
-                collection.set_reported_frontier(ReportedFrontier::NotReported { lower: as_of });
+            let as_of = dataflow.as_of.clone().unwrap();
+            collection.as_of = as_of.clone();
+            collection.set_reported_frontier(ReportedFrontier::NotReported { lower: as_of });
 
-                let existing = self.compute_state.collections.insert(object_id, collection);
-                if existing.is_some() {
-                    error!(
-                        id = ?object_id,
-                        "existing collection for newly created dataflow",
-                    );
-                }
-
-                // Log dataflow construction, frontier construction, and any dependencies.
-                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Export {
-                        id: object_id,
-                        dataflow_index,
-                    });
-                    logger.log(ComputeEvent::Frontier {
-                        id: object_id,
-                        time: timely::progress::Timestamp::minimum(),
-                        diff: 1,
-                    });
-                    for import_id in dataflow.depends_on_imports(collection_id) {
-                        logger.log(ComputeEvent::ExportDependency {
-                            export_id: object_id,
-                            import_id,
-                        })
-                    }
-                }
+            let existing = self.compute_state.collections.insert(object_id, collection);
+            if existing.is_some() {
+                error!(
+                    id = ?object_id,
+                    "existing collection for newly created dataflow",
+                );
             }
 
-            crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
+            // Log dataflow construction, frontier construction, and any dependencies.
+            if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+                logger.log(ComputeEvent::Export {
+                    id: object_id,
+                    dataflow_index,
+                });
+                logger.log(ComputeEvent::Frontier {
+                    id: object_id,
+                    time: timely::progress::Timestamp::minimum(),
+                    diff: 1,
+                });
+                for import_id in dataflow.depends_on_imports(collection_id) {
+                    logger.log(ComputeEvent::ExportDependency {
+                        export_id: object_id,
+                        import_id,
+                    })
+                }
+            }
         }
+
+        crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
     }
 
-    fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
-        for (id, frontier) in list {
-            if frontier.is_empty() {
-                // Indicates that we may drop `id`, as there are no more valid times to read.
-                self.drop_collection(id);
-            } else {
-                self.compute_state
-                    .traces
-                    .allow_compaction(id, frontier.borrow());
-            }
+    fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
+        if frontier.is_empty() {
+            // Indicates that we may drop `id`, as there are no more valid times to read.
+            self.drop_collection(id);
+        } else {
+            self.compute_state
+                .traces
+                .allow_compaction(id, frontier.borrow());
         }
     }
 
@@ -332,14 +326,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_cancel_peeks(&mut self, uuids: BTreeSet<uuid::Uuid>) {
-        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
-        for (uuid, peek) in pending_peeks {
-            if uuids.contains(&uuid) {
-                self.send_peek_response(peek, PeekResponse::Canceled);
-            } else {
-                self.compute_state.pending_peeks.insert(uuid, peek);
-            }
+    fn handle_cancel_peek(&mut self, uuid: Uuid) {
+        if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
+            self.send_peek_response(peek, PeekResponse::Canceled);
         }
     }
 
@@ -366,7 +355,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         //  * The collection is a subscribe, in which case we will emit a
         //    `SubscribeResponse::Dropped` independently.
         //  * The collection has already advanced to the empty frontier, in which case
-        //    the final `FrontierUppers` response already serves the purpose of reporting
+        //    the final `FrontierUpper` response already serves the purpose of reporting
         //    the end of the dataflow.
         if !collection.is_subscribe() && !collection.reported_frontier().is_empty() {
             self.compute_state.dropped_collections.push(id);
@@ -486,8 +475,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             collection.set_reported_frontier(new_reported_frontier);
         }
 
-        if !new_uppers.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
+        for (id, upper) in new_uppers {
+            self.send_compute_response(ComputeResponse::FrontierUpper { id, upper });
         }
     }
 
@@ -499,18 +488,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         // advanced to the empty frontier by announcing that it has advanced to the empty
         // frontier. We should introduce a new compute response variant that has the right
         // semantics.
-        let mut new_uppers = Vec::with_capacity(dropped_collections.len());
         for id in dropped_collections {
             // Sanity check: A collection that was dropped should not exist.
             assert!(
                 !self.compute_state.collection_exists(id),
                 "tried to report a dropped collection that still exists: {id}"
             );
-            new_uppers.push((id, Antichain::new()));
-        }
-
-        if !new_uppers.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
+            self.send_compute_response(ComputeResponse::FrontierUpper {
+                id,
+                upper: Antichain::new(),
+            });
         }
     }
 

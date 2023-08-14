@@ -9,24 +9,27 @@
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::{
-    raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
-};
+use mz_ore::metrics::{raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, MetricsRegistry, UIntGauge};
 use mz_repr::GlobalId;
-use prometheus::core::AtomicF64;
+use prometheus::core::{AtomicF64, GenericCounter};
 
+/// Metrics exposed by compute replicas.
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
     // command history
-    pub history_command_count: raw::UIntGaugeVec,
-    pub history_dataflow_count: UIntGauge,
+    history_command_count: raw::UIntGaugeVec,
+    history_dataflow_count: UIntGauge,
 
     // reconciliation
-    pub reconciliation_reused_dataflows: IntCounter,
-    pub reconciliation_replaced_dataflows: raw::IntCounterVec,
+    reconciliation_reused_dataflows_count_total: raw::IntCounterVec,
+    reconciliation_replaced_dataflows_count_total: raw::IntCounterVec,
 
     // dataflow state
-    pub dataflow_initial_output_duration_seconds: GaugeVec,
+    dataflow_initial_output_duration_seconds: GaugeVec,
+
+    // arrangements
+    arrangement_maintenance_seconds_total: raw::CounterVec,
+    arrangement_maintenance_active_info: raw::UIntGaugeVec,
 }
 
 impl ComputeMetrics {
@@ -41,19 +44,30 @@ impl ComputeMetrics {
                 name: "mz_compute_replica_history_dataflow_count",
                 help: "The number of dataflows in the replica's command history.",
             )),
-            reconciliation_reused_dataflows: registry.register(metric!(
-                name: "mz_compute_reconciliation_reused_dataflows",
-                help: "The number of dataflows that were reused during compute reconciliation.",
+            reconciliation_reused_dataflows_count_total: registry.register(metric!(
+                name: "mz_compute_reconciliation_reused_dataflows_count_total",
+                help: "The total number of dataflows that were reused during compute reconciliation.",
+                var_labels: ["worker_id"],
             )),
-            reconciliation_replaced_dataflows: registry.register(metric!(
-                name: "mz_compute_reconciliation_replaced_dataflows",
-                help: "The number of dataflows that were replaced during compute reconciliation.",
-                var_labels: ["reason"],
+            reconciliation_replaced_dataflows_count_total: registry.register(metric!(
+                name: "mz_compute_reconciliation_replaced_dataflows_count_total",
+                help: "The total number of dataflows that were replaced during compute reconciliation.",
+                var_labels: ["worker_id", "reason"],
             )),
             dataflow_initial_output_duration_seconds: registry.register(metric!(
                 name: "mz_dataflow_initial_output_duration_seconds",
                 help: "The time from dataflow installation up to when the first output was produced.",
                 var_labels: ["worker_id", "collection_id"],
+            )),
+            arrangement_maintenance_seconds_total: registry.register(metric!(
+                name: "mz_arrangement_maintenance_seconds_total",
+                help: "The total time spent maintaining arrangements.",
+                var_labels: ["worker_id"],
+            )),
+            arrangement_maintenance_active_info: registry.register(metric!(
+                name: "mz_arrangement_maintenance_active_info",
+                help: "Whether maintenance is currently occuring.",
+                var_labels: ["worker_id"],
             )),
         }
     }
@@ -69,6 +83,21 @@ impl ComputeMetrics {
         HistoryMetrics {
             command_counts,
             dataflow_count,
+        }
+    }
+
+    pub fn for_traces(&self, worker_id: usize) -> TraceMetrics {
+        let worker = worker_id.to_string();
+        let maintenance_seconds_total = self
+            .arrangement_maintenance_seconds_total
+            .with_label_values(&[&worker]);
+        let maintenance_active_info = self
+            .arrangement_maintenance_active_info
+            .with_label_values(&[&worker]);
+
+        TraceMetrics {
+            maintenance_seconds_total,
+            maintenance_active_info,
         }
     }
 
@@ -101,24 +130,29 @@ impl ComputeMetrics {
     /// recorded as unsuccessful, with a reason based on the first property that does not hold.
     pub fn record_dataflow_reconciliation(
         &self,
+        worker_id: usize,
         compatible: bool,
         uncompacted: bool,
         subscribe_free: bool,
     ) {
+        let worker = worker_id.to_string();
+
         if !compatible {
-            self.reconciliation_replaced_dataflows
-                .with_label_values(&["incompatible"])
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "incompatible"])
                 .inc();
         } else if !uncompacted {
-            self.reconciliation_replaced_dataflows
-                .with_label_values(&["compacted"])
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "compacted"])
                 .inc();
         } else if !subscribe_free {
-            self.reconciliation_replaced_dataflows
-                .with_label_values(&["subscribe"])
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "subscribe"])
                 .inc();
         } else {
-            self.reconciliation_reused_dataflows.inc();
+            self.reconciliation_reused_dataflows_count_total
+                .with_label_values(&[&worker])
+                .inc();
         }
     }
 }
@@ -126,4 +160,15 @@ impl ComputeMetrics {
 /// Metrics maintained per compute collection.
 pub struct CollectionMetrics {
     pub initial_output_duration_seconds: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
+}
+
+/// Metrics maintained by the trace manager.
+pub struct TraceMetrics {
+    pub maintenance_seconds_total: GenericCounter<AtomicF64>,
+    /// 1 if this worker is currently doing maintenance.
+    ///
+    /// If maintenance turns out to take a very long time, this will allow us
+    /// to gain a sense that Materialize is stuck on maintenance before the
+    /// maintenance completes
+    pub maintenance_active_info: UIntGauge,
 }

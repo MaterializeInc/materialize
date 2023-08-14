@@ -33,6 +33,8 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::{NewReplicaId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -120,6 +122,7 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
+    Frontiers,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -278,14 +281,15 @@ pub trait StorageController: Debug + Send {
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
-
-    /// Disconnects the storage instance from the specified replica.
-    fn drop_replica(
+    fn connect_replica(
         &mut self,
         instance_id: StorageInstanceId,
-        replica_id: mz_cluster_client::ReplicaId,
+        replica_id: ReplicaId,
+        location: ClusterReplicaLocation,
     );
+
+    /// Disconnects the storage instance from the specified replica.
+    fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
 
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
@@ -511,6 +515,17 @@ pub trait StorageController: Debug + Send {
     /// call from the single user into this method.
     async fn inspect_persist_state(&self, id: GlobalId)
         -> Result<serde_json::Value, anyhow::Error>;
+
+    /// Records the current frontiers of all known storage objects.
+    ///
+    /// The provided `frontiers` are merged with the frontiers known to the
+    /// storage controller. If `frontiers` contains entries with object IDs
+    /// that are known to storage controller, the contents of `frontiers` take
+    /// precedence.
+    async fn record_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    );
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -832,6 +847,8 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
+    /// For each storage instance the ID of its replica, if any.
+    replicas: BTreeMap<StorageInstanceId, ReplicaId>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
@@ -861,6 +878,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
     /// installed on a `clusterd` this can likely be refactored away.
     internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+    /// Frontiers that have been recorded in the `Frontiers` collection, kept to be able to retract
+    /// old rows.
+    recorded_frontiers: BTreeMap<(GlobalId, Option<ReplicaId>), Antichain<T>>,
 }
 
 #[derive(Debug)]
@@ -1101,6 +1121,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             clients: BTreeMap::new(),
+            replicas: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
         }
@@ -1110,7 +1131,13 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     MetadataExportFetcher: MetadataExport<T>,
@@ -1179,26 +1206,31 @@ where
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation) {
-        let client = self
-            .state
-            .clients
-            .get_mut(&id)
-            .unwrap_or_else(|| panic!("instance {id} does not exist"));
-        client.connect(location);
-    }
-
-    fn drop_replica(
+    fn connect_replica(
         &mut self,
         instance_id: StorageInstanceId,
-        _replica_id: mz_cluster_client::ReplicaId,
+        replica_id: ReplicaId,
+        location: ClusterReplicaLocation,
     ) {
         let client = self
             .state
             .clients
             .get_mut(&instance_id)
             .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
+        client.connect(location);
+
+        self.state.replicas.insert(instance_id, replica_id);
+    }
+
+    fn drop_replica(&mut self, instance_id: StorageInstanceId, _replica_id: ReplicaId) {
+        let client = self
+            .state
+            .clients
+            .get_mut(&instance_id)
+            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
         client.reset();
+
+        self.state.replicas.remove(&instance_id);
     }
 
     // Add new migrations below and precede them with a short summary of the
@@ -1502,6 +1534,10 @@ where
                     match i {
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
+                        }
+                        IntrospectionType::Frontiers => {
+                            // Set the collection to empty.
+                            self.reconcile_managed_collection(id, vec![]).await;
                         }
                         IntrospectionType::StorageSourceStatistics => {
                             // Set the collection to empty.
@@ -2113,9 +2149,14 @@ where
 
                 // Make sure we also send `AllowCompaction` commands for sinks,
                 // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) = exports_net
-                    .entry(key)
-                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), export.cluster_id()));
+                let (changes, frontier, _cluster_id) =
+                    exports_net.entry(key).or_insert_with(|| {
+                        (
+                            ChangeBatch::new(),
+                            Antichain::new(),
+                            Some(export.cluster_id()),
+                        )
+                    });
 
                 changes.extend(update.drain());
                 *frontier = export.read_capability.clone();
@@ -2396,6 +2437,82 @@ where
         let json_state = serde_json::to_value(shard_state)?;
         Ok(json_state)
     }
+
+    async fn record_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    ) {
+        // Make `replica_id` optional, to account for storage objects that are not installed on
+        // replicas.
+        let mut frontiers = BTreeMap::new();
+        let mut external_ids = HashSet::with_capacity(frontiers.len());
+        for ((object_id, replica_id), frontier) in external_frontiers {
+            frontiers.insert((object_id, Some(replica_id)), frontier);
+            external_ids.insert(object_id);
+        }
+
+        // Enrich `frontiers` with storage frontiers.
+        // Make sure to not add frontiers for objects already present in `frontiers`
+        for (object_id, collection) in self.active_collections() {
+            if !external_ids.contains(&object_id) {
+                let replica_id = collection
+                    .cluster_id()
+                    .and_then(|c| self.state.replicas.get(&c))
+                    .copied();
+                let frontier = collection.write_frontier.clone();
+                frontiers.insert((object_id, replica_id), frontier);
+            }
+        }
+        for (object_id, export) in &self.state.exports {
+            if !external_ids.contains(object_id) {
+                let cluster_id = export.cluster_id();
+                let replica_id = self.state.replicas.get(&cluster_id).copied();
+                let frontier = export.write_frontier.clone();
+                frontiers.insert((*object_id, replica_id), frontier);
+            }
+        }
+
+        let mut updates = Vec::new();
+        let mut push_update = |(object_id, replica_id): (GlobalId, Option<ReplicaId>),
+                               frontier: Antichain<Self::Timestamp>,
+                               diff: Diff| {
+            let time_datum = match frontier.into_option() {
+                Some(ts) => Datum::MzTimestamp(ts.into()),
+                None => return, // don't record empty frontiers
+            };
+            let object_id = object_id.to_string();
+            let object_datum = Datum::String(&object_id);
+            let replica_id = replica_id.map(|id| {
+                // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+                NewReplicaId::User(id).to_string()
+            });
+            let replica_datum = replica_id.as_deref().map_or(Datum::Null, Datum::String);
+
+            let row = Row::pack_slice(&[object_datum, replica_datum, time_datum]);
+            updates.push((row, diff));
+        };
+
+        let mut old_frontiers = std::mem::replace(&mut self.recorded_frontiers, frontiers);
+        for (&key, new_frontier) in &self.recorded_frontiers {
+            match old_frontiers.remove(&key) {
+                Some(old_frontier) if &old_frontier != new_frontier => {
+                    push_update(key, new_frontier.clone(), 1);
+                    push_update(key, old_frontier, -1);
+                }
+                Some(_) => (),
+                None => push_update(key, new_frontier.clone(), 1),
+            }
+        }
+        for (key, old_frontier) in old_frontiers {
+            push_update(key, old_frontier, -1);
+        }
+
+        self.append_to_managed_collection(
+            self.state.introspection_ids[&IntrospectionType::Frontiers],
+            updates,
+        )
+        .await;
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2471,6 +2588,7 @@ where
             persist_location,
             persist: persist_clients,
             metrics: StorageControllerMetrics::new(metrics_registry),
+            recorded_frontiers: BTreeMap::new(),
         }
     }
 
@@ -2491,6 +2609,15 @@ where
             self.export(id)?;
         }
         Ok(())
+    }
+
+    /// Iterate over collections that have not been dropped.
+    fn active_collections(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
+        self.state
+            .collections
+            .iter()
+            .filter(|(_id, c)| !c.is_dropped())
+            .map(|(id, c)| (*id, c))
     }
 
     /// Return the since frontier at which we can read from all the given
@@ -2992,13 +3119,13 @@ where
                         .collection::<ProtoShardId, ()>(command_wals::SHARD_FINALIZATION.name())
                         .await
                         .expect("named collection must exist");
-                    tx.peek(collection).await
+                    tx.peek_one(collection).await
                 })
             })
             .await
             .expect("stash operation succeeds")
             .into_iter()
-            .map(|(shard, _, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
+            .map(|(shard, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
 
         // Open a persist client to delete unused shards.
         let persist_client = self
@@ -3354,6 +3481,11 @@ impl<T: Timestamp> CollectionState<T> {
             | DataSource::Progress => None,
         }
     }
+
+    /// Returns whether the collection was dropped.
+    fn is_dropped(&self) -> bool {
+        self.read_capabilities.is_empty()
+    }
 }
 
 /// State maintained about individual exports.
@@ -3394,9 +3526,9 @@ impl<T: Timestamp> ExportState<T> {
         }
     }
 
-    /// Returns the cluster to which the export is bound, if applicable.
-    fn cluster_id(&self) -> Option<StorageInstanceId> {
-        Some(self.description.instance_id)
+    /// Returns the cluster to which the export is bound.
+    fn cluster_id(&self) -> StorageInstanceId {
+        self.description.instance_id
     }
 }
 

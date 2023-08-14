@@ -98,7 +98,10 @@ use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_ore::task::{self, RuntimeExt};
+use mz_ore::{
+    assert_contains,
+    task::{self, RuntimeExt},
+};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
 use rand::RngCore;
@@ -380,10 +383,10 @@ fn test_http_sql() {
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
             let fixtimestamp = tc.args.get("fixtimestamp").is_some();
-            ws.write_message(msg).unwrap();
+            ws.send(msg).unwrap();
             let mut responses = String::new();
             loop {
-                let resp = ws.read_message().unwrap();
+                let resp = ws.read().unwrap();
                 match resp {
                     Message::Text(mut msg) => {
                         if fixtimestamp {
@@ -870,27 +873,51 @@ fn test_storage_usage_doesnt_update_between_restarts() {
     }
 }
 
+// Test that all rows for a single collection use the same timestamp.
 #[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
-    let config =
-        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
+    let storage_interval_s = 2;
+    let config = util::Config::default()
+        .with_storage_usage_collection_interval(Duration::from_secs(storage_interval_s));
     let server = util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Retry because it may take some time for the initial snapshot to be taken.
-    Retry::default().max_duration(Duration::from_secs(10)).retry(|_| {
+    let rows = Retry::default().max_duration(Duration::from_secs(10)).retry(|_| {
         let rows = client
             .query(
-                "SELECT collection_timestamp, SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage GROUP BY collection_timestamp ORDER BY collection_timestamp;",
+                "SELECT EXTRACT(EPOCH FROM collection_timestamp)::integer, SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage GROUP BY collection_timestamp ORDER BY collection_timestamp;",
                 &[],
             )
             .map_err(|e| e.to_string()).unwrap();
-        if rows.len() == 1 {
-            Ok(())
+
+        if rows.is_empty() {
+            Err("expected some timestamp, instead found None".to_string())
         } else {
-            Err(format!("expected a single timestamp, instead found {}", rows.len()))
+            Ok(rows)
         }
     }).unwrap();
+
+    // If there are multiple timestamps, make sure they are at least storage interval (2 seconds) apart.
+    let timestamps: Vec<_> = rows
+        .into_iter()
+        .map(|row| row.get::<_, i32>(0))
+        .map(|ts| u64::try_from(ts).unwrap())
+        .collect();
+    let mut prev = None;
+
+    for timestamp in timestamps {
+        match prev {
+            None => {
+                prev = Some(timestamp);
+            }
+            Some(prev_timestamp) => {
+                assert!(timestamp - prev_timestamp >= storage_interval_s,
+                            "found storage collection timestamps, {prev_timestamp} and {timestamp}, that are less than {storage_interval_s} s apart");
+                prev = Some(timestamp);
+            }
+        }
+    }
 }
 
 #[mz_ore::test]
@@ -1056,10 +1083,10 @@ fn test_max_request_size() {
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string())).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
-        let err = ws.read_message().unwrap_err();
+        let err = ws.read().unwrap_err();
         assert!(matches!(
             err,
             Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
@@ -1123,9 +1150,9 @@ fn test_max_statement_batch_size() {
         util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string())).unwrap();
 
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
         match msg {
@@ -1177,10 +1204,10 @@ fn test_ws_passes_options() {
     // set from the options map we passed with the auth.
     let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
@@ -1219,7 +1246,7 @@ fn test_ws_notifies_for_bad_options() {
     util::auth_with_ws(&mut ws, options).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
         serde_json::from_str(&msg).unwrap()
     };
@@ -1405,24 +1432,24 @@ fn test_max_connections_on_all_interfaces() {
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     // The specific error isn't forwarded to the client, the connection is just closed.
-    match ws.read_message() {
+    match ws.read() {
         Ok(Message::Text(msg)) => {
             assert_eq!(
                 msg,
                 r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#
             );
             assert_eq!(
-                ws.read_message().unwrap(),
+                ws.read().unwrap(),
                 Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
             );
             assert_eq!(
-                ws.read_message().unwrap(),
+                ws.read().unwrap(),
                 Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
             );
-            tracing::info!("data: {:?}", ws.read_message().unwrap());
+            tracing::info!("data: {:?}", ws.read().unwrap());
         }
         Ok(msg) => panic!("unexpected msg: {msg:?}"),
         Err(e) => panic!("{e}"),
@@ -1694,10 +1721,10 @@ fn test_cancel_ws() {
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.write_message(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
 
     loop {
-        let msg = ws.read_message().unwrap();
+        let msg = ws.read().unwrap();
         if let Ok(msg) = msg.into_text() {
             if msg.contains("query canceled") {
                 break;
@@ -1972,10 +1999,10 @@ fn test_github_20262() {
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
     util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-    ws.write_message(Message::Text(subscribe)).unwrap();
+    ws.send(Message::Text(subscribe)).unwrap();
     cancel();
-    ws.write_message(Message::Text(commit)).unwrap();
-    ws.write_message(Message::Text(select)).unwrap();
+    ws.send(Message::Text(commit)).unwrap();
+    ws.send(Message::Text(select)).unwrap();
 
     let mut expect = VecDeque::from([
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
@@ -1994,11 +2021,69 @@ fn test_github_20262() {
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
     ]);
     while !expect.is_empty() {
-        if let Message::Text(text) = ws.read_message().unwrap() {
+        if let Message::Text(text) = ws.read().unwrap() {
             let next = expect.pop_front().unwrap();
             assert_eq!(text, next);
         }
     }
+}
+
+// Test that the server properly handles cancellation requests of read-then-write queries.
+// See #20404.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_read_then_write() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
+        .unwrap();
+
+    // Lots of races here, so try this whole thing in a loop.
+    Retry::default()
+        .clamp_backoff(Duration::ZERO)
+        .retry(|_state| {
+            let mut client1 = server.connect(postgres::NoTls).unwrap();
+            let mut client2 = server.connect(postgres::NoTls).unwrap();
+            let cancel_token = client2.cancel_token();
+
+            client1.batch_execute("DELETE FROM foo").unwrap();
+            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
+            client1
+                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
+                .unwrap();
+
+            let handle1 = thread::spawn(move || {
+                let err =  client1
+                    .batch_execute("insert into foo select a, case when mz_internal.mz_sleep(ts) > 0 then 0 end as ts from foo")
+                    .unwrap_err();
+                assert_contains!(
+                    err.to_string(),
+                    "statement timeout"
+                );
+                client1
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            let handle2 = thread::spawn(move || {
+                client2
+                .batch_execute("insert into foo values ('blah', 1);")
+                .unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            cancel_token.cancel_query(postgres::NoTls)?;
+            let mut client1 = handle1.join().unwrap();
+            handle2.join().unwrap();
+            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
+            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
+            if rows !=1 {
+                anyhow::bail!("unexpected row count: {rows}");
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .unwrap();
 }
 
 #[mz_ore::test]
@@ -2080,6 +2165,7 @@ fn webhook_concurrent_actions() {
     }
 
     // Create a webhook source.
+    let src_name = "webhook_json";
     client
         .execute(
             "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
@@ -2088,7 +2174,7 @@ fn webhook_concurrent_actions() {
         .expect("failed to create cluster");
     client
         .execute(
-            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON",
+            &format!("CREATE SOURCE {src_name} IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON"),
             &[],
         )
         .expect("failed to create source");
@@ -2103,12 +2189,12 @@ fn webhook_concurrent_actions() {
     // Flag that lets us shutdown our threads.
     let keep_sending = Arc::new(AtomicBool::new(true));
     // Track how many requests were resolved before we dropped the collection.
-    let expected_success = Arc::new(AtomicUsize::new(0));
+    let num_requests_before_drop = Arc::new(AtomicUsize::new(0));
 
     // Spin up a thread that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
     let runtime_handle = Arc::clone(&server.runtime);
-    let expected_success_ = Arc::clone(&expected_success);
+    let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
     let addr = server.inner.http_local_addr();
 
     let poster = std::thread::spawn(move || {
@@ -2125,7 +2211,7 @@ fn webhook_concurrent_actions() {
             );
 
             let http_client_ = http_client.clone();
-            let expected_success__ = Arc::clone(&expected_success_);
+            let num_requests_before_drop__ = Arc::clone(&num_requests_before_drop_);
             let handle =
                 runtime_handle.spawn_named(|| "webhook_concurrent_actions-appender", async move {
                     // Create an event.
@@ -2142,7 +2228,7 @@ fn webhook_concurrent_actions() {
                         .send()
                         .await
                         .expect("failed to POST event");
-                    expected_success__.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    num_requests_before_drop__.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                     resp
                 });
@@ -2162,10 +2248,11 @@ fn webhook_concurrent_actions() {
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     // We should see at least this many successes.
-    let expected_success = expected_success.load(std::sync::atomic::Ordering::Relaxed);
+    let num_requests_before_drop =
+        num_requests_before_drop.load(std::sync::atomic::Ordering::Relaxed);
     // Drop the source
     client
-        .execute("DROP SOURCE webhook_json;", &[])
+        .execute(&format!("DROP SOURCE {src_name};"), &[])
         .expect("failed to drop source");
 
     // Keep sending for a bit.
@@ -2179,21 +2266,40 @@ fn webhook_concurrent_actions() {
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .expect("no join failures")
-        .into_iter()
-        .map(|r| r.status());
+        .into_iter();
 
-    // We should see at least "expected_success" number of successes, because this was the total
-    // count before we dropped the source.
-    for _ in 0..expected_success {
-        let status = results.next().expect("element");
-        // Note it's possible we get rate limited as we append so we allow that here.
+    for _ in 0..num_requests_before_drop {
+        let response = results.next().expect("element");
+        let status = response.status();
+
+        // We expect the following response codes:
+        //
+        // 1. 200 - Successfully append data.
+        // 2. 429 - Rate limited.
+        // 3. 404 - Collection not found. Due to the artificial latency we add to appending, we
+        //    could send a request, it gets queued, we drop the source, pull all requests from the
+        //    queue, find our source is missing. This should cause a 404 Not Found, not a 500.
+        //
         assert!(
-            status.is_success() || status == StatusCode::TOO_MANY_REQUESTS,
-            "status: {status:?}"
+            status.is_success()
+                || status == StatusCode::TOO_MANY_REQUESTS
+                || status == StatusCode::NOT_FOUND,
+            "response: {response:?}"
         )
     }
-    // We should have seen at least 100 successes.
-    assert!(expected_success > 100);
+    // We should have seen at least 100 requests before dropping the source.
+    assert!(num_requests_before_drop > 100);
+
+    // Make sure the source got dropped.
+    //
+    // Note: this doubles as a check to make sure nothing internally panicked.
+    let sources: Vec<String> = client
+        .query("SELECT name FROM mz_sources", &[])
+        .expect("success")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(!sources.iter().any(|name| name == src_name));
 
     // Best effort cleanup.
     let _ = client.execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[]);
@@ -2206,7 +2312,11 @@ fn webhook_concurrency_limit() {
     let config = util::Config::default().with_concurrent_webhook_req_count(concurrency_limit);
     let server = util::start_server(config).unwrap();
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_webhook_sources", "enable_unstable_dependencies"]);
+    server.enable_feature_flags(&[
+        "enable_webhook_sources",
+        "enable_unstable_dependencies",
+        "enable_dangerous_functions",
+    ]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2271,4 +2381,54 @@ fn webhook_concurrency_limit() {
     // We send 5 more requests than our limit, but we assert only at least 3 get
     // rate limited to reduce test flakiness.
     assert!(rate_limited >= 3);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn webhook_too_large_request() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_bytes",
+        server.inner.http_local_addr(),
+    );
+
+    // Send an event with a body larger that is exactly our max size.
+    let two_mb = usize::cast_from(bytesize::mb(2u64));
+    let body = vec![42u8; two_mb];
+    let resp = http_client
+        .post(&webhook_url)
+        .body(body)
+        .send()
+        .expect("failed to POST event");
+    assert!(resp.status().is_success());
+
+    // Send an event that is one larger than our max size.
+    let body = vec![42u8; two_mb + 1];
+    let resp = http_client
+        .post(&webhook_url)
+        .body(body)
+        .send()
+        .expect("failed to POST event");
+
+    // Note: If this changes then we need to update our docs.
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

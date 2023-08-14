@@ -53,6 +53,7 @@ impl SourceRender for TestScriptSourceConnection {
         config: RawSourceCreationConfig,
         _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<
             G,
@@ -72,6 +73,7 @@ impl SourceRender for TestScriptSourceConnection {
 
         let button = builder.build(move |caps| async move {
             let mut cap = caps.into_element();
+
             let commands: Vec<ScriptCommand> =
                 serde_json::from_str(&self.desc_json).expect("Invalid command description");
 

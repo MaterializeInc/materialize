@@ -371,12 +371,10 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
             SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
-                az_user_specified,
                 disk,
             } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
                 size: size.to_string(),
-                availability_zone: availability_zone.to_string(),
-                az_user_specified: *az_user_specified,
+                availability_zone: availability_zone.clone(),
                 disk: *disk,
             }),
         }
@@ -397,7 +395,6 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
                 Ok(SerializedReplicaLocation::Managed {
                     size: location.size,
                     availability_zone: location.availability_zone,
-                    az_user_specified: location.az_user_specified,
                     disk: location.disk,
                 })
             }

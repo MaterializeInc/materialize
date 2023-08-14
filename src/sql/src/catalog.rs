@@ -150,6 +150,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Gets all schemas.
     fn get_schemas(&self) -> Vec<&dyn CatalogSchema>;
 
+    /// Gets the mz_internal schema id.
+    fn get_mz_internal_schema_id(&self) -> &SchemaId;
+
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema(&self, schema: &str) -> bool;
 
@@ -616,6 +619,9 @@ pub trait CatalogItem {
 
     /// Returns the privileges associated with the item.
     fn privileges(&self) -> &PrivilegeMap;
+
+    /// Returns the cluster the item belongs to.
+    fn cluster_id(&self) -> Option<ClusterId>;
 }
 
 /// The type of a [`CatalogItem`].

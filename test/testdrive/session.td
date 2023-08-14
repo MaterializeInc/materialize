@@ -40,6 +40,7 @@ max_clusters                        10                      "The maximum number 
 max_connections                     1000                    "The maximum number of concurrent connections (Materialize)."
 max_credit_consumption_rate         1024                    "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize)."
 max_databases                       1000                    "The maximum number of databases in the region (Materialize)."
+max_identifier_length               255                     "The maximum length of object identifiers in bytes (PostgreSQL)."
 max_materialized_views              100                     "The maximum number of materialized views in the region, across all schemas (Materialize)."
 max_objects_per_schema              1000                    "The maximum number of objects in a schema (Materialize)."
 max_query_result_size               1073741824              "The maximum size in bytes for a single query's result (Materialize)."
@@ -60,6 +61,7 @@ standard_conforming_strings         on                      "Causes '...' string
 statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
+enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
 
 > SET application_name = 'foo'
 

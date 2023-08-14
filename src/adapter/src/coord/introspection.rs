@@ -19,13 +19,14 @@
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
 use mz_expr::CollectionPlan;
+use mz_repr::explain::Explainee;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
-use mz_sql::plan::{Plan, SubscribeFrom};
+use mz_sql::plan::{ExplainPlan, Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
-use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE};
+use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
@@ -50,6 +51,14 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
                 SubscribeFrom::Id(_) => false,
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
+        ),
+        Plan::Explain(ExplainPlan {
+            raw_plan,
+            explainee: Explainee::Query,
+            ..
+        }) => (
+            raw_plan.depends_on(),
+            raw_plan.could_run_expensive_function(),
         ),
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
@@ -94,6 +103,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
         | Plan::PurifiedAlterSource { .. }
+        | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
@@ -226,7 +236,7 @@ pub fn user_privilege_hack(
     plan: &Plan,
     resolved_ids: &ResolvedIds,
 ) -> Result<(), AdapterError> {
-    if session.user().name != MZ_INTROSPECTION_ROLE.name {
+    if session.user().name != MZ_SUPPORT_ROLE.name {
         return Ok(());
     }
 
@@ -292,6 +302,7 @@ pub fn user_privilege_hack(
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
+        | Plan::AlterSetCluster(_)
         | Plan::AlterRole(_)
         | Plan::AlterSink(_)
         | Plan::AlterSource(_)
@@ -314,7 +325,7 @@ pub fn user_privilege_hack(
         | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::MzIntrospection {
+                rbac::UnauthorizedError::MzSupport {
                     action: plan.name().to_string(),
                 },
             ))

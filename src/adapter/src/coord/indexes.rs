@@ -9,52 +9,23 @@
 
 use std::collections::BTreeSet;
 
-use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{CollectionPlan, MirScalarExpr};
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
 
-use crate::catalog::{CatalogItem, CatalogState, Index, Log};
+use crate::catalog::{CatalogItem, Index, Log};
 use crate::coord::dataflows::DataflowBuilder;
 use crate::coord::{CollectionIdBundle, Coordinator};
 
-/// Answers questions about the indexes available on a particular compute
-/// instance.
-#[derive(Debug)]
-pub struct ComputeInstanceIndexOracle<'a, T> {
-    catalog: &'a CatalogState,
-    compute: ComputeInstanceRef<'a, T>,
-}
-
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
-    pub fn index_oracle(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
-        ComputeInstanceIndexOracle {
-            catalog: self.catalog().state(),
-            compute: self
-                .controller
-                .compute
-                .instance_ref(instance)
-                .expect("compute instance does not exist"),
-        }
+    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        self.dataflow_builder(instance)
     }
 }
 
-impl<T: Copy> DataflowBuilder<'_, T> {
-    /// Creates a new index oracle for the same compute instance as the dataflow
-    /// builder.
-    pub fn index_oracle(&self) -> ComputeInstanceIndexOracle<T> {
-        ComputeInstanceIndexOracle {
-            catalog: self.catalog,
-            compute: self.compute,
-        }
-    }
-}
-
-impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
+impl DataflowBuilder<'_> {
     /// Identifies a bundle of storage and compute collection ids sufficient for
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
@@ -114,14 +85,14 @@ impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
     pub fn indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
         self.catalog
             .get_indexes_on(id, self.compute.instance_id())
-            .filter(|(idx_id, _idx)| self.compute.collection(*idx_id).is_ok())
+            .filter(|(idx_id, _idx)| self.compute.contains_collection(idx_id))
     }
 }
 
-impl<T: TimestampManipulation> IndexOracle for ComputeInstanceIndexOracle<'_, T> {
+impl IndexOracle for DataflowBuilder<'_> {
     fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
         Box::new(
-            ComputeInstanceIndexOracle::indexes_on(self, id)
+            self.indexes_on(id)
                 .map(|(_idx_id, idx)| idx.keys.as_slice()),
         )
     }

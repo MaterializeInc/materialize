@@ -162,6 +162,9 @@ class RestartEnvironmentdClusterdStorage(Scenario):
             KillMz(),
             StartMz(),
             Validate(self),
+            # Validate again so that introducing non-idempotent validate()s
+            # will cause the CI to fail.
+            Validate(self),
         ]
 
 

@@ -21,7 +21,7 @@ This can mean:
 - Explain the feature using examples that demonstrate product-level changes.
 - Explain how it builds on the current architecture.
 - Explain how engineers and users should think about this change, and how it influences how everyone uses the product.
-- If needed, talk though errors, backwards-compatibility, or migration strategies.
+- If needed, talk through errors, backwards-compatibility, or migration strategies.
 - Discuss how this affects maintainability, or whether it introduces concepts that might be hard to change in the future.
 
 # Reference explanation

@@ -109,7 +109,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         _keys: &AvailableCollections,
         _plan: &GetPlan,
     ) -> Self::Domain {
-        // A get operator yields physically monotonic output iff the correspoding
+        // A get operator yields physically monotonic output iff the corresponding
         // `Plan::Get` is on a local or global ID that is known to provide physically
         // monotonic input. The way this becomes know is through the interpreter itself
         // for non-recursive local IDs or through configuration for the global IDs of
@@ -213,9 +213,17 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         PhysicallyMonotonic(!ctx.is_rec)
     }
 
-    fn union(&self, _ctx: &Context<Self::Domain>, inputs: Vec<Self::Domain>) -> Self::Domain {
+    fn union(
+        &self,
+        _ctx: &Context<Self::Domain>,
+        inputs: Vec<Self::Domain>,
+        _consolidate_output: bool,
+    ) -> Self::Domain {
         // Union just concatenates the inputs, so is physically monotonic iff
         // all inputs are physically monotonic.
+        // (Even when we do consolidation, we can't be certain that a negative diff from an input
+        // is actually cancelled out. For example, Union outputs negative diffs when it's part of
+        // the EXCEPT pattern.)
         PhysicallyMonotonic(inputs.iter().all(|monotonic| monotonic.0))
     }
 

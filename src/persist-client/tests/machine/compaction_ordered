@@ -1,0 +1,70 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Ordering behaviour during compaction
+
+write-batch output=b0 lower=0 upper=1000 target_size=1000
+a 0 1
+a 257 -1
+----
+parts=1 len=2
+
+compact output=b0_unadvanced inputs=(b0) lower=0 upper=1000 since=0 target_size=1000 memory_bound=10000
+----
+parts=1 len=2
+
+fetch-batch input=b0_unadvanced
+----
+<part 0>
+a 0 1
+a 257 -1
+<run 0>
+part 0
+
+compact output=b0_advanced inputs=(b0) lower=0 upper=1000 since=2 target_size=1000 memory_bound=10000
+----
+parts=1 len=2
+
+fetch-batch input=b0_advanced
+----
+<part 0>
+a 2 1
+a 257 -1
+<run 0>
+part 0
+
+write-batch output=b1 lower=0 upper=1000 target_size=0
+a 0 1
+a 257 -1
+----
+parts=2 len=2
+
+fetch-batch input=b1
+----
+<part 0>
+a 0 1
+<part 1>
+a 257 -1
+<run 0>
+part 0
+part 1
+
+compact output=b1_advanced inputs=(b1) lower=0 upper=1000 since=2 target_size=1 memory_bound=10000
+----
+parts=2 len=2
+
+fetch-batch input=b1_advanced
+----
+<part 0>
+a 2 1
+<part 1>
+a 257 -1
+<run 0>
+part 0
+part 1

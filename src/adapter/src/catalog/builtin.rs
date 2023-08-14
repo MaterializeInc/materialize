@@ -36,13 +36,13 @@ use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, ObjectType, RoleAttributes,
     TypeReference,
 };
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 use crate::rbac;
 
@@ -1739,7 +1739,15 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("managed", ScalarType::Bool.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("replication_factor", ScalarType::UInt32.nullable(true))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column(
+            "availability_zones",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(true),
+        ),
     is_retained_metrics_object: false,
 });
 
@@ -1775,6 +1783,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
+        // `NULL` for un-orchestrated clusters and for replicas where the user
+        // hasn't specified them.
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true)),
@@ -1940,15 +1950,49 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     is_retained_metrics_object: true,
 });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replica_frontiers",
+pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::Frontiers),
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("export_id", ScalarType::String.nullable(false))
-        .with_column("time", ScalarType::MzTimestamp.nullable(false)),
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("time", ScalarType::MzTimestamp.nullable(true)),
     is_retained_metrics_object: false,
 });
+
+pub const MZ_GLOBAL_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_global_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_global_frontiers AS
+WITH
+  -- If a collection has reached the empty frontier on one of its replicas,
+  -- the entry for that replica is removed from `mz_frontiers`. In this case,
+  -- it should also be removed from `mz_global_frontiers`, to signal that the
+  -- global frontier is empty as well. The achieve that, we join the replica
+  -- lists from `mz_frontiers` with those in `mz_cluster_replicas`. If a
+  -- replica is missing from `mz_frontiers`, it won't have a match in this
+  -- join and will be omitted from the final output.
+  replica_lists AS (
+    SELECT list_agg(id) AS replicas
+    FROM mz_cluster_replicas
+    GROUP BY cluster_id
+    -- Add a `{NULL}` list to accomodate collections that are not installed
+    -- on a replica.
+    UNION VALUES (LIST[NULL])
+  ),
+  frontiers_with_replicas AS (
+    SELECT
+      object_id,
+      list_agg(replica_id) AS replicas,
+      max(time) AS time
+    FROM mz_internal.mz_frontiers
+    GROUP BY object_id
+  )
+SELECT object_id, time
+FROM frontiers_with_replicas
+JOIN replica_lists USING (replicas)",
+};
 
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_subscriptions",
@@ -2128,6 +2172,33 @@ UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
+};
+
+pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
+    name: "mz_object_fully_qualified_names",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_object_fully_qualified_names (id, name, object_type, schema_name, database_name) AS
+    SELECT o.id, o.name, o.type, sc.name as schema_name, db.name as database_name
+    FROM mz_catalog.mz_objects o
+    INNER JOIN mz_catalog.mz_schemas sc ON sc.id = o.schema_id
+    -- LEFT JOIN accounts for objects in the ambient database.
+    LEFT JOIN mz_catalog.mz_databases db ON db.id = sc.database_id"
+};
+
+pub const MZ_OBJECT_LIFETIMES: BuiltinView = BuiltinView {
+    name: "mz_object_lifetimes",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_object_lifetimes (id, object_type, event_type, occurred_at) AS
+    SELECT
+        CASE
+            WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
+            ELSE a.details ->> 'id'
+        END id,
+        a.object_type,
+        a.event_type,
+        a.occurred_at
+    FROM mz_catalog.mz_audit_events a
+    WHERE a.event_type = 'create' OR a.event_type = 'drop'",
 };
 
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
@@ -2519,6 +2590,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     6 as encoding,
     -- Materialize doesn't support database cloning.
     FALSE AS datistemplate,
+    TRUE AS datallowconn,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
@@ -3182,6 +3254,133 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
                 JOIN mz_objects AS mo ON mo.id = mce.export_id
                 JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
         GROUP BY mo.name, mdod.dataflow_id",
+};
+
+pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
+    name: "mz_expected_group_size_advice",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW
+    mz_internal.mz_expected_group_size_advice
+    AS
+        -- The mz_expected_group_size_advice view provides tuning suggestions for the EXPECTED
+        -- GROUP SIZE. This tuning hint is effective for min/max/top-k patterns, where a stack
+        -- of arrangements must be built. For each dataflow and region corresponding to one
+        -- such pattern, we look for how many levels can be eliminated without hitting a level
+        -- that actually substantially filters the input. The advice is constructed so that
+        -- setting the hint for the affected region will eliminate these redundant levels of
+        -- the hierachical rendering.
+        --
+        -- A number of helper CTEs are used for the view definition. The first one, operators,
+        -- looks for operator names that comprise arrangements of inputs to each level of a
+        -- min/max/top-k hierarchy.
+        WITH operators AS (
+            SELECT
+                dod.dataflow_id,
+                dor.id AS region_id,
+                dod.id,
+                ars.records
+            FROM
+                mz_internal.mz_dataflow_operator_dataflows dod
+                JOIN mz_internal.mz_dataflow_addresses doa
+                    ON dod.id = doa.id
+                JOIN mz_internal.mz_dataflow_addresses dra
+                    ON dra.address = doa.address[:list_length(doa.address) - 1]
+                JOIN mz_internal.mz_dataflow_operators dor
+                    ON dor.id = dra.id
+                JOIN mz_internal.mz_arrangement_sizes ars
+                    ON ars.operator_id = dod.id
+            WHERE
+                dod.name = 'Arranged TopK input'
+                OR dod.name = 'Arranged MinsMaxesHierarchical input'
+                OR dod.name = 'Arrange ReduceMinsMaxes'
+            ),
+        -- The second CTE, levels, simply computes the heights of the min/max/top-k hierarchies
+        -- identified in operators above.
+        levels AS (
+            SELECT o.dataflow_id, o.region_id, COUNT(*) AS levels
+            FROM operators o
+            GROUP BY o.dataflow_id, o.region_id
+        ),
+        -- The third CTE, pivot, determines for each min/max/top-k hierarchy, the first input
+        -- operator. This operator is crucially important, as it records the number of records
+        -- that was given as input to the gadget as a whole.
+        pivot AS (
+            SELECT
+                o1.dataflow_id,
+                o1.region_id,
+                o1.id,
+                o1.records
+            FROM operators o1
+            WHERE
+                o1.id = (
+                    SELECT MIN(o2.id)
+                    FROM operators o2
+                    WHERE
+                        o2.dataflow_id = o1.dataflow_id
+                        AND o2.region_id = o1.region_id
+                    OPTIONS (EXPECTED GROUP SIZE = 8)
+                )
+        ),
+        -- The fourth CTE, candidates, will look for operators where the number of records
+        -- maintained is not significantly different from the number at the pivot (excluding
+        -- the pivot itself). These are the candidates for being cut from the dataflow region
+        -- by adjusting the hint. The query includes a constant, heuristically tuned on TPC-H
+        -- load generator data, to give some room for small deviations in number of records.
+        -- The intuition for allowing for this deviation is that we are looking for a strongly
+        -- reducing point in the hierarchy. To see why one such operator ought to exist in an
+        -- untuned hierarchy, consider that at each level, we use hashing to distribute rows
+        -- among groups where the min/max/top-k computation is (partially) applied. If the
+        -- hierarchy has too many levels, the first-level (pivot) groups will be such that many
+        -- groups might be empty or contain only one row. Each subsequent level will have a number
+        -- of groups that is reduced exponentially. So at some point, we will find the level where
+        -- we actually start having a few rows per group. That's where we will see the row counts
+        -- significantly drop off.
+        candidates AS (
+            SELECT
+                o.dataflow_id,
+                o.region_id,
+                o.id,
+                o.records
+            FROM
+                operators o
+                JOIN pivot p
+                    ON o.dataflow_id = p.dataflow_id
+                        AND o.region_id = p.region_id
+                        AND o.id <> p.id
+            WHERE o.records >= p.records * (1 - 0.15)
+        ),
+        -- The fifth CTE, cuts, computes for each relevant dataflow region, the number of
+        -- candidate levels that should be cut. We only return here dataflow regions where at
+        -- least one level must be cut. Note that once we hit a point where the hierarchy starts
+        -- to have a filtering effect, i.e., after the last candidate, it is dangerous to suggest
+        -- cutting the height of the hierarchy further. This is because we will have way less
+        -- groups in the next level, so there should be even further reduction happening or there
+        -- is some substantial skew in the data. But if the latter is the case, then we should not
+        -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
+        -- at these unusually large groups.
+        cuts AS (
+            SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
+            FROM candidates c
+            GROUP BY c.dataflow_id, c.region_id
+            HAVING COUNT(*) > 0
+        )
+        -- Finally, we compute the hint suggestion for each dataflow region based on the number of
+        -- levels and the number of candidates to be cut. The hint is computed taking into account
+        -- the fan-in used in rendering for the hash partitioning and reduction of the groups,
+        -- currently equal to 16.
+        SELECT
+            dod.dataflow_id,
+            dod.dataflow_name,
+            dod.id AS region_id,
+            dod.name AS region_name,
+            l.levels,
+            c.to_cut,
+            pow(16, l.levels - c.to_cut) - 1 AS hint
+        FROM cuts c
+            JOIN levels l
+                ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
+            JOIN mz_internal.mz_dataflow_operator_dataflows dod
+                ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
@@ -4252,12 +4451,30 @@ ON mz_internal.mz_source_statuses (id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SINK_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_statuses (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_source_status_history_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_source_status_history (source_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sink_status_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sink_status_history_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4315,13 +4532,22 @@ ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_lifetimes_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_object_lifetimes_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_object_lifetimes (id, object_type)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
     attributes: RoleAttributes::new().with_all(),
 });
 
-pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*INTROSPECTION_USER.name,
+pub static MZ_SUPPORT_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*SUPPORT_USER.name,
     attributes: RoleAttributes::new(),
 });
 
@@ -4329,7 +4555,7 @@ pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster
     name: &*SYSTEM_USER.name,
     privileges: vec![
         MzAclItem {
-            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE,
         },
@@ -4344,7 +4570,7 @@ pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
     });
 
 pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
-    name: &*INTROSPECTION_USER.name,
+    name: "mz_introspection",
     privileges: vec![
         MzAclItem {
             grantee: RoleId::Public,
@@ -4352,7 +4578,7 @@ pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| Builtin
             acl_mode: AclMode::USAGE,
         },
         MzAclItem {
-            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
             acl_mode: AclMode::USAGE.union(AclMode::CREATE),
         },
@@ -4530,7 +4756,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
@@ -4548,6 +4773,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
+        Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),
+        Builtin::View(&MZ_OBJECT_LIFETIMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
@@ -4568,6 +4795,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
@@ -4662,6 +4890,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::Source(&MZ_SINK_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
+        Builtin::Source(&MZ_FRONTIERS),
+        Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
@@ -4680,18 +4910,21 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTERS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
+        Builtin::Index(&MZ_SINK_STATUSES_IND),
+        Builtin::Index(&MZ_SINK_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
         Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
+        Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
     ]);
 
     builtins
 });
 pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
+    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_SUPPORT_ROLE]);
 pub static BUILTIN_CLUSTERS: Lazy<Vec<&BuiltinCluster>> =
     Lazy::new(|| vec![&*MZ_SYSTEM_CLUSTER, &*MZ_INTROSPECTION_CLUSTER]);
 pub static BUILTIN_CLUSTER_REPLICAS: Lazy<Vec<&BuiltinClusterReplica>> = Lazy::new(|| {

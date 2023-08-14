@@ -787,7 +787,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     sc
                 }
                 SecretsControllerKind::AwsSecretsManager => {
-                    let aws_secrets_controller = Arc::new(
+                    Arc::new(
                         runtime.block_on(AwsSecretsController::new(
                             args.environment_id.cloud_provider_region(),
                             // TODO [Alex Hunt] move this to a shared function that can be imported by the
@@ -799,11 +799,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                 .map(|tag| (tag.key, tag.value))
                                 .collect(),
                         )),
-                    );
-                    // One-time migrate any existing kubernetes secrets
-                    // TODO [Alex Hunt] Remove after all customers have been migrated.
-                    runtime.block_on(aws_secrets_controller.migrate_from(&*orchestrator))?;
-                    aws_secrets_controller
+                    )
                 }
                 SecretsControllerKind::LocalFile => bail!(
                     "SecretsControllerKind::LocalFile is not compatible with Orchestrator::Kubernetes."
@@ -863,7 +859,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     "SecretsControllerKind::Kubernetes is not compatible with Orchestrator::Process."
                 ),
                 SecretsControllerKind::AwsSecretsManager => {
-                    let aws_secrets_controller = Arc::new(
+                    Arc::new(
                         runtime.block_on(AwsSecretsController::new(
                             args.environment_id.cloud_provider_region(),
                             &aws_secrets_controller_prefix(&args.environment_id),
@@ -873,11 +869,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                 .map(|tag| (tag.key, tag.value))
                                 .collect(),
                         )),
-                    );
-                    // One-time migrate any existing kubernetes secrets
-                    // TODO [Alex Hunt] Remove after all customers have been migrated.
-                    runtime.block_on(aws_secrets_controller.migrate_from(&*orchestrator))?;
-                    aws_secrets_controller
+                    )
                 }
                 SecretsControllerKind::LocalFile => {
                     let sc = Arc::clone(&orchestrator);
@@ -888,6 +880,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             (orchestrator, secrets_controller, None)
         }
     };
+    let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
@@ -1009,6 +1002,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     &args.tracing.startup_log_filter,
                     args.aws_external_id_prefix,
                     secrets_reader,
+                    cloud_resource_reader,
                 ),
                 tracing_handle,
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,

@@ -35,6 +35,7 @@ use rand::Rng;
 use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
+use tracing::info;
 use url::Url;
 
 use crate::error::PosError;
@@ -306,6 +307,12 @@ impl State {
             .batch_execute("ALTER SYSTEM RESET ALL")
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
+
+        // Dangerous functions are useful for tests so we enable it for all tests.
+        inner_client
+            .batch_execute("ALTER SYSTEM SET enable_dangerous_functions = on")
+            .await
+            .context("enabling dangerous functions")?;
 
         for row in inner_client
             .query("SHOW DATABASES", &[])
@@ -684,6 +691,7 @@ pub async fn create_state(
         let materialize_internal_url =
             util::postgres::config_url(&config.materialize_internal_pgconfig)?;
 
+        info!("Connecting to {}", materialize_url.as_str());
         let (pgclient, pgconn) = Retry::default()
             .max_duration(config.default_timeout)
             .retry_async_canceling(|_| async move {
