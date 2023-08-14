@@ -454,6 +454,9 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 /// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
 ///
+/// The input plans should be normalized with `NormalizeLets`! Otherwise we might find dangling
+/// `ArrangeBy`s at the top of unused Let bindings.
+///
 /// Should be called on a [DataflowDesc] only once.
 #[tracing::instrument(
     target = "optimizer",
