@@ -627,7 +627,9 @@ fn trim_to_budget_jsonb(
     //
     // Note: even though we sort in ascending order, we use `.pop()` to iterate
     // over the elements, which takes from the back of the Vec.
-    stats.elements.sort_unstable_by_key(|element| element.len);
+    stats
+        .elements
+        .sort_unstable_by_key(|element| element.encoded_len());
 
     // Our strategy is to pop of stats until there are no more, or we're under
     // budget. As we trim anything we want to keep, e.g. with force_keep_col,
@@ -665,7 +667,7 @@ fn trim_to_budget_jsonb(
             // Each field costs at least the cost of serializing the value
             // and a byte for the tag. (Though a tag may be more than one
             // byte in extreme cases.)
-            *budget_shortfall = budget_shortfall.saturating_sub(usize::cast_from(column.len) + 1);
+            *budget_shortfall = budget_shortfall.saturating_sub(column.encoded_len() + 1);
         }
     }
 
@@ -1861,7 +1863,7 @@ mod tests {
             panic!("serialized produced wrong type!");
         };
 
-        let mut budget_shortfall = 10;
+        let mut budget_shortfall = 50;
         // We should recurse into the "context" message and only drop the "b" column.
         trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|_name| false);
 
@@ -1891,7 +1893,7 @@ mod tests {
             panic!("serialized produced wrong type!");
         };
 
-        let mut budget_shortfall = 10;
+        let mut budget_shortfall = 50;
         // We're force keeping "b" which is larger than our budgets_shortfall, so we should drop
         // everything else.
         trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|name| name == "b");
