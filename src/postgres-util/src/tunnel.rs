@@ -116,16 +116,11 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
-    replication_timeouts: TcpTimeoutConfig,
 }
 
 impl Config {
     pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, PostgresError> {
-        let config = Self {
-            inner,
-            tunnel,
-            replication_timeouts: TcpTimeoutConfig::default(),
-        };
+        let config = Self { inner, tunnel }.tcp_timeouts(TcpTimeoutConfig::default());
 
         // Early validate that the configuration contains only a single TCP
         // server.
@@ -134,8 +129,22 @@ impl Config {
         Ok(config)
     }
 
-    pub fn replication_timeouts(mut self, replication_timeouts: TcpTimeoutConfig) -> Config {
-        self.replication_timeouts = replication_timeouts;
+    pub fn tcp_timeouts(mut self, tcp_timeouts: TcpTimeoutConfig) -> Config {
+        if let Some(connect_timeout) = tcp_timeouts.connect_timeout {
+            self.inner.connect_timeout(connect_timeout);
+        }
+        if let Some(keepalives_retries) = tcp_timeouts.keepalives_retries {
+            self.inner.keepalives_retries(keepalives_retries);
+        }
+        if let Some(keepalives_idle) = tcp_timeouts.keepalives_idle {
+            self.inner.keepalives_idle(keepalives_idle);
+        }
+        if let Some(keepalives_interval) = tcp_timeouts.keepalives_interval {
+            self.inner.keepalives_interval(keepalives_interval);
+        }
+        if let Some(tcp_user_timeout) = tcp_timeouts.tcp_user_timeout {
+            self.inner.tcp_user_timeout(tcp_user_timeout);
+        }
         self
     }
 
@@ -147,33 +156,7 @@ impl Config {
     /// Starts a replication connection to the configured PostgreSQL database.
     pub async fn connect_replication(&self) -> Result<Client, PostgresError> {
         self.connect_traced("postgres_connect_replication", |config| {
-            config
-                .replication_mode(ReplicationMode::Logical)
-                .connect_timeout(
-                    self.replication_timeouts
-                        .connect_timeout
-                        .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
-                )
-                .keepalives_interval(
-                    self.replication_timeouts
-                        .keepalives_interval
-                        .unwrap_or(DEFAULT_KEEPALIVE_INTERVAL),
-                )
-                .keepalives_idle(
-                    self.replication_timeouts
-                        .keepalives_idle
-                        .unwrap_or(DEFAULT_KEEPALIVE_IDLE),
-                )
-                .keepalives_retries(
-                    self.replication_timeouts
-                        .keepalives_retries
-                        .unwrap_or(DEFAULT_KEEPALIVE_RETRIES),
-                )
-                .tcp_user_timeout(
-                    self.replication_timeouts
-                        .tcp_user_timeout
-                        .unwrap_or(DEFAULT_TCP_USER_TIMEOUT),
-                );
+            config.replication_mode(ReplicationMode::Logical);
         })
         .await
     }
