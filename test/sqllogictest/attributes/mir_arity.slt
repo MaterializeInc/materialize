@@ -165,6 +165,6 @@ Source materialize.public.v
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.u_d_idx (differential join)
+  - materialize.public.u_d_idx (*** full scan ***, differential join)
 
 EOF
