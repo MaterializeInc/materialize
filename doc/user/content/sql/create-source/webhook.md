@@ -124,6 +124,85 @@ Webhook sources apply the following limits to received requests:
 when the server is at the maximum will return 429 Too Many Requests.
 * Requests that contain a header name specified more than once will be rejected with 401 Unauthorized.
 
+## Debugging `CHECK` Statements
+
+It can be difficult to get your `CHECK` statement correct, especially if your application does not
+have a way to send test events. If you're having trouble with your `CHECK` statement, we recommend
+creating a temporary source without `CHECK` and using that to iterate more quickly.
+
+```
+CREATE SOURCE my_webhook_temporary_debug IN CLUSTER my_cluster FROM WEBHOOK
+  -- Specify the BODY FORMAT as TEXT or BYTES which is how it's provided to CHECK.
+  BODY FORMAT TEXT
+  INCLUDE HEADERS
+```
+
+Once you have a few events in _my_webhook_temporary_debug_ you can query it with your would-be
+`CHECK` statement.
+
+```
+SELECT
+  -- Your would be CHECK statement.
+  decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || body, 'my key', 'sha512')
+FROM my_webhook_temporary_debug
+LIMIT 10
+```
+
+{{< note >}}
+
+It's not possible to use `SECRET`s in a `SELECT` statement, so you'll need to provide these values
+as raw text for debugging.
+
+{{< /note >}}
+
+## Duplicated and Partial Events
+
+Given any number of conditions, e.g. a network hiccup, it's possible for your application to send
+an event more than once. If your event contains a unique ID you can de-duplicate these events
+using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISCINCT ON` clause.
+
+```
+CREATE MATERIALIZED VIEW my_webhook_idempotent IN CLUSTER my_compute_cluster AS (
+  SELECT DISTINCT ON (body->>'unique_id') *
+  FROM my_webhook_source
+  ORDER BY id
+)
+```
+
+We can take this technique a bit further to handle partial events. Let's pretend our application
+tracks the completion of build jobs, and it sends us JSON objects with following structure.
+
+Key           | Value   | Optional? |
+--------------|---------|-----------|
+_id_          | `text`  | No
+_started_at_  | `text`  | Yes
+_finished_at_ | `text`  | Yes
+
+When a build job starts we receive an event containing _id_ and the _started_at_ timestamp. When a
+build finished, we'll receive a second event with the same _id_ but now a _finished_at_ timestamp.
+To merge these events into a single row, we can again use the `DISTINCT ON` clause.
+
+```
+CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
+  SELECT DISTINCT ON (id) *
+  FROM (
+    SELECT
+      body->>'id' as id,
+      (body->>'started_at')::timestamptz as started_at,
+      (body->>'finished_at')::timestamptz as finished_at
+    FROM my_build_jobs_source
+  )
+  ORDER BY id, finished_at NULLS LAST, started_at NULLS LAST
+)
+```
+
+{{< note >}}
+
+If the feature is enabled, when casting from `text` to `timestamp` you should prefer to use the
+[`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function, which enables
+[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+
+{{< /note >}}
 
 ## Examples
 
@@ -157,3 +236,48 @@ After a successful secret creation, you can use the same secret to create differ
 ```
 
 Your new webhook is now up and ready to accept requests using the basic authentication.
+
+### Connecting with Segment
+
+[Segment](https://segment.com/) is a commonly used tool for collecting events from your
+applications. You can supercharge these events by ingesting them into Materialize and joining it
+with your other data!
+
+The first step for setting up a webhook source is to create a shared secret. While this isn't
+required, it's the recommended best practice.
+
+```
+CREATE SECRET segment_shared_secret AS 'abc123';
+```
+
+Using this shared key, Segment will sign each request and we can use the signature to determine if
+the request is legitmate.
+
+After defining a shared secret, we can create the source itself:
+
+```
+CREATE SOURCE my_segment_source IN CLUSTER my_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  INCLUDE HEADERS
+  CHECK (
+    WITH ( BODY BYTES, HEADERs, SECRET segment_shared_secret AS secret BYTES)
+    decode(headers->'x-signature', 'hex') = hmac(body, secret, 'sha1')
+  )
+```
+
+This creates a source called _my_segment_source_ and installs it in cluster named _my_cluster_.
+The source will have two columns, _body_ of type `jsonb` and _headers_ of type `map[text=>text]`.
+
+The `CHECK` statement defines how to validate each request. At the time of writing, Segment
+validates requests by signing them with an HMAC in the `X-Signature` request header. The HMAC is a
+hex-encoded SHA1 hash using the shared secret and request body. We can decode the signature using
+the [`decode`](/sql/functions/#decode) function, getting the raw bytes, and generate our own HMAC
+using the [`hmac`](/sql/functions/#hmac) function. If the two values are equal, then the request is
+legitimate!
+
+{{< note >}}
+
+For the latest information on Segment's Webhook Destination, please see their
+[documentation](https://segment.com/docs/connections/destinations/catalog/actions-webhook/).
+
+{{< /note >}}
