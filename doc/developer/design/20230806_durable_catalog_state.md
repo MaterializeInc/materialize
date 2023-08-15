@@ -88,7 +88,7 @@ pub trait DurableCatalogState {
     /// been initialized and perform any migrations needed.
     fn open(&mut self) -> Result<(), Error>;
 
-    /// Checks to see if opening the catalog would be 
+    /// Checks to see if opening the catalog would be
     /// successful, without making any durable changes.
     ///
     /// Will return an error in the following scenarios:
@@ -152,7 +152,7 @@ pub trait DurableCatalogState {
 
     // Write
 
-    /// Creates a new durable catalog state transaction. 
+    /// Creates a new durable catalog state transaction.
     fn transaction(&mut self) -> Transaction;
 
     /// Commits a durable catalog state transaction.
@@ -161,7 +161,7 @@ pub trait DurableCatalogState {
     /*
      * The majority of writes will go through a Transaction.
      * However as an optimization it may be useful to have more
-     * targeted methods. We can add those on a case-by-case basis.  
+     * targeted methods. We can add those on a case-by-case basis.
      */
 
     /// Persist mapping from system objects to global IDs and fingerprints.
