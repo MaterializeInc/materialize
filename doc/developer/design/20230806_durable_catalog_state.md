@@ -119,7 +119,7 @@ pub trait DurableCatalogState {
     fn boot_ts(&self) -> mz_repr::Timestamp;
 
     /// Returns the epoch of the current durable catalog state. The epoch acts as
-    /// a fencing token to prevent split brain issues across two 
+    /// a fencing token to prevent split brain issues across two
     /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
     /// catalog, it will increment the epoch by one (or initialize it to some
     /// value if there's no existing epoch) and store the value in memory. It's
