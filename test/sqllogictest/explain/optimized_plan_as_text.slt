@@ -922,3 +922,69 @@ Used Indexes:
   - materialize.public.t_a_idx_1 (delta join 1st input, delta join, delta join)
 
 EOF
+
+# An index is used in both a join and a full scan.
+query T multiline
+EXPLAIN
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t AS t1, t AS t2
+ WHERE t1.a = t2.a)
+UNION
+(SELECT *
+ FROM t
+ WHERE b > 5)
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0, #1]
+      Union
+        Project (#4, #5)
+          Filter (#0) IS NOT NULL
+            Map ((#0 + #0), (#1 + #3))
+              Join on=(#0 = #2) type=differential
+                Get l0
+                Get l0
+        Filter (#1 > 5)
+          Get materialize.public.t
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (differential join, differential join)
+
+EOF
+
+# An index exists that can't be used for the join because of having the wrong key.
+query T multiline
+EXPLAIN
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t AS t1, t AS t2
+ WHERE t1.b = t2.b)
+UNION
+(SELECT *
+ FROM t
+ WHERE b > 5)
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0, #1]
+      Union
+        Project (#4, #5)
+          Map ((#0 + #2), (#1 + #1))
+            Join on=(#1 = #3) type=differential
+              Get l0
+              Get l0
+        Filter (#1 > 5)
+          Get materialize.public.t
+  With
+    cte l0 =
+      ArrangeBy keys=[[#1]]
+        Filter (#1) IS NOT NULL
+          Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+EOF
