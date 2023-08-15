@@ -227,7 +227,7 @@ In this example, let's say your `dev_role` needs the following permissions:
     terraform apply
     ```
 
-### Step 4. Assign the role to a user
+## Step 4. Assign the role to a user
 
 The dev_role now has the acceptable privileges it needs. Let’s apply this role to a user in your Materialize organization.
 
@@ -262,7 +262,7 @@ The dev_role now has the acceptable privileges it needs. Let’s apply this role
     ```
     In this example, role ID `u1` has append, read, write, and delete privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges, which were assigned by the `u1` user.
 
-### Step 5. Create a second role
+## Step 5. Create a second role
 
 Next, you will create a new role with different privileges to other objects. Then you will apply those privileges to the dev role and alter or drop privileges as needed.
 
@@ -307,7 +307,7 @@ Next, you will create a new role with different privileges to other objects. The
     }
     ```
 
-### Step 6. Add inherited privileges
+## Step 6. Add inherited privileges
 
 Your `dev_role` also needs access to `qa_db`. You can apply these privileges individually or you can choose to grant the `dev_role` the same permissions as the `qa_role`.
 
