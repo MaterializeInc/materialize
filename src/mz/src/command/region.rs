@@ -56,16 +56,13 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
                 Some(region_info) => {
                     loading_spinner.set_message("Waiting for the region to be ready...");
                     if region_info.resolvable {
-                        loop {
-                            if cx
-                                .sql_client()
-                                .is_ready(&region_info, cx.admin_client().claims().await?.email)?
-                            {
-                                return Ok(());
-                            } else {
-                                break Err(Error::NotPgReadyError);
-                            }
+                        if cx
+                            .sql_client()
+                            .is_ready(&region_info, cx.admin_client().claims().await?.email)?
+                        {
+                            return Ok(());
                         }
+                        Err(Error::NotPgReadyError)
                     } else {
                         Err(Error::NotResolvableRegion)
                     }
