@@ -9,6 +9,7 @@
 
 //! Structs and traits for `EXPLAIN AS TEXT`.
 
+use itertools::Itertools;
 use std::fmt;
 
 use mz_ore::str::{separated, Indent, IndentLike};
@@ -81,7 +82,7 @@ where
                 "{}- {} ({})",
                 ctx.as_mut(),
                 index_name,
-                separated(", ", usage_types)
+                separated(", ", usage_types.iter().sorted().dedup())
             )?;
         }
         *ctx.as_mut() -= 1;
