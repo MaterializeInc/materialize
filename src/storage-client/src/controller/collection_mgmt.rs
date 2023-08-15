@@ -18,6 +18,7 @@ use futures::stream::StreamExt;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
@@ -35,14 +36,15 @@ const CHANNEL_CAPACITY: usize = 128;
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
 type WriteChannel = mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>;
-type WriteTask = tokio::task::JoinHandle<()>;
+type WriteTask = AbortOnDropHandle<()>;
+type ShutdownSender = oneshot::Sender<()>;
 
 #[derive(Debug, Clone)]
 pub struct CollectionManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
-    collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel, WriteTask)>>>,
+    collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel, WriteTask, ShutdownSender)>>>,
     write_handle: persist_handles::PersistWriteWorker<T>,
     now: NowFn,
 }
@@ -79,7 +81,7 @@ where
         let mut guard = self.collections.lock().expect("collection_mgmt panicked");
 
         // Check if this collection is already registered.
-        if let Some((_writer, task)) = guard.get(&id) {
+        if let Some((_writer, task, _shutdown_tx)) = guard.get(&id) {
             // The collection is already registered and the task is still running so nothing to do.
             if !task.is_finished() {
                 // TODO(parkmycar): Panic here if we never see this error in production.
@@ -93,7 +95,7 @@ where
         let prev = guard.insert(id, writer_and_handle);
 
         // Double check the previous task was actually finished.
-        if let Some((_, prev_task)) = prev {
+        if let Some((_, prev_task, _)) = prev {
             assert!(
                 prev_task.is_finished(),
                 "should only spawn a new task if the previous is finished"
@@ -114,8 +116,11 @@ where
         let existed = prev.is_some();
 
         // Wait for the task to complete before reporting as unregisted.
-        if let Some((_prev_writer, prev_task)) = prev {
-            prev_task.abort();
+        if let Some((_prev_writer, prev_task, shutdown_tx)) = prev {
+            // Notify the task it needs to shutdown.
+            //
+            // We can ignore errors here because they indicate the task is already done.
+            let _ = shutdown_tx.send(());
             let _ = prev_task.await;
         }
 
@@ -150,7 +155,7 @@ where
         let guard = self.collections.lock().expect("CollectionManager panicked");
         let tx = guard
             .get(&id)
-            .map(|(tx, _)| tx.clone())
+            .map(|(tx, _, _)| tx.clone())
             .ok_or(StorageError::IdentifierMissing(id))?;
 
         Ok(MonotonicAppender { tx })
@@ -167,11 +172,12 @@ fn write_task<T>(
     id: GlobalId,
     write_handle: persist_handles::PersistWriteWorker<T>,
     now: NowFn,
-) -> (WriteChannel, WriteTask)
+) -> (WriteChannel, WriteTask, ShutdownSender)
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let handle = mz_ore::task::spawn(
         || format!("CollectionManager-write_task-{id}"),
@@ -183,6 +189,11 @@ where
                     // Prefer sending actual updates over just bumping the upper, because sending
                     // updates also bump the upper.
                     biased;
+
+                    // Listen for a shutdown signal so we can gracefully cleanup.
+                    _ = &mut shutdown_rx => {
+                        break 'run;
+                    }
 
                     // Pull as many queued updates off the channel as possible.
                     cmd = rx.recv_many(CHANNEL_CAPACITY) => {
@@ -316,7 +327,7 @@ where
         },
     );
 
-    (tx, handle)
+    (tx, handle.abort_on_drop(), shutdown_tx)
 }
 
 /// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
