@@ -91,6 +91,10 @@ pub trait DurableCatalogState {
 
     /// Checks to see if opening the catalog would be 
     /// successful, without making any durable changes.
+    /// 
+    /// Will return an error in the following scenarios:
+    ///   - Catalog not initialized.
+    ///   - Catalog migrations fail.
     fn check_open(&self) -> Result<(), Error>;
 
     /// Opens the catalog in read only mode. All mutating methods
