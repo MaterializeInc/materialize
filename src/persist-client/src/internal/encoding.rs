@@ -1008,6 +1008,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 .map(|key| HollowBatchPart {
                     key: PartialBatchKey(key),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 }),
         );
@@ -1025,6 +1026,7 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
             key_stats: self.stats.into_proto(),
         }
     }
@@ -1033,6 +1035,7 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+            key_lower: proto.key_lower.into(),
             stats: proto.key_stats.into_rust()?,
         })
     }
@@ -1282,6 +1285,7 @@ mod tests {
             parts: vec![HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
+                key_lower: vec![],
                 stats: None,
             }],
             runs: vec![],
@@ -1300,6 +1304,7 @@ mod tests {
         expected.parts.push(HollowBatchPart {
             key: PartialBatchKey("b".into()),
             encoded_size_bytes: 0,
+            key_lower: vec![],
             stats: None,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);

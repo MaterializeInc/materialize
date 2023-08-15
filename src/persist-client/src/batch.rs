@@ -839,6 +839,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             self.finished_parts.push(HollowBatchPart {
                 key,
                 encoded_size_bytes,
+                key_lower: vec![],
                 stats,
             });
         }
@@ -856,6 +857,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             parts.push(HollowBatchPart {
                 key,
                 encoded_size_bytes,
+                key_lower: vec![],
                 stats,
             });
         }
