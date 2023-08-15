@@ -90,7 +90,7 @@ pub trait DurableCatalogState {
 
     /// Checks to see if opening the catalog would be 
     /// successful, without making any durable changes.
-    /// 
+    ///
     /// Will return an error in the following scenarios:
     ///   - Catalog not initialized.
     ///   - Catalog migrations fail.
@@ -112,7 +112,7 @@ pub trait DurableCatalogState {
     /// The boot timestamp is guaranteed to never go backwards, even in the face
     /// of backwards time jumps across restarts. Every time the catalog is opened,
     /// this value is guaranteed to increase.
-    /// 
+    ///
     /// NB: This is only ever used during startup to ensure that the timestamp for
     /// all migrations are the same. There's probably a better way to handle this
     /// than storing it in the catalog indefinitely.
@@ -125,7 +125,7 @@ pub trait DurableCatalogState {
     /// value if there's no existing epoch) and store the value in memory. It's
     /// guaranteed that no two [`DurableCatalogState`]s will return the same value
     /// for their epoch.
-    /// 
+    ///
     /// None is returned if the catalog hasn't been opened yet.
     ///
     /// NB: We may remove this in later iterations of Pv2.
@@ -233,7 +233,9 @@ on [Aljoscha's skunk works project](https://github.com/aljoscha/materialize/tree
 The entire state will be stored in a single persist shard as raw bytes with a tag to differentiate
 between object types. The existing protobuf infrastructure will be used to serialize and deserialize
 objects. The implementing struct will maintain a persist write handle, an upper, and
-an in-memory cache of all the objects.
+an in-memory cache of all the objects. Certain append only object types, like audit
+logs and storage usage, will not be cached in memory since they are only written to and not read.
+NB: The storage events are read once at start-time and never read again. 
 
 #### Initialization
 
@@ -403,8 +405,7 @@ frameworks (not counting the builtin migration framework).
   read via a read handle. This has better memory usage, but slower reads. The reason that I decided
   on the current proposed implementation is that the Coordinator already reads the entire durable
   catalog state into memory for every catalog transaction. So we already need that amount of memory
-  free at any time in order to be able to serve DDL. Certain append only object types, like audit
-  logs and storage usage, don't need to be cached in memory.
+  free at any time in order to be able to serve DDL.
 
 ## Open questions
 
