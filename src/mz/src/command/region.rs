@@ -73,7 +73,8 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
                 None => Err(Error::NotReadyRegion),
             }
         })
-        .await.map_err(|e| Error::TimeoutError(Box::new(e)))?;
+        .await
+        .map_err(|e| Error::TimeoutError(Box::new(e)))?;
 
     loading_spinner.finish_with_message(format!("Region in {} is now online", cloud_provider.id));
 
