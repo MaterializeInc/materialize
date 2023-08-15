@@ -46,4 +46,4 @@ Single sign-on in Materialize only supports authentication into the Materialize 
 * Select *Organization Admin* or *Organization Member* depending on what level of console access the user needs:
 
     - **Organization Admin**: Can invite new users, edit account information, edit account security information, and are super users in the database.
-    - **Organization Member**: Can login to the console and have database permissions definied via r[role-based access control](/manage/access-control/).
+    - **Organization Member**: Can login to the console and have database permissions defined via [role-based access control](/manage/access-control/).
