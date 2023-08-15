@@ -72,8 +72,8 @@ implementation): https://github.com/MaterializeInc/materialize/pull/21071
 
 ### Durable Catalog Trait
 
-We will add the following trait in the catalog to describe interacting with the durable catalog
-state.
+We will add the following object safe trait in the catalog to describe interacting with the durable
+catalog state.
 
 NB: `async` modifiers and trait bounds (such as `Debug`) are left off for easier readability.
 
@@ -235,7 +235,7 @@ between object types. The existing protobuf infrastructure will be used to seria
 objects. The implementing struct will maintain a persist write handle, an upper, and
 an in-memory cache of all the objects. Certain append only object types, like audit
 logs and storage usage, will not be cached in memory since they are only written to and not read.
-NB: The storage events are read once at start-time and never read again. 
+NB: The storage events are read once at start-time and never read again.
 
 #### Initialization
 
@@ -307,6 +307,8 @@ migrations have been run.
 #### Misc
 
 - `confirm_leadership`: Check that the persist shard upper is equal to the upper cached in memory.
+  This will use the `fetch_recent_upper` method in persist which requires fetching the latest state
+  from consensus and is therefore a potentially expensive operation.
 - `dump`: Convert the in-memory state to a JSON string.
 
 ### Catalog Transactions
@@ -352,7 +354,8 @@ The tool will have two modes:
 - Persist: Connects to persist.
 
 The tool will initialize a `Box<dyn DurableCatalogState>` and use the trait methods to implement
-each functionality.
+each functionality. `dyn DurableCatalogState` is safe because the trait is designed to be object
+safe.
 
 - Dump: Will use the `dump` method.
 - Edit and Delete: Will be implemented using a catalog transaction.
