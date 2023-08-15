@@ -35,10 +35,10 @@ SERVICES = [
             "image": "grafana/tempo:2.2.0",
             "ports": ["4317:4317", "3200:3200"],
             "volumes": [
-                "./tempo.yaml:/etc/tempo.yaml",
+                "./tempo.yml:/etc/tempo.yml",
                 "../../mzdata/tempo:/tmp/tempo",
             ],
-            "command": ["-config.file=/etc/tempo.yaml"],
+            "command": ["-config.file=/etc/tempo.yml"],
             "allow_host_ports": True,
         },
     ),

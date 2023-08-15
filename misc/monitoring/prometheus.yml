@@ -20,7 +20,7 @@ scrape_configs:
     file_sd_configs:
     - files:
       - /mnt/services/*.json
-      refresh_interval: 30s
+      refresh_interval: 5s
     relabel_configs:
       # Rewrite references to 127.0.0.1 or 0.0.0.0 to host.docker.internal,
       # since the services are running on the host.

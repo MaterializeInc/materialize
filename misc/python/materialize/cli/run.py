@@ -176,7 +176,11 @@ def main() -> int:
                 # Remove everything in the `mzdata`` directory *except* for
                 # the `prometheus` directory and all contents of `tempo`.
                 paths = list(mzdata.glob("prometheus/*"))
-                paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus" and p.name != "tempo")
+                paths.extend(
+                    p
+                    for p in mzdata.glob("*")
+                    if p.name != "prometheus" and p.name != "tempo"
+                )
                 paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
