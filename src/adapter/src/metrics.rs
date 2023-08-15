@@ -31,6 +31,7 @@ pub struct Metrics {
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub introspection_logins: IntCounter,
+    pub statement_logging_actual_bytes: IntCounterVec,
 }
 
 impl Metrics {
@@ -106,6 +107,10 @@ impl Metrics {
                 name: "mz_introspection_logins",
                 help: "Number of times mz_introspection used the psql interface",
             )),
+            statement_logging_actual_bytes: registry.register(metric!(
+                name: "mz_statement_logging_actual_bytes",
+                help: "The total amount of SQL text that was logged by statement logging.",
+            ))
         }
     }
 }

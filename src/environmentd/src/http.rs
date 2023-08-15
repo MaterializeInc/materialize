@@ -457,7 +457,7 @@ impl AuthedClient {
         let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let conn_id = adapter_client.new_conn_id()?;
         let session = adapter_client.new_session(conn_id, user);
-        let (adapter_client, _) = adapter_client.startup(session).await?;
+        let (adapter_client, _) = adapter_client.startup(session, vec![]).await?;
         Ok(AuthedClient {
             client: adapter_client,
             drop_connection,

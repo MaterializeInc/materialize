@@ -197,6 +197,353 @@ fn test_persistence() {
     );
 }
 
+fn setup_statement_logging(
+    max_sample_rate: f64,
+    sample_rate: f64,
+) -> (util::Server, postgres::Client) {
+    let server = util::start_server(
+        util::Config::default()
+            .with_system_parameter_default(
+                "statement_logging_max_sample_rate".to_string(),
+                max_sample_rate.to_string(),
+            )
+            .with_system_parameter_default(
+                "statement_logging_use_reproducible_rng".to_string(),
+                "true".to_string(),
+            ),
+    )
+    .unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .execute(
+            &format!("SET statement_logging_sample_rate={sample_rate}"),
+            &[],
+        )
+        .unwrap();
+    (server, client)
+}
+
+#[mz_ore::test]
+// Test that we log various kinds of statement whose execution terminates in the coordinator.
+fn test_statement_logging_immediate() {
+    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
+    let successful_immediates: &[&str] = &[
+        "CREATE VIEW v AS SELECT 1;",
+        "CREATE DEFAULT INDEX i ON v;",
+        "CREATE TABLE t (x int);",
+        "INSERT INTO t VALUES (1), (2), (3)",
+        "UPDATE t SET x=x+1",
+        "DELETE FROM t;",
+        "CREATE SECRET s AS 'hunter2';",
+        "DROP SECRET s;",
+        "",
+        "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (size='2')",
+        "PREPARE foo AS SELECT * FROM t",
+        "EXECUTE foo",
+        "BEGIN",
+        "DECLARE c CURSOR FOR SELECT * FROM t",
+        "FETCH FORWARD ALL FROM c",
+        "COMMIT",
+        "BEGIN",
+        "ROLLBACK",
+        "SET application_name='my_application'",
+        "SHOW ALL",
+        "SHOW application_name",
+    ];
+
+    for &statement in successful_immediates {
+        client.execute(statement, &[]).unwrap();
+    }
+
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+
+    let sl = client
+        .query(
+            "
+SELECT
+    mseh.sample_rate,
+    mseh.began_at,
+    mseh.finished_at,
+    mseh.finished_status,
+    mpsh.sql,
+    mpsh.prepared_at
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+ORDER BY mseh.began_at;",
+            &[],
+        )
+        .unwrap();
+    #[derive(Debug)]
+    struct Record {
+        sample_rate: f64,
+        began_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        finished_status: String,
+        sql: String,
+        prepared_at: DateTime<Utc>,
+    }
+    assert_eq!(sl.len(), successful_immediates.len());
+    for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
+        let r = Record {
+            sample_rate: r.get(0),
+            began_at: r.get(1),
+            finished_at: r.get(2),
+            finished_status: r.get(3),
+            sql: r.get(4),
+            prepared_at: r.get(5),
+        };
+        assert_eq!(r.sample_rate, 1.0);
+        assert_eq!(
+            r.sql,
+            stmt.chars().filter(|&ch| ch != ';').collect::<String>()
+        );
+        assert_eq!(r.finished_status, "success");
+        assert!(r.prepared_at <= r.began_at);
+        assert!(r.began_at <= r.finished_at);
+        // NB[btv] -- It would be a bit nicer if we could separately mock
+        // both the start and end time, but the `NowFn` mechanism doesn't
+        // appear to give us any way to do that. Instead, let's just check
+        // that none of these statements took longer than 5s wall-clock time.
+        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5))
+    }
+}
+
+#[mz_ore::test]
+fn test_statement_logging_selects() {
+    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
+    client.execute("SELECT 1", &[]).unwrap();
+    // We test that queries of this view execute on a cluster.
+    // If we ever change the threshold for constant folding such that
+    // this gets to run on environmentd, change this query.
+    client
+        .execute(
+            "CREATE VIEW v AS SELECT * FROM generate_series(1, 10001)",
+            &[],
+        )
+        .unwrap();
+    client.execute("SELECT * FROM v", &[]).unwrap();
+    client.execute("CREATE DEFAULT INDEX i ON v", &[]).unwrap();
+    client.execute("SELECT * FROM v", &[]).unwrap();
+    let _ = client.execute("SELECT 1/0", &[]);
+
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+
+    #[derive(Debug)]
+    struct Record {
+        sample_rate: f64,
+        began_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        finished_status: String,
+        error_message: Option<String>,
+        prepared_at: DateTime<Utc>,
+        execution_strategy: Option<String>,
+        rows_returned: Option<i64>,
+    }
+
+    let sl_selects = client
+        .query(
+            "SELECT
+    mseh.sample_rate,
+    mseh.began_at,
+    mseh.finished_at,
+    mseh.finished_status,
+    mseh.error_message,
+    mpsh.prepared_at,
+    mseh.execution_strategy,
+    mseh.rows_returned
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+WHERE mpsh.sql ~~ 'SELECT%'
+ORDER BY mseh.began_at",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| Record {
+            sample_rate: r.get(0),
+            began_at: r.get(1),
+            finished_at: r.get(2),
+            finished_status: r.get(3),
+            error_message: r.get(4),
+            prepared_at: r.get(5),
+            execution_strategy: r.get(6),
+            rows_returned: r.get(7),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sl_selects.len(), 4);
+    for r in &sl_selects {
+        assert_eq!(r.sample_rate, 1.0);
+        assert!(r.prepared_at <= r.began_at);
+        assert!(r.began_at <= r.finished_at);
+    }
+    assert_eq!(sl_selects[0].rows_returned, Some(1));
+    assert_eq!(sl_selects[0].finished_status, "success");
+    assert_eq!(
+        sl_selects[0].execution_strategy.as_ref().unwrap(),
+        "constant"
+    );
+    assert_eq!(sl_selects[1].rows_returned, Some(10001));
+    assert_eq!(sl_selects[1].finished_status, "success");
+    assert_eq!(
+        sl_selects[1].execution_strategy.as_ref().unwrap(),
+        "standard"
+    );
+    assert_eq!(sl_selects[2].rows_returned, Some(10001));
+    assert_eq!(sl_selects[2].finished_status, "success");
+    assert_eq!(
+        sl_selects[2].execution_strategy.as_ref().unwrap(),
+        "fast-path"
+    );
+    assert_eq!(sl_selects[3].finished_status, "error");
+    assert!(sl_selects[3]
+        .error_message
+        .as_ref()
+        .unwrap()
+        .contains("division by zero"));
+    assert!(sl_selects[3].rows_returned.is_none());
+}
+
+#[mz_ore::test]
+fn test_statement_logging_subscribes() {
+    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let cancel_token = client.cancel_token();
+
+    // This should finish
+    client
+        .execute(
+            "SUBSCRIBE TO (SELECT * FROM generate_series(1, 10001))",
+            &[],
+        )
+        .unwrap();
+
+    let handle = thread::spawn(move || {
+        client.execute("CREATE TABLE t (x int)", &[]).unwrap();
+        // This should not finish until it's canceled.
+        let _ = client.execute("SUBSCRIBE TO (SELECT * FROM t)", &[]);
+    });
+
+    while !handle.is_finished() {
+        thread::sleep(Duration::from_secs(1));
+        cancel_token.cancel_query(postgres::NoTls).unwrap();
+    }
+    handle.join().unwrap();
+
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    struct Record {
+        sample_rate: f64,
+        began_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        finished_status: String,
+        prepared_at: DateTime<Utc>,
+        execution_strategy: Option<String>,
+    }
+    let sl_subscribes = client
+        .query(
+            "SELECT
+    mseh.sample_rate,
+    mseh.began_at,
+    mseh.finished_at,
+    mseh.finished_status,
+    mpsh.prepared_at,
+    mseh.execution_strategy
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        LEFT JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+WHERE mpsh.sql ~~ 'SUBSCRIBE%'
+ORDER BY mseh.began_at",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| Record {
+            sample_rate: r.get(0),
+            began_at: r.get(1),
+            finished_at: r.get(2),
+            finished_status: r.get(3),
+            prepared_at: r.get(4),
+            execution_strategy: r.get(5),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sl_subscribes.len(), // 3
+        2
+    );
+    for r in &sl_subscribes {
+        assert_eq!(r.sample_rate, 1.0);
+        assert!(r.prepared_at <= r.began_at);
+        assert!(r.began_at <= r.finished_at);
+        assert!(r.execution_strategy.is_none());
+    }
+    assert_eq!(sl_subscribes[0].finished_status, "success");
+    assert_eq!(sl_subscribes[1].finished_status, "canceled");
+}
+
+/// Test that we are sampling approximately 50% of statements.
+/// Relies on two assumptions:
+/// (1) that the effective sampling rate for the session is 50%,
+/// (2) that we are using the deterministic testing RNG.
+fn test_statement_logging_sampling_inner(mut client: postgres::Client) {
+    for i in 0..50 {
+        client.execute(&format!("SELECT {i}"), &[]).unwrap();
+    }
+    // Statement logging happens async, give it a chance to catch up
+    thread::sleep(Duration::from_secs(5));
+    client
+        .execute("SET statement_logging_sample_rate=0", &[])
+        .unwrap();
+    let sqls: Vec<String> = client
+        .query(
+            "SELECT mpsh.sql
+FROM
+    mz_internal.mz_statement_execution_history AS mseh
+        JOIN
+            mz_internal.mz_prepared_statement_history AS mpsh
+            ON mseh.prepared_statement_id = mpsh.id
+WHERE mpsh.sql ~~ 'SELECT%'
+ORDER BY mseh.began_at ASC;",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| r.get(0))
+        .collect();
+    // 22 randomly sampled out of 50 with 50% sampling. Seems legit!
+    let expected_sqls = [
+        1, 3, 4, 5, 8, 14, 16, 17, 18, 19, 20, 22, 23, 24, 30, 31, 32, 35, 36, 41, 45, 49,
+    ]
+    .into_iter()
+    .map(|i| format!("SELECT {i}"))
+    .collect::<Vec<_>>();
+    assert_eq!(sqls, expected_sqls);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_sampling() {
+    let (_server, client) = setup_statement_logging(1.0, 0.5);
+    test_statement_logging_sampling_inner(client);
+}
+
+/// Test that we are not allowed to set `statement_logging_sample_rate`
+/// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
+#[mz_ore::test]
+fn test_statement_logging_sampling_constrained() {
+    let (_server, client) = setup_statement_logging(0.5, 1.0);
+    test_statement_logging_sampling_inner(client);
+}
+
 #[mz_ore::test]
 fn test_statement_logging_unsampled_metrics() {
     let server = util::start_server(util::Config::default()).unwrap();
@@ -230,12 +577,11 @@ fn test_statement_logging_unsampled_metrics() {
 
     let named_prepared_inner = "SELECT 42";
     let named_prepared_outer = format!("PREPARE p AS {named_prepared_inner};EXECUTE p;");
-    let named_prepared_total = named_prepared_inner.len()
-        + named_prepared_outer
-            .as_bytes()
-            .iter()
-            .filter(|&&ch| ch != b';')
-            .count();
+    let named_prepared_outer_len = named_prepared_outer
+        .as_bytes()
+        .iter()
+        .filter(|&&ch| ch != b';')
+        .count();
 
     for q in batch_queries {
         client.batch_execute(q).unwrap();
@@ -255,7 +601,7 @@ fn test_statement_logging_unsampled_metrics() {
     // This should NOT be logged, since we never actually execute it.
     client.prepare("SELECT 'Hello, not counted!'").unwrap();
 
-    let expected_total = batch_total + single_total + prepared_total + named_prepared_total;
+    let expected_total = batch_total + single_total + prepared_total + named_prepared_outer_len;
     let metric_value = server
         .metrics_registry
         .gather()

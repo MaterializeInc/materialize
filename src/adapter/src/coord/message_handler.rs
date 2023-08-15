@@ -58,14 +58,6 @@ impl Coordinator {
                 self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::Execute {
-                portal_name,
-                ctx,
-                span,
-            } => {
-                let span = tracing::debug_span!(parent: &span, "message (execute)");
-                self.handle_execute(portal_name, ctx).instrument(span).await;
-            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -101,8 +93,8 @@ impl Coordinator {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
-            Message::RetireExecute { data } => {
-                self.retire_execute(data);
+            Message::RetireExecute { data, reason } => {
+                self.retire_execution(reason, data);
             }
             Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
@@ -739,7 +731,7 @@ impl Coordinator {
                 id_bundle,
             } => {
                 let result = self.sequence_explain_timestamp_finish(
-                    ctx.session_mut(),
+                    &mut ctx,
                     format,
                     cluster_id,
                     optimized_plan,

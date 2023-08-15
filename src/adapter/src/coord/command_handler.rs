@@ -27,7 +27,9 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
 };
-use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
+use mz_sql::session::vars::{
+    EndTransactionAction, OwnedVarInput, Var, VarInput, STATEMENT_LOGGING_SAMPLE_RATE,
+};
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
@@ -51,10 +53,6 @@ use crate::{catalog, metrics, rbac, ExecuteContext};
 use super::ExecuteContextExtra;
 
 impl Coordinator {
-    pub(crate) fn retire_execute(&mut self, _data: ExecuteContextExtra) {
-        // Do nothing, for now.
-        // In the future this is where we will log that statement execution finished.
-    }
     fn send_error(&mut self, cmd: Command, e: AdapterError) {
         fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
             let _ = tx.send(Response::<T> {
@@ -83,6 +81,7 @@ impl Coordinator {
                     send(tx, session, e)
                 }
             }
+            Command::RetireExecute { .. } => panic!("Command::RetireExecute is infallible"),
         }
     }
 
@@ -99,10 +98,12 @@ impl Coordinator {
                 session,
                 cancel_tx,
                 tx,
+                set_setting_keys,
             } => {
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
-                self.handle_startup(session, cancel_tx, tx).await;
+                self.handle_startup(session, cancel_tx, tx, set_setting_keys)
+                    .await;
             }
 
             Command::Execute {
@@ -110,19 +111,18 @@ impl Coordinator {
                 session,
                 tx,
                 span,
+                outer_ctx_extra,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let ctx = ExecuteContext::from_parts(
-                    tx,
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    ExecuteContextExtra,
-                );
-
                 let span = span
                     .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
-                self.handle_execute(portal_name, ctx).instrument(span).await;
+
+                self.handle_execute(portal_name, session, tx, outer_ctx_extra)
+                    .instrument(span)
+                    .await;
             }
+
+            Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
 
             Command::Declare {
                 name,
@@ -305,6 +305,7 @@ impl Coordinator {
         mut session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
+        set_setting_keys: Vec<String>,
     ) {
         if self
             .catalog()
@@ -355,6 +356,27 @@ impl Coordinator {
                 session.vars().database().into(),
             ));
         }
+        if !set_setting_keys
+            .iter()
+            .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
+        {
+            let default = catalog
+                .state()
+                .system_config()
+                .statement_logging_default_sample_rate();
+            session
+                .vars_mut()
+                .set(
+                    None,
+                    STATEMENT_LOGGING_SAMPLE_RATE.name(),
+                    VarInput::Flat(&default.to_string()),
+                    false,
+                )
+                .expect("constrained to be valid");
+            session
+                .vars_mut()
+                .end_transaction(EndTransactionAction::Commit);
+        }
 
         let session_type = metrics::session_type_label_value(session.user());
         self.metrics
@@ -373,6 +395,7 @@ impl Coordinator {
             },
         );
         let update = self.catalog().state().pack_session_update(&session, 1);
+        self.begin_session_for_statement_logging(&session);
         self.send_builtin_table_updates(vec![update]).await;
 
         ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
@@ -381,42 +404,80 @@ impl Coordinator {
 
     /// Handles an execute command.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn handle_execute(&mut self, portal_name: String, mut ctx: ExecuteContext) {
-        if ctx.session().vars().emit_trace_id_notice() {
+    pub(crate) async fn handle_execute(
+        &mut self,
+        portal_name: String,
+        mut session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        // If this command was part of another execute command
+        // (for example, executing a `FETCH` statement causes an execute to be
+        //  issued for the cursor it references),
+        // then `outer_context` should be `Some`.
+        // This instructs the coordinator that the
+        // outer execute should be considered finished once the inner one is.
+        outer_context: Option<ExecuteContextExtra>,
+    ) {
+        if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
                 .span()
                 .span_context()
                 .clone();
             if span_context.is_valid() {
-                ctx.session().add_notice(AdapterNotice::QueryTrace {
+                session.add_notice(AdapterNotice::QueryTrace {
                     trace_id: span_context.trace_id(),
                 });
             }
         }
 
-        if let Err(err) = self.verify_portal(ctx.session_mut(), &portal_name) {
+        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+            // If statement logging hasn't started yet, we don't need
+            // to add any "end" event, so just make up a no-op
+            // `ExecuteContextExtra` here, via `Default::default`.
+            //
+            // It's a bit unfortunate because the edge case of failed
+            // portal verifications won't show up in statement
+            // logging, but there seems to be nothing else we can do,
+            // because we need access to the portal to begin logging.
+            //
+            // Another option would be to log a begin and end event, but just fill in NULLs
+            // for everything we get from the portal (prepared statement id, params).
+            let extra = outer_context.unwrap_or_else(Default::default);
+            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
             return ctx.retire(Err(err));
         }
 
-        let portal = ctx
-            .session()
-            .get_portal_unverified(&portal_name)
-            .expect("known to exist");
+        // The reference to `portal` can't outlive `session`, which we
+        // use to construct the context, so scope the reference to this block where we
+        // get everything we need from the portal for later.
+        let (stmt, ctx, params) = {
+            let portal = session
+                .get_portal_unverified(&portal_name)
+                .expect("known to exist");
+            let params = portal.parameters.clone();
+            let stmt = portal.stmt.clone();
+            let logging = Arc::clone(&portal.logging);
 
-        let stmt = match &portal.stmt {
-            Some(stmt) => stmt.clone(),
-            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
+            let extra = if let Some(extra) = outer_context {
+                // We are executing in the context of another SQL statement, so we don't
+                // want to begin statement logging anew. The context of the actual statement
+                // being executed is the one that should be retired once this finishes.
+                extra
+            } else {
+                // This is a new statement, log it and return the context
+                let maybe_uuid =
+                    self.begin_statement_execution(&mut session, params.clone(), &logging);
+
+                ExecuteContextExtra::new(maybe_uuid)
+            };
+            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
+            (stmt, ctx, params)
         };
 
-        let logging = Arc::clone(&portal.logging);
-
-        self.begin_statement_execution(ctx.session_mut(), &logging);
-
-        let portal = ctx
-            .session()
-            .get_portal_unverified(&portal_name)
-            .expect("known to exist");
+        let stmt = match stmt {
+            Some(stmt) => stmt,
+            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
+        };
 
         let session_type = metrics::session_type_label_value(ctx.session().user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
@@ -441,7 +502,6 @@ impl Coordinator {
             _ => {}
         }
 
-        let params = portal.parameters.clone();
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
@@ -792,6 +852,11 @@ impl Coordinator {
                 conn_id: _,
                 cluster_id: _,
                 depends_on: _,
+                // We take responsibility for retiring the
+                // peek in `self.cancel_pending_peeks`,
+                // so we don't need to do anything with `ctx_extra` here.
+                ctx_extra: _,
+                is_fast_path: _,
             } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
@@ -827,6 +892,7 @@ impl Coordinator {
             .dec();
         self.active_conns.remove(session.conn_id());
         self.cancel_pending_peeks(session.conn_id());
+        self.end_session_for_statement_logging(session.uuid());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }
