@@ -861,7 +861,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.storage_state.dropped_ids.extend(ids);
             }
             InternalStorageCommand::UpdateConfiguration {
-                pg_replication_timeouts,
+                pg_source_tcp_timeouts,
                 pg_source_snapshot_statement_timeout,
                 rocksdb,
                 storage_dataflow_max_inflight_bytes_config,
@@ -869,7 +869,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 delay_sources_past_rehydration,
                 shrink_upsert_unused_buffers_by_ratio,
             } => self.storage_state.dataflow_parameters.update(
-                pg_replication_timeouts,
+                pg_source_tcp_timeouts,
                 pg_source_snapshot_statement_timeout,
                 rocksdb,
                 auto_spill_config,
@@ -1186,7 +1186,7 @@ impl StorageState {
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
-                        pg_replication_timeouts: params.pg_replication_timeouts,
+                        pg_source_tcp_timeouts: params.pg_source_tcp_timeouts,
                         pg_source_snapshot_statement_timeout: params
                             .pg_source_snapshot_statement_timeout,
                         rocksdb: params.upsert_rocksdb_tuning_config,

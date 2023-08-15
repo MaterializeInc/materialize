@@ -28,7 +28,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 pub struct StorageParameters {
     /// Persist client configuration.
     pub persist: PersistParameters,
-    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
     pub pg_source_snapshot_statement_timeout: Duration,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
@@ -127,7 +127,7 @@ impl StorageParameters {
         &mut self,
         StorageParameters {
             persist,
-            pg_replication_timeouts,
+            pg_source_tcp_timeouts,
             pg_source_snapshot_statement_timeout,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
@@ -144,7 +144,7 @@ impl StorageParameters {
         }: StorageParameters,
     ) {
         self.persist.update(persist);
-        self.pg_replication_timeouts = pg_replication_timeouts;
+        self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
@@ -167,7 +167,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
     fn into_proto(&self) -> ProtoStorageParameters {
         ProtoStorageParameters {
             persist: Some(self.persist.into_proto()),
-            pg_replication_timeouts: Some(self.pg_replication_timeouts.into_proto()),
+            pg_source_tcp_timeouts: Some(self.pg_source_tcp_timeouts.into_proto()),
             pg_source_snapshot_statement_timeout: Some(
                 self.pg_source_snapshot_statement_timeout.into_proto(),
             ),
@@ -199,9 +199,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoStorageParameters::persist")?,
-            pg_replication_timeouts: proto
-                .pg_replication_timeouts
-                .into_rust_if_some("ProtoStorageParameters::pg_replication_timeouts")?,
+            pg_source_tcp_timeouts: proto
+                .pg_source_tcp_timeouts
+                .into_rust_if_some("ProtoStorageParameters::pg_source_tcp_timeouts")?,
             pg_source_snapshot_statement_timeout: proto
                 .pg_source_snapshot_statement_timeout
                 .into_rust_if_some(
@@ -242,9 +242,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
     }
 }
 
-impl RustType<ProtoPgReplicationTimeouts> for mz_postgres_util::ReplicationTimeouts {
-    fn into_proto(&self) -> ProtoPgReplicationTimeouts {
-        ProtoPgReplicationTimeouts {
+impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
+    fn into_proto(&self) -> ProtoPgSourceTcpTimeouts {
+        ProtoPgSourceTcpTimeouts {
             connect_timeout: self.connect_timeout.into_proto(),
             keepalives_retries: self.keepalives_retries,
             keepalives_idle: self.keepalives_idle.into_proto(),
@@ -253,8 +253,8 @@ impl RustType<ProtoPgReplicationTimeouts> for mz_postgres_util::ReplicationTimeo
         }
     }
 
-    fn from_proto(proto: ProtoPgReplicationTimeouts) -> Result<Self, TryFromProtoError> {
-        Ok(mz_postgres_util::ReplicationTimeouts {
+    fn from_proto(proto: ProtoPgSourceTcpTimeouts) -> Result<Self, TryFromProtoError> {
+        Ok(mz_postgres_util::TcpTimeoutConfig {
             connect_timeout: proto.connect_timeout.into_rust()?,
             keepalives_retries: proto.keepalives_retries,
             keepalives_idle: proto.keepalives_idle.into_rust()?,

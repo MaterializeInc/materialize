@@ -74,9 +74,19 @@ pub enum TunnelConfig {
     },
 }
 
+// Some of these defaults were recommended by @ph14
+// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+pub const DEFAULT_KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+pub const DEFAULT_KEEPALIVE_RETRIES: u32 = 5;
+// This is meant to be DEFAULT_KEEPALIVE_IDLE
+// + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
+pub const DEFAULT_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Configurable timeouts that apply only when using [`Config::connect_replication`].
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReplicationTimeouts {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TcpTimeoutConfig {
     pub connect_timeout: Option<Duration>,
     pub keepalives_retries: Option<u32>,
     pub keepalives_idle: Option<Duration>,
@@ -84,15 +94,17 @@ pub struct ReplicationTimeouts {
     pub tcp_user_timeout: Option<Duration>,
 }
 
-// Some of these defaults were recommended by @ph14
-// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
-pub const DEFAULT_REPLICATION_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-pub const DEFAULT_REPLICATION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
-pub const DEFAULT_REPLICATION_KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
-pub const DEFAULT_REPLICATION_KEEPALIVE_RETRIES: u32 = 5;
-// This is meant to be DEFAULT_REPLICATION_KEEPALIVE_IDLE
-// + DEFAULT_REPLICATION_KEEPALIVE_RETRIES * DEFAULT_REPLICATION_KEEPALIVE_INTERVAL
-pub const DEFAULT_REPLICATION_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+impl Default for TcpTimeoutConfig {
+    fn default() -> Self {
+        TcpTimeoutConfig {
+            connect_timeout: Some(DEFAULT_CONNECT_TIMEOUT),
+            keepalives_retries: Some(DEFAULT_KEEPALIVE_RETRIES),
+            keepalives_idle: Some(DEFAULT_KEEPALIVE_IDLE),
+            keepalives_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            tcp_user_timeout: Some(DEFAULT_TCP_USER_TIMEOUT),
+        }
+    }
+}
 
 pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 
@@ -104,7 +116,7 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
-    replication_timeouts: ReplicationTimeouts,
+    replication_timeouts: TcpTimeoutConfig,
 }
 
 impl Config {
@@ -112,7 +124,7 @@ impl Config {
         let config = Self {
             inner,
             tunnel,
-            replication_timeouts: ReplicationTimeouts::default(),
+            replication_timeouts: TcpTimeoutConfig::default(),
         };
 
         // Early validate that the configuration contains only a single TCP
@@ -122,7 +134,7 @@ impl Config {
         Ok(config)
     }
 
-    pub fn replication_timeouts(mut self, replication_timeouts: ReplicationTimeouts) -> Config {
+    pub fn replication_timeouts(mut self, replication_timeouts: TcpTimeoutConfig) -> Config {
         self.replication_timeouts = replication_timeouts;
         self
     }
@@ -140,27 +152,27 @@ impl Config {
                 .connect_timeout(
                     self.replication_timeouts
                         .connect_timeout
-                        .unwrap_or(DEFAULT_REPLICATION_CONNECT_TIMEOUT),
+                        .unwrap_or(DEFAULT_CONNECT_TIMEOUT),
                 )
                 .keepalives_interval(
                     self.replication_timeouts
                         .keepalives_interval
-                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_INTERVAL),
+                        .unwrap_or(DEFAULT_KEEPALIVE_INTERVAL),
                 )
                 .keepalives_idle(
                     self.replication_timeouts
                         .keepalives_idle
-                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_IDLE),
+                        .unwrap_or(DEFAULT_KEEPALIVE_IDLE),
                 )
                 .keepalives_retries(
                     self.replication_timeouts
                         .keepalives_retries
-                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_RETRIES),
+                        .unwrap_or(DEFAULT_KEEPALIVE_RETRIES),
                 )
                 .tcp_user_timeout(
                     self.replication_timeouts
                         .tcp_user_timeout
-                        .unwrap_or(DEFAULT_REPLICATION_TCP_USER_TIMEOUT),
+                        .unwrap_or(DEFAULT_TCP_USER_TIMEOUT),
                 );
         })
         .await

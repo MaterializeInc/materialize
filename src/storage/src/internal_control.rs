@@ -26,7 +26,7 @@ use timely::worker::Worker as TimelyWorker;
 #[derive(Debug)]
 pub struct DataflowParameters {
     /// Configured PG replication timeouts,
-    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
     /// Configured PG `statement_timeout` value to use during snapshotting.
     pub pg_source_snapshot_statement_timeout: Duration,
     /// Configuration/tuning for RocksDB
@@ -53,7 +53,7 @@ impl DataflowParameters {
         cluster_memory_limit: Option<usize>,
     ) -> Self {
         Self {
-            pg_replication_timeouts: Default::default(),
+            pg_source_tcp_timeouts: Default::default(),
             pg_source_snapshot_statement_timeout: Default::default(),
             upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig::new(
                 shared_rocksdb_write_buffer_manager,
@@ -68,7 +68,7 @@ impl DataflowParameters {
     /// Update the `DataflowParameters` with new configuration.
     pub fn update(
         &mut self,
-        pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+        pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
         pg_source_snapshot_statement_timeout: Duration,
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
         auto_spill_config: mz_storage_types::parameters::UpsertAutoSpillConfig,
@@ -76,7 +76,7 @@ impl DataflowParameters {
         delay_sources_past_rehydration: bool,
         shrink_upsert_unused_buffers_by_ratio: usize,
     ) {
-        self.pg_replication_timeouts = pg_replication_timeouts;
+        self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
         self.auto_spill_config = auto_spill_config;
@@ -126,7 +126,7 @@ pub enum InternalStorageCommand {
     /// Update the configuration for rendering dataflows.
     UpdateConfiguration {
         /// PG timeout configuration.
-        pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+        pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
         /// PG snapshot `statement_timeout` config
         pg_source_snapshot_statement_timeout: Duration,
         /// RocksDB configuration.

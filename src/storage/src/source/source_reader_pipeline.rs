@@ -159,7 +159,7 @@ impl RawSourceCreationConfig {
 #[derive(Clone)]
 pub struct SourceCreationParams {
     /// Sets timeouts specific to PG replication streams
-    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
     pub pg_source_snapshot_statement_timeout: Duration,
 }
 
