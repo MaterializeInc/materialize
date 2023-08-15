@@ -125,6 +125,12 @@ def main() -> int:
         "--wrapper",
         help="Wrapper command for the program",
     )
+    parser.add_argument(
+        "--monitoring",
+        help="Automatically send monitoring data.",
+        default=False,
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -215,9 +221,10 @@ def main() -> int:
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
-                "--opentelemetry-endpoint=http://localhost:4317",
                 *args.args,
             ]
+            if args.monitoring:
+                command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")

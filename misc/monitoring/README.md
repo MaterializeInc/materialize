@@ -1,9 +1,13 @@
 # Local monitoring composition
 
 An [mzcompose] composition for running a minimal monitoring stack of Prometheus
-(metrics), Tempo (distributed tracing), and Grafana locally. Metrics and traces
-from all processes run by the `bin/environmentd` script will be automatically
-discovered and collected.
+(metrics), Tempo (distributed tracing), and Grafana locally. Metrics from all
+processes run by the `bin/environmentd` script will be automatically discovered
+and collected, and traces will be collected when run with `--monitoring`:
+
+```
+./bin/environmentd --monitoring
+```
 
 ## Usage
 

@@ -229,9 +229,11 @@ and `mz_ore::tracing::OpenTelemetryContext::attach_as_parent()` on the receiving
 To setup trace collection locally, start the `../../misc/monitoring` composition. It will spin up Tempo to
 automatically start storing traces, and Grafana to visualize them.
 
+Then start `./bin/environmentd --monitoring`.
+
 ### Setting the Trace Filter
 
-By default, `./bin/materialized` will only emit `INFO`-level spans. The filter is controlled through the
+By default, `./bin/environmentd` will only emit `INFO`-level spans. The filter is controlled through the
 `opentelemetry_filter` system variable and can be toggled dynamically:
 
 ```
@@ -243,7 +245,7 @@ mz_system=> ALTER SYSTEM SET opentelemetry_filter="debug";
 Or on startup:
 
 ```
-./bin/environmentd --reset -- --system-parameter-default='opentelemetry_filter=debug'
+./bin/environmentd --reset --monitoring -- --system-parameter-default='opentelemetry_filter=debug'
 ```
 
 More details on [the filter syntax] can be found in Notion.
