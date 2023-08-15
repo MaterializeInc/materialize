@@ -110,7 +110,12 @@ pub trait DurableCatalogState {
     /// migrations can write data at the same timestamp, if desired.
     ///
     /// The boot timestamp is guaranteed to never go backwards, even in the face
-    /// of backwards time jumps across restarts.
+    /// of backwards time jumps across restarts. Every time the catalog is opened,
+    /// this value is guaranteed to increase.
+    /// 
+    /// NB: This is only ever used during startup to ensure that the timestamp for
+    /// all migrations are the same. There's probably a better way to handle this
+    /// than storing it in the catalog indefinitely.
     fn boot_ts(&self) -> mz_repr::Timestamp;
 
     /// Returns the epoch of the current durable catalog state.
