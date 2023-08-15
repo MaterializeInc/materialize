@@ -127,22 +127,25 @@ where
         existed
     }
 
-    /// Appends `updates` to the collection correlated with `id`.
+    /// Appends `updates` to the collection correlated with `id`, does not work for the append to
+    /// complete.
     ///
     /// # Panics
     /// - If `id` does not belong to managed collections.
-    /// - If there is contention to write to the collection identified by
-    ///   `id`.
+    /// - If there is contention to write to the collection identified by `id`.
     /// - If the collection closed.
     pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if !updates.is_empty() {
-            let appender = self.monotonic_appender(id).expect("id to exist");
-            match appender.append(updates).await {
-                Ok(()) => (),
-                // There's nothing we can do if we're shutting down.
-                Err(StorageError::ShuttingDown(_)) => (),
-                Err(e) => panic!("unexpected error when appending to collection {id}, err: {e:?}"),
-            }
+            // Get the update channel in a block to make sure the Mutex lock is scoped.
+            let update_tx = {
+                let guard = self.collections.lock().expect("CollectionManager panicked");
+                let (update_tx, _, _) = guard.get(&id).expect("id to exist");
+                update_tx.clone()
+            };
+
+            // Specifically _do not_ wait for the append to complete, just for it to be sent.
+            let (tx, _rx) = oneshot::channel();
+            update_tx.send((updates, tx)).await.expect("rx hung up");
         }
     }
 
