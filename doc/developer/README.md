@@ -46,6 +46,8 @@ land, and then browsed as reference material as you skill up on the codebase.
 * [fast-compiles.md](fast-compiles.md) describes various tricks for speeding
   up Rust compilation.
 
+* [feature-lifecycle.md](feature-lifecycle.md) outlines how we ship features.
+
 * [guide.md](guide.md) walks you through hacking on this codebase and our
   development philosophy.
 
@@ -59,6 +61,9 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 * [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
   our Docker images and Docker Compose configurations.
+
+* [project-management.md](project-management.md) describes our processes for
+  organizing, prioritizing, and shipping projects.
 
 * [publishing.md](publishing.md) details how to publish packages, like Rust
   crates or Docker images.

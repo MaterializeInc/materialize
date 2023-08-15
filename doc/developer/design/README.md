@@ -2,31 +2,33 @@
 
 ## What's the purpose of a design document?
 
-A design doc is a tool for the author to explain and gather feedback on a
-technical decision, providing an opportunity for anything they hadn't thought of
-to be surfaced early on and to have their thinking validated. It also serves as
-historical documentation for why a thing was done a certain way. The idea is to
-go slower at the beginning and get everything out on the table so we can go fast
-when implementing.
+A design document is a tool we use to thoroughly discover problems and
+examine potential solutions before moving into the delivery phase of a project.
+Design documents can tackle different classes of problems, including customer
+needs and internal technical challenges. The important part of a design
+document is being crisp about the exact problem we’re tackling, explaining
+all of the options being considered for tackling that problem, and recording why
+we ended up moving forward with a particular solution.
 
-Design docs go hand in hand with a discussion meeting. Asynchronous, text-only
-communication tends to drag out the process and doesn't get the same kind of
-broad feedback as having a short, in-person meeting.
+Writing a design document takes time. It requires a certain amount of
+legwork to get started, and it can require a meaningful amount of
+collaboration to get to a shareable state. We actively are making a
+choice here: to move slower at the beginning of the project management process
+in order to move faster and more confidently when we enter the delivery phase.
 
-It's not expected that all questions will be answered prior to the meeting, but
-the meeting should not be an open-ended brainstorming process. There is upfront
-work that goes into the doc (see [template](./00000000_template.md)) to allow
-for a productive meeting, and it's best if attendees have time to read and
-digest the doc prior to the meeting.
+Once a design document is written, it is required to host a discussion
+meeting. Asynchronous, text-only communication tends to drag out the
+process and doesn’t get the same kind of broad feedback that live
+meetings solicit. It is expected that attendees are given time to read, digest,
+and engage with the design document before the meeting. It is not
+expected that all open questions will be answered before the meeting starts.
 
-Note that design doc meetings are not an approval board or review body and the
-process is not design by committee. The author is responsible for driving to a
-conclusion. That doesn't mean that the author is solely responsible for making a
-decision, but does mean that the author is responsible for getting the knowledge
-they need to understand the space (from e.g., talking to peers), ensuring that
-critical concerns or open questions are addressed, and determining at what point
-a good decision has been reached. Not every design doc will lead to complete
-consensus.
+Design document meetings are not meant for open-ended brainstorming,
+nor are they meant to act as a review body. The intention of this
+process is not to design by committee. Instead, the author is
+responsible for driving the process to a conclusion that is satisfactory
+to the relevant stakeholders. Not every design document will result
+in complete consensus.
 
 Examples (some "in spirit", because the design doc template changed over time):
 * [External Introspection](./20230227_external_introspection.md)
@@ -35,54 +37,54 @@ Examples (some "in spirit", because the design doc template changed over time):
 
 ## Goals
 
-Summary of the goals of a design document:
+As stated earlier, the goal of a design document is to thoroughly
+discover problems and examine potential solutions before moving
+into the delivery phase of a project. In order to do this, each
+design document should:
 
- - Record context and assumptions.
- - Achieve a (reasonable) level of consensus around a design.
- - Record decisions.
- - Document a chosen design and lay out _some_ of the technical details.
+- Clearly and succinctly state the problem it aims to solve,
+  along with any required context.
+- Document evidence of the problem via customer interviews,
+  metrics, or any other means.
+- Crisply articulate the author’s preferred solution to the
+  problem, and why.
+- Document all alternative solutions that were considered,
+  and why they weren’t chosen.
+- Document any dependencies that may need to break or change
+  as a result of this work.
+- Record any decisions that resulted from the document.
 
-The last point is intentionally vague and requires some _intuition_ from the
-writer. The appropriate level of technical detail depends on the target
-reviewers and the nature of the design/change that is being proposed.
-
-Ask your tech lead if you are unsure about the right level of technical detail.
-A good rule of thumb is that you should strive for the *minimum* level of
-detail that fully communicates the proposal to your reviewers. Going into too
-much detail has a cost: it takes longer to write the document and longer to
-review the document, plus the finest details are those that are most likely to
-change during implementation.
+If any of these goals are unclear to you, or if the specific
+requirements of the document are unclear once you kick off a
+design process, reach out to your manager.
 
 ## Non-Goals
 
-These are not explicitly required for a good design document. You should,
-however, use your own judgement to determine what is and isn't required for
-your specific case.
+These are not explicitly required for a good design document.
+You should, however, use your own judgment to determine what
+is and isn’t required for your specific case.
 
- - Allow a drive-by commenter without any context to fully understand the
-   design: the intention is that a group of people with common context can come
-   together, understand the design and come to a decision. Some context might
-   be gathered from previous design documents, from reference documentation, or
-   from looking at the code.
- - Provide a fully spec'ed reference implementation: depending on the topic, it
-   can be very helpful to prepare a prototype. Both for validating the design
-   and for presenting it to others. However, it is not always a required part
-   of the design.
+Allow a drive-by commenter without any context to fully understand
+the design. The intention is that a group of people with some
+common context can come together, understand the design, and
+come to a decision. Provide a fully spec’ed out implementation
+of any of the solutions. Depending on the topic, it can be very
+helpful to provide a prototype, both for validating the design
+and for presenting it to others. However, it is not a required
+part of the design.
 
 ## When should you make a design document?
 
-Design docs should be written for all changes where an implementation does not
-immediately follow from the problem.
-
-Some specific times when you should write a design document:
+Design docs should be written for all changes where an implementation
+does not immediately follow from the problem.
 
 Definitely write a design document:
 
-1. If the change is large/cross-cutting, e.g., will be spread over multiple PRs
-   and/or multiple teams.
-2. If there are multiple alternative implementations and no clear best option.
-3. If it changes a customer-facing/public API, or a major private API (for
+1. If there are multiple alternative implementations and no clear best option.
+2. If it changes a customer-facing/public API, or a major private API (for
    example, the API for implementing new sinks).
+3. If the change is large/cross-cutting, e.g., will be spread over multiple PRs
+   and/or multiple teams.
 
 Consider writing a design document:
 
@@ -100,44 +102,60 @@ short.
 
 ### Creation
 
-1. Copy the [template](./00000000_template.md) to a new date-prefixed file in
-   `doc/developer/design` and fill it in. There is a separate template that the
-   COMPUTE team prefers: [template_compute](./00000000_template_compute.md).
-2. Submit a pull request -- this makes it easy for others to add written
-   comments.
-3. "Socialize" the design with relevant stakeholders. Typically, there is a
-   small set of people who have a vested interest in the area the design
-   touches. If it's not clear who that is, ask your TL, EM, or in #eng-general.
-4. Announce that the design doc is ready for review in #eng-announce, if you
-   think it's helpful to surface the design to a larger set of people. This
-   step is optional. We have an automation that posts new ready-for-review
-   design docs to #eng-design-docs and in many cases that will be sufficient
-   to inform any interested parties.
+1. Copy the design document template to a new date-prefixed file in
+   the design/ directory of the repository you’re working in, and fill it in.
+2. Submit a pull request of your filled in design document. This
+   makes it easy for others to add written comments.
+3. Identify your key stakeholders and socialize the design document
+   with them. Typically, there is a small set of people who have a vested
+   interest in the area the design touches. If it’s not clear who your
+   stakeholders for the design document are, check in with your manager.
+4. Schedule a meeting to discuss the design document live with your
+   stakeholders. Rule of thumb is that you should give your reviewers
+   about a week to thoroughly review and engage with your document.
+5. Optional, but recommended: announce that the design document is ready
+   for review in #epd-announce. It may be useful to get extra eyes on
+   your design, but remember that this process is not intended to design
+   by committee. Use your judgment in engaging with feedback from outside
+   of your group of stakeholders.
 
 ### Iteration
 
-5. Address comments, discuss, and iterate on the document in the PR.
-6. Gather explicit approvals from relevant stakeholders. This should be the set
-   of people that you identified at step 3. or folks that noticed your design
-   document from the (optional) announcement.
+6. As you begin to get feedback on your document, address the comments
+   and answer the questions on your PR. Continue to iterate.
+7. Drive the design document meeting and attempt to gather explicit
+   approvals from your stakeholders, the set of people that you
+   identified in Step 3.
+8. If you do not get explicit approvals in the meeting, keep iterating
+   until you do. You can do this asynchronously or synchronously.
+   If you’ve gone through multiple iterations and are struggling to get
+   the required approvals, get help from your manager.
 
-### Request approval
+### Approval
 
-7. If no comments have raised new issues or if no one has asked for additional
-   time to review, merge the design document. Do _not_ assume _silent
-   consensus_: if you did not hear back from important stakeholders, don't take
-   this as approval. Make sure the relevant people have in fact seen your design
-   and had a chance to object or propose changes.
+9. Once you have gotten the required approvals, merge the design
+   document. Do not assume silent consensus. If you did not hear back
+   from important stakeholders, do not take this as approval. Make
+   sure the relevant people have in fact seen your design and had
+   a chance to object or propose changes.
 
 ## Refinement
 
-If you discover substantial flaws in your design during implementation, update
-the design document, open a PR with the changes, and repeat steps 3-7.
+Once you’ve had your design document approved, you will move into
+the [delivery phase of the project management process](../project-management.md).
+On the happy path, your design will work as planned and the
+implementation will match what you’ve already documented. In that case,
+your design document will not require any refinement. On the unhappy
+path, you might discover that the design you proposed needs to be updated.
 
-For minor errors, just correct the design document in place in your
-implementation PRs.
+If you discover major flaws in your design during implementation, you
+will need to update your design document and get a new round of approvals
+(effectively repeating Steps 3-9 above). If you discover minor flaws,
+you can correct the design document alongside the implementation
+changes, instead.
 
-Use your judgment as to which scenario applies.
+Use your judgment as to which scenario applies, and reach out to your
+manager if you need guidance.
 
 ## Finalization
 
