@@ -496,7 +496,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
