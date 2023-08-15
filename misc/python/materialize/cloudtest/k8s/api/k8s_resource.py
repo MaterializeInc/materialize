@@ -34,7 +34,9 @@ class K8sResource:
                 *args,
             ]
 
-            return subprocess.check_output(cmd, text=True, input=input)
+            return subprocess.run(
+                cmd, text=True, input=input, check=True, stdout=subprocess.PIPE
+            ).stdout
         except subprocess.CalledProcessError as e:
             print(
                 dedent(
