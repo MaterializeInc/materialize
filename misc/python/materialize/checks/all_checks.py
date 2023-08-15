@@ -62,6 +62,7 @@ from materialize.checks.rollback import *  # noqa: F401 F403
 from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.source_errors import *  # noqa: F401 F403
 from materialize.checks.string import *  # noqa: F401 F403
+from materialize.checks.subsource import *  # noqa: F401 F403
 from materialize.checks.temporal_types import *  # noqa: F401 F403
 from materialize.checks.text_bytea_types import *  # noqa: F401 F403
 from materialize.checks.threshold import *  # noqa: F401 F403
