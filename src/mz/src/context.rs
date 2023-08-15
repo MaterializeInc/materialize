@@ -36,6 +36,7 @@ use mz_frontegg_client::client::{Authentication, Client as AdminClient};
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
 };
+use url::{ParseError, Url};
 
 /// Arguments for [`Context::load`].
 pub struct ContextLoadArgs {
@@ -76,6 +77,30 @@ impl Context {
         })
     }
 
+    /// Retrieves the admin endpoint from the configuration file.
+    ///
+    /// - If an admin-endpoint is provided, it uses its value.
+    /// - If only a cloud-endpoint is provided, it constructs the admin endpoint based on it.
+    /// - If neither an admin-endpoint nor a cloud-endpoint is provided, default values are used.
+    pub fn get_admin_endpoint(
+        &self,
+        cloud_endpoint: Option<&str>,
+        admin_endpoint: Option<&str>,
+    ) -> Result<Option<Url>, ParseError> {
+        if let Some(admin_endpoint) = admin_endpoint {
+            return Ok(Some(admin_endpoint.parse()?));
+        } else if let Some(cloud_endpoint) = cloud_endpoint {
+            let mut admin_endpoint_url = cloud_endpoint.parse::<Url>()?;
+
+            if let Some(host) = admin_endpoint_url.host_str() {
+                admin_endpoint_url.set_host(Some(&format!("admin.{}", host)))?;
+                return Ok(Some(admin_endpoint_url));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
@@ -87,8 +112,10 @@ impl Context {
         // Build clients
         let mut admin_client_builder = AdminClientBuilder::default();
 
-        if let Some(admin_endpoint) = profile.admin_endpoint() {
-            admin_client_builder = admin_client_builder.endpoint(admin_endpoint.parse()?);
+        if let Ok(Some(admin_endpoint)) =
+            self.get_admin_endpoint(profile.cloud_endpoint(), profile.admin_endpoint())
+        {
+            admin_client_builder = admin_client_builder.endpoint(admin_endpoint);
         }
 
         let admin_client: Arc<AdminClient> = Arc::new(
