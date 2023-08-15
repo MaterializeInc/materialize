@@ -270,7 +270,7 @@ Next, you will create a new role with different privileges to other objects. The
 
     ```hcl
     resource "materialize_role" "qa_role" {
-    name = "qa_role"
+      name = "qa_role"
     }
     ```
 
