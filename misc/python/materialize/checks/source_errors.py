@@ -75,6 +75,11 @@ class SourceErrors(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION source_errors_publicationA;
                 INSERT INTO source_errors_table VALUES (3);
+
+                # We sleep for a bit here to allow status updates to propagate to the storage controller
+                # in scenarios where environmentd is killed
+                > SELECT mz_internal.mz_sleep(3);
+                <null>
                 """,
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres

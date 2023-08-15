@@ -103,6 +103,33 @@ message ProtoStorageResponse {
         repeated ProtoSinkStatisticsUpdate sink_updates = 2;
     }
 
+    message ProtoSinkStatusUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        string status = 2;
+        optional string error = 3;
+        optional string hint = 4;
+        uint64 timestamp = 5;
+    }
+
+    message ProtoSourceStatusUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        string status = 2;
+        optional string error = 3;
+        optional string hint = 4;
+        uint64 timestamp = 5;
+    }
+
+    message ProtoObjectStatusUpdate {
+        oneof kind {
+            ProtoSinkStatusUpdate sink = 1;
+            ProtoSourceStatusUpdate source = 2;
+        }
+    }
+
+    message ProtoStatusUpdates {
+        repeated ProtoObjectStatusUpdate updates = 1;
+    }
+
     message ProtoDroppedIds {
         repeated mz_repr.global_id.ProtoGlobalId ids = 1;
     }
@@ -111,5 +138,6 @@ message ProtoStorageResponse {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoDroppedIds dropped_ids = 2;
         ProtoStatisticsUpdates stats = 3;
+        ProtoStatusUpdates status_updates = 4;
     }
 }

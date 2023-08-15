@@ -25,6 +25,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
@@ -45,6 +46,8 @@ use crate::client::{
 };
 use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
+
+use crate::healthcheck::{CollectionStatusManager, RawStatusUpdate};
 
 /// A storage client that replays the command stream on failure.
 ///
@@ -70,6 +73,8 @@ where
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
         grpc_client_params: GrpcClientParameters,
+        collection_status_manager: CollectionStatusManager,
+        now: NowFn,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -86,6 +91,8 @@ where
             config: Default::default(),
             metrics,
             grpc_client_params,
+            collection_status_manager,
+            now,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -164,6 +171,10 @@ struct RehydrationTask<T> {
     metrics: RehydratingStorageClientMetrics,
     /// gRPC client parameters.
     grpc_client_params: GrpcClientParameters,
+    /// A function that returns the current time.
+    now: NowFn,
+    /// Interface for appending source/sinks statuses
+    collection_status_manager: CollectionStatusManager,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -215,6 +226,17 @@ where
                 }
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
+
+                    match command {
+                        // If we receive this command while we are in the `AwaitAddress` state,
+                        // we should set the status of any sources/sink that this task manages
+                        // to `paused`
+                        StorageCommand::RunIngestions(_) => {
+                            self.set_internal_collection_statuses(InternalCollectionStatus::Paused)
+                                .await;
+                        }
+                        _ => {}
+                    }
                 }
                 Some(RehydrationCommand::Reset) => {}
             }
@@ -342,6 +364,7 @@ where
                     self.send_commands(location, client, vec![command]).await
                 }
                 Some(RehydrationCommand::Reset) => {
+                    self.set_internal_collection_statuses(InternalCollectionStatus::Paused).await;
                     RehydrationTaskState::AwaitAddress
                 }
             },
@@ -358,9 +381,46 @@ where
                     Some(response) => response,
                 };
 
+                if let Err(e) = &response {
+                    self.set_internal_collection_statuses(InternalCollectionStatus::Unknown { error_details: Some(e.to_string()) }).await;
+                }
+
                 self.send_response(location, client, response)
             }
         }
+    }
+
+    /// Sets the internal collection status for sources/sinks this task manages
+    async fn set_internal_collection_statuses(&self, status: InternalCollectionStatus) {
+        self.collection_status_manager
+            .append_source_updates(
+                self.sources
+                    .keys()
+                    .map(|id| RawStatusUpdate {
+                        collection_id: *id,
+                        status_name: status.name(),
+                        error: status.error_details(),
+                        ts: (self.now)(),
+                        hint: None,
+                    })
+                    .collect(),
+            )
+            .await;
+
+        self.collection_status_manager
+            .append_sink_updates(
+                self.sinks
+                    .keys()
+                    .map(|id| RawStatusUpdate {
+                        collection_id: *id,
+                        status_name: status.name(),
+                        error: status.error_details(),
+                        ts: (self.now)(),
+                        hint: None,
+                    })
+                    .collect(),
+            )
+            .await;
     }
 
     async fn send_commands(
@@ -491,6 +551,42 @@ where
             StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along.
                 Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats))
+            }
+            StorageResponse::StatusUpdates(updates) => {
+                // Just forward it along.
+                Some(StorageResponse::StatusUpdates(updates))
+            }
+        }
+    }
+}
+
+/// Status updates that only the storage controller has enough context
+/// to deduce. Generally status updates for a collection are sent from
+/// a storage replica, however there are some cases in which only the
+/// controller has enough context to conclude a status
+enum InternalCollectionStatus {
+    /// There are no resources for computation to occur. For example,
+    /// if 0 replicas are allocated to a source/sink for computation,
+    /// its status should be this
+    Paused,
+    /// Indicates that the storage controller has lost contact with a
+    /// storage replica
+    Unknown { error_details: Option<String> },
+}
+
+impl InternalCollectionStatus {
+    pub fn name(&self) -> &'static str {
+        match self {
+            InternalCollectionStatus::Paused => "paused",
+            InternalCollectionStatus::Unknown { .. } => "unknown",
+        }
+    }
+
+    pub fn error_details(&self) -> Option<&str> {
+        match self {
+            InternalCollectionStatus::Paused => None,
+            InternalCollectionStatus::Unknown { error_details } => {
+                error_details.as_ref().map(|e| e.as_str())
             }
         }
     }

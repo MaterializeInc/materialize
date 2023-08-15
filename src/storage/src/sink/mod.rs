@@ -13,6 +13,6 @@ mod healthcheck;
 mod kafka;
 pub mod metrics;
 
-pub use healthcheck::{Healthchecker, SinkStatus};
+pub use healthcheck::SinkStatus;
 pub(crate) use metrics::KafkaBaseMetrics;
 pub use metrics::SinkBaseMetrics;

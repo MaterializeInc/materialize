@@ -19,9 +19,6 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::DataflowError;
@@ -71,20 +68,12 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
-    let healthchecker_args = HealthcheckerArgs {
-        persist_clients: Arc::clone(&storage_state.persist_clients),
-        persist_location: sink.from_storage_metadata.persist_location.clone(),
-        status_shard_id: sink.status_id,
-        now_fn: storage_state.now.clone(),
-    };
-
     let sink_token = sink_render.render_continuous_sink(
         storage_state,
         sink,
         sink_id,
         ok_collection,
         err_collection.as_collection(),
-        healthchecker_args,
     );
 
     if let Some(sink_token) = sink_token {
@@ -231,18 +220,6 @@ where
     collection
 }
 
-/// Args for creating a healthchecker.  Not done inline because it requires async.
-pub struct HealthcheckerArgs {
-    /// persist_clients
-    pub persist_clients: Arc<PersistClientCache>,
-    /// location of persist
-    pub persist_location: PersistLocation,
-    /// id of status shard for updates
-    pub status_shard_id: Option<ShardId>,
-    /// now_fn
-    pub now_fn: NowFn,
-}
-
 /// A type that can be rendered as a dataflow sink.
 pub(crate) trait SinkRender<G>
 where
@@ -262,7 +239,6 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-        healthchecker_args: HealthcheckerArgs,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;
