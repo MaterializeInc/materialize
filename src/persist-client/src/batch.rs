@@ -25,7 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
-use mz_persist_types::stats::trim_to_budget;
+use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::order::Reverse;
 use semver::Version;
@@ -352,6 +352,7 @@ where
             Arc::clone(&blob),
             isolated_runtime,
             &batch_write_metrics,
+            consolidate,
         );
         Self {
             lower,
@@ -673,9 +674,10 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<LazyPartStats>)>)>,
+    writing_parts: VecDeque<JoinHandle<HollowBatchPart>>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
+    consolidated: bool,
 }
 
 // NB: In practice, the inputs to this end up getting downcased before they make
@@ -704,6 +706,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         blob: Arc<dyn Blob + Send + Sync>,
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
+        consolidated: bool,
     ) -> Self {
         BatchParts {
             cfg,
@@ -716,6 +719,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
             batch_metrics: batch_metrics.clone(),
+            consolidated,
         }
     }
 
@@ -738,12 +742,20 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let stats_collection_enabled = self.cfg.stats_collection_enabled;
         let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
+        let consolidated = self.consolidated;
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
         let handle = mz_ore::task::spawn(
             || "batch::write_part",
             async move {
                 let goodbytes = updates.goodbytes();
+                let key_lower = if consolidated {
+                    updates.get(0).and_then(|((k, _), _, _)| {
+                        truncate_bytes(k, TRUNCATE_LEN, TruncateBound::Lower)
+                    })
+                } else {
+                    None
+                };
                 let batch = BlobTraceBatchPart {
                     desc,
                     updates: vec![updates],
@@ -816,50 +828,44 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     }
                     stats
                 });
-                (payload_len, stats)
+
+                HollowBatchPart {
+                    key: partial_key,
+                    encoded_size_bytes: payload_len,
+                    key_lower: key_lower.unwrap_or_else(Vec::new),
+                    stats,
+                }
             }
             .instrument(write_span),
         );
-        self.writing_parts.push_back((partial_key, handle));
+        self.writing_parts.push_back(handle);
 
         while self.writing_parts.len() > self.cfg.batch_builder_max_outstanding_parts {
             batch_metrics.write_stalls.inc();
-            let (key, handle) = self
+            let handle = self
                 .writing_parts
                 .pop_front()
                 .expect("pop failed when len was just > some usize");
-            let (encoded_size_bytes, stats) = match handle
+            let part = match handle
                 .instrument(debug_span!("batch::max_outstanding"))
                 .await
             {
                 Ok(x) => x,
-                Err(err) if err.is_cancelled() => (0, None),
                 Err(err) => panic!("part upload task failed: {}", err),
             };
-            self.finished_parts.push(HollowBatchPart {
-                key,
-                encoded_size_bytes,
-                key_lower: vec![],
-                stats,
-            });
+            self.finished_parts.push(part);
         }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
     pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
         let mut parts = self.finished_parts;
-        for (key, handle) in self.writing_parts {
-            let (encoded_size_bytes, stats) = match handle.await {
+        for handle in self.writing_parts {
+            let part = match handle.await {
                 Ok(x) => x,
-                Err(err) if err.is_cancelled() => (0, None),
                 Err(err) => panic!("part upload task failed: {}", err),
             };
-            parts.push(HollowBatchPart {
-                key,
-                encoded_size_bytes,
-                key_lower: vec![],
-                stats,
-            });
+            parts.push(part);
         }
         parts
     }
