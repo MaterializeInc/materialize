@@ -249,7 +249,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .connection
                 .config(&*context.secrets_reader)
                 .await?
-                .replication_timeouts(config.params.pg_source_tcp_timeouts.clone());
+                .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
             let client = if is_snapshot_leader {
