@@ -75,19 +75,18 @@ implementation): https://github.com/MaterializeInc/materialize/pull/21071
 We will add the following trait in the catalog to describe interacting with the durable catalog
 state.
 
-NB: `async` modifiers, trait bounds, and most `Result`s are left off for easier readability. Almost
-all methods will return a `Result<T, Error>` for some `T`.
+NB: `async` modifiers and trait bounds (such as `Debug`) are left off for easier readability.
 
 ```Rust
 pub trait DurableCatalogState {
     // Initialization
 
     /// Reports if the catalog state has been initialized.
-    fn is_initialized(&self) -> bool;
+    fn is_initialized(&self) -> Result<bool, Error>;
 
     /// Optionally initialize the catalog if it has not
     /// been initialized and perform any migrations needed.
-    fn open(&mut self);
+    fn open(&mut self) -> Result<(), Error>;
 
     /// Checks to see if opening the catalog would be 
     /// successful, without making any durable changes.
@@ -117,7 +116,7 @@ pub trait DurableCatalogState {
     /// Returns the epoch of the current durable catalog state.
     ///
     /// NB: We may remove this in later iterations of Pv2.
-    fn epoch(&mut self) -> Option<NonZeroI64>;
+    fn epoch(&mut self) -> Result<Option<NonZeroI64>, Error>;
 
     // Read
 
@@ -126,7 +125,7 @@ pub trait DurableCatalogState {
      * get_<object-type>s(&self) -> Vec<ObjectType>;
      */
     /// Get all clusters.
-    fn get_clusters(&mut self) -> Vec<Cluster>;
+    fn get_clusters(&mut self) -> Result<Vec<Cluster>, Error>;
 
     /*
      * Currently, there isn't much need for methods of the form
@@ -144,7 +143,7 @@ pub trait DurableCatalogState {
     fn transaction(&mut self) -> Transaction;
 
     /// Commits a durable catalog state transaction.
-    fn commit_transaction(&mut self, tx: Transaction);
+    fn commit_transaction(&mut self, tx: Transaction) -> Result<(), Error>;
 
     /*
      * The majority of writes will go through a Transaction.
@@ -156,7 +155,7 @@ pub trait DurableCatalogState {
     fn set_system_object_mapping(
         &mut self,
         mappings: Vec<SystemObjectMapping>,
-    );
+    ) -> Result<(), Error>;
 
     // ...
 
@@ -168,7 +167,7 @@ pub trait DurableCatalogState {
     fn confirm_leadership(&mut self) -> Result<(), Error>;
 
     /// Dumps the entire catalog contents in human readable JSON.
-    fn dump(&self) -> String;
+    fn dump(&self) -> Result<String, Error>;
 }
 ```
 
