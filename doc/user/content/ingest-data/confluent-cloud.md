@@ -8,6 +8,7 @@ menu:
   main:
     parent: "kafka"
     name: "Confluent Cloud"
+    weight: 1
 ---
 
 This guide goes through the required steps to connect Materialize to a Confluent Cloud Kafka cluster.

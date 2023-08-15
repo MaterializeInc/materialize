@@ -8,6 +8,7 @@ menu:
   main:
     parent: "kafka"
     name: "Upstash Kafka"
+    weight: 3
 ---
 
 This guide goes through the required steps to connect Materialize to an Upstash Kafka cluster.

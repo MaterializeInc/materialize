@@ -9,6 +9,7 @@ menu:
   main:
     parent: "kafka"
     name: "Amazon MSK"
+    weight: 2
 ---
 
 This guide goes through the required steps to connect Materialize to an Amazon MSK cluster.
