@@ -21,10 +21,10 @@ use std::time::Duration;
 
 use crate::{context::RegionContext, error::Error};
 
-use mz_cloud_api::client::{cloud_provider::CloudProvider, region::RegionInfo};
+use mz_cloud_api::client::cloud_provider::CloudProvider;
+use mz_ore::retry::Retry;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
-use tokio::time::sleep;
 
 /// Enable a region in the profile organization.
 ///
@@ -44,34 +44,37 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
 
     loading_spinner.set_message("Waiting for the region to be online...");
 
-    let mut tries = 0;
+    // Loop retrieving the region and checking the SQL connection for 6 minutes.
+    // After 6 minutes it will timeout.
+    let _ = Retry::default()
+        .max_duration(Duration::from_secs(360))
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async(|_| async {
+            let region_info = cx.get_region().await?.region_info;
 
-    let region_info: RegionInfo = loop {
-        tries += 1;
-        match cx.get_region().await {
-            Ok(region) => {
-                if let Some(region_info) = region.region_info {
-                    break Ok(region_info);
+            match region_info {
+                Some(region_info) => {
+                    loading_spinner.set_message("Waiting for the region to be ready...");
+                    if region_info.resolvable {
+                        loop {
+                            if cx
+                                .sql_client()
+                                .is_ready(&region_info, cx.admin_client().claims().await?.email)?
+                            {
+                                return Ok(());
+                            } else {
+                                break Err(Error::NotPgReadyError);
+                            }
+                        }
+                    } else {
+                        Err(Error::NotResolvableRegion)
+                    }
                 }
+                None => Err(Error::NotReadyRegion),
             }
-            Err(e) => {
-                if tries == 10 {
-                    break Err(e);
-                }
-            }
-        }
-        sleep(Duration::from_secs(10)).await;
-    }?;
+        })
+        .await.map_err(|e| Error::TimeoutError(Box::new(e)))?;
 
-    loading_spinner.set_message("Waiting for the region to be ready...");
-    loop {
-        if cx
-            .sql_client()
-            .is_ready(&region_info, cx.admin_client().claims().await?.email)?
-        {
-            break;
-        }
-    }
     loading_spinner.finish_with_message(format!("Region in {} is now online", cloud_provider.id));
 
     Ok(())
