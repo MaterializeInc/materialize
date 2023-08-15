@@ -945,7 +945,7 @@ impl Coordinator {
                     let body = desc
                         .get_by_name(&"body".into())
                         .map(|(_idx, ty)| ty.clone())
-                        .ok_or(name)?;
+                        .ok_or(name.clone())?;
                     let header = desc
                         .get_by_name(&"headers".into())
                         .map(|(_idx, ty)| ty.clone());
@@ -964,7 +964,11 @@ impl Coordinator {
             };
 
             // Get a channel so we can queue updates to be written.
-            let row_tx = coord.controller.storage.monotonic_appender(entry.id());
+            let row_tx = coord
+                .controller
+                .storage
+                .monotonic_appender(entry.id())
+                .map_err(|_| name)?;
             Ok(AppendWebhookResponse {
                 tx: row_tx,
                 body_ty,
