@@ -4414,6 +4414,7 @@ dependencies = [
  "futures-task",
  "futures-util",
  "h2",
+ "hex",
  "humantime",
  "mz-build-info",
  "mz-http-util",

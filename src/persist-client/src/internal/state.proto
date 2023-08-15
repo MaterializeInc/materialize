@@ -27,6 +27,8 @@ message ProtoHollowBatchPart {
     string key = 1;
     uint64 encoded_size_bytes = 2;
 
+    bytes key_lower = 3;
+
     optional bytes key_stats = 536870906;
     reserved 536870907 to 536870911;
 }
