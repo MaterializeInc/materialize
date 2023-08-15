@@ -729,6 +729,7 @@ mod tests {
     use std::str::FromStr;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use mz_ore::collections::CollectionExt;
     use serde_json::json;
 
     use crate::tests::{all_ok, new_test_client};
@@ -801,6 +802,15 @@ mod tests {
         write
             .expect_compare_and_append_batch(&mut [&mut batch0, &mut batch1], 0, 4)
             .await;
+
+        let batch = write
+            .machine
+            .snapshot(&Antichain::from_elem(3))
+            .await
+            .expect("just wrote this")
+            .into_element();
+
+        assert!(batch.runs().count() >= 2);
 
         let expected = vec![
             (("1".to_owned(), "one".to_owned()), 1, 2),
