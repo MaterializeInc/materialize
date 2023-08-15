@@ -11,6 +11,7 @@
 
    ```
    VERSION=vX.Y.Z
+   git branch -D mz-release
    git checkout -b mz-release
    git commit -am "mz: release $VERSION"
    git push -u your-fork
