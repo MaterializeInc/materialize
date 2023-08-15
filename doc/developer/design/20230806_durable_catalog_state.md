@@ -188,7 +188,7 @@ We will also add the following methods to initialize the durable catalog state s
 not open the catalog, but they may create connections over the network.
 
 ```Rust
-fn stash_catalog_state(
+fn init_stash_catalog_state(
     now: NowFn,
     stash_factory: StashFactory,
     stash_url: String,
@@ -197,7 +197,7 @@ fn stash_catalog_state(
     // ...
 }
 
-fn persist_catalog_state(
+fn init_persist_catalog_state(
     now: NowFn,
     shard_id: ShardId,
     persist_client: PersistClient,
@@ -205,7 +205,7 @@ fn persist_catalog_state(
     // ...
 }
 
-fn shadow_catalog_state(
+fn init_shadow_catalog_state(
     primary_state: Box<dyn DurableCatalogState>,
     secondary_state: Box<dyn DurableCatalogState>,
 ) -> Box<dyn DurableCatalogState> {
@@ -239,7 +239,7 @@ NB: The storage events are read once at start-time and never read again.
 
 #### Initialization
 
-- `persist_catalog_state`:
+- `init_persist_catalog_state`:
     1. Creates a new persist write handle.
     2. Read the shard upper into memory.
     3. Store the boot timestamp in memory.
