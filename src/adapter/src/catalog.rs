@@ -7247,16 +7247,39 @@ impl Catalog {
         );
 
         let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = &mut state.get_schema_mut(
+        let schema = state.get_schema_mut(
             &old_entry.name().qualifiers.database_spec,
             &old_entry.name().qualifiers.schema_spec,
             conn_id,
         );
         schema.items.remove(&old_entry.name().item);
+
+        // We only need to install this item on items in the `used_by` of new
+        // dependencies.
+        let new_deps: Vec<_> = to_item
+            .uses()
+            .0
+            .difference(&old_entry.uses().0)
+            .cloned()
+            .collect();
+
         let mut new_entry = old_entry.clone();
         new_entry.name = to_name;
         new_entry.item = to_item;
+
         schema.items.insert(new_entry.name().item.clone(), id);
+
+        for u in new_deps {
+            match state.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.used_by.push(new_entry.id),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while updating {}",
+                    &u,
+                    state.resolve_full_name(&new_entry.name, new_entry.conn_id())
+                ),
+            }
+        }
+
         state.entry_by_id.insert(id, new_entry);
         builtin_table_updates.extend(state.pack_item_update(id, 1));
         Ok(())
