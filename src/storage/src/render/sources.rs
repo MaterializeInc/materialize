@@ -100,9 +100,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     let source_name = format!("{}-{}", connection.name(), id);
 
     let params = SourceCreationParams {
-        pg_replication_timeouts: storage_state
+        pg_source_tcp_timeouts: storage_state
             .dataflow_parameters
-            .pg_replication_timeouts
+            .pg_source_tcp_timeouts
             .clone(),
         pg_source_snapshot_statement_timeout: storage_state
             .dataflow_parameters

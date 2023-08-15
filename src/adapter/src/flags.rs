@@ -38,12 +38,12 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
         persist: persist_config(config),
-        pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
-            connect_timeout: Some(config.pg_replication_connect_timeout()),
-            keepalives_retries: Some(config.pg_replication_keepalives_retries()),
-            keepalives_idle: Some(config.pg_replication_keepalives_idle()),
-            keepalives_interval: Some(config.pg_replication_keepalives_interval()),
-            tcp_user_timeout: Some(config.pg_replication_tcp_user_timeout()),
+        pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
+            connect_timeout: Some(config.pg_source_connect_timeout()),
+            keepalives_retries: Some(config.pg_source_keepalives_retries()),
+            keepalives_idle: Some(config.pg_source_keepalives_idle()),
+            keepalives_interval: Some(config.pg_source_keepalives_interval()),
+            tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
         },
         pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),

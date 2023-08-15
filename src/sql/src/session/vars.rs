@@ -849,16 +849,6 @@ mod upsert_rocksdb {
         internal: true,
     };
 }
-
-/// Controls the connect_timeout setting when connecting to PG via replication.
-const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_connect_timeout"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_CONNECT_TIMEOUT,
-    description: "Sets the timeout applied to socket-level connection attempts for PG \
-    replication connections. (Materialize)",
-    internal: true,
-};
-
 static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
 static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
@@ -906,42 +896,52 @@ const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_connect_timeout"),
+    value: &mz_postgres_util::DEFAULT_CONNECT_TIMEOUT,
+    description: "Sets the timeout applied to socket-level connection attempts for PG \
+    replication connections. (Materialize)",
+    internal: true,
+};
+
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
-/// when connecting to PG via replication.
-const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
-    name: UncasedStr::new("pg_replication_keepalives_retries"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
+/// when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("pg_source_keepalives_retries"),
+    value: &mz_postgres_util::DEFAULT_KEEPALIVE_RETRIES,
     description:
         "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
-    a connection when connecting to PG via replication. (Materialize)",
+    a connection when connecting to PG via `mz_postgres_util`. (Materialize)",
     internal: true,
 };
 
 /// Sets the amount of idle time before a keepalive packet is sent on the connection when connecting
-/// to PG via replication.
-const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_keepalives_idle"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_IDLE,
+/// to PG via `mz_postgres_util`.
+const PG_SOURCE_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_keepalives_idle"),
+    value: &mz_postgres_util::DEFAULT_KEEPALIVE_IDLE,
     description:
         "Sets the amount of idle time before a keepalive packet is sent on the connection \
-    when connecting to PG via replication. (Materialize)",
+    when connecting to PG via `mz_postgres_util`. (Materialize)",
     internal: true,
 };
 
-/// Sets the time interval between TCP keepalive probes when connecting to PG via replication.
-const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_keepalives_interval"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_INTERVAL,
+/// Sets the time interval between TCP keepalive probes when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_keepalives_interval"),
+    value: &mz_postgres_util::DEFAULT_KEEPALIVE_INTERVAL,
     description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
     replication. (Materialize)",
     internal: true,
 };
 
-/// Sets the TCP user timeout when connecting to PG via replication.
-const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_tcp_user_timeout"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
-    description: "Sets the TCP user timeout when connecting to PG via replication. (Materialize)",
+/// Sets the TCP user timeout when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_tcp_user_timeout"),
+    value: &mz_postgres_util::DEFAULT_TCP_USER_TIMEOUT,
+    description:
+        "Sets the TCP user timeout when connecting to PG via `mz_postgres_util`. (Materialize)",
     internal: true,
 };
 
@@ -2341,11 +2341,11 @@ impl SystemVars {
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
-            .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
-            .with_var(&PG_REPLICATION_KEEPALIVES_IDLE)
-            .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
-            .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
-            .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&PG_SOURCE_CONNECT_TIMEOUT)
+            .with_var(&PG_SOURCE_KEEPALIVES_IDLE)
+            .with_var(&PG_SOURCE_KEEPALIVES_INTERVAL)
+            .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
+            .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
             .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
@@ -2830,32 +2830,32 @@ impl SystemVars {
         *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
     }
 
-    /// Returns the `pg_replication_connect_timeout` configuration parameter.
-    pub fn pg_replication_connect_timeout(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_CONNECT_TIMEOUT)
+    /// Returns the `pg_source_connect_timeout` configuration parameter.
+    pub fn pg_source_connect_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_CONNECT_TIMEOUT)
     }
 
-    /// Returns the `pg_replication_keepalives_retries` configuration parameter.
-    pub fn pg_replication_keepalives_retries(&self) -> u32 {
-        *self.expect_value(&PG_REPLICATION_KEEPALIVES_RETRIES)
+    /// Returns the `pg_source_keepalives_retries` configuration parameter.
+    pub fn pg_source_keepalives_retries(&self) -> u32 {
+        *self.expect_value(&PG_SOURCE_KEEPALIVES_RETRIES)
     }
 
-    /// Returns the `pg_replication_keepalives_idle` configuration parameter.
-    pub fn pg_replication_keepalives_idle(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_KEEPALIVES_IDLE)
+    /// Returns the `pg_source_keepalives_idle` configuration parameter.
+    pub fn pg_source_keepalives_idle(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_KEEPALIVES_IDLE)
     }
 
-    /// Returns the `pg_replication_keepalives_interval` configuration parameter.
-    pub fn pg_replication_keepalives_interval(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_KEEPALIVES_INTERVAL)
+    /// Returns the `pg_source_keepalives_interval` configuration parameter.
+    pub fn pg_source_keepalives_interval(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_KEEPALIVES_INTERVAL)
     }
 
-    /// Returns the `pg_replication_tcp_user_timeout` configuration parameter.
-    pub fn pg_replication_tcp_user_timeout(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_TCP_USER_TIMEOUT)
+    /// Returns the `pg_source_tcp_user_timeout` configuration parameter.
+    pub fn pg_source_tcp_user_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_TCP_USER_TIMEOUT)
     }
 
-    /// Returns the `pg_replication_tcp_user_timeout` configuration parameter.
+    /// Returns the `pg_source_snapshot_statement_timeout` configuration parameter.
     pub fn pg_source_snapshot_statement_timeout(&self) -> Duration {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
@@ -4584,11 +4584,11 @@ pub fn is_compute_config_var(name: &str) -> bool {
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub fn is_storage_config_var(name: &str) -> bool {
-    name == PG_REPLICATION_CONNECT_TIMEOUT.name()
-        || name == PG_REPLICATION_KEEPALIVES_IDLE.name()
-        || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
-        || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
-        || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+    name == PG_SOURCE_CONNECT_TIMEOUT.name()
+        || name == PG_SOURCE_KEEPALIVES_IDLE.name()
+        || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
+        || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
+        || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
         || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
