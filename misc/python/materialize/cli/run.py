@@ -174,9 +174,9 @@ def main() -> int:
             # opposite order.
             if args.reset:
                 # Remove everything in the `mzdata`` directory *except* for
-                # the `prometheus` directory.
+                # the `prometheus` directory and all contents of `tempo`.
                 paths = list(mzdata.glob("prometheus/*"))
-                paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus" and p.name != "tempo")
                 paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
@@ -211,6 +211,7 @@ def main() -> int:
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
+                "--opentelemetry-endpoint=http://localhost:4317",
                 *args.args,
             ]
         elif args.program == "sqllogictest":

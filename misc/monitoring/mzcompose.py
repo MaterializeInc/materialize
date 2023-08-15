@@ -21,6 +21,10 @@ SERVICES = [
                 "./prometheus.yml:/etc/prometheus/prometheus.yml",
                 "../../mzdata/prometheus:/mnt/services",
             ],
+            "command": [
+                "--config.file=/etc/prometheus/prometheus.yml",
+                "--web.enable-remote-write-receiver",
+            ],
             "extra_hosts": ["host.docker.internal:host-gateway"],
             "allow_host_ports": True,
         },
@@ -30,11 +34,11 @@ SERVICES = [
         {
             "image": "grafana/tempo:2.2.0",
             "ports": ["4317:4317", "3200:3200"],
-            "command": ["-config.file=/etc/tempo.yaml"],
             "volumes": [
                 "./tempo.yaml:/etc/tempo.yaml",
                 "../../mzdata/tempo:/tmp/tempo",
             ],
+            "command": ["-config.file=/etc/tempo.yaml"],
             "allow_host_ports": True,
         },
     ),
@@ -58,8 +62,8 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     # Create the `mzdata/prometheus|tempo` directories that will be bind mounted into
-    # the container before invoking Docker Compose, since otherwise the Docker daemon
-    # will create the directory as root, and `environmentd` won't be able to write to it.
+    # the containers before invoking Docker Compose, since otherwise the Docker daemon
+    # will create the directory as root, and `environmentd` won't be able to write to them.
     (ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
     (ROOT / "mzdata" / "tempo").mkdir(parents=True, exist_ok=True)
     c.up()
