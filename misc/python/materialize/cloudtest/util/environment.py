@@ -120,3 +120,35 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
         )
         is None
     )
+
+
+def wait_for_no_environmentd(config: EnvironmentConfig) -> None:
+    # Confirm the Region API is not returning the environment
+    def get_environment() -> None:
+        res = get(
+            config,
+            config.controllers.region_api_server.configured_base_url(),
+            "/api/region",
+        )
+        # a 204 indicates no region is found
+        if res.status_code != 204:
+            raise AssertionError()
+
+    retry(get_environment, 600, [AssertionError])
+
+    # Confirm the environment resource is gone
+    environment_assignment = f"{config.auth.organization_id}-0"
+    environment = f"environment-{environment_assignment}"
+
+    def get_k8s_environment() -> None:
+        assert (
+            kubectl_get_or_none(
+                context=config.environment_context,
+                namespace=None,
+                resource_type="environment",
+                resource_name=environment,
+            )
+            is None
+        )
+
+    retry(get_k8s_environment, 600, [AssertionError])
