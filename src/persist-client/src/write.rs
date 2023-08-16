@@ -453,14 +453,14 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let (mut parts, mut num_updates) = (Vec::new(), 0);
-        let mut runs = vec![];
+        let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
             for run in batch.batch.runs() {
                 // Mark the boundary if this is not the first run in the batch.
-                if parts.len() != 0 {
-                    runs.push(parts.len());
+                let start_index = parts.len();
+                if start_index != 0 {
+                    runs.push(start_index);
                 }
                 parts.extend_from_slice(run);
             }
