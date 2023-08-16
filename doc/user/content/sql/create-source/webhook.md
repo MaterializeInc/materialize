@@ -120,7 +120,7 @@ sources.
 Webhook sources apply the following limits to received requests:
 
 * Maximum size of the request body is `2MB`. Requests larger than this will fail with 413 Payload Too Large.
-* Maximum number of concurrent connections is 100, across all webhook sources. Trying to connect
+* Maximum number of concurrent connections is 250, across all webhook sources. Trying to connect
 when the server is at the maximum will return 429 Too Many Requests.
 * Requests that contain a header name specified more than once will be rejected with 401 Unauthorized.
 

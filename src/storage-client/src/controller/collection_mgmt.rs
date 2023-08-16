@@ -31,7 +31,7 @@ use crate::client::TimestamplessUpdate;
 use crate::controller::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 128;
+const CHANNEL_CAPACITY: usize = 255;
 // Default rate at which we append data and advance the uppers of managed collections.
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
