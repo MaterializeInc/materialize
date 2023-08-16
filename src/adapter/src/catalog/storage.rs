@@ -312,15 +312,26 @@ impl Connection {
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            let stash_ptr = &mut conn.stash;
-            match (|stash_ptr| async {
-                let mut txn = transaction(stash_ptr).await?;
-                add_new_builtin_clusters_migration(&mut txn)?;
-                add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-                txn.commit().await
-            })(stash_ptr)
-            .await
-            {
+            let mut txn = match transaction(&mut conn.stash).await {
+                Ok(txn) => txn,
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            };
+
+            match add_new_builtin_clusters_migration(&mut txn) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match txn.commit().await {
                 Ok(()) => {}
                 Err(e) => {
                     return Err((conn.stash, e));
