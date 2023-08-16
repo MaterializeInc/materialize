@@ -67,12 +67,12 @@ SHOW CLUSTERS;
 ```
 
 ```nofmt
-       name
----------------------
- default
- auction_house
- mz_introspection
- mz_system
+       name                  replicas
+--------------------- | ------------------
+ default              |  r1 (3xsmall)
+ auction_house        |  r1 (3xsmall)
+ mz_introspection     |  r1 (2xsmall)
+ mz_system            |  r1 (2xsmall)
 ```
 
 ```sql
@@ -80,9 +80,9 @@ SHOW CLUSTERS LIKE 'auction_%';
 ```
 
 ```nofmt
-       name
----------------------
- auction_house
+      name                  replicas
+--------------------- | ------------------
+ auction_house        |  r1 (3xsmall)
 ```
 
 
