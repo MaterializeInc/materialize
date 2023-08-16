@@ -66,7 +66,9 @@ use mz_sql_parser::ast::{
     TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
+use mz_storage_client::controller::{
+    CollectionDescription, DataSource, DataSourceOther, ReadPolicy, StorageError,
+};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -228,7 +230,10 @@ impl Coordinator {
                             source_status_collection_id,
                         ),
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                        DataSourceDesc::Source => (
+                            DataSource::Other(DataSourceOther::Source),
+                            source_status_collection_id,
+                        ),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => (DataSource::Webhook, None),
                         DataSourceDesc::Introspection(_) => {
@@ -545,7 +550,10 @@ impl Coordinator {
                 // Determine the initial validity for the table.
                 let since_ts = self.peek_local_write_ts();
 
-                let collection_desc = table.desc.clone().into();
+                let collection_desc = CollectionDescription::from_desc(
+                    table.desc.clone(),
+                    DataSourceOther::TableWrites,
+                );
                 self.controller
                     .storage
                     .create_collections(vec![(table_id, collection_desc)])
@@ -569,7 +577,7 @@ impl Coordinator {
                 let appends = vec![(table_id, Vec::new(), upper)];
                 self.controller
                     .storage
-                    .append(appends)
+                    .append_table(appends)
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")
@@ -1012,7 +1020,7 @@ impl Coordinator {
                         id,
                         CollectionDescription {
                             desc,
-                            data_source: DataSource::Other,
+                            data_source: DataSource::Other(DataSourceOther::Compute),
                             since: Some(as_of.clone()),
                             status_collection_id: None,
                         },
@@ -4345,7 +4353,10 @@ impl Coordinator {
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                        DataSourceDesc::Source => (
+                            DataSource::Other(DataSourceOther::Source),
+                            source_status_collection_id,
+                        ),
                         o => {
                             unreachable!(
                                 "ALTER SOURCE...ADD SUBSOURCE only creates subsources but got {:?}",

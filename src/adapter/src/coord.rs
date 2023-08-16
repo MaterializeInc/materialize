@@ -109,7 +109,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
@@ -1215,7 +1215,10 @@ impl Coordinator {
                     source_status_collection_id,
                 ),
                 // Subsources use source statuses.
-                DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                DataSourceDesc::Source => (
+                    DataSource::Other(DataSourceOther::Source),
+                    source_status_collection_id,
+                ),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, source_status_collection_id)
                 }
@@ -1242,11 +1245,17 @@ impl Coordinator {
                             Some((entry.id(), source_desc(source_status_collection_id, source)))
                         }
                         CatalogItem::Table(table) => {
-                            let collection_desc = table.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                table.desc.clone(),
+                                DataSourceOther::TableWrites,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = mview.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                mview.desc.clone(),
+                                DataSourceOther::Compute,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         _ => None,
@@ -1263,7 +1272,10 @@ impl Coordinator {
         for entry in &entries {
             match entry.item() {
                 CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
                     collections_to_create.push((entry.id(), collection_desc));
                 }
                 // User sources can have dependencies, so do avoid them in the
@@ -1366,7 +1378,10 @@ impl Coordinator {
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
                     // Re-create the storage collection.
-                    let collection_desc = mview.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
                     self.controller
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
@@ -1568,7 +1583,7 @@ impl Coordinator {
             .collect();
         self.controller
             .storage
-            .append(appends)
+            .append_table(appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
