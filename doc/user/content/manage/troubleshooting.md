@@ -40,7 +40,7 @@ CREATE MATERIALIZED VIEW num_bids AS
 CREATE INDEX num_bids_idx ON num_bids (item);
 ```
 
-The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use `EXPLAIN` to display the plan used to evaluate the join.
+The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use[ `EXPLAIN`](https://materialize.com/docs/sql/explain/) to display the plan used to evaluate the join.
 Note that you can also explain the plan of queries and common views with `EXPLAIN` and `EXPLAIN VIEW`, respectively.
 
 ```sql
