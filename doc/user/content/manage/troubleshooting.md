@@ -74,9 +74,9 @@ You can find more details on these operators in the [`EXPLAIN` documentation](ht
 But it's not important to have a deep understanding of all these operators for effective debugging.
 
 
-Behind the scenes, the operator graph is turned into a dataflow that is organized in a hierarchical structure.
-The dataflow  operators and so-called regions, which in turn contain operators and (sub)regions.
-In our example, the dataflow contains a InputRegion, BuildRegion, and a region for the sink.
+Behind the scenes, the operator graph is turned into a dataflow.
+The dataflow is organized in a hierarchical structure that contains operators and _regions_, which define a hierarchy on the operators.
+In our example, the dataflow contains a `InputRegion`, `BuildRegion`, and a region for the sink.
 
 ![Regions and operator visualization](/images/regions-and-operators-abstract.png)
 
@@ -87,8 +87,7 @@ For our purposes it's just important to know than that they define a hierarchy o
 ## The system catalog and introspection relations
 
 Materialize collects a lot of useful information about the dataflows and operators in the system catalog in [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations).
-These introspection relations are extremely valuable to troubleshoot and to understand what is happening under the hood,
-in particular if Materialize is not behaving in the expected way.
+The introspection relations are useful to troubleshoot and understand what is happening under the hood when Materialize is not behaving as expected.
 However, it is important to understand that most of the statistics we need for troubleshooting purposes are specific to the cluster that is running the queries we want to debug.
 
 {{< warning >}}
@@ -102,14 +101,17 @@ As a consequence, you should expect the results of the queries below to vary dep
 
 ## Where is Materialize spending compute time?
 
-Materialize spends time in various dataflow operators maintaining
-materialized views or indexes. If Materialize is taking more time to update
+Materialize spends time in various dataflow operators.
+Dataflows are created to maintain materialized views or indexes.
+In addition, temporary dataflow will be created for ad-hoc queries that don't just make a lookup to an existing index.
+
+If Materialize is taking more time to update
 results than you expect, you can identify which operators
 take the largest total amount of time.
 
 ### Identifying expensive dataflows
 
-To understand which query or dataflow, respectively, is taking the most time we can query the `mz_scheduling_elapsed` relation.
+To understand which dataflow is taking the most time we can query the `mz_scheduling_elapsed` relation.
 The `elapsed_time` metric shows the absolute time the dataflows was busy since the system started and the dataflow was created.
 
 ```sql
@@ -132,8 +134,8 @@ ORDER BY elapsed_ns DESC
  (2 rows)
 ```
 
-These results show that Materialize spent the most time keeping the materialized view `num_bids` up to date.
-Followed by the work on the index `avg_bids_idx` that has been defined on the materialized view.
+These results show that Materialize spends the most time keeping the materialized view `num_bids` up to date,
+followed by the work on the index `avg_bids_idx`.
 
 ### Identifying expensive operators in a dataflow
 
@@ -160,7 +162,7 @@ FROM mz_internal.mz_scheduling_elapsed AS mse,
     mz_internal.mz_dataflow_operator_dataflows AS mdod
 WHERE
     mse.id = mdod.id AND mdod.id = mda.id
-    -- exclude all operators that are regions
+    -- exclude regions and just return operators
     AND mda.address NOT IN (
         SELECT DISTINCT address[:list_length(address) - 1]
         FROM mz_internal.mz_dataflow_addresses
@@ -213,7 +215,7 @@ WITH histograms AS (
     WHERE
         mcodh.id = mdod.id
         AND mdod.id = mda.id
-        -- exclude all operators that are regions
+        -- exclude regions and just return operators
         AND mda.address NOT IN (
             SELECT DISTINCT address[:list_length(address) - 1]
             FROM mz_internal.mz_dataflow_addresses
@@ -262,7 +264,7 @@ COPY(SUBSCRIBE(
         WHERE
             mcodh.id = mdod.id
             AND mdod.id = mda.id
-            -- exclude all operators that are regions
+            -- exclude regions and just return operators
             AND mda.address NOT IN (
                 SELECT DISTINCT address[:list_length(address) - 1]
                 FROM mz_internal.mz_dataflow_addresses
