@@ -20,37 +20,37 @@ SELECT COALESCE(1, 2.000)
 query RR
 SELECT + 3 + + COALESCE ( 33, + + AVG ( - 81 ) + + + CAST ( - 37 AS INTEGER ) ) / - 52, + 98 AS col0
 ----
-2.3653846153846154 98
+2.36538461538461538461538461538461538462  98
 
 query R
 SELECT CASE 24 WHEN - - 89 + ( + ( + - 42 ) ) * + - 50 THEN NULL ELSE + 23 * - 45 END / COALESCE ( - 87, - 93 * - 8 * + + AVG ( 10 ) / 94 * - ( 21 ), + 79 ) * 95 * + 65
 ----
-73461.20689655172
+73461.2068965517241379310344827586206897
 
 query R
 SELECT ALL ( - COUNT ( * ) ) + + - COUNT ( * ) + 36 / COALESCE ( + CAST ( 76 AS INTEGER ), COUNT ( * ) - - + 21 * 44 * + COALESCE ( 61, - AVG ( 41 ) / - 34 ) + COALESCE ( 67, - ( 69 ), - 75 + 35 * + ( 78 * - 20 ) ) * + 36, 99 ) * + 65
 ----
-28.789473684210524
+28.7894736842105263157894736842105263158
 
 query R
 SELECT ALL 44 * COALESCE ( + 6, 5 + + - 61, - COALESCE ( - + 1, + 78 * - - 4 * - AVG ( NULLIF ( + 78, - - 85 * 17 + - + 64 ) ) - - MIN ( + + 36 ) ) ) / 68 * 18 - + - 84 * + - 92 * - 41 + - + 0
 ----
-316917.8823529412
+316917.882352941176470588235294117647059
 
 query R
 SELECT DISTINCT - CASE CAST ( - 91 AS INTEGER ) WHEN + COUNT ( * ) THEN NULL WHEN + 31 - + COALESCE ( + CAST ( - 3 AS INTEGER ), - + 66 ) THEN - + AVG ( DISTINCT + 72 ) ELSE - COUNT ( * ) END * 58 * + + ( COUNT ( * ) ) / - 61 * + - 33 * + 65 - - 65 AS col0
 ----
-2104.5081967213114
+2104.5081967213114754098360655737704918
 
 query R
 SELECT COALESCE ( - 20, - - 70 * + 37 * + CAST ( NULL AS INTEGER ) / + - AVG ( ( - - 3 ) ) + 2 ) / - MAX ( + + 83 ) * - 33 + - 79 * - 34 AS col1
 ----
-2678.0481927710844
+2678.04819277108433734939759036144578313
 
 query R
 SELECT ALL NULLIF ( 38, + 23 * + ( + 46 ) ) + + COUNT ( * ) - + COUNT ( DISTINCT + + 0 ) + + - 57 + + - 48 / - + COALESCE ( 85, - AVG ( + 53 ) ) * + 4 * + 44 / 22
 ----
--14.48235294117647
+-14.4823529411764705882352941176470588235
 
 query RI
 SELECT 17 / - COALESCE ( - + 60, - + AVG ( DISTINCT 54 ) * COUNT ( * ), + 0 ) * + MAX ( ALL - 17 ) * + - 15 - + - 14 * - + 89 - 83, ( - 61 ) / + 84 * - 65 * - 35 col1

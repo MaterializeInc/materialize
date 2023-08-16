@@ -3511,6 +3511,11 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
+            params!(Int64) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I64_OID;
             params!(UInt16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
@@ -3521,6 +3526,16 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
+            params!(UInt64) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U64_OID;
+            params!(Numeric) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
