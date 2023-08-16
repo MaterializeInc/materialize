@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 import requests
+from requests.exceptions import ConnectionError
 
+from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.jwt_key import fetch_jwt, make_jwt
-
-# TODO materialize#19626: move file to mz repo
 
 
 @dataclass
@@ -27,8 +27,15 @@ class AuthConfig:
 
 DEFAULT_ORG_ID = "80b1a04a-2277-11ed-a1ce-5405dbb9e0f7"
 
-
+# TODO: this retry loop should not be necessary, but we are seeing
+# connections getting frequently (but sporadically) interrupted here - we
+# should track this down and remove these retries
 def get_auth(args: argparse.Namespace) -> AuthConfig:
+    config: AuthConfig = retry(lambda: _get_auth(args), 5, [ConnectionError])
+    return config
+
+
+def _get_auth(args: argparse.Namespace) -> AuthConfig:
     if args.e2e_test_user_email is not None:
         assert args.e2e_test_user_password is not None
         assert args.frontegg_host is not None
