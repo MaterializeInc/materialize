@@ -9,7 +9,7 @@
 
 import unittest
 
-import psycopg2  # type: ignore
+import psycopg2
 import psycopg3  # type: ignore
 import sqlalchemy  # type: ignore
 from psycopg3.oids import builtins  # type: ignore
@@ -96,10 +96,15 @@ class SmokeTest(unittest.TestCase):
                 cur.execute("FETCH ALL cur")
 
                 # Validate the first row, but ignore the timestamp column.
-                (ts, diff, a, b) = cur.fetchone()
-                self.assertEqual(diff, 1)
-                self.assertEqual(a, 1)
-                self.assertEqual(b, "a")
+                row = cur.fetchone()
+                if row is not None:
+                    (ts, diff, a, b) = row
+                    self.assertEqual(diff, 1)
+                    self.assertEqual(a, 1)
+                    self.assertEqual(b, "a")
+                else:
+                    self.fail("row is None")
+
                 self.assertEqual(cur.fetchone(), None)
 
                 # Insert another row from another connection to simulate an
@@ -111,10 +116,16 @@ class SmokeTest(unittest.TestCase):
 
                 # Validate the new row, again ignoring the timestamp column.
                 cur.execute("FETCH ALL cur")
-                (ts, diff, a, b) = cur.fetchone()
-                self.assertEqual(diff, 1)
-                self.assertEqual(a, 2)
-                self.assertEqual(b, "b")
+                row = cur.fetchone()
+
+                if row is not None:
+                    (ts, diff, a, b) = row
+                    self.assertEqual(diff, 1)
+                    self.assertEqual(a, 2)
+                    self.assertEqual(b, "b")
+                else:
+                    self.fail("row None")
+
                 self.assertEqual(cur.fetchone(), None)
 
     def test_psycopg3_subscribe_copy(self) -> None:
