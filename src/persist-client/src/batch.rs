@@ -832,6 +832,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 HollowBatchPart {
                     key: partial_key,
                     encoded_size_bytes: payload_len,
+                    // If we don't have an explicit bound, use the minimum key.
                     key_lower: key_lower.unwrap_or_else(Vec::new),
                     stats,
                 }
