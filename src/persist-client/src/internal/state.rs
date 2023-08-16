@@ -162,7 +162,8 @@ pub struct HollowBatchPart {
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
-    /// A lower bound on the keys in the part. Empty by default.
+    /// A lower bound on the keys in the part. (By default, this the minimum
+    /// possible key: `vec![]`.)
     #[serde(serialize_with = "serialize_part_bytes")]
     pub key_lower: Vec<u8>,
     /// Aggregate statistics about data contained in this part.
