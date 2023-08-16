@@ -13,7 +13,7 @@ This guide walks you through the steps required to create a [Census](https://www
 In order to build a sync with Census you will need:
 
 * A table, view, materialized view or source within your Materialize account that you would like to export.
-* The connection details for one of [destinations](https://www.getcensus.com/integrations) supported by Census.
+* A [Braze](https://www.braze.com/) account. Census supports a number of possible [destinations](https://www.getcensus.com/integrations), we will use Braze as an example.
 
 ## Step 1. Set up a Materialize Source
 
@@ -26,25 +26,51 @@ To begin you will need to add your Materialize database as a source in Census.
 1. Set the connection parameters using the credentials provided in the [Materialize console](https://console.materialize.com/).
    Then press the **Connect** button.
 
-### Step 2. Create a Sync
+## Step 2. Set up a Destination
+
+Next you will add a destination where data will be sent.
+
+{{< tabs >}}
+{{< tab "Braze">}}
+
+1. In Census navigate to **Destinations** and select **New Destination**.
+
+1. From the list of destinations types, choose **Braze**.
+
+1. You will need to supply your Braze URL (which will most likely be `https://rest.iad-03.braze.com`) and a Braze API key.
+   The [Census guide for Braze](https://docs.getcensus.com/destinations/braze) will explain how create an API key with the
+   correct permissions. Then press the **Connect** button.
+
+{{< /tab >}}
+
+### Step 3. Create a Sync
 
 After successfully adding the Materialize source, you can create a sync to send data from Materialize to your downstream destination.
+
+{{< tabs >}}
+{{< tab "Braze">}}
 
 1. In Census navigate to **Syncs** and select **New Sync**.
 
 1. Under **Select a Source** choose **Select a Warehouse Table**. Using the drop-down, choose the Materialize source that was
-   just configured as the **Connection**. Using the **Schema** and **Table** drop-downs you can select the
+   configured in step 1 as the **Connection**. Using the **Schema** and **Table** drop-downs you can select the
    Materialize object you would like to export.
 
-1. In **Select a Destination** choose the destination where you would like to send your data.
+1. **Select a Destination** choose the Braze destination configured in step 2 and select "User" as the **Object**.
 
-1. **Select Sync Behavior** and the remaining options will be determined by your destination type.
+1. **Select Sync Behavior** can be set to "Update or Create". This will only add and modify new data in Braze but never delete users.
+
+1. **Select a Sync Key** select an id column from the Materialize object.
+
+1. **Set Up Braze Field Mappings** allows any of the columns in the Materialize object to the user entity in Braze.
 
 1. Click **Next** to see an overview of your sync. You can now **Create** your sync.
 
-### Step 3. Add a Schedule (Optional)
+{{< /tab >}}
 
-Your Census sync is created and ready to run. It can be invoked manually but we can attach a schedule to ensure all new data
+### Step 4. Add a Schedule (Optional)
+
+Your Census sync is created and ready to run. It can be invoked manually but a schedule will ensure all new data
 is sent to the destination.
 
 1. In Census navigate to **Syncs** and select the sync that was just created.
