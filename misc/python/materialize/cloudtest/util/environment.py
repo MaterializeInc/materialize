@@ -15,11 +15,7 @@ from requests import Response
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.controller import wait_for_connectable
-from materialize.cloudtest.util.kubectl import (
-    kubectl_get,
-    kubectl_get_or_none,
-    kubectl_get_retry,
-)
+from materialize.cloudtest.util.kubectl import Kubectl
 from materialize.cloudtest.util.web_request import delete, get, patch
 
 
@@ -39,15 +35,16 @@ def create_environment_assignment(
         "/api/region",
         json,
     )
-    kubectl_get_retry(
-        config.environment_context,
+    env_kubectl = Kubectl(config.environment_context)
+    sys_kubectl = Kubectl(config.system_context)
+
+    env_kubectl.get_retry(
         None,
         "environment",
         environment,
         10,
     )
-    return kubectl_get(
-        config.system_context,
+    return sys_kubectl.get(
         None,
         "environmentassignment",
         environment_assignment,
@@ -93,9 +90,11 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
 
     retry(delete_environment, 10, [requests.exceptions.HTTPError])
 
+    env_kubectl = Kubectl(config.environment_context)
+    sys_kubectl = Kubectl(config.system_context)
+
     assert (
-        kubectl_get_or_none(
-            context=config.environment_context,
+        env_kubectl.get_or_none(
             namespace=None,
             resource_type="namespace",
             resource_name=environment,
@@ -103,8 +102,7 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
         is None
     )
     assert (
-        kubectl_get_or_none(
-            context=config.environment_context,
+        env_kubectl.get_or_none(
             namespace=None,
             resource_type="environment",
             resource_name=environment,
@@ -112,8 +110,7 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
         is None
     )
     assert (
-        kubectl_get_or_none(
-            context=config.system_context,
+        sys_kubectl.get_or_none(
             namespace=None,
             resource_type="environmentassignment",
             resource_name=environment_assignment,
@@ -139,11 +136,11 @@ def wait_for_no_environmentd(config: EnvironmentConfig) -> None:
     # Confirm the environment resource is gone
     environment_assignment = f"{config.auth.organization_id}-0"
     environment = f"environment-{environment_assignment}"
+    env_kubectl = Kubectl(config.environment_context)
 
     def get_k8s_environment() -> None:
         assert (
-            kubectl_get_or_none(
-                context=config.environment_context,
+            env_kubectl.get_or_none(
                 namespace=None,
                 resource_type="environment",
                 resource_name=environment,
@@ -152,3 +149,59 @@ def wait_for_no_environmentd(config: EnvironmentConfig) -> None:
         )
 
     retry(get_k8s_environment, 600, [AssertionError])
+
+
+def await_environment_pod(context: str, namespace: str, pod_name: str) -> None:
+    kubectl = Kubectl(context)
+
+    # we can't just wait, since it errors if it doesn't exist yet
+    kubectl.get_retry(
+        namespace=namespace,
+        resource_type="pod",
+        resource_name=pod_name,
+        # Especially on dev stacks, this can take a little while
+        max_attempts=180,
+    )
+    kubectl.wait(
+        namespace=namespace,
+        resource_type="pod",
+        resource_name=pod_name,
+        wait_for="condition=Ready=True",
+        # If we're unlucky with certificates, we can take up to 10 minutes :-(
+        # -- pad a bit just in case
+        timeout_secs=630,
+    )
+
+
+def cleanup_crds(
+    system_context: str,
+    environment_context: str,
+) -> None:
+    if system_context != "kind-mzcloud":
+        return
+
+    assert "production" not in system_context
+    assert "production" not in environment_context
+    assert "staging" not in system_context
+    assert "staging" not in environment_context
+
+    sys_kubectl = Kubectl(system_context)
+    env_kubectl = Kubectl(environment_context)
+
+    sys_kubectl.delete(
+        namespace=None,
+        resource_type="crd",
+        resource_name="environmentassignments.materialize.cloud",
+    )
+
+    env_kubectl.delete(
+        namespace=None,
+        resource_type="crd",
+        resource_name="environments.materialize.cloud",
+    )
+
+    env_kubectl.delete(
+        namespace=None,
+        resource_type="crd",
+        resource_name="vpcendpoints.materialize.cloud",
+    )
