@@ -293,3 +293,43 @@ part 1
 part 2
 <run 3>
 part 3
+
+# parts from different batches appended together get different runs
+write-batch output=b0 lower=0 upper=2 target_size=10
+a 0 1
+b 0 1
+----
+parts=2 len=2
+
+write-batch output=b1 lower=0 upper=2 target_size=10 consolidate=false
+c 0 1
+d 0 1
+----
+parts=2 len=2
+
+write-batch output=b2 lower=0 upper=2 target_size=10
+e 1 1
+----
+parts=1 len=1
+
+compare-and-append-batches expected_upper=0 new_upper=2 batches=(b0,b1,b2)
+----
+ok
+
+snapshot as_of=1
+----
+<batch [0]-[2]>
+<run 0>
+<part 0>
+a 1 1
+<part 1>
+b 1 1
+<run 1>
+<part 0>
+c 1 1
+<run 2>
+<part 0>
+d 1 1
+<run 3>
+<part 0>
+e 1 1
