@@ -12,7 +12,8 @@ time without requiring explicit approval and complicated reimbursement for the
 customer.
 
 We extend Materialize with a concept of unbilled replicas, which server compute
-traffic but are not charged to a customer's account.
+traffic but are not charged to a customer's account. To achieve this, we extend
+properties of clusters and their replicas with a profiles abstraction.
 
 ## Goals
 
@@ -42,22 +43,21 @@ We extend clusters to support multiple replica configurations, and name each a p
 A cluster profile describes the properties of a set of replicas within a cluster.
 A cluster can have several profiles, and each replica is part of a single profile.
 
-
 ```sql
 -- Creating a managed cluster profile without billing
-CREATE CLUSTER PROFILE cluster.support WITH (SIZE '3xlarge', BILLED = FALSE);
+CREATE CLUSTER PROFILE cluster.support WITH (SIZE '3xlarge', BILLED AS 'unbilled');
 -- Drop the profile, releasing any associated resource.
 DROP CLUSTER PROFILE cluster.support;
 
 -- Alternatively, create an unmanaged profile without billing.
-CREATE CLUSTER PROFILE cluster.support WITH (MANAGED = FALSE, BILLED = FALSE);
--- Create a replica in the profile, identifying the profile in the name.
-CREATE CLUSTER REPLICA cluster.support.r1 SIZE '3xlarge';
--- Drop the profile
+CREATE CLUSTER PROFILE cluster.support WITH (MANAGED = FALSE, BILLED AS 'unbilled');
+-- Create a replica in the profile.
+CREATE CLUSTER REPLICA cluster.r1 SIZE '3xlarge' IN PROFILE support;
+-- Drop the profile, also dropping replica `r1`.
 DROP CLUSTER PROFILE cluster.support CASCADE;
 ```
 
-### Default profile
+### Profiles and replicas
 
 When a user doesn't specify a profile, they interact with the default profile:
 
@@ -88,11 +88,15 @@ We can mix managed and unmanaged profiles:
 ```sql
 -- Create cluster without profiles
 CREATE CLUSTER cl;
--- Create `default` profile:
+-- Create `default` profile, which include replicas `cl.default_r1`, `cl.default_r2`:
 CREATE CLUSTER PROFILE cl.default SIZE '3xsmall', REPLICATION FACTOR 2;
--- Create `p1` profile:
+-- Create `p1` profile, which includes replica `cl.r1`:
 CREATE CLUSTER PROFILE cl.p1 REPLICAS (r1 SIZE 'large');
 ```
+
+This requires a change to the names of replicas in managed clusters. Instead of
+only using the names `r1..rN`, we could use the profile name, or `default`, as a
+prefix.
 
 This is equivalent to creating the default profile in-line:
 
@@ -103,18 +107,25 @@ CREATE CLUSTER cl SIZE '3xsmall', REPLICATION FACTOR 2;
 CREATE CLUSTER PROFILE cl.p1 REPLICAS (r1 SIZE 'large');
 ```
 
-
-We need to extend the syntax to dropping replicas of unmanaged profiles:
+The syntax to drop replicas stays the same:
 
 ```sql
--- Drop replica from the default profile:
+-- Drop replica a replica:
 DROP CLUSTER REPLICA cl.r1;
--- Drop replica from specific profile:
-DROP CLUSTER REPLICA cl.p1.r1;
 ```
 
-Name resolution could either default to the `default` profile, or, if there is
-only one profile, target the single profile.
+### Altering profiles
+
+* Similar to altering clusters
+* Altering profile name: Rename profile, rename replicas for managed profiles
+* Should we allow moving replicas between profiles?
+
+```sql
+ALTER CLUSTER REPLICA cl.r1 IN PROFILE support;
+ERROR: Cannot move billed replica to unbilled profile.
+```
+
+* Can we use RBAC to limit what users can do with unbilled profiles?
 
 ### Billing
 
