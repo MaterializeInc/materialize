@@ -70,7 +70,7 @@ Others are specific to Materialize (`Get`, `ArrangeBy`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
 `Filter` filters records, `Join on` joins records from two or more inputs, `Map` applies a function to transform records, etc.
-You can find more details on these operators in the [`EXPLAIN` documentation](https://materialize.com/docs/sql/explain/#operators-in-decorrelated-and-optimized-plans). 
+You can find more details on these operators in the [`EXPLAIN` documentation](https://materialize.com/docs/sql/explain/#operators-in-decorrelated-and-optimized-plans).
 But it's not important to have a deep understanding of all these operators for effective debugging.
 
 
