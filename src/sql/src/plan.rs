@@ -122,6 +122,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
+    ShowColumns(ShowColumnsPlan),
     ShowVariable(ShowVariablePlan),
     InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
@@ -262,6 +263,7 @@ impl Plan {
                 PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
+                PlanKind::ShowColumns,
                 PlanKind::ShowAllVariables,
                 PlanKind::InspectShard,
             ],
@@ -313,6 +315,7 @@ impl Plan {
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
+            Plan::ShowColumns(_) => "show columns",
             Plan::ShowVariable(_) => "show variable",
             Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
@@ -772,6 +775,13 @@ impl SubscribeFrom {
 pub struct ShowCreatePlan {
     pub id: GlobalId,
     pub row: Row,
+}
+
+#[derive(Debug)]
+pub struct ShowColumnsPlan {
+    pub id: GlobalId,
+    pub select_plan: Box<Plan>,
+    pub new_resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
