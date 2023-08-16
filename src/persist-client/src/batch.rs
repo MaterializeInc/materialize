@@ -756,10 +756,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             let stats_start = Instant::now();
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
                                 Ok(x) => {
+                                    let mut trimmed_bytes = 0;
                                     let x = LazyPartStats::encode(&x, |s| {
-                                        trim_to_budget(s, stats_budget, force_keep_stats_col);
+                                        trimmed_bytes =
+                                            trim_to_budget(s, stats_budget, force_keep_stats_col);
                                     });
-                                    Some((x, stats_start.elapsed()))
+                                    Some((x, stats_start.elapsed(), trimmed_bytes))
                                 }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);
@@ -801,10 +803,17 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
                 batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
                 batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
-                let stats = stats.map(|(stats, stats_step_timing)| {
+                let stats = stats.map(|(stats, stats_step_timing, trimmed_bytes)| {
                     batch_metrics
                         .step_stats
                         .inc_by(stats_step_timing.as_secs_f64());
+                    if trimmed_bytes > 0 {
+                        metrics.pushdown.parts_stats_trimmed_count.inc();
+                        metrics
+                            .pushdown
+                            .parts_stats_trimmed_bytes
+                            .inc_by(u64::cast_from(trimmed_bytes));
+                    }
                     stats
                 });
                 (payload_len, stats)

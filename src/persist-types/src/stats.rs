@@ -503,20 +503,24 @@ impl TrimStats for ProtoStructStats {
 /// returns true for that column. The resulting StructStats object is
 /// guaranteed to fit within the passed budget, except when the columns that
 /// are force-kept are collectively larger than the budget.
+///
+/// The number of bytes trimmed is returned.
 pub fn trim_to_budget(
     stats: &mut ProtoStructStats,
     budget: usize,
     force_keep_col: impl Fn(&str) -> bool,
-) {
+) -> usize {
     // No trimming necessary should be the overwhelming common case in practice.
-    if stats.encoded_len() <= budget {
-        return;
+    let original_cost = stats.encoded_len();
+    if original_cost <= budget {
+        return 0;
     }
 
     // First try any lossy trimming that doesn't lose an entire column.
     stats.trim();
-    if stats.encoded_len() <= budget {
-        return;
+    let new_cost = stats.encoded_len();
+    if new_cost <= budget {
+        return original_cost.saturating_sub(new_cost);
     }
 
     // That wasn't enough. Try recursively trimming out entire cols.
@@ -527,8 +531,9 @@ pub fn trim_to_budget(
     // keep _something_. Another possibility would be to replace this whole bit
     // with some sort of recursive max-cost search with force_keep_col things
     // weighted after everything else.
-    let mut budget_shortfall = stats.encoded_len().saturating_sub(budget);
+    let mut budget_shortfall = new_cost.saturating_sub(budget);
     trim_to_budget_struct(stats, &mut budget_shortfall, &force_keep_col);
+    original_cost.saturating_sub(stats.encoded_len())
 }
 
 /// Recursively trims cols in the struct, greatest-size first, keeping force
@@ -1736,9 +1741,10 @@ mod tests {
             let mut budget = stats.encoded_len().next_power_of_two();
             while budget > 0 {
                 let cost_before = stats.encoded_len();
-                trim_to_budget(&mut stats, budget, |col| Some(col) == required);
+                let trimmed = trim_to_budget(&mut stats, budget, |col| Some(col) == required);
                 let cost_after = stats.encoded_len();
                 assert!(cost_before >= cost_after);
+                assert_eq!(trimmed, cost_before - cost_after);
                 if let Some(required) = required {
                     assert!(stats.cols.contains_key(required));
                 } else {
@@ -1997,9 +2003,11 @@ mod tests {
             ]),
         };
         let mut proto_stats = RustType::into_proto(&source_data_stats);
-        trim_to_budget(&mut proto_stats, BIG, |x| {
+        let trimmed = trim_to_budget(&mut proto_stats, BIG, |x| {
             x.ends_with("timestamp") || x == "err"
         });
+        // Sanity-check that the test is trimming something.
+        assert!(trimmed > 0);
         // We don't want to trim either "ok" or "err".
         assert!(proto_stats.cols.contains_key("ok"));
         assert!(proto_stats.cols.contains_key("err"));
