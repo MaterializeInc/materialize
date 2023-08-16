@@ -78,7 +78,7 @@ Behind the scenes, the operator graph is turned into a dataflow.
 The dataflow is organized in a hierarchical structure that contains operators and _regions_, which define a hierarchy on the operators.
 In our example, the dataflow contains a `InputRegion`, `BuildRegion`, and a region for the sink.
 
-![Regions and operator visualization](/images/regions-and-operators-abstract.png)
+![Regions and operator visualization](/images/regions-and-operators-abstract.jpg)
 
 Again, it's not too important for our purposes to understand what these regions do and how they are used to structure the operator graph.
 For our purposes it's just important to know than that they define a hierarchy on the operators.
@@ -185,7 +185,7 @@ From the results of this query we can see that most of the elapsed time of the d
 
 ## Why is Materialize unresponsive or slow?
 
-A large class of problems can be identified by using [`elapsed_time`](#finding-expensive-operators-within-a-dataflow) to estimate the most expensive dataflows and operators.
+A large class of problems can be identified by using [`elapsed_time`](#identifying-expensive-operators-in-a-dataflow) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
 Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
 If you want to see what operator is taking the most time **right now**,
