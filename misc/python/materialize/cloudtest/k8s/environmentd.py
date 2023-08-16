@@ -9,7 +9,7 @@
 
 import operator
 import urllib.parse
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from kubernetes.client import (
     V1Container,
@@ -101,53 +101,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})
         label_selector = V1LabelSelector(match_labels={"app": "environmentd"})
 
-        value_from = V1EnvVarSource(
-            field_ref=V1ObjectFieldSelector(field_path="metadata.name")
-        )
-
-        env = [
-            V1EnvVar(name="MZ_POD_NAME", value_from=value_from),
-            V1EnvVar(name="AWS_REGION", value="minio"),
-            V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
-            V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
-            V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
-            V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
-            V1EnvVar(
-                name="MZ_AWS_EXTERNAL_ID_PREFIX",
-                value="eb5cb59b-e2fe-41f3-87ca-d2176a495345",
-            ),
-            V1EnvVar(
-                name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
-            ),
-            # TODO: these should be the same as in mzcompose
-            V1EnvVar(
-                name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value=(
-                    "enable_envelope_upsert_in_subscribe=true;"
-                    "enable_disk_cluster_replicas=true;"
-                    "enable_with_mutually_recursive=true"
-                ),
-            ),
-        ]
-
-        if self.coverage_mode:
-            env.extend(
-                [
-                    V1EnvVar(
-                        name="LLVM_PROFILE_FILE",
-                        value="/coverage/environmentd-%p-%9m%c.profraw",
-                    ),
-                    V1EnvVar(
-                        name="CI_COVERAGE_ENABLED",
-                        value="1",
-                    ),
-                    V1EnvVar(name="MZ_ORCHESTRATOR_KUBERNETES_COVERAGE", value="1"),
-                ]
-            )
-
-        for (k, v) in self.env.items():
-            env.append(V1EnvVar(name=k, value=v))
-
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
         volume_mounts = [V1VolumeMount(name="data", mount_path="/data")]
@@ -155,6 +108,61 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
 
+        container = V1Container(
+            name="environmentd",
+            image=self.image(
+                "environmentd",
+                tag=self.tag,
+                release_mode=self.release_mode,
+            ),
+            args=self.args(),
+            env=self.env_vars(),
+            ports=ports,
+            volume_mounts=volume_mounts,
+        )
+
+        pod_spec = V1PodSpec(containers=[container])
+        template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
+
+        return V1StatefulSet(
+            api_version="apps/v1",
+            kind="StatefulSet",
+            metadata=metadata,
+            spec=V1StatefulSetSpec(
+                service_name="environmentd",
+                replicas=1,
+                pod_management_policy="Parallel",
+                selector=label_selector,
+                template=template_spec,
+                volume_claim_templates=self.claim_templates(),
+            ),
+        )
+
+    def claim_templates(self) -> List[V1PersistentVolumeClaim]:
+        claim_templates = [
+            V1PersistentVolumeClaim(
+                metadata=V1ObjectMeta(name="data"),
+                spec=V1PersistentVolumeClaimSpec(
+                    access_modes=["ReadWriteOnce"],
+                    resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
+                ),
+            ),
+        ]
+
+        if self.coverage_mode:
+            claim_templates.append(
+                V1PersistentVolumeClaim(
+                    metadata=V1ObjectMeta(name="coverage"),
+                    spec=V1PersistentVolumeClaimSpec(
+                        access_modes=["ReadWriteOnce"],
+                        resources=V1ResourceRequirements(requests={"storage": "10Gi"}),
+                    ),
+                )
+            )
+
+        return claim_templates
+
+    def args(self) -> List[str]:
         s3_endpoint = urllib.parse.quote(
             f"http://minio-service.{self.minio_namespace}:9000"
         )
@@ -227,55 +235,57 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_maximum_version("0.63.99"):
             args += ["--system-parameter-default=enable_managed_clusters=true"]
 
-        container = V1Container(
-            name="environmentd",
-            image=self.image(
-                "environmentd",
-                tag=self.tag,
-                release_mode=self.release_mode,
-            ),
-            args=args,
-            env=env,
-            ports=ports,
-            volume_mounts=volume_mounts,
+        return args
+
+    def env_vars(self) -> List[V1EnvVar]:
+        value_from = V1EnvVarSource(
+            field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )
 
-        pod_spec = V1PodSpec(containers=[container])
-        template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
-        claim_templates = [
-            V1PersistentVolumeClaim(
-                metadata=V1ObjectMeta(name="data"),
-                spec=V1PersistentVolumeClaimSpec(
-                    access_modes=["ReadWriteOnce"],
-                    resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
+        env = [
+            V1EnvVar(name="MZ_POD_NAME", value_from=value_from),
+            V1EnvVar(name="AWS_REGION", value="minio"),
+            V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
+            V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
+            V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
+            V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
+            V1EnvVar(
+                name="MZ_AWS_EXTERNAL_ID_PREFIX",
+                value="eb5cb59b-e2fe-41f3-87ca-d2176a495345",
+            ),
+            V1EnvVar(
+                name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
+            ),
+            # TODO: these should be the same as in mzcompose
+            V1EnvVar(
+                name="MZ_SYSTEM_PARAMETER_DEFAULT",
+                value=(
+                    "enable_envelope_upsert_in_subscribe=true;"
+                    "enable_disk_cluster_replicas=true;"
+                    "enable_with_mutually_recursive=true"
                 ),
             ),
         ]
 
         if self.coverage_mode:
-            claim_templates.append(
-                V1PersistentVolumeClaim(
-                    metadata=V1ObjectMeta(name="coverage"),
-                    spec=V1PersistentVolumeClaimSpec(
-                        access_modes=["ReadWriteOnce"],
-                        resources=V1ResourceRequirements(requests={"storage": "10Gi"}),
+            env.extend(
+                [
+                    V1EnvVar(
+                        name="LLVM_PROFILE_FILE",
+                        value="/coverage/environmentd-%p-%9m%c.profraw",
                     ),
-                )
+                    V1EnvVar(
+                        name="CI_COVERAGE_ENABLED",
+                        value="1",
+                    ),
+                    V1EnvVar(name="MZ_ORCHESTRATOR_KUBERNETES_COVERAGE", value="1"),
+                ]
             )
 
-        return V1StatefulSet(
-            api_version="apps/v1",
-            kind="StatefulSet",
-            metadata=metadata,
-            spec=V1StatefulSetSpec(
-                service_name="environmentd",
-                replicas=1,
-                pod_management_policy="Parallel",
-                selector=label_selector,
-                template=template_spec,
-                volume_claim_templates=claim_templates,
-            ),
-        )
+        for (k, v) in self.env.items():
+            env.append(V1EnvVar(name=k, value=v))
+
+        return env
 
     def _meets_version(self, version: str, operator: Callable, default: bool) -> bool:
         """Determine whether environmentd matches a given version based on a comparison operator"""
