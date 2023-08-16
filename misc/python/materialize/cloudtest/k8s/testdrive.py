@@ -65,6 +65,7 @@ class Testdrive(K8sPod):
         seed: Optional[int] = None,
         caller: Optional[Traceback] = None,
         default_timeout: str = "300s",
+        log_filter: str = "off",
     ) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
@@ -78,6 +79,7 @@ class Testdrive(K8sPod):
             f"--kafka-addr={self.kafka_addr}",
             f"--schema-registry-url={self.schema_registry_url}",
             f"--default-timeout={default_timeout}",
+            f"--log-filter={log_filter}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",

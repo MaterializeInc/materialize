@@ -169,7 +169,7 @@ struct Args {
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
-    #[clap(long, value_name = "FILTER", default_value = "off")]
+    #[clap(long, env = "LOG_FILTER", value_name = "FILTER", default_value = "off")]
     log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
