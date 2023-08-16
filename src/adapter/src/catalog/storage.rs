@@ -10,14 +10,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use std::iter::once;
+use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -199,28 +202,71 @@ impl Connection {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = pin::pin!(retry);
+        loop {
+            match Self::open_inner(stash, now.clone(), bootstrap_args, deploy_generation).await {
+                Ok(conn) => {
+                    return Ok(conn);
+                }
+                Err((given_stash, err)) => {
+                    stash = given_stash;
+                    let should_retry =
+                        matches!(&err, Error{ kind: ErrorKind::Stash(se)} if se.should_retry());
+                    if !should_retry || retry.next().await.is_none() {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+    }
+
+    #[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
+    async fn open_inner(
+        mut stash: Stash,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, (Stash, Error)> {
         // Initialize the Stash if it hasn't been already
-        let mut conn = if !stash.is_initialized().await? {
+        let mut conn = if !match stash.is_initialized().await {
+            Ok(is_init) => is_init,
+            Err(e) => {
+                return Err((stash, e.into()));
+            }
+        } {
             // Get the current timestamp so we can record when we booted.
             let previous_now = mz_repr::Timestamp::MIN;
             let boot_ts = timeline::monotonic_now(now, previous_now);
 
             // Initialize the Stash
             let args = bootstrap_args.clone();
-            stash
+            match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
                         stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
                     })
                 })
-                .await?;
+                .await
+            {
+                Ok(()) => {}
+                Err(e) => return Err((stash, e.into())),
+            }
 
             Connection { stash, boot_ts }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
             if !stash.is_readonly() {
-                stash.upgrade().await?;
+                match stash.upgrade().await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        return Err((stash, e.into()));
+                    }
+                }
             }
 
             // Choose a time at which to boot. This is the time at which we will run
@@ -229,19 +275,35 @@ impl Connection {
             //
             // This time is usually the current system time, but with protection
             // against backwards time jumps, even across restarts.
-            let previous = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
-                .await?
-                .unwrap_or(mz_repr::Timestamp::MIN);
+            let previous =
+                match try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds).await {
+                    Ok(ts) => ts.unwrap_or(mz_repr::Timestamp::MIN),
+                    Err(e) => {
+                        return Err((stash, e));
+                    }
+                };
             let boot_ts = timeline::monotonic_now(now, previous);
 
             let mut conn = Connection { stash, boot_ts };
 
             if !conn.stash.is_readonly() {
                 // IMPORTANT: we durably record the new timestamp before using it.
-                conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await?;
+                match conn
+                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        return Err((conn.stash, e));
+                    }
+                }
                 if let Some(deploy_generation) = deploy_generation {
-                    conn.persist_deploy_generation(deploy_generation).await?;
+                    match conn.persist_deploy_generation(deploy_generation).await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            return Err((conn.stash, e));
+                        }
+                    }
                 }
             }
 
@@ -250,10 +312,31 @@ impl Connection {
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            let mut txn = transaction(&mut conn.stash).await?;
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-            txn.commit().await?;
+            let mut txn = match transaction(&mut conn.stash).await {
+                Ok(txn) => txn,
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            };
+
+            match add_new_builtin_clusters_migration(&mut txn) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match txn.commit().await {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
         }
 
         Ok(conn)
