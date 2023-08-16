@@ -149,3 +149,59 @@ def wait_for_no_environmentd(config: EnvironmentConfig) -> None:
         )
 
     retry(get_k8s_environment, 600, [AssertionError])
+
+
+def await_environment_pod(context: str, namespace: str, pod_name: str) -> None:
+    kubectl = Kubectl(context)
+
+    # we can't just wait, since it errors if it doesn't exist yet
+    kubectl.get_retry(
+        namespace=namespace,
+        resource_type="pod",
+        resource_name=pod_name,
+        # Especially on dev stacks, this can take a little while
+        max_attempts=180,
+    )
+    kubectl.wait(
+        namespace=namespace,
+        resource_type="pod",
+        resource_name=pod_name,
+        wait_for="condition=Ready=True",
+        # If we're unlucky with certificates, we can take up to 10 minutes :-(
+        # -- pad a bit just in case
+        timeout_secs=630,
+    )
+
+
+def cleanup_crds(
+    system_context: str,
+    environment_context: str,
+) -> None:
+    if system_context != "kind-mzcloud":
+        return
+
+    assert "production" not in system_context
+    assert "production" not in environment_context
+    assert "staging" not in system_context
+    assert "staging" not in environment_context
+
+    sys_kubectl = Kubectl(system_context)
+    env_kubectl = Kubectl(environment_context)
+
+    sys_kubectl.delete(
+        namespace=None,
+        resource_type="crd",
+        resource_name="environmentassignments.materialize.cloud",
+    )
+
+    env_kubectl.delete(
+        namespace=None,
+        resource_type="crd",
+        resource_name="environments.materialize.cloud",
+    )
+
+    env_kubectl.delete(
+        namespace=None,
+        resource_type="crd",
+        resource_name="vpcendpoints.materialize.cloud",
+    )
