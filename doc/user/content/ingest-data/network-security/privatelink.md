@@ -10,6 +10,10 @@ menu:
     name: "AWS PrivateLink connections"
 ---
 
+{{< public-preview >}}
+Privatelink
+{{</ public-preview >}}
+
 Materialize can connect to a Kafka broker, a Confluent Schema Registry server or
 a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
 service. In this guide, we'll cover how to create `AWS PRIVATELINK` connections
@@ -74,6 +78,9 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
     Note the **service name** that is generated for the endpoint service.
 
+    **Remarks**
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seemlessly recreate and migrate endpoints as we work to stabalize this feature.
+
 1. #### Create an AWS PrivateLink Connection
      In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the endpoint service that you created in the previous step.
 
@@ -125,6 +132,9 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
     Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html) and associate it with the **Network Load Balancer** that you’ve just created.
 
     Note the **service name** that is generated for the endpoint service.
+
+    **Remarks**
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seemlessly recreate and migrate endpoints as we work to stabalize this feature.
 
 1. #### Create an AWS PrivateLink Connection
      In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the endpoint service that you created in the previous step.
