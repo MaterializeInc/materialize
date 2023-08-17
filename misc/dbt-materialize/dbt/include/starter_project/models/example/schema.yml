@@ -1,0 +1,22 @@
+version: 2
+
+# https://materialize.com/docs/get-started/quickstart/
+
+models:
+  - name: avg_bids
+    description: "The average price of bids that arrived before their auctions closed"
+    columns:
+      - name: item
+        description: "The primary key for this table"
+        tests:
+          - unique
+          - not_null
+
+  - name: num_bids
+    description: "The number of eligible bids per item"
+    columns:
+      - name: item
+        description: "The primary key for this table"
+        tests:
+          - unique
+          - not_null
