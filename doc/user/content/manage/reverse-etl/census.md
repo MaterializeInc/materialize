@@ -68,6 +68,7 @@ After successfully adding the Materialize source, you can create a sync to send 
 1. Click **Next** to see an overview of your sync. You can now **Create** your sync.
 
 {{< /tab >}}
+{{< /tabs >}}
 
 ### Step 4. Add a Schedule (Optional)
 
