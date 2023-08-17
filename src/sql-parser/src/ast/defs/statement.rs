@@ -25,11 +25,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateConnection, CreateConnectionOption, CreateSinkConnection,
-    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
-    DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint, Query, SelectItem,
-    SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, CreateConnection, CreateConnectionOption,
+    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
+    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident,
+    KeyConstraint, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -622,8 +623,9 @@ impl_display_t!(KafkaBrokerAwsPrivatelink);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateConnectionStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
-    pub connection: CreateConnection<T>,
+    pub connection_type: CreateConnectionType,
     pub if_not_exists: bool,
+    pub values: Vec<ConnectionOption<T>>,
     pub with_options: Vec<CreateConnectionOption<T>>,
 }
 
@@ -635,7 +637,11 @@ impl<T: AstInfo> AstDisplay for CreateConnectionStatement<T> {
         }
         f.write_node(&self.name);
         f.write_str(" TO ");
-        self.connection.fmt(f);
+        self.connection_type.fmt(f);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.values));
+        f.write_str(")");
+
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
