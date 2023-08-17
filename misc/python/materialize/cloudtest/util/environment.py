@@ -51,7 +51,9 @@ def create_environment_assignment(
     )
 
 
-def wait_for_environmentd(config: EnvironmentConfig) -> Dict[str, Any]:
+def wait_for_environmentd(
+    config: EnvironmentConfig, max_attempts: int = 300
+) -> Dict[str, Any]:
     def get_environment() -> Response:
         response = get(
             config,
@@ -69,7 +71,7 @@ def wait_for_environmentd(config: EnvironmentConfig) -> Dict[str, Any]:
     ).json()
     pgwire_url = environment_json["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
-    wait_for_connectable((pgwire_host, int(pgwire_port)), 300)
+    wait_for_connectable((pgwire_host, int(pgwire_port)), max_attempts)
     return environment_json
 
 

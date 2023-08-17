@@ -98,7 +98,7 @@ impl ComputeState {
         tracing_handle: Arc<TracingHandle>,
     ) -> Self {
         let traces = TraceManager::new(metrics.for_traces(worker_id));
-        let command_history = ComputeCommandHistory::new(metrics.for_history());
+        let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
 
         Self {
             collections: Default::default(),

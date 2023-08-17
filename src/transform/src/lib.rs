@@ -587,6 +587,8 @@ impl Optimizer {
             // you remove this transform for examples.
             Box::new(crate::threshold_elision::ThresholdElision),
             // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
+            // (For example, `FoldConstants` can break the normalized form by removing all
+            // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
             Box::new(crate::normalize_lets::NormalizeLets::new(false)),
             Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
         ];

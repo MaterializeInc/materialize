@@ -109,7 +109,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
@@ -1215,7 +1215,10 @@ impl Coordinator {
                     source_status_collection_id,
                 ),
                 // Subsources use source statuses.
-                DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                DataSourceDesc::Source => (
+                    DataSource::Other(DataSourceOther::Source),
+                    source_status_collection_id,
+                ),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, source_status_collection_id)
                 }
@@ -1242,11 +1245,17 @@ impl Coordinator {
                             Some((entry.id(), source_desc(source_status_collection_id, source)))
                         }
                         CatalogItem::Table(table) => {
-                            let collection_desc = table.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                table.desc.clone(),
+                                DataSourceOther::TableWrites,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = mview.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                mview.desc.clone(),
+                                DataSourceOther::Compute,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         _ => None,
@@ -1263,7 +1272,10 @@ impl Coordinator {
         for entry in &entries {
             match entry.item() {
                 CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
                     collections_to_create.push((entry.id(), collection_desc));
                 }
                 // User sources can have dependencies, so do avoid them in the
@@ -1366,7 +1378,10 @@ impl Coordinator {
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
                     // Re-create the storage collection.
-                    let collection_desc = mview.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
                     self.controller
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
@@ -1568,7 +1583,7 @@ impl Coordinator {
             .collect();
         self.controller
             .storage
-            .append(appends)
+            .append_table(appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
@@ -1707,19 +1722,51 @@ impl Coordinator {
     ) {
         // // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
+
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-        spawn(|| "coord idle metric", async move {
+        spawn(|| "coord watchdog", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last
             // processed. If it is idle, this will result in some microseconds
             // of measurement.
             let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // If we end up having to wait more than 5 seconds for the coord to respond, then the
+            // behavior of Delay results in the interval "restarting" from whenever we yield
+            // instead of trying to catch up.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            // Track if we become stuck to de-dupe error reporting.
+            let mut coord_stuck = false;
+
             loop {
                 interval.tick().await;
-                // If the buffer is full (or the channel is closed), ignore and
-                // try again later.
-                let _ = idle_tx.try_send(idle_metric.start_timer());
+
+                // Wait for space in the channel, if we timeout then the coordinator is stuck!
+                let duration = tokio::time::Duration::from_secs(60);
+                let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
+                let Ok(maybe_permit) = timeout else {
+                    // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                    if !coord_stuck {
+                        tracing::error!("Coordinator is stuck, did not respond after {duration:?}");
+                    }
+                    coord_stuck = true;
+
+                    continue;
+                };
+
+                // We got a permit, we're not stuck!
+                if coord_stuck {
+                    tracing::info!("Coordinator became unstuck");
+                }
+                coord_stuck = false;
+
+                // If we failed to acquire a permit it's because we're shutting down.
+                let Ok(permit) = maybe_permit else {
+                    break;
+                };
+
+                permit.send(idle_metric.start_timer());
             }
         });
 

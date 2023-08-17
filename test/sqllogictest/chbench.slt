@@ -352,9 +352,10 @@ Source materialize.public.region
   filter=(like["EUROP%"](padchar(#1)))
 
 Used Indexes:
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_stock_supplier (differential join)
-  - materialize.public.fk_nation_regionkey (differential join)
-  - materialize.public.fk_supplier_nationkey (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***, differential join)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***, differential join)
 
 EOF
 
@@ -1211,7 +1212,7 @@ Source materialize.public.item
   filter=(like["%b"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item (differential join, differential join)
+  - materialize.public.fk_orderline_item (differential join)
 
 EOF
 
@@ -1474,7 +1475,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.fk_order_customer (*** full scan ***)
-  - materialize.public.fk_orderline_order (differential join, differential join)
+  - materialize.public.fk_orderline_order (differential join)
   - materialize.public.fk_stock_warehouse (*** full scan ***)
   - materialize.public.fk_nation_regionkey (*** full scan ***)
   - materialize.public.fk_supplier_nationkey (*** full scan ***)

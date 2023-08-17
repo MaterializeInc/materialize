@@ -2673,8 +2673,8 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
 ----
 Explained Query (fast path):
-  Project (#11)
-    Map (list_index(list[list[list[#0, #1], list[#6, #7, #2, #3]], list[list[#4, #5], list[#6, #7]]], integer_to_bigint(#8), integer_to_bigint(#9), integer_to_bigint(#8)))
+  Project (#12)
+    Map (integer_to_bigint(#8), list_index(list[list[list[#0, #1], list[#6, #7, #2, #3]], list[list[#4, #5], list[#6, #7]]], #11, integer_to_bigint(#9), #11))
       ReadExistingIndex materialize.public.m3_primary_idx
 
 Used Indexes:

@@ -45,7 +45,7 @@ where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
     collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel, WriteTask, ShutdownSender)>>>,
-    write_handle: persist_handles::PersistWriteWorker<T>,
+    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     now: NowFn,
 }
 
@@ -63,7 +63,7 @@ where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     pub(super) fn new(
-        write_handle: persist_handles::PersistWriteWorker<T>,
+        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager<T> {
         CollectionManager {
@@ -173,7 +173,7 @@ where
 /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
 fn write_task<T>(
     id: GlobalId,
-    write_handle: persist_handles::PersistWriteWorker<T>,
+    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     now: NowFn,
 ) -> (WriteChannel, WriteTask, ShutdownSender)
 where
@@ -248,7 +248,7 @@ where
                                     // Failed to receive which means the worker shutdown.
                                     Err(_recv_error) => {
                                         // Sender hung up, this seems fine and can happen when shutting down.
-                                        notify_listeners(responders, || Err(StorageError::ShuttingDown("PersistWriteWorker")));
+                                        notify_listeners(responders, || Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker")));
 
                                         // End the task since we can no longer send writes to persist.
                                         break 'run;

@@ -170,7 +170,7 @@ Explained Query:
         Get materialize.public.t
 
 Used Indexes:
-  - materialize.public.t_x (differential join, differential join)
+  - materialize.public.t_x (differential join)
 
 EOF
 

@@ -14,11 +14,19 @@ use mz_repr::GlobalId;
 use prometheus::core::{AtomicF64, GenericCounter};
 
 /// Metrics exposed by compute replicas.
+//
+// Most of the metrics here use the `raw` implementations, rather than the `DeleteOnDrop` wrappers
+// because their labels are fixed throughout the lifetime of the replica process. For example, any
+// metric labeled only by `worker_id` can be `raw` since the number of workers cannot change.
+//
+// Metrics that are labelled by a dimension that can change throughout the lifetime of the process
+// (such as `collection_id`) MUST NOT use the `raw` metric types and must use the `DeleteOnDrop`
+// types instead, to avoid memory leaks.
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
     // command history
     history_command_count: raw::UIntGaugeVec,
-    history_dataflow_count: UIntGauge,
+    history_dataflow_count: raw::UIntGaugeVec,
 
     // reconciliation
     reconciliation_reused_dataflows_count_total: raw::IntCounterVec,
@@ -38,11 +46,12 @@ impl ComputeMetrics {
             history_command_count: registry.register(metric!(
                 name: "mz_compute_replica_history_command_count",
                 help: "The number of commands in the replica's command history.",
-                var_labels: ["command_type"],
+                var_labels: ["worker_id", "command_type"],
             )),
             history_dataflow_count: registry.register(metric!(
                 name: "mz_compute_replica_history_dataflow_count",
                 help: "The number of dataflows in the replica's command history.",
+                var_labels: ["worker_id"],
             )),
             reconciliation_reused_dataflows_count_total: registry.register(metric!(
                 name: "mz_compute_reconciliation_reused_dataflows_count_total",
@@ -72,13 +81,13 @@ impl ComputeMetrics {
         }
     }
 
-    pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
+    pub fn for_history(&self, worker_id: usize) -> HistoryMetrics<UIntGauge> {
+        let worker = worker_id.to_string();
         let command_counts = CommandMetrics::build(|typ| {
             self.history_command_count
-                .get_metric_with_label_values(&[typ])
-                .unwrap()
+                .with_label_values(&[&worker, typ])
         });
-        let dataflow_count = self.history_dataflow_count.clone();
+        let dataflow_count = self.history_dataflow_count.with_label_values(&[&worker]);
 
         HistoryMetrics {
             command_counts,

@@ -13,6 +13,7 @@ import psycopg2
 from psycopg2.extensions import connection
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.common import eprint
 from materialize.cloudtest.util.environment import wait_for_environmentd
 from materialize.cloudtest.util.web_request import post
 
@@ -36,11 +37,6 @@ def sql_execute(
     cur.execute(query, vars)  # type: ignore[no-untyped-call]
 
 
-def sql_query_pgwire(config: EnvironmentConfig, query: str) -> List[List[Any]]:
-    conn = pgwire_sql_conn(config)
-    return sql_query(conn, query)
-
-
 def pgwire_sql_conn(config: EnvironmentConfig) -> connection:
     environment = wait_for_environmentd(config)
     pgwire_url: str = environment["regionInfo"]["sqlAddress"]
@@ -55,6 +51,26 @@ def pgwire_sql_conn(config: EnvironmentConfig) -> connection:
     )
     conn.autocommit = True
     return conn
+
+
+def sql_query_pgwire(
+    config: EnvironmentConfig,
+    query: str,
+    vars: Optional[Sequence[Any]] = None,
+) -> List[List[Any]]:
+    with pgwire_sql_conn(config) as conn:
+        eprint(f"QUERY: {query}")
+    return sql_query(conn, query, vars)
+
+
+def sql_execute_pgwire(
+    config: EnvironmentConfig,
+    query: str,
+    vars: Optional[Sequence[Any]] = None,
+) -> None:
+    with pgwire_sql_conn(config) as conn:
+        eprint(f"QUERY: {query}")
+        return sql_execute(conn, query, vars)
 
 
 def sql_query_http(config: EnvironmentConfig, query: str) -> List[List[Any]]:

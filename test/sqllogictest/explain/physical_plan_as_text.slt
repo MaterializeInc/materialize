@@ -1009,9 +1009,9 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx (delta join 1st input)
-  - materialize.public.u_c_idx (delta join)
-  - materialize.public.v_e_idx (delta join)
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
 
 EOF
 
