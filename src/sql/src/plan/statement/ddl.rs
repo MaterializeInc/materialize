@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
@@ -31,13 +31,14 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
+    AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterRoleOption,
+    AlterRoleStatement, AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement,
+    AlterSourceAction, AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName,
+    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
+    AlterSystemSetStatement, CommentObjectType, CommentStatement, ConnectionOptionName,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
     MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
@@ -101,10 +102,10 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
-    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
@@ -112,8 +113,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
+    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
@@ -4766,6 +4767,135 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
+pub fn describe_alter_connection(
+    _: &StatementContext,
+    _: AlterConnectionStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_connection(
+    scx: &StatementContext,
+    stmt: AlterConnectionStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterConnectionStatement {
+        name,
+        if_exists,
+        actions,
+    } = stmt;
+    let conn_name = normalize::unresolved_item_name(name)?;
+    let entry = match scx.catalog.resolve_item(&conn_name) {
+        Ok(entry) => entry,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: conn_name.to_string(),
+                object_type: ObjectType::Sink,
+            });
+
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Connection,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let connection = entry.connection()?;
+
+    if actions
+        .iter()
+        .any(|action| matches!(action, AlterConnectionAction::RotateKeys))
+    {
+        if actions.len() > 1 {
+            sql_bail!("cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS");
+        }
+
+        if !matches!(connection, Connection::Ssh(_)) {
+            sql_bail!(
+                "{} is not an SSH connection",
+                scx.catalog.resolve_full_name(entry.name())
+            )
+        }
+
+        return Ok(Plan::AlterConnection(AlterConnectionPlan {
+            id: entry.id(),
+            action: crate::plan::AlterConnectionAction::RotateKeys,
+        }));
+    }
+
+    let connection_type = match connection {
+        Connection::Aws(_) => CreateConnectionType::Aws,
+        Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
+        Connection::Kafka(_) => CreateConnectionType::Kafka,
+        Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::Postgres(_) => CreateConnectionType::Postgres,
+        Connection::Ssh(_) => CreateConnectionType::Ssh,
+    };
+
+    let specified_options = actions
+        .iter()
+        .map(|action: &AlterConnectionAction<Aug>| match action {
+            AlterConnectionAction::SetOption(option) => option.name.clone(),
+            AlterConnectionAction::DropOption(name) => name.clone(),
+            AlterConnectionAction::RotateKeys => unreachable!(),
+        })
+        .collect();
+
+    connection::validate_options_per_connection_type(connection_type, specified_options)?;
+
+    let (set_options_vec, mut drop_options): (Vec<_>, BTreeSet<_>) =
+        actions.into_iter().partition_map(|action| match action {
+            AlterConnectionAction::SetOption(option) => Either::Left(option),
+            AlterConnectionAction::DropOption(name) => Either::Right(name),
+            AlterConnectionAction::RotateKeys => unreachable!(),
+        });
+
+    let set_options: BTreeMap<_, _> = set_options_vec
+        .clone()
+        .into_iter()
+        .map(|option| (option.name, option.value))
+        .collect();
+
+    // Type check values + avoid duplicates; we don't want to e.g. let users
+    // drop and set the same option in the same statement, so treating drops as
+    // sets here is fine.
+    let connection_options_extracted =
+        connection::ConnectionOptionExtracted::try_from(set_options_vec)?;
+
+    let duplicates: Vec<_> = connection_options_extracted
+        .seen
+        .intersection(&drop_options)
+        .collect();
+
+    if !duplicates.is_empty() {
+        sql_bail!(
+            "cannot both SET and DROP/RESET options {}",
+            duplicates
+                .iter()
+                .map(|option| option.to_string())
+                .join(", ")
+        )
+    }
+
+    // Handle any mutually exclusive options.
+    //
+    // e.g. if we're setting BROKER or BROKERS, we need to ensure we clear out
+    // the previous definition of BROKER or BROKERS.
+    if set_options.contains_key(&ConnectionOptionName::Broker)
+        || set_options.contains_key(&ConnectionOptionName::Brokers)
+    {
+        drop_options.insert(ConnectionOptionName::Broker);
+        drop_options.insert(ConnectionOptionName::Brokers);
+    }
+
+    Ok(Plan::AlterConnection(AlterConnectionPlan {
+        id: entry.id(),
+        action: crate::plan::AlterConnectionAction::AlterOptions {
+            set_options,
+            drop_options,
+        },
+    }))
+}
+
 pub fn describe_alter_sink(
     _: &StatementContext,
     _: AlterSinkStatement<Aug>,
@@ -4845,13 +4975,6 @@ pub fn describe_alter_source(
     _: AlterSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     // TODO: put the options here, right?
-    Ok(StatementDesc::new(None))
-}
-
-pub fn describe_alter_connection(
-    _: &StatementContext,
-    _: AlterConnectionStatement,
-) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
@@ -5035,37 +5158,6 @@ pub fn plan_alter_system_reset_all(
     _: AlterSystemResetAllStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
-}
-
-pub fn plan_alter_connection(
-    scx: &mut StatementContext,
-    stmt: AlterConnectionStatement,
-) -> Result<Plan, PlanError> {
-    let AlterConnectionStatement { name, if_exists } = stmt;
-    let name = normalize::unresolved_item_name(name)?;
-    let entry = match scx.catalog.resolve_item(&name) {
-        Ok(connection) => connection,
-        Err(_) if if_exists => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_string(),
-                object_type: ObjectType::Connection,
-            });
-
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Connection,
-            }));
-        }
-        Err(e) => return Err(e.into()),
-    };
-    if !matches!(entry.connection()?, Connection::Ssh(_)) {
-        sql_bail!(
-            "{} is not an SSH connection",
-            scx.catalog.resolve_full_name(entry.name())
-        )
-    }
-
-    let id = entry.id();
-    Ok(Plan::RotateKeys(RotateKeysPlan { id }))
 }
 
 pub fn describe_alter_role(
