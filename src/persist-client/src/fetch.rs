@@ -23,6 +23,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
@@ -603,6 +604,12 @@ where
             needs_truncation,
         }
     }
+
+    pub(crate) fn maybe_unconsolidated(&self) -> bool {
+        // At time of writing, only user parts may be unconsolidated, and they are always
+        // written with a since of [T::minimum()].
+        self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
+    }
 }
 
 /// A pointer into a particular encoded part, with methods for fetching an update and
@@ -662,6 +669,13 @@ impl Cursor {
             self.idx += 1;
         }
         update
+    }
+
+    /// Advance the cursor just past the end of the most recent update, if there is one.
+    pub fn advance<'a, T: Timestamp + Codec64>(&mut self, part: &'a EncodedPart<T>) {
+        if self.part_idx < part.part.updates.len() {
+            self.idx += 1;
+        }
     }
 }
 
