@@ -17,6 +17,12 @@ $ kafka-ingest format=bytes topic=connection_test
 1,2
 2,3
 
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', ACCESS KEY ID = 'abc')
+contains:KAFKA connections do not support ACCESS KEY ID values
+
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', ACCESS KEY ID = 'abc', PORT = 1)
+contains:KAFKA connections do not support ACCESS KEY ID, PORT values
+
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > SELECT name, type from mz_connections
@@ -135,6 +141,13 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
+
+
+! CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}',
+    TOKEN = 'abc'
+  );
+contains:CONFLUENT SCHEMA REGISTRY connections do not support TOKEN values
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
@@ -261,6 +274,14 @@ importee1  importee2
 (f)        "(\"(1234,5678)\")"
 
 # SSH
+
+! CREATE CONNECTION ssh_conn TO SSH TUNNEL (
+    HOST 'host',
+    USER 'user',
+    PORT 1,
+    REGION = 'abc'
+  );
+contains:SSH TUNNEL connections do not support REGION values
 
 > CREATE CONNECTION ssh_conn TO SSH TUNNEL (
     HOST 'host',
