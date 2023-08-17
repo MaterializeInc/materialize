@@ -503,7 +503,7 @@ macro_rules! generate_extracted_config {
         paste::paste! {
             #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
-                seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
+                pub(crate) seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
                     pub(crate) [<$option_name:snake>]: generate_extracted_config!(
                         @ifty $allow_multiple,
