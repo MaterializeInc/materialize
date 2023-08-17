@@ -16,8 +16,8 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::{StringSchema, TodoSchema};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId, ShardIdSchema};
+use mz_persist_types::codec_impls::StringSchema;
 use mz_persist_types::{Codec, Codec64};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -132,7 +132,7 @@ where
         let (mut txns_write, txns_read) = client
             .open(
                 txns_id,
-                Arc::new(TodoSchema::<ShardId>::default()),
+                Arc::new(ShardIdSchema),
                 Arc::new(StringSchema),
                 Diagnostics {
                     shard_name: "txns".to_owned(),

@@ -91,7 +91,9 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_persist::location::{Blob, Consensus, ExternalError};
-use mz_persist_types::codec_impls::TodoSchema;
+use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
+use mz_persist_types::columnar::{ColumnPush, Schema};
+use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -734,7 +736,7 @@ impl PersistClient {
 }
 
 impl Codec for ShardId {
-    type Schema = TodoSchema<ShardId>;
+    type Schema = ShardIdSchema;
     fn codec_name() -> String {
         "ShardId".into()
     }
@@ -744,6 +746,32 @@ impl Codec for ShardId {
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
         shard_id.parse()
+    }
+}
+
+/// An implementation of [Schema] for [ShardId].
+#[derive(Debug)]
+pub struct ShardIdSchema;
+
+impl Schema<ShardId> for ShardIdSchema {
+    type Encoder<'a> = SimpleEncoder<'a, ShardId, String>;
+
+    type Decoder<'a> = SimpleDecoder<'a, ShardId, String>;
+
+    fn columns(&self) -> DynStructCfg {
+        SimpleSchema::<ShardId, String>::columns(&())
+    }
+
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        SimpleSchema::<ShardId, String>::decoder(cols, |val, ret| {
+            *ret = val.parse().expect("should be valid ShardId")
+        })
+    }
+
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        SimpleSchema::<ShardId, String>::push_encoder(cols, |col, val| {
+            ColumnPush::<String>::push(col, &val.to_string())
+        })
     }
 }
 
