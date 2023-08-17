@@ -105,6 +105,8 @@ _replica_name_ | A name for a cluster replica.
 
 {{% replica-options %}}
 
+See [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) for details.
+
 ## Availability zone assignment
 
 When assigning replicas of a [managed cluster](#managed-clusters) to
