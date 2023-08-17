@@ -42,7 +42,7 @@ Next you will add a destination where data will be sent.
    correct permissions. Then click the **Connect**.
 
 {{< /tab >}}
-{{< /tabs }}
+{{< /tabs >}}
 
 ## Step 3. Create a Sync
 
@@ -59,11 +59,11 @@ After successfully adding the Materialize source, you can create a sync to send 
 
 1. Under **Select a Destination** choose the Braze destination configured in step 2 and select "User" as the **Object**.
 
-1. **Select Sync Behavior** can be set to "Update or Create". This will only add and modify new data in Braze but never delete users.
+1. Under **Select Sync Behavior** can be set to "Update or Create". This will only add and modify new data in Braze but never delete users.
 
-1. **Select a Sync Key** select an id column from the Materialize object.
+1. Under **Select a Sync Key** select an id column from the Materialize object.
 
-1. **Set Up Braze Field Mappings** allows any of the columns in the Materialize object to the User entity in Braze.
+1. Under **Set Up Braze Field Mappings** set any of the columns in the Materialize object to their corresponding fields in the Braze User entity.
 
 1. Click **Next** to see an overview of your sync and click **Create** to create the sync.
 
