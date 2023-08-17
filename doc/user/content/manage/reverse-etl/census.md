@@ -33,7 +33,7 @@ Next you will add a destination where data will be sent.
 {{< tabs >}}
 {{< tab "Braze">}}
 
-1. In Census navigate to **Destinations** and select **New Destination**.
+1. In Census, navigate to **Destinations** and select **New Destination**.
 
 1. From the list of destinations types, choose **Braze**.
 
