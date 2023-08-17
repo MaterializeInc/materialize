@@ -214,6 +214,8 @@ mod tests {
     use mz_persist_client::PersistClient;
     use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
 
+    use crate::tests::writer;
+
     use super::*;
 
     // Regression test for a bug caught during code review, where it was
@@ -232,7 +234,7 @@ mod tests {
         )
         .await;
         let d0 = ShardId::new();
-        txns.register(d0, 2).await.unwrap();
+        txns.register(2, writer(&client, d0).await).await.unwrap();
 
         let mut txn = txns.begin();
         txn.write(&d0, "foo".into(), (), 1).await;

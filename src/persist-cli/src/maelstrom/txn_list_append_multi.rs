@@ -216,7 +216,17 @@ impl Transactor {
 
         let mut init_ts = self.oracle.write_ts();
         loop {
-            let res = self.txns.register(*data_id, init_ts).await;
+            let data_write = self
+                .client
+                .open_writer(
+                    *data_id,
+                    Arc::new(VecU8Schema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::from_purpose("txn data"),
+                )
+                .await
+                .expect("data schema shouldn't change");
+            let res = self.txns.register(init_ts, data_write).await;
             match res {
                 Ok(()) => {
                     self.data_reads.insert(*data_id, (init_ts, data_read));

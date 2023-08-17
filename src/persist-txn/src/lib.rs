@@ -193,8 +193,14 @@
 //!
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
-//! txns.register(d0, 1u64).await.expect("not previously initialized");
-//! txns.register(d1, 2u64).await.expect("not previously initialized");
+//! # let d0_write = c.open_writer(
+//! #    d0, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # ).await.unwrap();
+//! # let d1_write = c.open_writer(
+//! #    d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # ).await.unwrap();
+//! txns.register(1u64, d0_write).await.expect("not previously initialized");
+//! txns.register(2u64, d1_write).await.expect("not previously initialized");
 //!
 //! // Commit a txn. This is durable if/when the `commit_at` succeeds, but reads
 //! // at the commit ts will _block_ until after the txn is applied. Users are
@@ -486,5 +492,30 @@ where
 impl StepForward for u64 {
     fn step_forward(&self) -> Self {
         self.checked_add(1).unwrap()
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::sync::Arc;
+
+    use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+    use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
+
+    use super::*;
+
+    pub(crate) async fn writer(
+        client: &PersistClient,
+        data_id: ShardId,
+    ) -> WriteHandle<Vec<u8>, (), u64, i64> {
+        client
+            .open_writer(
+                data_id,
+                Arc::new(VecU8Schema),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("codecs should not change")
     }
 }

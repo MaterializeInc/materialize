@@ -124,6 +124,8 @@ where
         init_ts: T,
         client: PersistClient,
         txns_id: ShardId,
+        // TODO(txn): Get rid of these by introducing a SchemalessWriteHandle to
+        // persist.
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
     ) -> Self {
@@ -174,7 +176,12 @@ where
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
-    pub async fn register(&mut self, data_id: ShardId, register_ts: T) -> Result<(), T> {
+    pub async fn register(
+        &mut self,
+        mut register_ts: T,
+        data_write: WriteHandle<K, V, T, D>,
+    ) -> Result<(), T> {
+        let data_id = data_write.shard_id();
         // SUBTLE! We have to write the registration to the txns shard *before*
         // we write empty data to the physical shard. Otherwise we could race
         // with a commit at the same timestamp, which would then not be able to
@@ -186,9 +193,9 @@ where
                 debug!("txns register {:.9} already done at {:?}", data_id, init_ts);
                 if register_ts < init_ts {
                     return Err(init_ts);
-                } else {
-                    return Ok(());
                 }
+                register_ts = init_ts;
+                break;
             } else if register_ts < txns_upper {
                 debug!(
                     "txns register {:.9} at {:?} mismatch current={:?}",
@@ -217,6 +224,7 @@ where
                 }
             }
         }
+        self.datas.data_write.insert(data_id, data_write);
 
         // Now that we've written the initialization into the txns shard, we
         // know it's safe to make the data shard readable at `commit_ts`. We
@@ -376,6 +384,8 @@ mod tests {
     use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
     use timely::progress::Antichain;
 
+    use crate::tests::writer;
+
     use super::*;
 
     async fn expect_snapshot(
@@ -434,13 +444,13 @@ mod tests {
         )
         .await;
         let d0 = ShardId::new();
-        txns.register(d0, 1).await.unwrap();
+        txns.register(1, writer(&client, d0).await).await.unwrap();
 
         let mut txn = txns.begin();
         txn.write(&d0, "foo".into(), (), 1).await;
         let commit_apply = txn.commit_at(&mut txns, 2).await.unwrap();
 
-        txns.register(d0, 2).await.unwrap();
+        txns.register(2, writer(&client, d0).await).await.unwrap();
 
         // Make sure that we can read empty at the register commit time even
         // before the txn commit apply.
