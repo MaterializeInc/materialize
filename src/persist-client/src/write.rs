@@ -453,10 +453,17 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let (mut parts, mut num_updates) = (Vec::new(), 0);
+        let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
-            parts.extend_from_slice(&batch.batch.parts);
+            for run in batch.batch.runs() {
+                // Mark the boundary if this is not the first run in the batch.
+                let start_index = parts.len();
+                if start_index != 0 {
+                    runs.push(start_index);
+                }
+                parts.extend_from_slice(run);
+            }
             num_updates += batch.batch.len;
         }
 
@@ -468,7 +475,7 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
-                    runs: vec![],
+                    runs,
                 },
                 &self.writer_id,
                 &self.debug_state,
@@ -724,6 +731,7 @@ mod tests {
     use std::str::FromStr;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use mz_ore::collections::CollectionExt;
     use serde_json::json;
 
     use crate::tests::{all_ok, new_test_client};
@@ -796,6 +804,15 @@ mod tests {
         write
             .expect_compare_and_append_batch(&mut [&mut batch0, &mut batch1], 0, 4)
             .await;
+
+        let batch = write
+            .machine
+            .snapshot(&Antichain::from_elem(3))
+            .await
+            .expect("just wrote this")
+            .into_element();
+
+        assert!(batch.runs().count() >= 2);
 
         let expected = vec![
             (("1".to_owned(), "one".to_owned()), 1, 2),
