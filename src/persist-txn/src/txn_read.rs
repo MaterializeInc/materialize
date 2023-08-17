@@ -164,6 +164,28 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
         self.unapplied_batches.values()
     }
 
+    /// Filters out retractions known to have made it into the txns shard.
+    ///
+    /// This is called with a set of things that are known to have been applied
+    /// and in preparation for retracting them. The caller will attempt to
+    /// retract everything not filtered out by this method in a CaA with an
+    /// expected upper of `expected_txns_upper`. So, we catch up to that point,
+    /// and keep everything that is still outstanding. If the CaA fails with an
+    /// expected upper mismatch, then it must call this method again on the next
+    /// attempt with the new expected upper (new retractions may have made it
+    /// into the txns shard in the meantime).
+    ///
+    /// Callers must first wait for `update_ge` with the same or later timestamp
+    /// to return. Panics otherwise.
+    pub(crate) fn filter_retractions<'a>(
+        &'a self,
+        expected_txns_upper: &T,
+        retractions: impl Iterator<Item = (&'a String, &'a ShardId)>,
+    ) -> impl Iterator<Item = (&'a String, &'a ShardId)> {
+        assert!(&self.progress_exclusive >= expected_txns_upper);
+        retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
+    }
+
     /// Invariant: afterward, self.progress_exclusive will be > ts
     pub(crate) async fn update_gt(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive > ts)

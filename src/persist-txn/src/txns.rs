@@ -244,14 +244,14 @@ where
     ///
     /// In the common case, the txn committer will have done this work and this
     /// method will be a no-op, but it is not guaranteed. In the event of a
-    /// crash or race, this does whatever persist writes and resulting
-    /// maintenance work is necessary, which could be significant.
+    /// crash or race, this does whatever persist writes are necessary (and
+    /// returns the resulting maintenance work), which could be significant.
     ///
     /// If the requested timestamp has not yet been written, this could block
     /// for an unbounded amount of time.
     ///
     /// This method is idempotent.
-    pub async fn apply_le(&mut self, ts: &T) {
+    pub async fn apply_le(&mut self, ts: &T) -> Tidy {
         debug!("apply_le {:?}", ts);
         self.txns_cache.update_gt(ts).await;
 
@@ -268,59 +268,63 @@ where
             .await;
         }
 
-        let mut retractions = Vec::new();
+        let mut retractions = BTreeMap::new();
         for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
             if ts < commit_ts {
                 break;
             }
 
             let write = self.datas.get_write(data_id).await;
-            let by_us = crate::apply_caa(write, batch_raw, commit_ts.clone()).await;
-            if by_us {
-                // NB: Protos are not guaranteed to exactly roundtrip the
-                // encoded bytes, so we intentionally use the raw batch so that
-                // it definitely retracts.
-                retractions.push((data_id, batch_raw));
-            }
-            // TODO(txn): Commit as we go? This is idempotent but that could
-            // save us duplicate work when racing.
-        }
-
-        let mut retract_ts = recent_upper(&mut self.txns_write).await;
-        loop {
-            // TODO(txn): Need to filter here to avoid double retractions.
-            // Maelstrom won't catch this bug, so leaving it in to make sure the
-            // unit tests do once they're added.
-            let retractions = retractions
-                .iter()
-                .map(|(data_id, batch_desc)| ((*data_id, *batch_desc), &retract_ts, -1))
-                .collect::<Vec<_>>();
-            if retractions.is_empty() {
-                break;
-            }
-            let res = crate::small_caa(
-                || "txns retract",
-                &mut self.txns_write,
-                &retractions,
-                retract_ts.clone(),
-                retract_ts.step_forward(),
-            )
-            .await;
-            match res {
-                Ok(()) => break,
-                Err(current) => {
-                    retract_ts = current;
-                    continue;
-                }
-            }
+            crate::apply_caa(write, batch_raw, commit_ts.clone()).await;
+            // NB: Protos are not guaranteed to exactly roundtrip the
+            // encoded bytes, so we intentionally use the raw batch so that
+            // it definitely retracts.
+            retractions.insert(batch_raw.clone(), *data_id);
         }
 
         debug!("apply_le {:?} success", ts);
+        Tidy { retractions }
+    }
+
+    /// Commits the tidy work at the given time.
+    ///
+    /// Mostly a helper to make it obvious that we can throw away the apply work
+    /// (and not get into an infinite cycle of tidy->apply->tidy).
+    pub async fn tidy_at(&mut self, tidy_ts: T, tidy: Tidy) -> Result<(), T> {
+        debug!("tidy at {:?}", tidy_ts);
+
+        let mut txn = self.begin();
+        txn.tidy(tidy);
+        // We just constructed this txn, so it couldn't have committed any
+        // batches, and thus there's nothing to apply. We're free to throw it
+        // away.
+        let apply = txn.commit_at(self, tidy_ts.clone()).await?;
+        assert!(apply.is_empty());
+
+        debug!("tidy at {:?} success", tidy_ts);
+        Ok(())
     }
 
     /// Returns the [TxnsCache] used by this handle.
     pub fn read_cache(&self) -> &TxnsCache<T> {
         &self.txns_cache
+    }
+}
+
+/// A token representing maintenance writes (in particular, retractions) to the
+/// txns shard.
+///
+/// This can be written on its own with [TxnsHandle::tidy_at] or sidecar'd into
+/// a normal txn with [Txn::tidy].
+#[derive(Debug, Default)]
+pub struct Tidy {
+    pub(crate) retractions: BTreeMap<String, ShardId>,
+}
+
+impl Tidy {
+    /// Merges the work represented by the other tidy into this one.
+    pub fn merge(&mut self, other: Tidy) {
+        self.retractions.extend(other.retractions)
     }
 }
 
@@ -406,7 +410,7 @@ mod tests {
             .await
             .expect("schemas shouldn't change");
 
-        let () = txns.apply_le(&as_of).await;
+        let _tidy = txns.apply_le(&as_of).await;
         let translated_as_of = txns
             .read_cache()
             .to_data_inclusive(&data_id, as_of)

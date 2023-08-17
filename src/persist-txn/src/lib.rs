@@ -211,16 +211,18 @@
 //! let mut txn = txns.begin();
 //! txn.write(&d0, vec![0], (), 1);
 //! txn.write(&d1, vec![1], (), -1);
-//! txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
-//!     // And make it available to reads by applying it.
+//! let tidy = txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
+//!     // Make it available to reads by applying it.
 //!     .apply(&mut txns).await;
 //!
 //! // Commit a contended txn at a higher timestamp. Note that the upper of `d1`
-//! // is also advanced by this.
+//! // is also advanced by this. At the same time clean up after our last commit
+//! // (the tidy).
 //! let mut txn = txns.begin();
 //! txn.write(&d0, vec![2], (), 1);
+//! txn.tidy(tidy);
 //! txn.commit_at(&mut txns, 3).await.expect_err("ts 3 not available");
-//! txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
+//! let _tidy = txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
@@ -412,14 +414,11 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// the work must have already been done by someone else. (Think how our compute
 /// replicas race to compute some MATERIALIZED VIEW, but they're all guaranteed
 /// to get the same answer.)
-///
-/// Returns true if this call was the one to apply it.
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
     batch_raw: &str,
     commit_ts: T,
-) -> bool
-where
+) where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
@@ -441,7 +440,7 @@ where
             );
             // Mark the batch as consumed, so we don't get warnings in the logs.
             batch.into_hollow_batch();
-            return false;
+            return;
         }
         debug!(
             "CaA data {:.9} apply b={} t={:?} [{:?},{:?})",
@@ -470,7 +469,7 @@ where
                     upper,
                     commit_ts.step_forward(),
                 );
-                return true;
+                return;
             }
             Err(UpperMismatch { current, .. }) => {
                 let current = current.into_option().expect("data should not be closed");

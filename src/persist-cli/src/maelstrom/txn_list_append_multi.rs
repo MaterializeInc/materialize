@@ -30,7 +30,7 @@ use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{ListenEvent, ReadHandle};
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_txn::txns::TxnsHandle;
+use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
 use timely::progress::Antichain;
 use tokio::sync::Mutex;
@@ -47,6 +47,7 @@ pub struct Transactor {
     oracle: LocalOracle,
     client: PersistClient,
     txns: TxnsHandle<Vec<u8>, (), u64, i64>,
+    tidy: Tidy,
     data_reads: BTreeMap<ShardId, (u64, ReadHandle<Vec<u8>, (), u64, i64>)>,
 }
 
@@ -66,6 +67,7 @@ impl Transactor {
             txns_id,
             oracle,
             txns,
+            tidy: Tidy::default(),
             client,
             data_reads: BTreeMap::default(),
         })
@@ -111,10 +113,12 @@ impl Transactor {
             let mut write_ts = self.oracle.write_ts();
             debug!("write ts {}", write_ts);
             loop {
+                txn.tidy(std::mem::take(&mut self.tidy));
                 match txn.commit_at(&mut self.txns, write_ts).await {
                     Ok(maintenance) => {
                         debug!("req committed at read_ts={} write_ts={}", read_ts, write_ts);
-                        let () = maintenance.apply(&mut self.txns).await;
+                        let tidy = maintenance.apply(&mut self.txns).await;
+                        self.tidy.merge(tidy);
                         break;
                     }
                     Err(_current) => {
@@ -251,7 +255,8 @@ impl Transactor {
         data_ids: impl Iterator<Item = &ShardId>,
     ) -> BTreeMap<ShardId, Vec<(Vec<u8>, u64, i64)>> {
         // Ensure these reads don't block.
-        let () = self.txns.apply_le(&read_ts).await;
+        let tidy = self.txns.apply_le(&read_ts).await;
+        self.tidy.merge(tidy);
 
         let mut reads = BTreeMap::new();
         for data_id in data_ids {

@@ -21,13 +21,14 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
-use crate::txns::{self, TxnsHandle};
+use crate::txns::{Tidy, TxnsHandle};
 use crate::StepForward;
 
 /// An in-progress transaction.
 #[derive(Debug)]
 pub struct Txn<K, V, D> {
     writes: BTreeMap<ShardId, Vec<(K, V, D)>>,
+    tidy: Tidy,
 }
 
 impl<K, V, D> Txn<K, V, D>
@@ -39,6 +40,7 @@ where
     pub(crate) fn new() -> Self {
         Txn {
             writes: BTreeMap::default(),
+            tidy: Tidy::default(),
         }
     }
 
@@ -78,10 +80,16 @@ where
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     {
         // TODO(txn): Use ownership to disallow a double commit.
-        let mut txns_upper = txns::recent_upper(&mut handle.txns_write).await;
+        let mut txns_upper = handle
+            .txns_write
+            .upper()
+            .as_option()
+            .expect("txns shard should not be closed")
+            .clone();
 
         // Validate that the involved data shards are all registered. txns_upper
-        // only advances in the loop below, so we only have to check this once.
+        // only advances in the loop below, so we only have to check
+        // registration once.
         let () = handle.txns_cache.update_ge(&txns_upper).await;
         for (data_id, _) in self.writes.iter() {
             let registered_before_commit_ts = handle
@@ -141,10 +149,24 @@ where
                 txns_updates.push((*data_id, batch_raw));
             }
 
-            let txns_updates = txns_updates
+            let mut txns_updates = txns_updates
                 .iter()
                 .map(|(k, v)| ((k, v), &commit_ts, 1))
                 .collect::<Vec<_>>();
+            let apply_is_empty = txns_updates.is_empty();
+
+            // Tidy guarantees that anything in retractions has been applied,
+            // but races mean someone else may have written the retraction. If
+            // the following CaA goes through, then the `update_ge(txns_upper)`
+            // above means that anything the cache thinks is still unapplied
+            // but we know is applied indeed still needs to be retracted.
+            let filtered_retractions = handle
+                .read_cache()
+                .filter_retractions(&txns_upper, self.tidy.retractions.iter());
+            for (batch_raw, data_id) in filtered_retractions {
+                txns_updates.push(((data_id, batch_raw), &commit_ts, -1));
+            }
+
             let res = crate::small_caa(
                 || "txns commit",
                 &mut handle.txns_write,
@@ -166,7 +188,10 @@ where
                     for batch in txn_batches {
                         let _ = batch.into_hollow_batch();
                     }
-                    return Ok(TxnApply { commit_ts });
+                    return Ok(TxnApply {
+                        is_empty: apply_is_empty,
+                        commit_ts,
+                    });
                 }
                 Err(new_txns_upper) => {
                     assert!(txns_upper < new_txns_upper);
@@ -179,10 +204,24 @@ where
                     for batch in txn_batches {
                         let () = batch.delete().await;
                     }
+                    let () = handle.txns_cache.update_ge(&txns_upper).await;
                     continue;
                 }
             }
         }
+    }
+
+    /// Merges the work represented by given tidy into this txn.
+    ///
+    /// If this txn commits, the tidy work will be written at the commit ts.
+    pub fn tidy(&mut self, tidy: Tidy) {
+        self.tidy.merge(tidy);
+    }
+
+    /// Extracts any tidy work that has been merged into this txn with
+    /// [Self::tidy].
+    pub fn take_tidy(&mut self) -> Tidy {
+        std::mem::take(&mut self.tidy)
     }
 }
 
@@ -190,12 +229,13 @@ where
 /// performed by a txn committer.
 #[derive(Debug)]
 pub struct TxnApply<T> {
+    is_empty: bool,
     pub(crate) commit_ts: T,
 }
 
 impl<T> TxnApply<T> {
     /// Applies the txn, unblocking reads at timestamp it was committed at.
-    pub async fn apply<K, V, D>(self, handle: &mut TxnsHandle<K, V, T, D>)
+    pub async fn apply<K, V, D>(self, handle: &mut TxnsHandle<K, V, T, D>) -> Tidy
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -204,6 +244,14 @@ impl<T> TxnApply<T> {
     {
         debug!("txn apply {:?}", self.commit_ts);
         handle.apply_le(&self.commit_ts).await
+    }
+
+    /// Returns whether the apply represents a txn with any non-tidy writes.
+    ///
+    /// If this returns true, the apply is essentially a no-op and safe to
+    /// discard.
+    pub fn is_empty(&self) -> bool {
+        self.is_empty
     }
 }
 
