@@ -78,24 +78,89 @@
 #![warn(missing_docs)]
 
 use std::fmt;
+use std::str::FromStr;
+
+use anyhow::bail;
+use mz_proto::{RustType, TryFromProtoError};
+use mz_stash::objects::proto;
+use serde::{Deserialize, Serialize};
 
 pub mod client;
 
 /// Identifier of a replica.
-pub type ReplicaId = u64;
-
-/// Identifier of a replica.
-// TODO(#18377): Replace `ReplicaId` with this type.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum NewReplicaId {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum ReplicaId {
     /// A user replica.
     User(u64),
+    /// A system replica.
+    System(u64),
 }
 
-impl fmt::Display for NewReplicaId {
+impl ReplicaId {
+    /// Return the inner numeric ID value.
+    pub fn inner_id(&self) -> u64 {
+        match self {
+            ReplicaId::User(id) => *id,
+            ReplicaId::System(id) => *id,
+        }
+    }
+
+    /// Whether this value identifies a user replica.
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User(_))
+    }
+
+    /// Whether this value identifies a system replica.
+    pub fn is_system(&self) -> bool {
+        matches!(self, Self::System(_))
+    }
+}
+
+impl fmt::Display for ReplicaId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::User(id) => write!(f, "u{}", id),
+            Self::System(id) => write!(f, "s{}", id),
+        }
+    }
+}
+
+impl FromStr for ReplicaId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let first = s.chars().next();
+        let rest = s.get(1..);
+        if let (Some(prefix), Some(num)) = (first, rest) {
+            let id = num.parse()?;
+            match prefix {
+                'u' => return Ok(Self::User(id)),
+                's' => return Ok(Self::System(id)),
+                _ => (),
+            }
+        }
+
+        bail!("invalid replica ID: {}", s);
+    }
+}
+
+impl RustType<proto::ReplicaId> for ReplicaId {
+    fn into_proto(&self) -> proto::ReplicaId {
+        use proto::replica_id::Value::*;
+        proto::ReplicaId {
+            value: Some(match self {
+                Self::System(id) => System(*id),
+                Self::User(id) => User(*id),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaId) -> Result<Self, TryFromProtoError> {
+        use proto::replica_id::Value::*;
+        match proto.value {
+            Some(System(id)) => Ok(Self::System(id)),
+            Some(User(id)) => Ok(Self::User(id)),
+            None => Err(TryFromProtoError::missing_field("ReplicaId::value")),
         }
     }
 }

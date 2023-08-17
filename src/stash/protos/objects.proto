@@ -264,7 +264,10 @@ message SchemaId {
 }
 
 message ReplicaId {
-    uint64 value = 1;
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+    }
 }
 
 message ReplicaLogging {

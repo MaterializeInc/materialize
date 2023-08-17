@@ -213,16 +213,13 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
 impl RustType<proto::ClusterReplicaKey> for ClusterReplicaKey {
     fn into_proto(&self) -> proto::ClusterReplicaKey {
         proto::ClusterReplicaKey {
-            id: Some(proto::ReplicaId { value: self.id }),
+            id: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::ClusterReplicaKey) -> Result<Self, TryFromProtoError> {
         Ok(ClusterReplicaKey {
-            id: proto
-                .id
-                .map(|id| id.value)
-                .ok_or_else(|| TryFromProtoError::missing_field("ClusterReplicaKey::id"))?,
+            id: proto.id.into_rust_if_some("ClusterReplicaKey::id")?,
         })
     }
 }

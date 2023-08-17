@@ -2054,7 +2054,10 @@ pub async fn serve(
                     .await?;
                 coord
                     .controller
-                    .remove_orphaned_replicas(coord.catalog().get_next_replica_id().await?)
+                    .remove_orphaned_replicas(
+                        coord.catalog().get_next_user_replica_id().await?,
+                        coord.catalog().get_next_system_replica_id().await?,
+                    )
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use itertools::max;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;
@@ -28,9 +28,9 @@ use crate::catalog::object_type_to_audit_object_type;
 use crate::catalog::storage::{
     BootstrapArgs, DefaultPrivilegesKey, DefaultPrivilegesValue, RoleMembership,
     SystemPrivilegesKey, SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY,
-    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, REPLICA_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::rbac;
 
@@ -93,8 +93,8 @@ const SYSTEM_ID_ALLOC_KEY: &str = "system";
 const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
 const DEFAULT_USER_CLUSTER_NAME: &str = "default";
 
-const DEFAULT_REPLICA_ID: u64 = 1;
-const DEFAULT_REPLICA_NAME: &str = "r1";
+const DEFAULT_USER_REPLICA_ID: ReplicaId = ReplicaId::User(1);
+const DEFAULT_USER_REPLICA_NAME: &str = "r1";
 
 const MATERIALIZE_DATABASE_ID_VAL: u64 = 1;
 const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::User(MATERIALIZE_DATABASE_ID_VAL);
@@ -599,13 +599,11 @@ pub async fn initialize(
             tx,
             [(
                 proto::ClusterReplicaKey {
-                    id: Some(proto::ReplicaId {
-                        value: DEFAULT_REPLICA_ID,
-                    }),
+                    id: Some(DEFAULT_USER_REPLICA_ID.into_proto()),
                 },
                 proto::ClusterReplicaValue {
                     cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
-                    name: DEFAULT_REPLICA_NAME.to_string(),
+                    name: DEFAULT_USER_REPLICA_NAME.to_string(),
                     config: Some(default_replica_config(options)),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 },
@@ -619,8 +617,8 @@ pub async fn initialize(
             proto::audit_log_event_v1::CreateClusterReplicaV1 {
                 cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
                 cluser_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
-                replica_name: DEFAULT_REPLICA_NAME.to_string(),
-                replica_id: Some(DEFAULT_REPLICA_ID.to_string().into()),
+                replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
+                replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string().into()),
                 logical_size: options.default_cluster_replica_size.to_string(),
                 disk: false,
             },
@@ -771,10 +769,18 @@ pub async fn initialize(
                 ),
                 (
                     proto::IdAllocKey {
-                        name: REPLICA_ID_ALLOC_KEY.to_string(),
+                        name: USER_REPLICA_ID_ALLOC_KEY.to_string(),
                     },
                     proto::IdAllocValue {
-                        next_id: DEFAULT_REPLICA_ID + 1,
+                        next_id: DEFAULT_USER_REPLICA_ID.inner_id() + 1,
+                    },
+                ),
+                (
+                    proto::IdAllocKey {
+                        name: SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(),
+                    },
+                    proto::IdAllocValue {
+                        next_id: id_allocator.next_id(SYSTEM_REPLICA_ID_ALLOC_KEY),
                     },
                 ),
                 (
