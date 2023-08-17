@@ -46,7 +46,7 @@ pub struct Transactor {
     txns_id: ShardId,
     oracle: LocalOracle,
     client: PersistClient,
-    txns: TxnsHandle,
+    txns: TxnsHandle<Vec<u8>, (), u64, i64>,
     data_reads: BTreeMap<ShardId, (u64, ReadHandle<Vec<u8>, (), u64, i64>)>,
 }
 
@@ -54,7 +54,14 @@ impl Transactor {
     pub async fn new(client: PersistClient, txns_id: ShardId) -> Result<Self, MaelstromError> {
         let mut oracle = LocalOracle::new();
         let init_ts = oracle.write_ts();
-        let txns = TxnsHandle::open(init_ts, client.clone(), txns_id).await;
+        let txns = TxnsHandle::open(
+            init_ts,
+            client.clone(),
+            txns_id,
+            Arc::new(VecU8Schema),
+            Arc::new(UnitSchema),
+        )
+        .await;
         Ok(Transactor {
             txns_id,
             oracle,
@@ -98,7 +105,7 @@ impl Transactor {
             let mut txn = self.txns.begin();
             for (data_id, writes) in writes {
                 for (data, diff) in writes {
-                    txn.write(&data_id, data, diff).await;
+                    txn.write(&data_id, data, (), diff).await;
                 }
             }
             let mut write_ts = self.oracle.write_ts();
@@ -234,7 +241,7 @@ impl Transactor {
         data_ids: impl Iterator<Item = &ShardId>,
     ) -> BTreeMap<ShardId, Vec<(Vec<u8>, u64, i64)>> {
         // Ensure these reads don't block.
-        let () = self.txns.apply_le(read_ts).await;
+        let () = self.txns.apply_le(&read_ts).await;
 
         let mut reads = BTreeMap::new();
         for data_id in data_ids {

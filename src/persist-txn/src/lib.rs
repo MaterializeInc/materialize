@@ -187,7 +187,9 @@
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
 //! # let client = c.clone();
-//! let mut txns = TxnsHandle::open(0u64, client, ShardId::new()).await;
+//! let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64>::open(
+//!     0u64, client, ShardId::new(), VecU8Schema.into(), UnitSchema.into()
+//! ).await;
 //!
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
@@ -201,8 +203,8 @@
 //! // but in the event of a crash, neither correctness nor liveness depend on
 //! // it.
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![0], 1);
-//! txn.write(&d1, vec![1], -1);
+//! txn.write(&d0, vec![0], (), 1);
+//! txn.write(&d1, vec![1], (), -1);
 //! txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
 //!     // And make it available to reads by applying it.
 //!     .apply(&mut txns).await;
@@ -210,7 +212,7 @@
 //! // Commit a contended txn at a higher timestamp. Note that the upper of `d1`
 //! // is also advanced by this.
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![2], 1);
+//! txn.write(&d0, vec![2], (), 1);
 //! txn.commit_at(&mut txns, 3).await.expect_err("ts 3 not available");
 //! txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
 //!     .apply(&mut txns).await;
@@ -257,11 +259,14 @@
 
 use std::fmt::Debug;
 
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::Codec;
-use timely::progress::Antichain;
+use mz_persist_types::{Codec, Codec64};
+use timely::order::TotalOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 pub mod error;
@@ -270,7 +275,6 @@ pub mod txn_write;
 pub mod txns;
 
 // TODO(txn):
-// - Extract K, V, T, D into type params.
 // - Figure out the mod and struct naming.
 // - Add frontier advancement operator.
 // - Closing/deleting data shards.
@@ -279,25 +283,37 @@ pub mod txns;
 // - Use Row to store the remap shard contents so we can debug it with SQL.
 // - Figure out the compaction story for both txn and data shard.
 
+/// Advance a timestamp by the least amount possible such that
+/// `ts.less_than(ts.step_forward())` is true.
+///
+/// TODO(txn): Unify this with repr's TimestampManipulation.
+pub trait StepForward {
+    /// Advance a timestamp by the least amount possible such that
+    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
+    fn step_forward(&self) -> Self;
+}
+
 /// Helper for common logging for compare_and_append-ing a small amount of data.
-pub(crate) async fn small_caa<S, F, K, V>(
+pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
-    txns_or_data_write: &mut WriteHandle<K, V, u64, i64>,
-    updates: &[((&K, &V), u64, i64)],
-    upper: u64,
-    new_upper: u64,
-) -> Result<(), u64>
+    txns_or_data_write: &mut WriteHandle<K, V, T, D>,
+    updates: &[((&K, &V), &T, D)],
+    upper: T,
+    new_upper: T,
+) -> Result<(), T>
 where
     S: AsRef<str>,
     F: Fn() -> S,
     K: Debug + Codec,
     V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
         xs.into_iter().map(|x| format!("{}{:?}", sep, x)).collect()
     }
     debug!(
-        "CaA {} [{},{}){}",
+        "CaA {} [{:?},{:?}){}",
         name().as_ref(),
         upper,
         new_upper,
@@ -307,22 +323,27 @@ where
     let res = txns_or_data_write
         .compare_and_append(
             updates,
-            Antichain::from_elem(upper),
-            Antichain::from_elem(new_upper),
+            Antichain::from_elem(upper.clone()),
+            Antichain::from_elem(new_upper.clone()),
         )
         .await
         .expect("usage was valid");
     match res {
         Ok(()) => {
-            debug!("CaA {} [{},{}) success", name().as_ref(), upper, new_upper);
+            debug!(
+                "CaA {} [{:?},{:?}) success",
+                name().as_ref(),
+                upper,
+                new_upper
+            );
             Ok(())
         }
         Err(UpperMismatch { current, .. }) => {
-            let current = *current
-                .as_option()
+            let current = current
+                .into_option()
                 .expect("txns shard should not be closed");
             debug!(
-                "CaA {} [{},{}) mismatch actual={}",
+                "CaA {} [{:?},{:?}) mismatch actual={:?}",
                 name().as_ref(),
                 upper,
                 new_upper,
@@ -337,22 +358,25 @@ where
 /// batch, retrying as necessary.
 ///
 /// This method is idempotent.
-pub(crate) async fn empty_caa<S, F, K, V>(
+pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     name: F,
-    txns_or_data_write: &mut WriteHandle<K, V, u64, i64>,
-    init_ts: u64,
+    txns_or_data_write: &mut WriteHandle<K, V, T, D>,
+    init_ts: T,
 ) where
     S: AsRef<str>,
     F: Fn() -> S,
     K: Debug + Codec,
     V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     let name = name();
-    let empty: &[((&K, &V), u64, i64)] = &[];
-    let mut upper = *txns_or_data_write
+    let empty: &[((&K, &V), &T, D)] = &[];
+    let mut upper = txns_or_data_write
         .upper()
         .as_option()
-        .expect("shard should not be closed");
+        .expect("shard should not be closed")
+        .clone();
     loop {
         if init_ts < upper {
             return;
@@ -362,7 +386,7 @@ pub(crate) async fn empty_caa<S, F, K, V>(
             txns_or_data_write,
             empty,
             upper,
-            init_ts + 1,
+            init_ts.step_forward(),
         )
         .await;
         match res {
@@ -384,21 +408,28 @@ pub(crate) async fn empty_caa<S, F, K, V>(
 /// to get the same answer.)
 ///
 /// Returns true if this call was the one to apply it.
-async fn apply_caa(
-    data_write: &mut WriteHandle<Vec<u8>, (), u64, i64>,
+async fn apply_caa<K, V, T, D>(
+    data_write: &mut WriteHandle<K, V, T, D>,
     batch_raw: &str,
-    commit_ts: u64,
-) -> bool {
+    commit_ts: T,
+) -> bool
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     let batch = serde_json::from_str(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
-    let mut upper = *data_write
+    let mut upper = data_write
         .upper()
         .as_option()
-        .expect("data shard should not be closed");
+        .expect("data shard should not be closed")
+        .clone();
     loop {
         if commit_ts < upper {
             debug!(
-                "CaA data {:.9} apply t={} already done",
+                "CaA data {:.9} apply t={:?} already done",
                 data_write.shard_id().to_string(),
                 commit_ts
             );
@@ -407,47 +438,53 @@ async fn apply_caa(
             return false;
         }
         debug!(
-            "CaA data {:.9} apply b={} t={} [{},{})",
+            "CaA data {:.9} apply b={} t={:?} [{:?},{:?})",
             data_write.shard_id().to_string(),
             batch_raw.hashed(),
             commit_ts,
             upper,
-            commit_ts + 1
+            commit_ts.step_forward(),
         );
         // TODO(txn): We need to do all the batches for a given `(shard, ts)` at
         // once.
         let res = data_write
             .compare_and_append_batch(
                 &mut [&mut batch],
-                Antichain::from_elem(upper),
-                Antichain::from_elem(commit_ts + 1),
+                Antichain::from_elem(upper.clone()),
+                Antichain::from_elem(commit_ts.step_forward()),
             )
             .await
             .expect("usage was valid");
         match res {
             Ok(()) => {
                 debug!(
-                    "CaA data {:.9} apply t={} [{},{}) success",
+                    "CaA data {:.9} apply t={:?} [{:?},{:?}) success",
                     data_write.shard_id().to_string(),
                     commit_ts,
                     upper,
-                    commit_ts + 1
+                    commit_ts.step_forward(),
                 );
                 return true;
             }
             Err(UpperMismatch { current, .. }) => {
-                let current = *current.as_option().expect("data should not be closed");
+                let current = current.into_option().expect("data should not be closed");
                 debug!(
-                    "CaA data {:.9} apply t={} [{},{}) mismatch actual={}",
+                    "CaA data {:.9} apply t={:?} [{:?},{:?}) mismatch actual={:?}",
                     data_write.shard_id().to_string(),
                     commit_ts,
                     upper,
-                    commit_ts + 1,
+                    commit_ts.step_forward(),
                     current,
                 );
                 upper = current;
                 continue;
             }
         }
+    }
+}
+
+impl StepForward for u64 {
+    fn step_forward(&self) -> Self {
+        self.checked_add(1).unwrap()
     }
 }
