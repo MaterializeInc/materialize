@@ -2186,59 +2186,31 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection = match self
-            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])?
-        {
-            AWS => {
-                if self.parse_keyword(PRIVATELINK) {
-                    if expect_paren {
-                        self.expect_token(&Token::LParen)?;
+        let connection_type =
+            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
+                AWS => {
+                    if self.parse_keyword(PRIVATELINK) {
+                        CreateConnectionType::AwsPrivatelink
+                    } else {
+                        CreateConnectionType::Aws
                     }
-                    let options = self
-                        .parse_comma_separated(Parser::parse_aws_privatelink_connection_option)?;
-                    CreateConnection::AwsPrivatelink { options }
-                } else {
-                    if expect_paren {
-                        self.expect_token(&Token::LParen)?;
-                    }
-                    let options =
-                        self.parse_comma_separated(Parser::parse_aws_connection_option)?;
-                    CreateConnection::Aws { options }
                 }
-            }
-            KAFKA => {
-                if expect_paren {
-                    self.expect_token(&Token::LParen)?;
+                KAFKA => CreateConnectionType::Kafka,
+                CONFLUENT => {
+                    self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    CreateConnectionType::Csr
                 }
-                let options = self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
-                CreateConnection::Kafka { options }
-            }
-            CONFLUENT => {
-                self.expect_keywords(&[SCHEMA, REGISTRY])?;
-                if expect_paren {
-                    self.expect_token(&Token::LParen)?;
+                POSTGRES => CreateConnectionType::Postgres,
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    CreateConnectionType::Ssh
                 }
-                let options = self.parse_comma_separated(Parser::parse_csr_connection_option)?;
-                CreateConnection::Csr { options }
-            }
-            POSTGRES => {
-                if expect_paren {
-                    self.expect_token(&Token::LParen)?;
-                }
-                let options =
-                    self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
-                CreateConnection::Postgres { options }
-            }
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
-                if expect_paren {
-                    self.expect_token(&Token::LParen)?;
-                }
-                let options = self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
-                CreateConnection::Ssh { options }
-            }
-            _ => unreachable!(),
-        };
+                _ => unreachable!(),
+            };
+        if expect_paren {
+            self.expect_token(&Token::LParen)?;
+        }
+        let values = self.parse_comma_separated(Parser::parse_connection_option_unified)?;
         if expect_paren {
             self.expect_token(&Token::RParen)?;
         }
@@ -2254,7 +2226,8 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connection,
+            connection_type,
+            values,
             if_not_exists,
             with_options,
         }))

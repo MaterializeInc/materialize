@@ -422,7 +422,8 @@ pub fn create_statement(
         }
         Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connection: _,
+            connection_type: _,
+            values: _,
             with_options: _,
             if_not_exists,
         }) => {

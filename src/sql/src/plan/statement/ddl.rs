@@ -124,6 +124,8 @@ use crate::plan::{
 };
 use crate::session::vars;
 
+mod connection;
+
 // TODO: Figure out what the maximum number of columns we can actually support is, and set that.
 //
 // The real max is probably higher than this, but it's easier to relax a constraint than make it
@@ -3694,49 +3696,14 @@ pub fn plan_create_connection(
     let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
-        connection,
+        connection_type,
+        values,
         if_not_exists,
         with_options,
     } = stmt;
-    let connection = match connection {
-        CreateConnection::Kafka { options } => {
-            let c = KafkaConnectionOptionExtracted::try_from(options)?;
-            Connection::Kafka(c.to_connection(scx)?)
-        }
-        CreateConnection::Csr { options } => {
-            let c = CsrConnectionOptionExtracted::try_from(options)?;
-            Connection::Csr(c.to_connection(scx)?)
-        }
-        CreateConnection::Postgres { options } => {
-            let c = PostgresConnectionOptionExtracted::try_from(options)?;
-            Connection::Postgres(c.to_connection(scx)?)
-        }
-        CreateConnection::Aws { options } => {
-            let c = AwsConnectionOptionExtracted::try_from(options)?;
-            let connection = AwsConfig::try_from(c)?;
-            Connection::Aws(connection)
-        }
-        CreateConnection::AwsPrivatelink { options } => {
-            let c = AwsPrivatelinkConnectionOptionExtracted::try_from(options)?;
-            let connection = AwsPrivatelinkConnection::try_from(c)?;
-            if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
-                for connection_az in &connection.availability_zones {
-                    if !supported_azs.contains(connection_az) {
-                        return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
-                            name: connection_az.to_string(),
-                            supported_azs,
-                        });
-                    }
-                }
-            }
-            Connection::AwsPrivatelink(connection)
-        }
-        CreateConnection::Ssh { options } => {
-            let c = SshConnectionOptionExtracted::try_from(options)?;
-            let connection = mz_storage_types::connections::SshConnection::try_from(c)?;
-            Connection::Ssh(connection)
-        }
-    };
+
+    let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
+    let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     let options = CreateConnectionOptionExtracted::try_from(with_options)?;
