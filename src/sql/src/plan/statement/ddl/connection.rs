@@ -17,8 +17,9 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker, KafkaBrokerTunnel,
 };
-use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
-use mz_storage_client::types::connections::{
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
     KafkaBroker as StorageClientKafkaBroker, KafkaConnection, KafkaSecurity, KafkaTlsConfig,
     PostgresConnection, SaslConfig, SshConnection, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
@@ -144,14 +145,14 @@ impl ConnectionOptionExtracted {
         Ok(())
     }
 
-    fn try_into_connection(
+    pub fn try_into_connection(
         self,
         scx: &StatementContext,
-        t: CreateConnectionType,
-    ) -> Result<Connection, PlanError> {
-        Self::ensure_only_valid_options(self.seen.clone(), t)?;
+        connection_type: CreateConnectionType,
+    ) -> Result<Connection<ReferencedConnection>, PlanError> {
+        Self::ensure_only_valid_options(self.seen.clone(), connection_type)?;
 
-        let c = match t {
+        let connection: Connection<ReferencedConnection> = match connection_type {
             CreateConnectionType::Aws => {
                 Connection::Aws(AwsConfig {
                     credentials: AwsCredentials {
@@ -303,13 +304,13 @@ impl ConnectionOptionExtracted {
             }),
         };
 
-        Ok(c)
+        Ok(connection)
     }
 
     pub fn get_brokers(
         &self,
         scx: &StatementContext,
-    ) -> Result<Vec<StorageClientKafkaBroker>, PlanError> {
+    ) -> Result<Vec<StorageClientKafkaBroker<ReferencedConnection>>, PlanError> {
         let mut brokers = match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => sql_bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
             (None, None) => sql_bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
@@ -375,9 +376,9 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let ssh_tunnel = scx.catalog.get_item(id);
                     match ssh_tunnel.connection()? {
-                        Connection::Ssh(connection) => Tunnel::Ssh(SshTunnel {
+                        Connection::Ssh(_connection) => Tunnel::Ssh(SshTunnel {
                             connection_id: *id,
-                            connection: connection.clone(),
+                            connection: *id,
                         }),
                         _ => {
                             sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item)
