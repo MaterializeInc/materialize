@@ -1360,11 +1360,15 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let stats = args.optional_str("stats");
         let batch = datadriven.batches.get(input).expect("unknown batch");
 
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
+            if stats == Some("lower") && !part.key_lower.is_empty() {
+                writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
+            }
             let blob_batch = datadriven
                 .client
                 .blob
