@@ -50,17 +50,17 @@ EXPLAIN MATERIALIZED VIEW num_bids
 ```
                 Optimized Plan
 -----------------------------------------------
- materialize.public.num_bids:                 +
+ materialize.qck.num_bids:                    +
    Reduce group_by=[#0] aggregates=[count(*)] +
      Project (#3)                             +
        Filter (#1 < #4)                       +
          Join on=(#0 = #2) type=differential  +
            ArrangeBy keys=[[#0]]              +
              Project (#2, #4)                 +
-               Get materialize.public.bids    +
+               Get materialize.qck.bids       +
            ArrangeBy keys=[[#0]]              +
              Project (#0, #2, #3)             +
-               Get materialize.public.auctions+
+               Get materialize.qck.auctions+
 
 (1 row)
 ```
@@ -310,10 +310,10 @@ FROM mz_internal.mz_dataflow_arrangement_sizes
 ORDER BY size DESC
 ```
 ```
-  id   |     name     | records |   size_mb
--------+--------------+---------+-------------
- 19157 | num_bids     | 1612747 |      113.82
- 19158 | num_bids_idx |      13 |           0
+  id   |     name     | records | size_mb
+-------+--------------+---------+---------
+ 19157 | num_bids     | 1612747 |  113.82
+ 19158 | num_bids_idx |      13 |       0
 ```
 
 If you need to drill down into individual operators, you can query `mz_arrangement_sizes` instead.
@@ -332,15 +332,15 @@ WHERE mas.operator_id = mdod.id
 ORDER BY mas.records DESC
 ```
 ```
-   id    |             name              |               dataflow_name               | records |   size_mb
----------+-------------------------------+-------------------------------------------+---------+-------------
- 2722012 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.public.num_bids     | 1612747 |      113.82
- 2722027 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.public.num_bids     |  292662 |       20.65
- 2722216 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.public.num_bids_idx |      17 |           0
- 2722077 | ReduceAccumulable             | Dataflow: materialize.public.num_bids     |       5 |           0
- 2722073 | ArrangeAccumulable            | Dataflow: materialize.public.num_bids     |       5 |           0
- 2722081 | AccumulableErrorCheck         | Dataflow: materialize.public.num_bids     |       0 |           0
- 2722225 | ArrangeBy[[Column(0)]]-errors | Dataflow: materialize.public.num_bids_idx |       0 |           0
+   id    |             name              |             dataflow_name              | records | size_mb
+---------+-------------------------------+----------------------------------------+---------+---------
+ 2722012 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.qck.num_bids     | 1612747 |  113.82
+ 2722027 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.qck.num_bids     |  292662 |   20.65
+ 2722216 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.qck.num_bids_idx |      17 |       0
+ 2722077 | ReduceAccumulable             | Dataflow: materialize.qck.num_bids     |       5 |       0
+ 2722073 | ArrangeAccumulable            | Dataflow: materialize.qck.num_bids     |       5 |       0
+ 2722081 | AccumulableErrorCheck         | Dataflow: materialize.qck.num_bids     |       0 |       0
+ 2722225 | ArrangeBy[[Column(0)]]-errors | Dataflow: materialize.qck.num_bids_idx |       0 |       0
 (7 rows)
 ```
 
