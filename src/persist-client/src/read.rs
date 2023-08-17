@@ -34,6 +34,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
+use crate::cfg::PersistFlag;
 use crate::fetch::{
     fetch_leased_part, BatchFetcher, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,
@@ -43,6 +44,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
 use crate::internal::watch::StateWatch;
+use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -1034,6 +1036,16 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        if self
+            .machine
+            .applier
+            .cfg
+            .dynamic
+            .enabled(PersistFlag::STREAMING_SNAPSHOT_AND_FETCH)
+        {
+            return self.snapshot_and_fetch_streaming(as_of).await;
+        }
+
         let snap = self.snapshot(as_of).await?;
 
         let mut contents = Vec::new();
@@ -1070,6 +1082,59 @@ where
         if !is_consolidated {
             consolidate_updates(&mut contents);
         }
+        Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// The output is consolidated. Furthermore, to keep memory usage down when
+    /// reading a snapshot that consolidates well, this consolidates as it goes.
+    async fn snapshot_and_fetch_streaming(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let batches = self.machine.snapshot(&as_of).await?;
+
+        let mut consolidator = Consolidator::new(
+            as_of.clone(),
+            self.cfg.dynamic.compaction_memory_bound_bytes(),
+        );
+
+        for batch in batches {
+            for run in batch.runs() {
+                consolidator.enqueue_run(
+                    self.machine.shard_id(),
+                    &self.blob,
+                    &self.metrics,
+                    |m| &m.snapshot,
+                    &self.machine.applier.shard_metrics,
+                    &batch.desc,
+                    run,
+                );
+            }
+        }
+
+        let mut contents = Vec::new();
+
+        while let Some(iter) = consolidator.next().await {
+            contents.extend(
+                iter.filter(|(_, _, t, _)| !as_of.less_than(t))
+                    .map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)),
+            )
+        }
+
+        // NB: we don't currently guarantee that encoding is deterministic, so we still need to
+        // consolidate the decoded outputs. However, let's complain if this isn't a noop.
+        let old_len = contents.len();
+        consolidate_updates(&mut contents);
+        if old_len != contents.len() {
+            warn!(
+                "nondeterministic serialization in shard {}",
+                self.machine.shard_id()
+            );
+        }
+
         Ok(contents)
     }
 
