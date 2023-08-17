@@ -82,6 +82,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
@@ -250,7 +251,7 @@ pub fn user_privilege_hack(
         //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
         //     details.
         //
-        Plan::ShowCreate(_) => {
+        Plan::ShowCreate(_) | Plan::ShowColumns(_) => {
             return Ok(());
         }
 

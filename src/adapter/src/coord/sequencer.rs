@@ -281,6 +281,10 @@ impl Coordinator {
             Plan::ShowCreate(plan) => {
                 ctx.retire(Ok(Self::send_immediate_rows(vec![plan.row])));
             }
+            Plan::ShowColumns(show_columns_plan) => {
+                self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster)
+                    .await;
+            }
             Plan::CopyFrom(plan) => {
                 let (tx, _, session, ctx_extra) = ctx.into_parts();
                 tx.send(

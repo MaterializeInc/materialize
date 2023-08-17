@@ -324,6 +324,7 @@ pub fn generate_required_role_membership(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
@@ -400,6 +401,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::CopyFrom(_)
         | Plan::CopyRows(_)
         | Plan::Explain(_)
@@ -794,7 +796,29 @@ fn generate_required_privileges(
                 role_id,
             )]
         }
+        Plan::ShowColumns(plan::ShowColumnsPlan {
+            id,
+            select_plan,
+            new_resolved_ids,
+        }) => {
+            let item = catalog.get_item(id);
+            let mut privileges = vec![(
+                SystemObjectId::Object(item.name().qualifiers.clone().into()),
+                AclMode::USAGE,
+                role_id,
+            )];
 
+            for privilege in generate_required_privileges(
+                catalog,
+                &Plan::Select(select_plan.clone()),
+                target_cluster_id,
+                new_resolved_ids,
+                role_id,
+            ) {
+                privileges.push(privilege);
+            }
+            privileges
+        }
         Plan::Select(plan::SelectPlan {
             source,
             when: _,
