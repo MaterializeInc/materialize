@@ -19,7 +19,7 @@ In order to build a sync with Census you will need:
 
 To begin you will need to add your Materialize database as a source in Census.
 
-1. In Census navigate to **Sources** and select **New Source**.
+1. In Census, navigate to **Sources** and select **New Source**.
 
 1. From the list of connection types, choose **Materialize**.
 
