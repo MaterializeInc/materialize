@@ -19,7 +19,9 @@ use differential_dataflow::trace::Description;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -29,6 +31,7 @@ use uuid::Uuid;
 
 use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+    ProtoBatch,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
@@ -86,7 +89,7 @@ impl WriterId {
 /// A token representing one written batch.
 ///
 /// This may be exchanged (including over the network). It is tradeable via
-/// [`WriteHandle::batch_from_hollow_batch`].
+/// [`WriteHandle::batch_from_transmittable_batch`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "T: Timestamp + Codec64",
@@ -501,26 +504,24 @@ where
         Ok(Ok(()))
     }
 
-    /// Turns the given [`WriterEnrichedHollowBatch`] back into a [`Batch`]
-    /// which can be used to append it to this shard.
-    pub fn batch_from_hollow_batch(
-        &self,
-        hollow: WriterEnrichedHollowBatch<T>,
-    ) -> Batch<K, V, T, D> {
-        assert_eq!(
-            hollow.shard_id,
-            self.machine.shard_id(),
-            "hollow batch with shard id {} is not for this shard {}",
-            hollow.shard_id,
-            self.machine.shard_id()
-        );
-        Batch {
-            shard_id: self.machine.shard_id(),
-            version: hollow.version,
-            batch: hollow.batch,
+    /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
+    /// to append it to this shard.
+    pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let ret = Batch {
+            shard_id: batch
+                .shard_id
+                .into_rust()
+                .expect("valid transmittable batch"),
+            version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            batch: batch
+                .batch
+                .into_rust_if_some("ProtoBatch::batch")
+                .expect("valid transmittable batch"),
             _blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
-        }
+        };
+        assert_eq!(ret.shard_id, self.machine.shard_id());
+        ret
     }
 
     /// Returns a [BatchBuilder] that can be used to write a batch of updates to
@@ -858,8 +859,8 @@ mod tests {
         // But a) turning a batch into a hollow batch consumes it, and b) Batch
         // doesn't have Eq/PartialEq.
         let batch = write.expect_batch(&data, 0, 4).await;
-        let hollow_batch = batch.into_writer_hollow_batch();
-        let mut rehydrated_batch = write.batch_from_hollow_batch(hollow_batch);
+        let hollow_batch = batch.into_transmittable_batch();
+        let mut rehydrated_batch = write.batch_from_transmittable_batch(hollow_batch);
 
         write
             .expect_compare_and_append_batch(&mut [&mut rehydrated_batch], 0, 4)
