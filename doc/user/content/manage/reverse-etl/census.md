@@ -70,7 +70,7 @@ After successfully adding the Materialize source, you can create a sync to send 
 {{< /tab >}}
 {{< /tabs >}}
 
-### Step 4. Add a Schedule (Optional)
+## Step 4. Add a Schedule (Optional)
 
 Your Census sync is created and ready to run. It can be invoked manually but a schedule will ensure all new data
 is sent to the destination.
