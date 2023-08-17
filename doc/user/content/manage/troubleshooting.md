@@ -61,7 +61,6 @@ EXPLAIN MATERIALIZED VIEW num_bids
            ArrangeBy keys=[[#0]]              +
              Project (#0, #2, #3)             +
                Get materialize.qck.auctions   +
-
 (1 row)
 ```
 
@@ -283,7 +282,8 @@ COPY(SUBSCRIBE(
 1691667344000	t	\N	\N	\N	\N	\N	\N
 1691667344000	f	-1	431	ArrangeBy[[Column(0)]]	Dataflow: materialize.qck.num_bids	7673	00:00:00.104800
 1691667344000	f	1	431	ArrangeBy[[Column(0)]]	Dataflow: materialize.qck.num_bids	7674	00:00:00.104800
-1691667345000	t	\N	\N	\N	\N	\N	\N...
+1691667345000	t	\N	\N	\N	\N	\N	\N
+...
 ```
 
 In this way you can see that currently the only operator that is doing more than 100 milliseconds worth of work
