@@ -163,7 +163,8 @@ mod internal {
     pub mod datadriven;
 }
 
-const BUILD_INFO: BuildInfo = build_info!();
+/// Persist build information.
+pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.

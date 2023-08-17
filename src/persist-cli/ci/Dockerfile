@@ -20,6 +20,6 @@ RUN mkdir -p /usr/local/share/java \
     && curl -fsSL https://github.com/jepsen-io/maelstrom/releases/download/v0.2.1/maelstrom.tar.bz2 \
         | tar -xj --strip-components=2 -C /usr/local/share/java maelstrom/lib/maelstrom.jar
 
-COPY examples/persistcli /usr/local/bin/persistcli
+COPY persistcli /usr/local/bin/persistcli
 
 ENTRYPOINT ["java", "-Djava.awt.headless=true", "-jar", "/usr/local/share/java/maelstrom.jar", "test", "-w", "txn-list-append", "--bin=/usr/local/bin/persistcli"]

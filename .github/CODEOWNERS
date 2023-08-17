@@ -53,6 +53,7 @@
 /src/orchestrator-tracing           @benesch
 /src/ore                            @benesch
 /src/persist                        @MaterializeInc/persist
+/src/persist-cli                    @MaterializeInc/persist
 /src/persist-client                 @MaterializeInc/persist
 /src/persist-txn                    @MaterializeInc/persist
 /src/persist-types                  @MaterializeInc/persist

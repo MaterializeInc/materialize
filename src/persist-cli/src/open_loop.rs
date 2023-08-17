@@ -32,7 +32,6 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
-use crate::BUILD_INFO;
 
 /// Different benchmark configurations.
 #[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
@@ -130,7 +129,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         consensus_uri: args.consensus_uri.clone(),
     };
     let persist = PersistClientCache::new(
-        PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
+        PersistConfig::new(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
         |_, _| PubSubClientConnection::noop(),
     )

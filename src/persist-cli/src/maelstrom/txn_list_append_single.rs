@@ -44,7 +44,6 @@ use crate::maelstrom::txn_list_append_single::codec_impls::{
     MaelstromKeySchema, MaelstromValSchema,
 };
 use crate::maelstrom::Args;
-use crate::BUILD_INFO;
 
 /// Key of the persist shard used by [Transactor]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -94,10 +93,11 @@ pub struct MaelstromVal(Vec<u64>);
 /// upper. To keep things simple, this is done by a fixed offset. This exercises
 /// persist compaction.
 ///
-/// To ensure that both [ReadHandle::snapshot] and [ReadHandle::listen] are
-/// exercised, when a txn reads the state at `read_ts`, it artificially picks an
-/// `as_of` timestamp in `[since, read_ts]` and splits up the read data between
-/// snapshot and listen along this timestamp.
+/// To ensure that both [mz_persist_client::read::ReadHandle::snapshot] and
+/// [mz_persist_client::read::ReadHandle::listen] are exercised, when a txn
+/// reads the state at `read_ts`, it artificially picks an `as_of` timestamp in
+/// `[since, read_ts]` and splits up the read data between snapshot and listen
+/// along this timestamp.
 #[derive(Debug)]
 pub struct Transactor {
     cads_token: u64,
@@ -604,7 +604,7 @@ impl Service for TransactorService {
         // should_timeout to for blobs, so use the same handle for both.
         let unreliable = UnreliableHandle::new(seed, should_happen, should_timeout);
 
-        let mut config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+        let mut config = PersistConfig::new(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
 
         // Construct requested Blob.

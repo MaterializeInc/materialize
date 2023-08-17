@@ -81,7 +81,6 @@
 
 //! Persist command-line utilities
 
-use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -91,8 +90,6 @@ use tracing::{info_span, Instrument};
 pub mod maelstrom;
 pub mod open_loop;
 pub mod service;
-
-const BUILD_INFO: BuildInfo = build_info!();
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Persist command-line utilities", long_about = None)]
@@ -129,7 +126,7 @@ fn main() {
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "persistcli",
-                build_info: BUILD_INFO,
+                build_info: mz_persist_client::BUILD_INFO,
             },
             MetricsRegistry::new(),
         ))

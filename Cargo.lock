@@ -4404,7 +4404,6 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "axum",
  "bytes",
  "clap",
  "criterion",
@@ -4415,18 +4414,13 @@ dependencies = [
  "futures-util",
  "h2",
  "hex",
- "humantime",
  "mz-build-info",
- "mz-http-util",
- "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist",
- "mz-persist-txn",
  "mz-persist-types",
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
- "num_enum",
  "prometheus",
  "proptest",
  "proptest-derive",
@@ -5962,6 +5956,37 @@ name = "percent-encoding"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
+
+[[package]]
+name = "persistcli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "clap",
+ "differential-dataflow",
+ "futures",
+ "humantime",
+ "mz-http-util",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-txn",
+ "mz-persist-types",
+ "num_cpus",
+ "num_enum",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
 
 [[package]]
 name = "petgraph"
