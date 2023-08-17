@@ -1722,19 +1722,51 @@ impl Coordinator {
     ) {
         // // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
+
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-        spawn(|| "coord idle metric", async move {
+        spawn(|| "coord watchdog", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last
             // processed. If it is idle, this will result in some microseconds
             // of measurement.
             let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // If we end up having to wait more than 5 seconds for the coord to respond, then the
+            // behavior of Delay results in the interval "restarting" from whenever we yield
+            // instead of trying to catch up.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            // Track if we become stuck to de-dupe error reporting.
+            let mut coord_stuck = false;
+
             loop {
                 interval.tick().await;
-                // If the buffer is full (or the channel is closed), ignore and
-                // try again later.
-                let _ = idle_tx.try_send(idle_metric.start_timer());
+
+                // Wait for space in the channel, if we timeout then the coordinator is stuck!
+                let duration = tokio::time::Duration::from_secs(60);
+                let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
+                let Ok(maybe_permit) = timeout else {
+                    // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                    if !coord_stuck {
+                        tracing::error!("Coordinator is stuck, did not respond after {duration:?}");
+                    }
+                    coord_stuck = true;
+
+                    continue;
+                };
+
+                // We got a permit, we're not stuck!
+                if coord_stuck {
+                    tracing::info!("Coordinator became unstuck");
+                }
+                coord_stuck = false;
+
+                // If we failed to acquire a permit it's because we're shutting down.
+                let Ok(permit) = maybe_permit else {
+                    break;
+                };
+
+                permit.send(idle_metric.start_timer());
             }
         });
 
