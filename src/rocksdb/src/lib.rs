@@ -663,6 +663,12 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 for _ in buf_size..batch_size {
                     encoded_batch_buffers.push(Some(Vec::new()));
                 }
+                // shrinking the buffers in case the scratch buffer's is more than
+                // double the batch size
+                if buf_size / 2 > batch_size {
+                    encoded_batch_buffers.shrink_to(buf_size / 2);
+                    encoded_batch.shrink_to(buf_size / 2);
+                }
                 assert!(encoded_batch_buffers.len() >= batch_size);
 
                 // TODO(guswynn): sort by key before writing.
