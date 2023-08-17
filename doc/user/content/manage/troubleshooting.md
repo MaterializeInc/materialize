@@ -60,7 +60,7 @@ EXPLAIN MATERIALIZED VIEW num_bids
                Get materialize.qck.bids       +
            ArrangeBy keys=[[#0]]              +
              Project (#0, #2, #3)             +
-               Get materialize.qck.auctions+
+               Get materialize.qck.auctions   +
 
 (1 row)
 ```
