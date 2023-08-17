@@ -50,7 +50,7 @@ After successfully adding the Materialize source, you can create a sync to send 
 {{< tabs >}}
 {{< tab "Braze">}}
 
-1. In Census navigate to **Syncs** and select **New Sync**.
+1. In Census, navigate to **Syncs** and select **New Sync**.
 
 1. Under **Select a Source** choose **Select a Warehouse Table**. Using the drop-down, choose the Materialize source that was
    configured in step 1 as the **Connection**. Using the **Schema** and **Table** drop-downs you can select the
