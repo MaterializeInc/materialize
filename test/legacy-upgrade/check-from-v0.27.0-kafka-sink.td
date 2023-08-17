@@ -13,8 +13,16 @@
 # Test that the "disk" option on the linked cluster defaults to false
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_upgrade_kafka_sink'
 materialize_public_upgrade_kafka_sink  linked
+
+# NOTE: Due to `migrate_replica_ids_in_audit_log`, we currently see additional
+# `drop` and `create` events for each replica that existed before the
+# migration. Those events don't have a user attached, so we can recognize them
+# and filter them out.
 > SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id'
   FROM mz_audit_events
-  WHERE details->>'name' = 'materialize_public_upgrade_kafka_sink' OR details->>'cluster_name' = 'materialize_public_upgrade_kafka_sink'
+  WHERE (
+    details->>'name' = 'materialize_public_upgrade_kafka_sink'
+    OR details->>'cluster_name' = 'materialize_public_upgrade_kafka_sink'
+  ) AND user IS NOT NULL
 create  cluster          "{\"name\":\"materialize_public_upgrade_kafka_sink\"}"
 create  cluster-replica  "{\"cluster_name\":\"materialize_public_upgrade_kafka_sink\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"
