@@ -26,6 +26,7 @@ idle_in_transaction_session_timeout         | `120 seconds`             | The ma
 integer_datetimes                           | `true`                    | **Read-only.** Boolean flag indicating whether the server uses 64-bit-integer dates and times.
 intervalstyle                               | `postgres`                | The display format for interval values. The only supported value is `postgres`.
 is_superuser                                |                           | **Read-only.** Reports whether the current session is a _superuser_ with admin privileges.
+max_identifier_length                       | `255`                     | **Read-only.** The maximum length in bytes of object identifiers.
 max_query_result_size                       | `1073741824`              | The maximum size in bytes for a single query's result.
 mz_version                                  | Version-dependent         | **Read-only.** Shows the Materialize server version.
 server_version                              | Version-dependent         | **Read-only.** The PostgreSQL compatible server version.
