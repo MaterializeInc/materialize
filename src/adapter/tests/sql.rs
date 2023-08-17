@@ -143,7 +143,7 @@ async fn datadriven() {
                             catalog
                                 .transact(
                                     mz_repr::Timestamp::MIN,
-                                    None,
+                                    None::<&Session>,
                                     vec![Op::CreateItem {
                                         id,
                                         oid,

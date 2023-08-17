@@ -107,6 +107,7 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
@@ -535,6 +536,34 @@ pub struct ConnMeta {
 
     /// The authenticated role of the session, set once at session connection.
     pub(crate) authenticated_role: RoleId,
+}
+
+/// Metadata about a session. This type is used to limit and enumerate coordinator access to session
+/// innards. It will be used in the future when Sessions are no longer transmitted between the
+/// Coordinator and Adapter.
+pub trait SessionMeta {
+    fn conn_id(&self) -> &ConnectionId;
+    fn user(&self) -> &User;
+    fn application_name(&self) -> &str;
+    fn current_role_id(&self) -> &RoleId;
+}
+
+impl SessionMeta for Session {
+    fn conn_id(&self) -> &ConnectionId {
+        self.conn_id()
+    }
+
+    fn user(&self) -> &User {
+        self.user()
+    }
+
+    fn application_name(&self) -> &str {
+        self.application_name()
+    }
+
+    fn current_role_id(&self) -> &RoleId {
+        self.current_role_id()
+    }
 }
 
 #[derive(Debug)]

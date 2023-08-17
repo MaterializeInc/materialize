@@ -48,7 +48,7 @@ use crate::catalog::{
 use crate::client::ConnectionId;
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::{Coordinator, ReplicaMetadata};
+use crate::coord::{Coordinator, ReplicaMetadata, SessionMeta};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
@@ -65,7 +65,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact(
         &mut self,
-        session: Option<&Session>,
+        session: Option<&impl SessionMeta>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
         self.catalog_transact_with(session, ops, |_| Ok(())).await
@@ -84,7 +84,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact_with<F, R>(
         &mut self,
-        session: Option<&Session>,
+        session: Option<&impl SessionMeta>,
         mut ops: Vec<catalog::Op>,
         f: F,
     ) -> Result<R, AdapterError>
