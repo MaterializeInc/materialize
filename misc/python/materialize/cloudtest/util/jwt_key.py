@@ -39,7 +39,7 @@ def make_jwt(tenant_id: str) -> str:
     timestamp).
 
     NOTE that the following constraints are assumed:
-    - `email` must end with `materialize.com`
+    - `email` must end with `materialize[dot]com`
     - `roles` must include `MaterializeAdmin`
     - `iss` must match the environment controller's `FRONTEGG_URL` variable
     """
