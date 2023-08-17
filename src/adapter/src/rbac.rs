@@ -810,7 +810,7 @@ fn generate_required_privileges(
 
             for privilege in generate_required_privileges(
                 catalog,
-                &*select_plan,
+                &Plan::Select(select_plan.clone()),
                 target_cluster_id,
                 new_resolved_ids,
                 role_id,

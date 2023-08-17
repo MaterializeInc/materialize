@@ -780,7 +780,7 @@ pub struct ShowCreatePlan {
 #[derive(Debug)]
 pub struct ShowColumnsPlan {
     pub id: GlobalId,
-    pub select_plan: Box<Plan>,
+    pub select_plan: SelectPlan,
     pub new_resolved_ids: ResolvedIds,
 }
 

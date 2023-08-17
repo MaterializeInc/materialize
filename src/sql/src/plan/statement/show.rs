@@ -753,11 +753,14 @@ impl<'a> ShowColumnsSelect<'a> {
 
     pub fn plan(self) -> Result<Plan, PlanError> {
         let select_plan = self.show_select.plan()?;
-        Ok(Plan::ShowColumns(ShowColumnsPlan {
-            id: self.id,
-            select_plan: Box::new(select_plan),
-            new_resolved_ids: self.new_resolved_ids,
-        }))
+        match select_plan {
+            Plan::Select(select_plan) => Ok(Plan::ShowColumns(ShowColumnsPlan {
+                id: self.id,
+                select_plan,
+                new_resolved_ids: self.new_resolved_ids,
+            })),
+            _ => Err(PlanError::Unstructured(format!("SHOW COLUMNS didn't produce a SelectPlan as expected, produced {:?} instead. Please file a bug.", select_plan)))
+        }
     }
 
     pub fn plan_hir(self, qcx: &QueryContext) -> Result<(HirRelationExpr, Scope), PlanError> {
