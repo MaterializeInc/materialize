@@ -69,14 +69,14 @@ Some of these operators resemble relational algebra or map reduce style operator
 Others are specific to Materialize (`Get`, `ArrangeBy`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
-`Filter` filters records, `Join on` joins records from two or more inputs, `Map` applies a function to transform records, etc.
+`Filter` filters records, `Join` joins records from two or more inputs, `Map` applies a function to transform records, etc.
 You can find more details on these operators in the [`EXPLAIN` documentation](https://materialize.com/docs/sql/explain/#operators-in-decorrelated-and-optimized-plans).
 But it's not important to have a deep understanding of all these operators for effective debugging.
 
 
 Behind the scenes, the operator graph is turned into a dataflow.
 The dataflow is organized in a hierarchical structure that contains operators and _regions_, which define a hierarchy on the operators.
-In our example, the dataflow contains a `InputRegion`, `BuildRegion`, and a region for the sink.
+In our example, the dataflow contains an `InputRegion`, a `BuildRegion`, and a region for the sink.
 
 ![Regions and operator visualization](/images/regions-and-operators-abstract.jpg)
 
@@ -240,7 +240,7 @@ ORDER BY duration DESC
 ```
 
 Note that this relation contains a lot of information.
-The query therefore filters all duration below `100 millisecond`.
+The query therefore filters all durations below `100 millisecond`.
 In this example, the result of the query shows that the longest an operator got scheduled is just over one second.
 So it's unlikely that Materialize is unresponsive because of a single operator blocking progress for others.
 
