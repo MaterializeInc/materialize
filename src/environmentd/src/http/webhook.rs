@@ -30,7 +30,7 @@ use thiserror::Error;
 /// TODO(parkmycar): Make this configurable via LaunchDarkly and/or as a setting on each webhook
 /// source. The blocker for doing this today is an `axum` layer that allows us to __reduce__ the
 /// concurrency limit, the current one only allows you to increase it.
-pub const CONCURRENCY_LIMIT: usize = 100;
+pub const CONCURRENCY_LIMIT: usize = 250;
 
 pub async fn handle_webhook(
     State(client): State<mz_adapter::Client>,
