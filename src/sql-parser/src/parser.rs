@@ -2506,6 +2506,124 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_connection_option_unified(&mut self) -> Result<ConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[
+            ACCESS,
+            AVAILABILITY,
+            AWS,
+            BROKER,
+            BROKERS,
+            DATABASE,
+            ENDPOINT,
+            HOST,
+            PASSWORD,
+            PORT,
+            PROGRESS,
+            REGION,
+            ROLE,
+            SASL,
+            SECRET,
+            SERVICE,
+            SSH,
+            SSL,
+            TOKEN,
+            URL,
+            USER,
+            USERNAME,
+        ])? {
+            ACCESS => {
+                self.expect_keywords(&[KEY, ID])?;
+                ConnectionOptionName::AccessKeyId
+            }
+            AVAILABILITY => {
+                self.expect_keyword(ZONES)?;
+                ConnectionOptionName::AvailabilityZones
+            }
+            AWS => {
+                self.expect_keyword(PRIVATELINK)?;
+                return Ok(ConnectionOption {
+                    name: ConnectionOptionName::AwsPrivatelink,
+                    value: Some(self.parse_object_option_value()?),
+                });
+            }
+            BROKER => {
+                return Ok(ConnectionOption {
+                    name: ConnectionOptionName::Broker,
+                    value: Some(self.parse_kafka_broker()?),
+                });
+            }
+            BROKERS => {
+                let _ = self.consume_token(&Token::Eq);
+                let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
+                let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
+                self.expect_token(&match delimiter {
+                    Token::LParen => Token::RParen,
+                    Token::LBracket => Token::RBracket,
+                    _ => unreachable!(),
+                })?;
+                return Ok(ConnectionOption {
+                    name: ConnectionOptionName::Brokers,
+                    value: Some(WithOptionValue::Sequence(brokers)),
+                });
+            }
+            DATABASE => ConnectionOptionName::Database,
+            ENDPOINT => ConnectionOptionName::Endpoint,
+            HOST => ConnectionOptionName::Host,
+            PASSWORD => ConnectionOptionName::Password,
+            PORT => ConnectionOptionName::Port,
+            PROGRESS => {
+                self.expect_keyword(TOPIC)?;
+                ConnectionOptionName::ProgressTopic
+            }
+            REGION => ConnectionOptionName::Region,
+            ROLE => {
+                self.expect_keyword(ARN)?;
+                ConnectionOptionName::RoleArn
+            }
+            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                MECHANISMS => ConnectionOptionName::SaslMechanisms,
+                PASSWORD => ConnectionOptionName::SaslPassword,
+                USERNAME => ConnectionOptionName::SaslUsername,
+                _ => unreachable!(),
+            },
+            SECRET => {
+                self.expect_keywords(&[ACCESS, KEY])?;
+                ConnectionOptionName::SecretAccessKey
+            }
+            SERVICE => {
+                self.expect_keyword(NAME)?;
+                ConnectionOptionName::ServiceName
+            }
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                return Ok(ConnectionOption {
+                    name: ConnectionOptionName::SshTunnel,
+                    value: Some(self.parse_object_option_value()?),
+                });
+            }
+            SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        ConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        ConnectionOptionName::SslCertificate
+                    }
+                }
+                KEY => ConnectionOptionName::SslKey,
+                MODE => ConnectionOptionName::SslMode,
+                _ => unreachable!(),
+            },
+            TOKEN => ConnectionOptionName::Token,
+            URL => ConnectionOptionName::Url,
+            USER | USERNAME => ConnectionOptionName::User,
+            _ => unreachable!(),
+        };
+        Ok(ConnectionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
     fn parse_csr_connection_option(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
         let name =
             match self.expect_one_of_keywords(&[AWS, PASSWORD, PORT, SSH, SSL, URL, USERNAME])? {

@@ -600,6 +600,91 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 }
 impl_display_t!(DbzTxMetadataOption);
 
+// All connection options are bundled together to allow us to parse `ALTER
+// CONNECTION` without specifying the type of connection we're altering. Il faut
+// souffrir pour être belle.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ConnectionOptionName {
+    AccessKeyId,
+    AvailabilityZones,
+    AwsPrivatelink,
+    Broker,
+    Brokers,
+    Database,
+    Endpoint,
+    Host,
+    Password,
+    Port,
+    ProgressTopic,
+    Region,
+    RoleArn,
+    SaslMechanisms,
+    SaslPassword,
+    SaslUsername,
+    SecretAccessKey,
+    ServiceName,
+    SshTunnel,
+    SslCertificate,
+    SslCertificateAuthority,
+    SslKey,
+    SslMode,
+    Token,
+    Url,
+    User,
+}
+
+impl AstDisplay for ConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            ConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
+            ConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
+            ConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
+            ConnectionOptionName::Broker => "BROKER",
+            ConnectionOptionName::Brokers => "BROKERS",
+            ConnectionOptionName::Database => "DATABASE",
+            ConnectionOptionName::Endpoint => "ENDPOINT",
+            ConnectionOptionName::Host => "HOST",
+            ConnectionOptionName::Password => "PASSWORD",
+            ConnectionOptionName::Port => "PORT",
+            ConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
+            ConnectionOptionName::Region => "REGION",
+            ConnectionOptionName::RoleArn => "ROLE ARN",
+            ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
+            ConnectionOptionName::SaslPassword => "SASL PASSWORD",
+            ConnectionOptionName::SaslUsername => "SASL USERNAME",
+            ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
+            ConnectionOptionName::ServiceName => "SERVICE NAME",
+            ConnectionOptionName::SshTunnel => "SSH TUNNEL",
+            ConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
+            ConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            ConnectionOptionName::SslKey => "SSL KEY",
+            ConnectionOptionName::SslMode => "SSL MODE",
+            ConnectionOptionName::Token => "TOKEN",
+            ConnectionOptionName::Url => "URL",
+            ConnectionOptionName::User => "USER",
+        })
+    }
+}
+impl_display!(ConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `CREATE CONNECTION`.
+pub struct ConnectionOption<T: AstInfo> {
+    pub name: ConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(ConnectionOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaConnectionOptionName {
     Broker,
@@ -883,6 +968,42 @@ pub enum CreateConnection<T: AstInfo> {
         options: Vec<SshConnectionOption<T>>,
     },
 }
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CreateConnectionType {
+    Aws,
+    AwsPrivatelink,
+    Kafka,
+    Csr,
+    Postgres,
+    Ssh,
+}
+
+impl AstDisplay for CreateConnectionType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Kafka => {
+                f.write_str("KAFKA");
+            }
+            Self::Csr => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY");
+            }
+            Self::Postgres => {
+                f.write_str("POSTGRES");
+            }
+            Self::Aws => {
+                f.write_str("AWS");
+            }
+            Self::AwsPrivatelink => {
+                f.write_str("AWS PRIVATELINK");
+            }
+            Self::Ssh => {
+                f.write_str("SSH TUNNEL");
+            }
+        }
+    }
+}
+impl_display!(CreateConnectionType);
 
 impl<T: AstInfo> AstDisplay for CreateConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
