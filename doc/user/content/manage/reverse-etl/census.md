@@ -42,6 +42,7 @@ Next you will add a destination where data will be sent.
    correct permissions. Then press the **Connect** button.
 
 {{< /tab >}}
+{{< /tabs }}
 
 ### Step 3. Create a Sync
 
