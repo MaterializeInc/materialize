@@ -759,7 +759,16 @@ impl<'a> ShowColumnsSelect<'a> {
                 select_plan,
                 new_resolved_ids: self.new_resolved_ids,
             })),
-            _ => Err(PlanError::Unstructured(format!("SHOW COLUMNS didn't produce a SelectPlan as expected, produced {:?} instead. Please file a bug.", select_plan)))
+            _ => {
+                tracing::error!(
+                    "SHOW COLUMNS produced a non select plan. plan: {:?}",
+                    select_plan
+                );
+                Err(PlanError::Unstructured(
+                    "SHOW COLUMNS didn't produce an unexpected plan. Please file a bug."
+                        .to_string(),
+                ))
+            }
         }
     }
 

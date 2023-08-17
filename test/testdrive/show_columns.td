@@ -44,4 +44,3 @@ contains:permission denied for TABLE "materialize.public.priv"
 
 $ postgres-execute connection=mz_support
 SHOW COLUMNS FROM priv
-
