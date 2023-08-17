@@ -33,7 +33,7 @@ use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
+    AlterSystemResetStatement, AlterSystemSetStatement, ClusterOptionName, CreateConnectionOption,
     CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
     SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
@@ -64,12 +64,12 @@ use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
     AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
-    ClusterOption, ClusterOptionName, ColumnOption, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    ClusterOption, ColumnOption, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnection, CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
@@ -79,14 +79,14 @@ use crate::ast::{
     KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
     KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
-    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedClusterItem, ReferencedSubsources,
     ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
     UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
-    ObjectType,
+    ClusterItemType, ObjectType, SystemObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -103,8 +103,8 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    plan_utils, query, transform_ast, AlterClusterItemRenamePlan, AlterClusterPlan,
+    AlterClusterRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
     AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
@@ -1537,7 +1537,8 @@ fn source_sink_cluster_config(
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
             let cluster = scx.catalog.get_cluster(in_cluster.id);
-            if cluster.replica_ids().len() > 1 {
+            // TODO: This also counts profiles, which will be a problem for unified clusters.
+            if cluster.item_ids().len() > 1 {
                 sql_bail!("cannot create {ty} in cluster with more than one replica")
             }
             if !is_storage_cluster(scx, cluster) {
@@ -3097,7 +3098,7 @@ pub fn plan_create_cluster_replica(
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
-        && cluster.replica_ids().len() > 0
+        && cluster.item_ids().len() > 0
     {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
@@ -3701,8 +3702,9 @@ pub fn plan_drop_objects(
             UnresolvedObjectName::Cluster(name) => {
                 plan_drop_cluster(scx, if_exists, name, cascade)?.map(ObjectId::Cluster)
             }
-            UnresolvedObjectName::ClusterReplica(name) => {
-                plan_drop_cluster_replica(scx, if_exists, name)?.map(ObjectId::ClusterReplica)
+            UnresolvedObjectName::ClusterItem(name) => {
+                plan_drop_cluster_item(scx, object_type, if_exists, name)?
+                    .map(ObjectId::ClusterItem)
             }
             UnresolvedObjectName::Database(name) => {
                 plan_drop_database(scx, if_exists, name, cascade)?.map(ObjectId::Database)
@@ -3821,15 +3823,26 @@ fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> b
     })
 }
 
-fn plan_drop_cluster_replica(
+fn plan_drop_cluster_item(
     scx: &StatementContext,
+    object_type: ObjectType,
     if_exists: bool,
-    name: &QualifiedReplica,
+    name: &QualifiedClusterItem,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
-    let cluster = resolve_cluster_replica(scx, name, if_exists)?;
-    if let Some((cluster, _)) = &cluster {
+    let cluster = resolve_cluster_item(scx, name, if_exists, None)?;
+    if let Some((cluster, item_id)) = &cluster {
         ensure_cluster_is_not_linked(scx, cluster.id())?;
-        ensure_cluster_is_not_managed(scx, cluster.id())?;
+        let item = cluster.item(*item_id);
+        match (item.item_type(), object_type) {
+            (ClusterItemType::Replica, ObjectType::ClusterReplica) => {}
+            (expected @ ClusterItemType::Replica, object_type) => {
+                return Err(PlanError::InvalidObjectType {
+                    expected_type: SystemObjectType::Object(expected.into()),
+                    actual_type: SystemObjectType::Object(object_type),
+                    object_name: format!("\"{}\".\"{}\"", cluster.name(), item.name()),
+                });
+            }
+        }
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
@@ -4031,13 +4044,13 @@ pub fn plan_drop_owned(
         ));
     }
 
-    // Replicas
-    for replica in scx.catalog.get_cluster_replicas() {
-        let cluster = scx.catalog.get_cluster(replica.cluster_id());
+    // Cluster items
+    for item in scx.catalog.get_cluster_items() {
+        let cluster = scx.catalog.get_cluster(item.cluster_id());
         // We skip over linked cluster replicas because they will be added later when collecting
         // the dependencies of the linked object.
-        if cluster.linked_object_id().is_none() && role_ids.contains(&replica.owner_id()) {
-            drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
+        if cluster.linked_object_id().is_none() && role_ids.contains(&item.owner_id()) {
+            drop_ids.push((item.cluster_id(), item.item_id()).into());
         }
     }
 
@@ -4559,8 +4572,8 @@ pub fn plan_alter_object_rename(
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_rename(scx, object_type, name, to_item_name, if_exists)
         }
-        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
-            plan_alter_cluster_replica_rename(scx, object_type, name, to_item_name, if_exists)
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterItem(name)) => {
+            plan_alter_cluster_item_rename(scx, object_type, name, to_item_name, if_exists)
         }
         (object_type, name) => {
             unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
@@ -4642,27 +4655,25 @@ pub fn plan_alter_cluster_rename(
     }
 }
 
-pub fn plan_alter_cluster_replica_rename(
+pub fn plan_alter_cluster_item_rename(
     scx: &mut StatementContext,
     object_type: ObjectType,
-    name: QualifiedReplica,
+    name: QualifiedClusterItem,
     to_item_name: Ident,
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
-    match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster, replica)) => {
+    match resolve_cluster_item(scx, &name, if_exists, None)? {
+        Some((cluster, item_id)) => {
             ensure_cluster_is_not_managed(scx, cluster.id())?;
-            Ok(Plan::AlterClusterReplicaRename(
-                AlterClusterReplicaRenamePlan {
-                    cluster_id: cluster.id(),
-                    replica_id: replica,
-                    name: QualifiedReplica {
-                        cluster: cluster.name().into(),
-                        replica: name.replica,
-                    },
-                    to_name: normalize::ident(to_item_name),
+            Ok(Plan::AlterClusterItemRename(AlterClusterItemRenamePlan {
+                cluster_id: cluster.id(),
+                item_id,
+                name: QualifiedClusterItem {
+                    cluster: cluster.name().into(),
+                    item: name.item,
                 },
-            ))
+                to_name: normalize::ident(to_item_name),
+            }))
         }
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -5053,20 +5064,25 @@ pub(crate) fn resolve_cluster<'a>(
     }
 }
 
-pub(crate) fn resolve_cluster_replica<'a>(
+pub(crate) fn resolve_cluster_item<'a>(
     scx: &'a StatementContext,
-    name: &QualifiedReplica,
+    name: &QualifiedClusterItem,
     if_exists: bool,
+    typ: Option<ClusterItemType>,
 ) -> Result<Option<(&'a dyn CatalogCluster<'a>, ReplicaId)>, PlanError> {
     match scx.resolve_cluster(Some(&name.cluster)) {
-        Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
-            Some(replica_id) => Ok(Some((cluster, *replica_id))),
-            None if if_exists => Ok(None),
-            None => Err(sql_err!(
-                "CLUSTER {} has no CLUSTER REPLICA named {}",
-                cluster.name(),
-                name.replica.as_str().quoted(),
-            )),
+        Ok(cluster) => match cluster.resolve_item(name.item.as_str()) {
+            Ok(item) => {
+                match typ {
+                    None => {}
+                    Some(ClusterItemType::Replica) => {
+                        item.replica()?;
+                    }
+                }
+                Ok(Some((cluster, item.item_id())))
+            }
+            Err(_) if if_exists => Ok(None),
+            Err(e) => Err(e.into()),
         },
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),

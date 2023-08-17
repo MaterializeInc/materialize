@@ -22,7 +22,7 @@ use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{
-    AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
+    AlterClusterItemRenamePlan, AlterClusterPlan, AlterClusterRenamePlan, AlterOptionParameter,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
@@ -357,10 +357,8 @@ impl Coordinator {
             .expect("creating cluster must not fail");
 
         let replicas: Vec<_> = cluster
-            .replicas_by_id
-            .keys()
-            .copied()
-            .map(|r| (cluster_id, r))
+            .iter_replicas()
+            .map(|r| (cluster_id, r.item_id))
             .collect();
         self.create_cluster_replicas(&replicas).await;
 
@@ -475,7 +473,7 @@ impl Coordinator {
         for (cluster_id, replica_id) in replicas.iter().copied() {
             let cluster = self.catalog().get_cluster(cluster_id);
             let role = cluster.role();
-            let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
+            let replica_config = cluster.get_item(replica_id).replica().config.clone();
 
             replicas_to_start.push(CreateReplicaConfig {
                 cluster_id,
@@ -726,11 +724,11 @@ impl Coordinator {
 
             // tear down all replicas, create new ones
             for name in (0..*replication_factor).map(managed_cluster_replica_name) {
-                let replica = cluster.replica_id_by_name.get(&name);
-                if let Some(replica) = replica {
-                    ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
+                let replica = cluster.resolve_item(&name);
+                if let Ok(replica) = replica {
+                    ops.push(catalog::Op::DropObject(ObjectId::ClusterItem((
                         cluster.id(),
-                        *replica,
+                        replica.item_id(),
                     ))))
                 }
             }
@@ -754,11 +752,12 @@ impl Coordinator {
             for name in
                 (*new_replication_factor..*replication_factor).map(managed_cluster_replica_name)
             {
-                let replica = cluster.replica_id_by_name.get(&name);
-                if let Some(replica) = replica {
-                    ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
+                let item = cluster.resolve_item(&name);
+                if let Ok(item) = item {
+                    item.replica()?;
+                    ops.push(catalog::Op::DropObject(ObjectId::ClusterItem((
                         cluster.id(),
-                        *replica,
+                        item.item_id(),
                     ))))
                 }
             }
@@ -820,15 +819,13 @@ impl Coordinator {
         match options.replication_factor {
             AlterOptionParameter::Set(_) => {
                 // Validate that the replication factor matches the current length only if specified.
-                if u32::try_from(cluster.replicas_by_id.len()).expect("must fit")
+                if u32::try_from(cluster.item_ids().len()).expect("must fit")
                     != *new_replication_factor
                 {
-                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({})", cluster.replicas_by_id.len());
+                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({})", cluster.item_ids().len());
                 }
             }
-            _ => {
-                *new_replication_factor = cluster.replicas_by_id.len().try_into().expect("must fit")
-            }
+            _ => *new_replication_factor = cluster.item_ids().len().try_into().expect("must fit"),
         }
 
         let mut names = BTreeSet::new();
@@ -838,8 +835,9 @@ impl Coordinator {
         self.ensure_valid_azs(new_availability_zones.iter())?;
 
         // Validate per-replica configuration
-        for replica in cluster.replicas_by_id.values() {
-            names.insert(replica.name.clone());
+        for item in cluster.iter_replicas() {
+            let replica = item.replica();
+            names.insert(item.name.clone());
             match &replica.config.location {
                 ReplicaLocation::Unmanaged(_) => coord_bail!(
                     "Cannot convert unmanaged cluster with unmanaged replicas to managed cluster"
@@ -864,7 +862,7 @@ impl Coordinator {
 
         if sizes.is_empty() {
             assert!(
-                cluster.replicas_by_id.is_empty(),
+                cluster.items().is_empty(),
                 "Cluster should not have replicas"
             );
             // We didn't collect any size, so the user has to name it.
@@ -980,12 +978,12 @@ impl Coordinator {
     pub(super) async fn sequence_alter_cluster_replica_rename(
         &mut self,
         session: &Session,
-        AlterClusterReplicaRenamePlan {
+        AlterClusterItemRenamePlan {
             cluster_id,
-            replica_id,
+            item_id: replica_id,
             name,
             to_name,
-        }: AlterClusterReplicaRenamePlan,
+        }: AlterClusterItemRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameClusterReplica {
             cluster_id,

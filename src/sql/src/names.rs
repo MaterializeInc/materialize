@@ -559,14 +559,14 @@ impl AstDisplay for ResolvedClusterName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ResolvedClusterReplicaName {
+pub struct ResolvedClusterItemName {
     pub cluster_id: ClusterId,
-    pub replica_id: ReplicaId,
+    pub item_id: ReplicaId,
 }
 
-impl AstDisplay for ResolvedClusterReplicaName {
+impl AstDisplay for ResolvedClusterItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(format!("[{}.{}]", self.cluster_id, self.replica_id))
+        f.write_str(format!("[{}.{}]", self.cluster_id, self.item_id))
     }
 }
 
@@ -722,7 +722,7 @@ impl AstDisplay for ResolvedRoleName {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedObjectName {
     Cluster(ResolvedClusterName),
-    ClusterReplica(ResolvedClusterReplicaName),
+    ClusterItem(ResolvedClusterItemName),
     Database(ResolvedDatabaseName),
     Schema(ResolvedSchemaName),
     Role(ResolvedRoleName),
@@ -733,7 +733,7 @@ impl AstDisplay for ResolvedObjectName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ResolvedObjectName::Cluster(n) => f.write_node(n),
-            ResolvedObjectName::ClusterReplica(n) => f.write_node(n),
+            ResolvedObjectName::ClusterItem(n) => f.write_node(n),
             ResolvedObjectName::Database(n) => f.write_node(n),
             ResolvedObjectName::Schema(n) => f.write_node(n),
             ResolvedObjectName::Role(n) => f.write_node(n),
@@ -900,7 +900,7 @@ pub static PUBLIC_ROLE_NAME: Lazy<&UncasedStr> = Lazy::new(|| UncasedStr::new("P
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ObjectId {
     Cluster(ClusterId),
-    ClusterReplica((ClusterId, ReplicaId)),
+    ClusterItem((ClusterId, ReplicaId)),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
@@ -914,10 +914,10 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_cluster_id called on {self:?}"),
         }
     }
-    pub fn unwrap_cluster_replica_id(self) -> (ClusterId, ReplicaId) {
+    pub fn unwrap_cluster_item_id(self) -> (ClusterId, ReplicaId) {
         match self {
-            ObjectId::ClusterReplica(id) => id,
-            _ => panic!("ObjectId::unwrap_cluster_replica_id called on {self:?}"),
+            ObjectId::ClusterItem(id) => id,
+            _ => panic!("ObjectId::unwrap_cluster_item_id called on {self:?}"),
         }
     }
     pub fn unwrap_database_id(self) -> DatabaseId {
@@ -949,7 +949,7 @@ impl ObjectId {
         match self {
             ObjectId::Cluster(cluster_id) => cluster_id.is_system(),
             // replica IDs aren't namespaced so we rely on the cluster ID.
-            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_system(),
+            ObjectId::ClusterItem((cluster_id, _replica_id)) => cluster_id.is_system(),
             ObjectId::Database(database_id) => database_id.is_system(),
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
             ObjectId::Role(role_id) => role_id.is_system(),
@@ -961,7 +961,7 @@ impl ObjectId {
         match self {
             ObjectId::Cluster(cluster_id) => cluster_id.is_user(),
             // replica IDs aren't namespaced so we rely on the cluster ID.
-            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_user(),
+            ObjectId::ClusterItem((cluster_id, _replica_id)) => cluster_id.is_user(),
             ObjectId::Database(database_id) => database_id.is_user(),
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_user(),
             ObjectId::Role(role_id) => role_id.is_user(),
@@ -974,7 +974,7 @@ impl fmt::Display for ObjectId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ObjectId::Cluster(cluster_id) => write!(f, "C{cluster_id}"),
-            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+            ObjectId::ClusterItem((cluster_id, replica_id)) => {
                 write!(f, "CR{cluster_id}.{replica_id}")
             }
             ObjectId::Database(database_id) => write!(f, "D{database_id}"),
@@ -997,8 +997,8 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
     fn try_from(name: ResolvedObjectName) -> Result<ObjectId, Self::Error> {
         match name {
             ResolvedObjectName::Cluster(name) => Ok(ObjectId::Cluster(name.id)),
-            ResolvedObjectName::ClusterReplica(name) => {
-                Ok(ObjectId::ClusterReplica((name.cluster_id, name.replica_id)))
+            ResolvedObjectName::ClusterItem(name) => {
+                Ok(ObjectId::ClusterItem((name.cluster_id, name.item_id)))
             }
             ResolvedObjectName::Database(name) => Ok(ObjectId::Database(*name.database_id())),
             ResolvedObjectName::Schema(name) => match name {
@@ -1033,13 +1033,13 @@ impl From<&ClusterId> for ObjectId {
 
 impl From<(ClusterId, ReplicaId)> for ObjectId {
     fn from(id: (ClusterId, ReplicaId)) -> Self {
-        ObjectId::ClusterReplica(id)
+        ObjectId::ClusterItem(id)
     }
 }
 
 impl From<&(ClusterId, ReplicaId)> for ObjectId {
     fn from(id: &(ClusterId, ReplicaId)) -> Self {
-        ObjectId::ClusterReplica(*id)
+        ObjectId::ClusterItem(*id)
     }
 }
 
@@ -1674,21 +1674,19 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             UnresolvedObjectName::Cluster(name) => ResolvedObjectName::Cluster(
                 self.fold_cluster_name(RawClusterName::Unresolved(name)),
             ),
-            UnresolvedObjectName::ClusterReplica(name) => {
-                match self.catalog.resolve_cluster_replica(&name) {
-                    Ok(cluster_replica) => {
-                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
-                            cluster_id: cluster_replica.cluster_id(),
-                            replica_id: cluster_replica.replica_id(),
-                        })
-                    }
+            UnresolvedObjectName::ClusterItem(name) => {
+                match self.catalog.resolve_cluster_item(&name) {
+                    Ok(cluster_item) => ResolvedObjectName::ClusterItem(ResolvedClusterItemName {
+                        cluster_id: cluster_item.cluster_id(),
+                        item_id: cluster_item.item_id(),
+                    }),
                     Err(e) => {
                         self.status = Err(e.into());
-                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                        ResolvedObjectName::ClusterItem(ResolvedClusterItemName {
                             // The ID is arbitrary here; we just need some dummy
                             // value to return.
                             cluster_id: ClusterId::System(0),
-                            replica_id: ReplicaId::System(0),
+                            item_id: ReplicaId::System(0),
                         })
                     }
                 }

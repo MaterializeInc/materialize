@@ -33,7 +33,7 @@ use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
-use mz_sql_parser::ast::QualifiedReplica;
+use mz_sql_parser::ast::QualifiedClusterItem;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
@@ -56,7 +56,7 @@ pub mod stash;
 
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    CLUSTER_ITEM_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
     DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
     SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
     SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
@@ -148,8 +148,8 @@ fn add_new_builtin_cluster_replicas_migration(
                 *cluster_id,
                 replica_id,
                 builtin_replica.name,
-                &config,
                 MZ_SYSTEM_ROLE_ID,
+                config,
             )?;
         }
     }
@@ -467,20 +467,18 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
-        let entries = CLUSTER_REPLICA_COLLECTION.peek_one(&mut self.stash).await?;
+    pub async fn load_cluster_items(&mut self) -> Result<Vec<ClusterItem>, Error> {
+        let entries = CLUSTER_ITEM_COLLECTION.peek_one(&mut self.stash).await?;
         let replicas = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(
-                |(k, v): (ClusterReplicaKey, ClusterReplicaValue)| ClusterReplica {
-                    cluster_id: v.cluster_id,
-                    replica_id: k.id,
-                    name: v.name,
-                    serialized_config: v.config,
-                    owner_id: v.owner_id,
-                },
-            )
+            .map_ok(|(k, v): (ClusterItemKey, ClusterItemValue)| ClusterItem {
+                cluster_id: v.cluster_id,
+                replica_id: k.id,
+                name: v.name,
+                item: v.item,
+                owner_id: v.owner_id,
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(replicas)
@@ -712,6 +710,30 @@ impl Connection {
             .map_err(|e| e.into())
     }
 
+    /// Set the configuration of a cluster item.
+    /// This accepts only one item, as we currently use this only for the default cluster
+    pub async fn set_cluster_item_config(
+        &mut self,
+        item_id: ReplicaId,
+        cluster_id: ClusterId,
+        name: String,
+        owner_id: RoleId,
+        item: ClusterItemVariant,
+    ) -> Result<(), Error> {
+        let key = ClusterItemKey { id: item_id }.into_proto();
+        let val = ClusterItemValue {
+            cluster_id,
+            name,
+            item,
+            owner_id,
+        }
+        .into_proto();
+        CLUSTER_ITEM_COLLECTION
+            .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
+            .await??;
+        Ok(())
+    }
+
     /// Set the configuration of a replica.
     /// This accepts only one item, as we currently use this only for the default cluster
     pub async fn set_replica_config(
@@ -722,18 +744,11 @@ impl Connection {
         config: &ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
-        let key = ClusterReplicaKey { id: replica_id }.into_proto();
-        let val = ClusterReplicaValue {
-            cluster_id,
-            name,
-            config: config.clone().into(),
-            owner_id,
-        }
-        .into_proto();
-        CLUSTER_REPLICA_COLLECTION
-            .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
-            .await??;
-        Ok(())
+        let item = ClusterItemVariant::Replica(ClusterReplica {
+            replica_config: config.clone().into(),
+        });
+        self.set_cluster_item_config(replica_id, cluster_id, name, owner_id, item)
+            .await
     }
 
     pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
@@ -926,7 +941,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
                     tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(CLUSTER_ITEM_COLLECTION.name()).await?),
                     tx.peek_one(
                         tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
                             .await?,
@@ -958,7 +973,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         })?,
         roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
         clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
-        cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
+        cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterItemValue, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
         })?,
         introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
@@ -984,7 +999,7 @@ pub struct Transaction<'a> {
     items: TableTransaction<ItemKey, ItemValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
-    cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
+    cluster_replicas: TableTransaction<ClusterItemKey, ClusterItemValue>,
     introspection_sources:
         TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
@@ -1262,58 +1277,81 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    pub(crate) fn rename_cluster_replica(
+    /// Rename a cluster item. This updates the item to carry a new name.
+    ///
+    /// Returns `OK` if the item was updated. Returns `Err` if the item doesn't exist.
+    /// Panics when the item is not unique.
+    pub(crate) fn rename_cluster_item(
         &mut self,
-        replica_id: ReplicaId,
-        replica_name: &QualifiedReplica,
-        replica_to_name: &str,
+        item_id: ReplicaId,
+        item_name: &QualifiedClusterItem,
+        item_to_name: &str,
     ) -> Result<(), Error> {
-        let key = ClusterReplicaKey { id: replica_id };
+        let key = ClusterItemKey { id: item_id };
 
         match self.cluster_replicas.update(|k, v| {
             if *k == key {
                 let mut value = v.clone();
-                value.name = replica_to_name.to_string();
+                value.name = item_to_name.to_string();
                 Some(value)
             } else {
                 None
             }
         })? {
-            0 => Err(SqlCatalogError::UnknownClusterReplica(replica_name.to_string()).into()),
+            0 => Err(SqlCatalogError::UnknownClusterItem(item_name.to_string()).into()),
             1 => Ok(()),
             n => panic!(
-                "Expected to update single cluster replica {replica_name} ({replica_id}), updated {n}"
+                "Expected to update single cluster item {item_name} ({item_id}), updated {n}"
             ),
         }
     }
 
-    pub(crate) fn insert_cluster_replica(
+    /// Insert a new cluster item. Returns an error if the item already exists.
+    pub(crate) fn insert_cluster_item(
         &mut self,
         cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        replica_name: &str,
-        config: &SerializedReplicaConfig,
+        id: ReplicaId,
+        name: &str,
         owner_id: RoleId,
+        item: ClusterItemVariant,
     ) -> Result<(), Error> {
         if let Err(_) = self.cluster_replicas.insert(
-            ClusterReplicaKey { id: replica_id },
-            ClusterReplicaValue {
+            ClusterItemKey { id },
+            ClusterItemValue {
                 cluster_id,
-                name: replica_name.into(),
-                config: config.clone(),
+                name: name.to_string(),
                 owner_id,
+                item,
             },
         ) {
             let cluster = self
                 .clusters
                 .get(&ClusterKey { id: cluster_id })
                 .expect("cluster exists");
-            return Err(Error::new(ErrorKind::DuplicateReplica(
-                replica_name.to_string(),
+            return Err(Error::new(ErrorKind::DuplicateClusterItem(
+                name.to_string(),
                 cluster.name.to_string(),
             )));
         };
         Ok(())
+    }
+
+    /// Insert a cluster replica. Returns an error if the item already exists.
+    pub(crate) fn insert_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        replica_name: &str,
+        owner_id: RoleId,
+        replica_config: SerializedReplicaConfig,
+    ) -> Result<(), Error> {
+        self.insert_cluster_item(
+            cluster_id,
+            replica_id,
+            replica_name,
+            owner_id,
+            ClusterItemVariant::Replica(ClusterReplica { replica_config }),
+        )
     }
 
     /// Updates persisted information about persisted introspection source
@@ -1448,13 +1486,16 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), Error> {
+    /// Remove a cluster item.
+    ///
+    /// Returns an error if the item didn't exist.Panics when the item was not unique.
+    pub(crate) fn remove_cluster_item(&mut self, id: ReplicaId) -> Result<(), Error> {
         let deleted = self.cluster_replicas.delete(|k, _v| k.id == id);
         if deleted.len() == 1 {
             Ok(())
         } else {
             assert!(deleted.is_empty());
-            Err(SqlCatalogError::UnknownClusterReplica(id.to_string()).into())
+            Err(SqlCatalogError::UnknownClusterItem(id.to_string()).into())
         }
     }
 
@@ -1644,25 +1685,31 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Updates cluster replica `replica_id` in the transaction to `replica`.
+    /// Updates cluster item `item_id` in the transaction to `entry`.
     ///
-    /// Returns an error if `replica_id` is not found.
+    /// Returns an error if `item_id` is not found.
     ///
     /// Runtime is linear with respect to the total number of cluster replicas in the stash.
     /// DO NOT call this function in a loop.
-    pub(crate) fn update_cluster_replica(
+    pub(crate) fn update_cluster_item(
         &mut self,
         cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        replica: &catalog::ClusterReplica,
+        item_id: ReplicaId,
+        entry: &catalog::ClusterEntry,
     ) -> Result<(), Error> {
         let n = self.cluster_replicas.update(|k, _v| {
-            if k.id == replica_id {
-                Some(ClusterReplicaValue {
+            if k.id == item_id {
+                Some(ClusterItemValue {
                     cluster_id,
-                    name: replica.name.clone(),
-                    config: replica.config.clone().into(),
-                    owner_id: replica.owner_id,
+                    name: entry.name.clone(),
+                    owner_id: entry.owner_id,
+                    item: match &entry.item {
+                        catalog::ClusterItem::Replica(replica) => {
+                            ClusterItemVariant::Replica(ClusterReplica {
+                                replica_config: replica.config.clone().into(),
+                            })
+                        }
+                    },
                 })
             } else {
                 None
@@ -1672,7 +1719,7 @@ impl<'a> Transaction<'a> {
         if n == 1 {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownClusterReplica(replica_id.to_string()).into())
+            Err(SqlCatalogError::UnknownClusterItem(item_id.to_string()).into())
         }
     }
 
@@ -1879,7 +1926,7 @@ impl<'a> Transaction<'a> {
                     add_batch(
                         &tx,
                         &mut batches,
-                        &CLUSTER_REPLICA_COLLECTION,
+                        &CLUSTER_ITEM_COLLECTION,
                         &cluster_replicas,
                     )
                     .await?;
@@ -1974,14 +2021,6 @@ pub struct Cluster {
     pub config: ClusterConfig,
 }
 
-pub struct ClusterReplica {
-    pub cluster_id: ClusterId,
-    pub replica_id: ReplicaId,
-    pub name: String,
-    pub serialized_config: SerializedReplicaConfig,
-    pub owner_id: RoleId,
-}
-
 #[derive(Debug)]
 pub struct Item {
     pub id: GlobalId,
@@ -2052,16 +2091,39 @@ pub struct ClusterIntrospectionSourceIndexValue {
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct ClusterReplicaKey {
+pub struct ClusterItemKey {
     id: ReplicaId,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct ClusterReplicaValue {
-    cluster_id: ClusterId,
-    name: String,
-    config: SerializedReplicaConfig,
-    owner_id: RoleId,
+pub struct ClusterItemValue {
+    /// The ID of the cluster the item belongs to.
+    pub cluster_id: ClusterId,
+    /// Name of the item.
+    pub name: String,
+    /// Owner of the item
+    pub owner_id: RoleId,
+    /// Specific item variant.
+    pub item: ClusterItemVariant,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterItem {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: String,
+    pub owner_id: RoleId,
+    pub item: ClusterItemVariant,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ClusterItemVariant {
+    Replica(ClusterReplica),
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterReplica {
+    pub replica_config: SerializedReplicaConfig,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -2194,7 +2256,7 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     AUDIT_LOG_COLLECTION.name(),
     CLUSTER_COLLECTION.name(),
     CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name(),
-    CLUSTER_REPLICA_COLLECTION.name(),
+    CLUSTER_ITEM_COLLECTION.name(),
     CONFIG_COLLECTION.name(),
     DATABASES_COLLECTION.name(),
     DEFAULT_PRIVILEGES_COLLECTION.name(),

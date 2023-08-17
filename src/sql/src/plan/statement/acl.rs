@@ -67,8 +67,8 @@ pub fn plan_alter_owner(
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(_)) => {
-            bail_never_supported!("altering the owner of a cluster replica");
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterItem(_)) => {
+            bail_never_supported!("altering the owner of a cluster item");
         }
         (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
             plan_alter_database_owner(scx, if_exists, name, new_owner.id)
@@ -88,7 +88,7 @@ pub fn plan_alter_owner(
         | (
             object_type,
             name @ UnresolvedObjectName::Cluster(_)
-            | name @ UnresolvedObjectName::ClusterReplica(_)
+            | name @ UnresolvedObjectName::ClusterItem(_)
             | name @ UnresolvedObjectName::Database(_)
             | name @ UnresolvedObjectName::Schema(_)
             | name @ UnresolvedObjectName::Role(_),
@@ -737,7 +737,7 @@ pub fn plan_reassign_owned(
     // Replicas
     for replica in scx.catalog.get_cluster_replicas() {
         if old_roles.contains(&replica.owner_id()) {
-            reassign_ids.push((replica.cluster_id(), replica.replica_id()).into());
+            reassign_ids.push((replica.cluster_id(), replica.item_id()).into());
         }
     }
     // Clusters

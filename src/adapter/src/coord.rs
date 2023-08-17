@@ -125,7 +125,8 @@ use uuid::Uuid;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    CatalogItem, ClusterItem, ClusterReplicaSizeMap, DataSourceDesc, Source,
+    StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -454,7 +455,7 @@ impl PlanValidity {
             };
 
             if let Some(replica_id) = self.replica_id {
-                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                if cluster.try_get_item(replica_id).is_none() {
                     return Err(AdapterError::ChangedPlan);
                 }
             }
@@ -1030,14 +1031,18 @@ impl Coordinator {
                     arranged_logs: instance.log_indexes.clone(),
                 },
             )?;
-            for (replica_id, replica) in instance.replicas_by_id.clone() {
+            for (entry_id, entry) in instance.iter_items_by_id() {
                 let role = instance.role();
-                replicas_to_start.push(CreateReplicaConfig {
-                    cluster_id: instance.id,
-                    replica_id,
-                    role,
-                    config: replica.config,
-                });
+                match &entry.item {
+                    ClusterItem::Replica(replica) => {
+                        replicas_to_start.push(CreateReplicaConfig {
+                            cluster_id: instance.id,
+                            replica_id: *entry_id,
+                            role,
+                            config: replica.config.clone(),
+                        });
+                    }
+                }
             }
         }
         self.controller.create_replicas(replicas_to_start).await?;

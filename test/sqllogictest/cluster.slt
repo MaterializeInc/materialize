@@ -460,7 +460,7 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.foo
 
-query error CLUSTER foo has no CLUSTER REPLICA named "foo"
+query error db error: ERROR: unknown cluster item 'foo'
 DROP CLUSTER REPLICA default.size_1, foo.foo
 
 statement ok
@@ -485,7 +485,7 @@ ALTER CLUSTER REPLICA default RENAME TO bar_foo
 statement ok
 ALTER CLUSTER REPLICA default.foo_bar RENAME TO bar_foo
 
-statement error CLUSTER default has no CLUSTER REPLICA named "foo_bar"
+statement error db error: ERROR: unknown cluster item 'foo_bar'
 ALTER CLUSTER REPLICA default.foo_bar RENAME TO bar_foo
 
 statement ok

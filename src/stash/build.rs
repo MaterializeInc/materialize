@@ -202,6 +202,8 @@ fn main() -> anyhow::Result<()> {
         // it here.
         .enum_attribute("CatalogItem.value", ATTR)
         .enum_attribute("ClusterConfig.variant", ATTR)
+        .enum_attribute("ClusterItemId.value", ATTR)
+        .enum_attribute("ClusterItemValue.item", ATTR)
         .enum_attribute("GlobalId.value", ATTR)
         .enum_attribute("ClusterId.value", ATTR)
         .enum_attribute("DatabaseId.value", ATTR)

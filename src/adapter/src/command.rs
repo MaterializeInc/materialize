@@ -775,7 +775,7 @@ impl ExecuteResponse {
             AbortTransaction => vec![TransactionRolledBack],
             AlterClusterRename
             | AlterCluster
-            | AlterClusterReplicaRename
+            | AlterClusterItemRename
             | AlterOwner
             | AlterItemRename
             | AlterNoop

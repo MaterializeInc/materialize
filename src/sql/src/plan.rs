@@ -45,7 +45,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
+    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedClusterItem,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
@@ -151,7 +151,7 @@ pub enum Plan {
         subsources: Vec<CreateSourcePlans>,
     },
     AlterClusterRename(AlterClusterRenamePlan),
-    AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
+    AlterClusterItemRename(AlterClusterItemRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
@@ -196,7 +196,7 @@ impl Plan {
             StatementKind::AlterObjectRename => {
                 vec![
                     PlanKind::AlterClusterRename,
-                    PlanKind::AlterClusterReplicaRename,
+                    PlanKind::AlterClusterItemRename,
                     PlanKind::AlterItemRename,
                     PlanKind::AlterNoop,
                 ]
@@ -350,7 +350,7 @@ impl Plan {
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
-            Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
+            Plan::AlterClusterItemRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
@@ -920,10 +920,10 @@ pub struct AlterClusterRenamePlan {
 }
 
 #[derive(Debug)]
-pub struct AlterClusterReplicaRenamePlan {
+pub struct AlterClusterItemRenamePlan {
     pub cluster_id: ClusterId,
-    pub replica_id: ReplicaId,
-    pub name: QualifiedReplica,
+    pub item_id: ReplicaId,
+    pub name: QualifiedClusterItem,
     pub to_name: String,
 }
 

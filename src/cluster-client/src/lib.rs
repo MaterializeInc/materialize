@@ -140,14 +140,14 @@ impl FromStr for ReplicaId {
             }
         }
 
-        bail!("invalid replica ID: {}", s);
+        bail!("invalid cluster item ID: {}", s);
     }
 }
 
-impl RustType<proto::ReplicaId> for ReplicaId {
-    fn into_proto(&self) -> proto::ReplicaId {
-        use proto::replica_id::Value::*;
-        proto::ReplicaId {
+impl RustType<proto::ClusterItemId> for ReplicaId {
+    fn into_proto(&self) -> proto::ClusterItemId {
+        use proto::cluster_item_id::Value::*;
+        proto::ClusterItemId {
             value: Some(match self {
                 Self::System(id) => System(*id),
                 Self::User(id) => User(*id),
@@ -155,12 +155,12 @@ impl RustType<proto::ReplicaId> for ReplicaId {
         }
     }
 
-    fn from_proto(proto: proto::ReplicaId) -> Result<Self, TryFromProtoError> {
-        use proto::replica_id::Value::*;
+    fn from_proto(proto: proto::ClusterItemId) -> Result<Self, TryFromProtoError> {
+        use proto::cluster_item_id::Value::*;
         match proto.value {
             Some(System(id)) => Ok(Self::System(id)),
             Some(User(id)) => Ok(Self::User(id)),
-            None => Err(TryFromProtoError::missing_field("ReplicaId::value")),
+            None => Err(TryFromProtoError::missing_field("ClusterItemId::value")),
         }
     }
 }

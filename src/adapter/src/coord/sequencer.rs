@@ -325,7 +325,7 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
-            Plan::AlterClusterReplicaRename(plan) => {
+            Plan::AlterClusterItemRename(plan) => {
                 let result = self
                     .sequence_alter_cluster_replica_rename(ctx.session(), plan)
                     .await;

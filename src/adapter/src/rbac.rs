@@ -27,7 +27,7 @@ use mz_sql::plan;
 use mz_sql::plan::{MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
-use mz_sql_parser::ast::QualifiedReplica;
+use mz_sql_parser::ast::QualifiedClusterItem;
 
 use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::client::ConnectionId;
@@ -288,7 +288,7 @@ pub fn generate_required_role_membership(
         | Plan::ExplainTimestamp(_)
         | Plan::Insert(_)
         | Plan::AlterClusterRename(_)
-        | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterClusterItemRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterNoop(_)
         | Plan::AlterSetCluster(_)
@@ -386,8 +386,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::AlterCluster(plan::AlterClusterPlan { id, .. }) => {
             vec![ObjectId::Cluster(*id)]
         }
-        Plan::AlterClusterReplicaRename(plan) => {
-            vec![ObjectId::ClusterReplica((plan.cluster_id, plan.replica_id))]
+        Plan::AlterClusterItemRename(plan) => {
+            vec![ObjectId::ClusterItem((plan.cluster_id, plan.item_id))]
         }
         Plan::AlterIndexSetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterIndexResetOptions(plan) => vec![ObjectId::Item(plan.id)],
@@ -442,14 +442,14 @@ fn ownership_err(
                     ObjectType::Cluster,
                     catalog.get_cluster(id).name().to_string(),
                 ),
-                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                ObjectId::ClusterItem((cluster_id, replica_id)) => {
                     let cluster = catalog.get_cluster(cluster_id);
-                    let replica = catalog.get_cluster_replica(cluster_id, replica_id);
-                    let name = QualifiedReplica {
+                    let itme = catalog.get_cluster_item(cluster_id, replica_id);
+                    let name = QualifiedClusterItem {
                         cluster: cluster.name().into(),
-                        replica: replica.name().into(),
+                        item: itme.name().into(),
                     };
-                    (ObjectType::ClusterReplica, name.to_string())
+                    (itme.item_type().into(), name.to_string())
                 }
                 ObjectId::Database(id) => (
                     ObjectType::Database,
@@ -710,7 +710,7 @@ fn generate_required_privileges(
                 referenced_ids
                     .iter()
                     .filter_map(|id| match id {
-                        ObjectId::ClusterReplica((cluster_id, _)) => Some((
+                        ObjectId::ClusterItem((cluster_id, _)) => Some((
                             SystemObjectId::Object(cluster_id.into()),
                             AclMode::USAGE,
                             role_id,
@@ -938,7 +938,7 @@ fn generate_required_privileges(
             object_type: _,
             new_owner: _,
         }) => match id {
-            ObjectId::ClusterReplica((cluster_id, _)) => {
+            ObjectId::ClusterItem((cluster_id, _)) => {
                 vec![(
                     SystemObjectId::Object(cluster_id.into()),
                     AclMode::CREATE,
@@ -994,7 +994,7 @@ fn generate_required_privileges(
             for UpdatePrivilege { target_id, .. } in update_privileges {
                 match target_id {
                     SystemObjectId::Object(object_id) => match object_id {
-                        ObjectId::ClusterReplica((cluster_id, _)) => {
+                        ObjectId::ClusterItem((cluster_id, _)) => {
                             privleges.push((
                                 SystemObjectId::Object(cluster_id.into()),
                                 AclMode::USAGE,
@@ -1051,9 +1051,9 @@ fn generate_required_privileges(
             name: _,
             to_name: _,
         })
-        | Plan::AlterClusterReplicaRename(plan::AlterClusterReplicaRenamePlan {
+        | Plan::AlterClusterItemRename(plan::AlterClusterItemRenamePlan {
             cluster_id: _,
-            replica_id: _,
+            item_id: _,
             name: _,
             to_name: _,
         })

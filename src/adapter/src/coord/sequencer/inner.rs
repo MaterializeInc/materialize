@@ -41,9 +41,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
-    ErrorMessageObjectDescription, ObjectType, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, ErrorMessageObjectDescription, ObjectType,
+    SessionCatalog,
 };
 use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
@@ -1320,10 +1320,10 @@ impl Coordinator {
                 &cluster_id,
                 &catalog,
             );
-            for replica in cluster.replicas_by_id.values() {
-                if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
+            for item in cluster.items() {
+                if let Some(role_name) = dropped_roles.get(&item.owner_id()) {
                     let replica_id =
-                        SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
+                        SystemObjectId::Object((item.cluster_id(), item.item_id()).into());
                     let object_description =
                         ErrorMessageObjectDescription::from_id(&replica_id, &catalog);
                     dependent_objects
@@ -2006,16 +2006,14 @@ impl Coordinator {
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                cluster.replica_id_by_name.get(name).copied().ok_or(
-                    AdapterError::UnknownClusterReplica {
-                        cluster_name: cluster.name.clone(),
-                        replica_name: name.to_string(),
-                    },
-                )
+                cluster.resolve_item(name).and_then(|item| {
+                    item.replica()?;
+                    Ok(item.item_id())
+                })
             })
             .transpose()?;
 
-        if cluster.replicas_by_id.is_empty() {
+        if cluster.iter_replicas().next().is_none() {
             return Err(AdapterError::NoClusterReplicasAvailable(
                 cluster.name.clone(),
             ));
@@ -2578,12 +2576,10 @@ impl Coordinator {
         let target_replica_name = ctx.session().vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                cluster.replica_id_by_name.get(name).copied().ok_or(
-                    AdapterError::UnknownClusterReplica {
-                        cluster_name: cluster.name.clone(),
-                        replica_name: name.to_string(),
-                    },
-                )
+                cluster.resolve_item(name).and_then(|item| {
+                    item.replica()?;
+                    Ok(item.item_id())
+                })
             })
             .transpose()?;
 
@@ -4825,10 +4821,9 @@ impl Coordinator {
                 if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
                     let linked_cluster_replica_ops =
                         cluster
-                            .replicas_by_id
-                            .keys()
-                            .map(|id| catalog::Op::UpdateOwner {
-                                id: ObjectId::ClusterReplica((cluster.id(), *id)),
+                            .iter_items_by_id()
+                            .map(|(id, _)| catalog::Op::UpdateOwner {
+                                id: ObjectId::ClusterItem((cluster.id(), *id)),
                                 new_owner,
                             });
                     ops.extend(linked_cluster_replica_ops);
@@ -4852,15 +4847,14 @@ impl Coordinator {
             ObjectId::Cluster(cluster_id) => {
                 let cluster = self.catalog().get_cluster(*cluster_id);
                 // Alter owner cascades down to cluster replicas.
-                let managed_cluster_replica_ops =
+                let cluster_item_ops =
                     cluster
-                        .replicas_by_id
-                        .keys()
-                        .map(|replica_id| catalog::Op::UpdateOwner {
-                            id: ObjectId::ClusterReplica((cluster.id(), *replica_id)),
+                        .iter_items_by_id()
+                        .map(|(replica_id, _)| catalog::Op::UpdateOwner {
+                            id: ObjectId::ClusterItem((cluster.id(), *replica_id)),
                             new_owner,
                         });
-                ops.extend(managed_cluster_replica_ops);
+                ops.extend(cluster_item_ops);
             }
             _ => {}
         }
@@ -5000,11 +4994,10 @@ where
     // Reading from log sources on replicated clusters is only allowed if a
     // target replica is selected. Otherwise, we have no way of knowing which
     // replica we read the introspection data from.
-    let num_replicas = cluster.replicas_by_id.len();
     if target_replica.is_none() {
-        if num_replicas == 1 {
-            *target_replica = cluster.replicas_by_id.keys().next().copied();
-        } else {
+        let mut replica_iter = cluster.iter_replicas_by_id();
+        *target_replica = replica_iter.next().map(|(id, _entry)| *id);
+        if target_replica.is_none() || replica_iter.next().is_some() {
             return Err(AdapterError::UntargetedLogRead { log_names });
         }
     }
@@ -5012,8 +5005,8 @@ where
     // Ensure that logging is initialized for the target replica, lest
     // we try to read from a non-existing arrangement.
     let replica_id = target_replica.expect("set to `Some` above");
-    let replica = &cluster.replicas_by_id[&replica_id];
-    if !replica.config.compute.logging.enabled() {
+    let replica = cluster.get_item(replica_id);
+    if !replica.try_replica()?.config.compute.logging.enabled() {
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }
 

@@ -2163,19 +2163,19 @@ impl<T: AstInfo> AstDisplay for DropOwnedStatement<T> {
 impl_display_t!(DropOwnedStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct QualifiedReplica {
+pub struct QualifiedClusterItem {
     pub cluster: Ident,
-    pub replica: Ident,
+    pub item: Ident,
 }
 
-impl AstDisplay for QualifiedReplica {
+impl AstDisplay for QualifiedClusterItem {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.cluster);
         f.write_str(".");
-        f.write_node(&self.replica);
+        f.write_node(&self.item);
     }
 }
-impl_display!(QualifiedReplica);
+impl_display!(QualifiedClusterItem);
 
 /// `SET <variable>`
 ///

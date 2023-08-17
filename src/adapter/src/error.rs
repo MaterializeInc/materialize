@@ -169,7 +169,7 @@ pub enum AdapterError {
     UnknownLoginRole(String),
     UnknownPreparedStatement(String),
     /// The named cluster replica does not exist.
-    UnknownClusterReplica {
+    UnknownClusterItem {
         cluster_name: String,
         replica_name: String,
     },
@@ -423,7 +423,7 @@ impl AdapterError {
             AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-            AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::UnknownClusterItem { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnknownWebhookSource { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
@@ -618,7 +618,7 @@ impl fmt::Display for AdapterError {
             AdapterError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
             }
-            AdapterError::UnknownClusterReplica {
+            AdapterError::UnknownClusterItem {
                 cluster_name,
                 replica_name,
             } => write!(

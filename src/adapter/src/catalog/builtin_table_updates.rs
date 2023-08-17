@@ -27,7 +27,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, ClusterItemType, TypeCategory,
+};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -227,15 +229,31 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_cluster_replica_update(
+    /// Pack a cluster item update. Packs a profile or replica update, depending
+    /// on the item type.
+    pub(super) fn pack_cluster_item_update(
         &self,
         cluster_id: ClusterId,
-        name: &str,
+        item_id: ReplicaId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
         let cluster = &self.clusters_by_id[&cluster_id];
-        let id = cluster.replica_id_by_name[name];
-        let replica = &cluster.replicas_by_id[&id];
+        let entry = &cluster.entries_by_id[&item_id];
+        match entry.item_type() {
+            ClusterItemType::Replica => self.pack_cluster_replica_update(cluster_id, item_id, diff),
+        }
+    }
+
+    /// Pack a cluster replica update.
+    pub(super) fn pack_cluster_replica_update(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let cluster = &self.clusters_by_id[&cluster_id];
+        let entry = &cluster.entries_by_id[&replica_id];
+        let replica = entry.try_replica().expect("Catalog out of sync");
 
         let (size, disk, az) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
@@ -258,12 +276,12 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(name),
+                Datum::String(&replica_id.to_string()),
+                Datum::String(&entry.name),
                 Datum::String(&cluster_id.to_string()),
                 Datum::from(size),
                 Datum::from(az),
-                Datum::String(&replica.owner_id.to_string()),
+                Datum::String(&entry.owner_id.to_string()),
                 Datum::from(disk),
             ]),
             diff,

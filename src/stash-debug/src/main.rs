@@ -250,7 +250,7 @@ macro_rules! for_collections {
                 $macro!(catalog::AUDIT_LOG_COLLECTION);
                 $macro!(catalog::CLUSTER_COLLECTION);
                 $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
-                $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
+                $macro!(catalog::CLUSTER_ITEM_COLLECTION);
                 $macro!(catalog::CONFIG_COLLECTION);
                 $macro!(catalog::CONFIG_COLLECTION);
                 $macro!(catalog::DATABASES_COLLECTION);

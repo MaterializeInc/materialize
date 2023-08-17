@@ -2793,7 +2793,7 @@ COMPLETE 0
 simple conn=joe,user=joe
 ALTER CLUSTER REPLICA clus.r2 OWNER TO other;
 ----
-db error: ERROR: altering the owner of a cluster replica is not supported
+db error: ERROR: altering the owner of a cluster item is not supported
 
 simple conn=mz_system,user=mz_system
 DROP CLUSTER clus;

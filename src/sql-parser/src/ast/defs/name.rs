@@ -22,7 +22,7 @@ use mz_sql_lexer::keywords::Keyword;
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, QualifiedReplica};
+use crate::ast::{AstInfo, QualifiedClusterItem};
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -184,7 +184,7 @@ impl_display_t!(DeferredItemName);
 #[derive(Debug, PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub enum UnresolvedObjectName {
     Cluster(Ident),
-    ClusterReplica(QualifiedReplica),
+    ClusterItem(QualifiedClusterItem),
     Database(UnresolvedDatabaseName),
     Schema(UnresolvedSchemaName),
     Role(Ident),
@@ -195,7 +195,7 @@ impl AstDisplay for UnresolvedObjectName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             UnresolvedObjectName::Cluster(n) => f.write_node(n),
-            UnresolvedObjectName::ClusterReplica(n) => f.write_node(n),
+            UnresolvedObjectName::ClusterItem(n) => f.write_node(n),
             UnresolvedObjectName::Database(n) => f.write_node(n),
             UnresolvedObjectName::Schema(n) => f.write_node(n),
             UnresolvedObjectName::Role(n) => f.write_node(n),

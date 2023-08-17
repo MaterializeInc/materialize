@@ -930,10 +930,10 @@ SELECT mz_roles.name
 ----
 materialize
 
-statement error altering the owner of a cluster replica is not supported
+statement error db error: ERROR: altering the owner of a cluster item is not supported
 ALTER CLUSTER REPLICA mclus.mr2 OWNER TO group_no_one
 
-statement error altering the owner of a cluster replica is not supported
+statement error db error: ERROR: altering the owner of a cluster item is not supported
 ALTER CLUSTER REPLICA mclus.mr2 OWNER TO group_materialize
 
 query T
@@ -996,7 +996,7 @@ DROP CLUSTER REPLICA jclus.jr2
 statement error must be owner of CLUSTER REPLICA jclus.jr2
 ALTER CLUSTER REPLICA jclus.jr2 RENAME TO jr3
 
-statement error altering the owner of a cluster replica is not supported
+statement error db error: ERROR: altering the owner of a cluster item is not supported
 ALTER CLUSTER REPLICA jclus.jr2 OWNER TO group_materialize
 
 simple conn=joe,user=joe
@@ -2149,7 +2149,7 @@ db error: ERROR: system cluster 'mz_system' cannot be modified
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER REPLICA mz_system.r1 OWNER TO mz_system
 ----
-db error: ERROR: altering the owner of a cluster replica is not supported
+db error: ERROR: altering the owner of a cluster item is not supported
 
 simple conn=mz_system,user=mz_system
 ALTER SCHEMA mz_catalog OWNER TO mz_system
@@ -2346,7 +2346,7 @@ linked  materialize
 statement error cannot modify linked cluster "materialize_public_s"
 ALTER CLUSTER materialize_public_s OWNER TO joe
 
-statement error altering the owner of a cluster replica is not supported
+statement error db error: ERROR: altering the owner of a cluster item is not supported
 ALTER CLUSTER REPLICA materialize_public_s.linked OWNER TO joe
 
 statement error cannot ALTER this type of source

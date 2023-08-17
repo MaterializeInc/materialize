@@ -30,7 +30,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
+use mz_sql_parser::ast::{Expr, QualifiedClusterItem, UnresolvedItemName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
@@ -188,10 +188,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
 
     /// Resolves the named cluster replica.
-    fn resolve_cluster_replica<'a, 'b>(
+    fn resolve_cluster_item<'a, 'b>(
         &'a self,
-        cluster_replica_name: &'b QualifiedReplica,
-    ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
+        cluster_item_name: &'b QualifiedClusterItem,
+    ) -> Result<&dyn CatalogClusterItem<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -235,14 +235,17 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn get_clusters(&self) -> Vec<&dyn CatalogCluster>;
 
     /// Gets a cluster replica by ID.
-    fn get_cluster_replica(
+    fn get_cluster_item(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn CatalogClusterReplica;
+    ) -> &dyn CatalogClusterItem;
 
     /// Gets all cluster replicas.
-    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+    fn get_cluster_items(&self) -> Vec<&dyn CatalogClusterItem>;
+
+    /// Gets all cluster replicas.
+    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterItem>;
 
     /// Gets all system privileges.
     fn get_system_privileges(&self) -> &PrivilegeMap;
@@ -509,13 +512,19 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
-    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
+    fn item_ids(&self) -> &BTreeMap<String, ReplicaId>;
 
     /// Returns the replicas of the cluster.
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+    fn items(&self) -> Vec<&dyn CatalogClusterItem>;
 
-    /// Returns the replica belonging to the cluster with replica ID `id`.
-    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica;
+    /// Returns the item belonging to the cluster with item ID `id`.
+    fn item(&self, id: ReplicaId) -> &dyn CatalogClusterItem;
+
+    /// Returns the item ID belonging to the cluster with item name `name`.
+    fn resolve_item_id(&self, name: &str) -> Result<ReplicaId, CatalogError>;
+
+    /// Returns the item belonging to the cluster with item name `name`.
+    fn resolve_item(&self, name: &str) -> Result<&dyn CatalogClusterItem, CatalogError>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -528,7 +537,7 @@ pub trait CatalogCluster<'a> {
 }
 
 /// A cluster replica in a [`SessionCatalog`]
-pub trait CatalogClusterReplica<'a> {
+pub trait CatalogClusterItem<'a> {
     /// Returns the name of the cluster replica.
     fn name(&self) -> &str;
 
@@ -536,11 +545,20 @@ pub trait CatalogClusterReplica<'a> {
     fn cluster_id(&self) -> ClusterId;
 
     /// Returns a stable ID for the replica.
-    fn replica_id(&self) -> ReplicaId;
+    fn item_id(&self) -> ReplicaId;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the type of the cluster item.
+    fn item_type(&self) -> ClusterItemType;
+
+    /// Returns the replica item. Errors if this is not a replica.
+    fn replica(&self) -> Result<&dyn CatalogClusterReplica, CatalogError>;
 }
+
+/// A cluster replica.
+pub trait CatalogClusterReplica<'a> {}
 
 /// An item in a [`SessionCatalog`].
 ///
@@ -716,6 +734,29 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             }
         };
         Ok(item_type)
+    }
+}
+
+/// The type of a cluster item.
+#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum ClusterItemType {
+    /// A replica.
+    Replica,
+}
+
+impl fmt::Display for ClusterItemType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Replica => f.write_str("replica"),
+        }
+    }
+}
+
+impl From<ClusterItemType> for ObjectType {
+    fn from(value: ClusterItemType) -> Self {
+        match value {
+            ClusterItemType::Replica => ObjectType::ClusterReplica,
+        }
     }
 }
 
@@ -1064,8 +1105,8 @@ pub enum CatalogError {
     UnknownRole(String),
     /// Unknown cluster.
     UnknownCluster(String),
-    /// Unknown cluster replica.
-    UnknownClusterReplica(String),
+    /// Unknown cluster item.
+    UnknownClusterItem(String),
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
@@ -1086,6 +1127,15 @@ pub enum CatalogError {
         /// The expected type of the item.
         expected_type: CatalogItemType,
     },
+    /// Expected the cluster item to have the given type, but it did not.
+    UnexpectedClusterItemType {
+        /// The item's name.
+        name: String,
+        /// The actual type of the item.
+        actual_type: ClusterItemType,
+        /// The expected type of the item.
+        expected_type: ClusterItemType,
+    },
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -1104,10 +1154,17 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
-            Self::UnknownClusterReplica(name) => {
-                write!(f, "unknown cluster replica '{}'", name)
+            Self::UnknownClusterItem(name) => {
+                write!(f, "unknown cluster item '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::UnexpectedClusterItemType {
+                name,
+                actual_type,
+                expected_type,
+            } => {
+                write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
+            }
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1398,8 +1455,8 @@ impl ErrorMessageObjectDescription {
                     ObjectId::Cluster(cluster_id) => {
                         catalog.get_cluster(*cluster_id).name().to_string()
                     }
-                    ObjectId::ClusterReplica((cluster_id, replica_id)) => catalog
-                        .get_cluster_replica(*cluster_id, *replica_id)
+                    ObjectId::ClusterItem((cluster_id, replica_id)) => catalog
+                        .get_cluster_item(*cluster_id, *replica_id)
                         .name()
                         .to_string(),
                     ObjectId::Database(database_id) => {

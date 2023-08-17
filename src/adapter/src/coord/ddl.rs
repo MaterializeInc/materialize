@@ -24,7 +24,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::CatalogCluster;
+use mz_sql::catalog::{CatalogCluster, ClusterItemType};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -42,7 +42,7 @@ use timely::progress::Antichain;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
+    CatalogItem, CatalogState, ClusterItem, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
     TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
@@ -197,9 +197,16 @@ impl Coordinator {
                 catalog::Op::DropObject(ObjectId::Cluster(id)) => {
                     clusters_to_drop.push(*id);
                 }
-                catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
-                    // Drop the cluster replica itself.
-                    cluster_replicas_to_drop.push((*cluster_id, *replica_id));
+                catalog::Op::DropObject(ObjectId::ClusterItem((cluster_id, replica_id))) => {
+                    if self
+                        .catalog
+                        .get_cluster_item(*cluster_id, *replica_id)
+                        .item_type()
+                        == ClusterItemType::Replica
+                    {
+                        // Drop the cluster replica itself.
+                        cluster_replicas_to_drop.push((*cluster_id, *replica_id));
+                    }
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
@@ -970,19 +977,25 @@ impl Coordinator {
                     ObjectId::Cluster(_) => {
                         new_clusters -= 1;
                     }
-                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                        let cluster = self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                        if let ReplicaLocation::Managed(location) = &cluster.config.location {
-                            let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(&location.size)
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                            new_credit_consumption_rate -= replica_allocation.credits_per_hour
+                    ObjectId::ClusterItem((cluster_id, replica_id)) => {
+                        let item = self.catalog().get_cluster_item(*cluster_id, *replica_id);
+                        match &item.item {
+                            ClusterItem::Replica(replica) => {
+                                *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                                if let ReplicaLocation::Managed(location) = &replica.config.location
+                                {
+                                    let replica_allocation = self
+                                        .catalog()
+                                        .cluster_replica_sizes()
+                                        .0
+                                        .get(&location.size)
+                                        .expect(
+                                            "location size is validated against the cluster replica sizes",
+                                        );
+                                    new_credit_consumption_rate -=
+                                        replica_allocation.credits_per_hour
+                                }
+                            }
                         }
                     }
                     ObjectId::Database(_) => {
@@ -1133,7 +1146,7 @@ impl Coordinator {
             let current_amount = self
                 .catalog()
                 .try_get_cluster(cluster_id)
-                .map(|instance| instance.replicas_by_id.len())
+                .map(|instance| instance.iter_replicas().count())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,

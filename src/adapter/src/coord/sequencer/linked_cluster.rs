@@ -132,10 +132,10 @@ impl Coordinator {
                 coord_bail!("cannot change the size of a source or sink created with IN CLUSTER");
             }
             Some(linked_cluster) => {
-                for id in linked_cluster.replicas_by_id.keys() {
+                for entry in linked_cluster.iter_replicas() {
                     ops.extend(
                         self.catalog()
-                            .cluster_replica_dependents(linked_cluster.id(), *id)
+                            .cluster_replica_dependents(linked_cluster.id(), entry.item_id())
                             .into_iter()
                             .map(catalog::Op::DropObject),
                     );
@@ -207,10 +207,8 @@ impl Coordinator {
             // need to be recreated in the controller.
             let cluster_id = cluster.id;
             let replicas: Vec<_> = cluster
-                .replicas_by_id
-                .keys()
-                .copied()
-                .map(|r| (cluster_id, r))
+                .iter_replicas()
+                .map(|r| (cluster_id, r.item_id))
                 .collect();
             self.create_cluster_replicas(&replicas).await;
         }

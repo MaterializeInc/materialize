@@ -63,10 +63,8 @@ pub const SYSTEM_CONFIGURATION_COLLECTION: TypedCollection<
 > = TypedCollection::new("system_configuration");
 pub const CLUSTER_COLLECTION: TypedCollection<proto::ClusterKey, proto::ClusterValue> =
     TypedCollection::new("compute_instance");
-pub const CLUSTER_REPLICA_COLLECTION: TypedCollection<
-    proto::ClusterReplicaKey,
-    proto::ClusterReplicaValue,
-> = TypedCollection::new("compute_replicas");
+pub const CLUSTER_ITEM_COLLECTION: TypedCollection<proto::ClusterItemKey, proto::ClusterItemValue> =
+    TypedCollection::new("compute_replicas");
 pub const AUDIT_LOG_COLLECTION: TypedCollection<proto::AuditLogKey, ()> =
     TypedCollection::new("audit_log");
 pub const CONFIG_COLLECTION: TypedCollection<proto::ConfigKey, proto::ConfigValue> =
@@ -594,18 +592,22 @@ pub async fn initialize(
         ));
     }
 
-    CLUSTER_REPLICA_COLLECTION
+    CLUSTER_ITEM_COLLECTION
         .initialize(
             tx,
             [(
-                proto::ClusterReplicaKey {
+                proto::ClusterItemKey {
                     id: Some(DEFAULT_USER_REPLICA_ID.into_proto()),
                 },
-                proto::ClusterReplicaValue {
+                proto::ClusterItemValue {
                     cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                     name: DEFAULT_USER_REPLICA_NAME.to_string(),
-                    config: Some(default_replica_config(options)),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                    item: Some(proto::cluster_item_value::Item::Replica(
+                        proto::ClusterReplicaConfig {
+                            replica_config: Some(default_replica_config(options)),
+                        },
+                    )),
                 },
             )],
         )

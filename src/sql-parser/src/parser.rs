@@ -3690,7 +3690,9 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
-            ObjectType::ClusterReplica => self.parse_drop_cluster_replicas(if_exists),
+            ObjectType::ClusterReplica => {
+                self.parse_drop_cluster_items(if_exists, ObjectType::ClusterReplica)
+            }
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
@@ -3738,17 +3740,18 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_drop_cluster_replicas(
+    fn parse_drop_cluster_items(
         &mut self,
         if_exists: bool,
+        object_type: ObjectType,
     ) -> Result<Statement<Raw>, ParserError> {
         let names = self.parse_comma_separated(|p| {
-            Ok(UnresolvedObjectName::ClusterReplica(
-                p.parse_cluster_replica_name()?,
+            Ok(UnresolvedObjectName::ClusterItem(
+                p.parse_cluster_item_name()?,
             ))
         })?;
         Ok(Statement::DropObjects(DropObjectsStatement {
-            object_type: ObjectType::ClusterReplica,
+            object_type,
             if_exists,
             names,
             cascade: false,
@@ -3768,11 +3771,14 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_cluster_replica_name(&mut self) -> Result<QualifiedReplica, ParserError> {
+    fn parse_cluster_item_name(&mut self) -> Result<QualifiedClusterItem, ParserError> {
         let cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let replica = self.parse_identifier()?;
-        Ok(QualifiedReplica { cluster, replica })
+        Ok(QualifiedClusterItem {
+            cluster,
+            item: replica,
+        })
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4088,8 +4094,8 @@ impl<'a> Parser<'a> {
             ObjectType::Cluster => self.parse_alter_cluster(object_type),
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
-                let name = UnresolvedObjectName::ClusterReplica(
-                    self.parse_cluster_replica_name()
+                let name = UnresolvedObjectName::ClusterItem(
+                    self.parse_cluster_item_name()
                         .map_no_statement_parser_err()?,
                 );
                 let action = self
@@ -5315,7 +5321,7 @@ impl<'a> Parser<'a> {
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
-                UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?)
+                UnresolvedObjectName::ClusterItem(self.parse_cluster_item_name()?)
             }
             ObjectType::Database => UnresolvedObjectName::Database(self.parse_database_name()?),
             ObjectType::Schema => UnresolvedObjectName::Schema(self.parse_schema_name()?),
