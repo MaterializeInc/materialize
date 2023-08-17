@@ -57,7 +57,7 @@ After successfully adding the Materialize source, you can create a sync to send 
    configured in step 1 as the **Connection**. Using the **Schema** and **Table** drop-downs you can select the
    Materialize object you would like to export.
 
-1. **Select a Destination** choose the Braze destination configured in step 2 and select "User" as the **Object**.
+1. Under **Select a Destination** choose the Braze destination configured in step 2 and select "User" as the **Object**.
 
 1. **Select Sync Behavior** can be set to "Update or Create". This will only add and modify new data in Braze but never delete users.
 
