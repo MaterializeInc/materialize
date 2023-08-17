@@ -33,6 +33,7 @@ from kubernetes.client import (
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
 
 try:
     from semver.version import Version
@@ -256,13 +257,13 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
             ),
-            # TODO: these should be the same as in mzcompose
             V1EnvVar(
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value=(
-                    "enable_envelope_upsert_in_subscribe=true;"
-                    "enable_disk_cluster_replicas=true;"
-                    "enable_with_mutually_recursive=true"
+                value=";".join(
+                    [
+                        f"{key}={value}"
+                        for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+                    ]
                 ),
             ),
         ]
