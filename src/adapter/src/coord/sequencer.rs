@@ -390,6 +390,10 @@ impl Coordinator {
                 let result = self.sequence_alter_sink(ctx.session(), plan).await;
                 ctx.retire(result);
             }
+            Plan::AlterConnection(plan) => {
+                let result = self.sequence_alter_connection(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::PurifiedAlterSource {
                 alter_source,
                 subsources,

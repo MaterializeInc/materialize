@@ -803,6 +803,7 @@ impl ExecuteResponse {
             | AlterNoop
             | AlterSecret
             | AlterSink
+            | AlterConnection
             | AlterSource
             | PurifiedAlterSource
             | RotateKeys => {

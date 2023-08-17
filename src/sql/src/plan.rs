@@ -45,7 +45,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -146,6 +146,7 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSetCluster(AlterSetClusterPlan),
     AlterSink(AlterSinkPlan),
+    AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
     PurifiedAlterSource {
         // The `ALTER SOURCE` plan
@@ -369,6 +370,7 @@ impl Plan {
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
+            Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
@@ -962,6 +964,13 @@ pub enum AlterOptionParameter<T = String> {
 pub struct AlterSinkPlan {
     pub id: GlobalId,
     pub size: AlterOptionParameter,
+}
+
+#[derive(Debug)]
+pub struct AlterConnectionPlan {
+    pub id: GlobalId,
+    pub set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
+    pub drop_options: BTreeSet<ConnectionOptionName>,
 }
 
 #[derive(Debug)]

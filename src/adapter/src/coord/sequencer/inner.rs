@@ -48,14 +48,15 @@ use mz_sql::catalog::{
     ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
-    Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
-    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
+    AlterConnectionPlan, AlterOptionParameter, Explainee, IndexOption, MaterializedView,
+    MutationKind, OptimizerConfig, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
+    QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege,
+    VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -64,9 +65,9 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
-    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    AlterSourceAddSubsourceOptionName, ConnectionOption, CreateSourceConnection,
+    CreateSourceSubsource, DeferredItemName, PgConfigOption, PgConfigOptionName,
+    ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
@@ -4305,9 +4306,11 @@ impl Coordinator {
     pub(super) async fn sequence_alter_connection(
         &mut self,
         session: &Session,
-        id: GlobalId,
-        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
-        drop_options: BTreeSet<ConnectionOptionName>,
+        AlterConnectionPlan {
+            id,
+            set_options,
+            drop_options,
+        }: AlterConnectionPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_conn = cur_entry.connection().expect("known to be connection");

@@ -825,6 +825,14 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
+        Plan::AlterConnection(plan::AlterConnectionPlan {
+            id,
+            set_options: _,
+            drop_options: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id)],
+            ..Default::default()
+        },
         Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
