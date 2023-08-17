@@ -22,7 +22,7 @@ from typing import List, NamedTuple, Optional, Union, cast
 
 import boto3
 
-from materialize import ROOT, git, scratch, spawn, util
+from materialize import MZ_ROOT, git, scratch, spawn, util
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import print_instances
 
@@ -30,7 +30,7 @@ from materialize.scratch import print_instances
 # This is duplicated with the one in cli/scratch.
 # TODO - factor it out.
 def main() -> None:
-    os.chdir(ROOT)
+    os.chdir(MZ_ROOT)
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for cmd_name, configure, run in [

@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT, mzbuild
+from materialize import MZ_ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
@@ -49,7 +49,7 @@ class MaterializeApplication(Application):
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
         self.release_mode = release_mode
         self.aws_region = aws_region
-        self.root = ROOT
+        self.root = MZ_ROOT
 
         # Register the VpcEndpoint CRD.
         self.register_vpc_endpoint()

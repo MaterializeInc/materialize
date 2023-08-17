@@ -30,7 +30,7 @@ from kubernetes.client import (
     V1VolumeMount,
 )
 
-from materialize import ROOT
+from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_config_map import K8sConfigMap
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
@@ -121,7 +121,10 @@ class CockroachStatefulSet(K8sStatefulSet):
 
 def cockroach_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
-    path_to_setup_script: Path = ROOT / "misc" / "cockroach" / "setup_materialize.sql",
+    path_to_setup_script: Path = MZ_ROOT
+    / "misc"
+    / "cockroach"
+    / "setup_materialize.sql",
 ) -> List[K8sResource]:
     return [
         CockroachConfigMap(namespace, path_to_setup_script),

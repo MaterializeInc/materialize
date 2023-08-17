@@ -17,7 +17,7 @@ import frontmatter
 from materialize.git import get_version_tags
 from materialize.util import MzVersion
 
-ROOT = Path(os.environ["MZ_ROOT"])
+MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 # not released on Docker
 INVALID_VERSIONS = {
@@ -111,7 +111,7 @@ class VersionsFromDocs(VersionList):
     """
 
     def __init__(self) -> None:
-        files = Path(ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
+        files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
         for f in files:
             base = f.stem
