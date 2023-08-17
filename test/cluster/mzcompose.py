@@ -314,7 +314,7 @@ def workflow_test_github_15531(c: Composition) -> None:
             STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            WORKERS 1
         ));
         SET cluster = cluster1;
         -- table for fast-path peeks
