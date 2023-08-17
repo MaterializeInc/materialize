@@ -9,8 +9,6 @@
 
 //! Functionality belonging to the catalog but extracted to control file size.
 
-use std::collections::BTreeSet;
-
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
 use mz_catalog::Transaction;
 use mz_controller_types::ClusterId;
@@ -35,7 +33,6 @@ impl Catalog {
         tx: &mut Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         oracle_write_ts: Timestamp,
-        drop_ids: &BTreeSet<GlobalId>,
         audit_events: &mut Vec<VersionedEvent>,
         session: Option<&ConnMeta>,
         id: GlobalId,
@@ -161,6 +158,6 @@ impl Catalog {
         let to_name = entry.name().clone();
         builtin_table_updates.extend(state.pack_item_update(id, -1));
         state.move_item(id, cluster_id);
-        Self::update_item(state, builtin_table_updates, id, to_name, item, drop_ids)
+        Self::update_item(state, builtin_table_updates, id, to_name, item)
     }
 }
