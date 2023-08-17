@@ -190,16 +190,13 @@ class Kubectl:
     def load_k8s_yaml(
         self,
         filepath: str,
-        tests_dir: Optional[str] = None,
+        tests_dir: str,
         substitutions: Optional[dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Load a Kubernetes YAML specification to assert against. If `substitutions`
         are given, find-and-replace in the YAML contents before parsing.
         """
-        # TODO(necaris): Make this path-finding less fragile
-        if tests_dir is None:
-            tests_dir = str(Path(__file__).parent.parent)
         contents = Path(tests_dir).joinpath(filepath).read_text()
         for old, new in (substitutions or {}).items():
             contents = contents.replace(old, new)
