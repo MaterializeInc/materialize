@@ -683,6 +683,7 @@ where
     pub async fn merge_snapshot_chunk<M>(
         &mut self,
         merges: M,
+        batch_size: usize,
         completed: bool,
     ) -> Result<(), anyhow::Error>
     where
@@ -701,6 +702,14 @@ where
         self.merge_scratch.clear();
         self.merge_upsert_scratch.clear();
         self.multi_get_scratch.clear();
+
+        // Shrinking the scratch vectors if the capacity is more than twice of batch_size
+        let half_capacity = self.merge_scratch.capacity() / 2;
+        if half_capacity > batch_size {
+            self.merge_scratch.shrink_to(half_capacity);
+            self.merge_upsert_scratch.shrink_to(half_capacity);
+            self.multi_get_scratch.shrink_to(half_capacity);
+        }
 
         let mut stats = MergeStats::default();
 
@@ -795,6 +804,12 @@ where
             .set_envelope_state_count(self.snapshot_stats.values_diff);
 
         if completed {
+            // After rehydration is done, these scratch buffers should now be empty
+            // Shrinking them entirely
+            self.merge_scratch.shrink_to_fit();
+            self.merge_upsert_scratch.shrink_to_fit();
+            self.multi_get_scratch.shrink_to_fit();
+
             self.worker_metrics
                 .rehydration_latency
                 .set(self.snapshot_start.elapsed().as_secs_f64());

@@ -335,6 +335,10 @@ fn stage_input<T, O>(
         assert!(diff > 0, "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
+
+    if stash.capacity() / 2 > stash.len() {
+        stash.shrink_to(stash.capacity() / 2);
+    }
 }
 
 fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
@@ -462,9 +466,12 @@ where
                 }
             }
 
+            let batch_size = events.len();
+
             match state
                 .merge_snapshot_chunk(
                     events.drain(..),
+                    batch_size,
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )
                 .await
