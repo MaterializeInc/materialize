@@ -29,12 +29,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, ConnectionOption, CreateConnection, CreateConnectionOption,
-    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident,
-    KeyConstraint, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, CreateConnectionOption, CreateConnectionType,
+    CreateSinkConnection, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint, Query,
+    SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -623,7 +623,7 @@ impl<T: AstInfo> AstDisplay for KafkaBrokerAwsPrivatelink<T> {
 }
 impl_display_t!(KafkaBrokerAwsPrivatelink);
 
-/// `CREATE CONNECTION`
+/// `CREATE CONNECTION` refactor WIP
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateConnectionStatement<T: AstInfo> {
     pub name: UnresolvedItemName,

@@ -15,7 +15,8 @@ use itertools::Itertools;
 use mz_ore::str::StrExt;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker, KafkaBrokerTunnel,
+    ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker,
+    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
 use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -29,8 +30,6 @@ use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{PlanError, StatementContext};
-
-use super::KafkaBrokerAwsPrivatelinkOptionExtracted;
 
 const SSL_CONFIG: [ConnectionOptionName; 2] = [
     ConnectionOptionName::SslKey,
@@ -71,6 +70,12 @@ generate_extracted_config!(
     (Token, StringOrSecret),
     (Url, String),
     (User, StringOrSecret)
+);
+
+generate_extracted_config!(
+    KafkaBrokerAwsPrivatelinkOption,
+    (AvailabilityZone, String),
+    (Port, u16)
 );
 
 impl ConnectionOptionExtracted {
