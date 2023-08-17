@@ -107,6 +107,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
         | Plan::AlterSink(_)
+        | Plan::AlterConnection(_)
         | Plan::AlterSource(_)
         | Plan::PurifiedAlterSource { .. }
         | Plan::AlterSetCluster(_)
@@ -128,7 +129,6 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::Execute(_)
         | Plan::Deallocate(_)
         | Plan::Raise(_)
-        | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::GrantPrivileges(_)

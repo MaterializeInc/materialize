@@ -44,16 +44,17 @@ use mz_sql::catalog::{
     ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
-    Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
-    AlterOptionParameter, ExplainSinkSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
-    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
-    SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
+    Explainee, Index, IndexOption, MaterializedView, MutationKind, Params, Plan,
+    PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -452,30 +453,6 @@ impl Coordinator {
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(super) async fn sequence_rotate_keys(
-        &mut self,
-        session: &Session,
-        id: GlobalId,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let secret = self.secrets_controller.reader().read(id).await?;
-        let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let new_key_set = previous_key_set.rotate()?;
-        self.secrets_controller
-            .ensure(id, &new_key_set.to_bytes())
-            .await?;
-
-        let ops = vec![catalog::Op::UpdateRotatedKeys {
-            id,
-            previous_public_key_pair: previous_key_set.public_keys(),
-            new_public_key_pair: new_key_set.public_keys(),
-        }];
-
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
     }
@@ -4512,8 +4489,49 @@ impl Coordinator {
     pub(super) async fn sequence_alter_connection(
         &mut self,
         session: &Session,
+        AlterConnectionPlan { id, action }: AlterConnectionPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match action {
+            AlterConnectionAction::RotateKeys => self.sequence_rotate_keys(session, id).await,
+            AlterConnectionAction::AlterOptions {
+                set_options,
+                drop_options,
+            } => {
+                self.sequence_alter_connection_options(session, id, set_options, drop_options)
+                    .await
+            }
+        }
+    }
+
+    async fn sequence_rotate_keys(
+        &mut self,
+        session: &Session,
         id: GlobalId,
-        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let secret = self.secrets_controller.reader().read(id).await?;
+        let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
+        let new_key_set = previous_key_set.rotate()?;
+        self.secrets_controller
+            .ensure(id, &new_key_set.to_bytes())
+            .await?;
+
+        let ops = vec![catalog::Op::UpdateRotatedKeys {
+            id,
+            previous_public_key_pair: previous_key_set.public_keys(),
+            new_public_key_pair: new_key_set.public_keys(),
+        }];
+
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_alter_connection_options(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
         drop_options: BTreeSet<ConnectionOptionName>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let cur_entry = self.catalog().get_entry(&id);

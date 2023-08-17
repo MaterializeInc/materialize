@@ -602,9 +602,9 @@ impl ExecuteResponse {
             | AlterSchemaSwap
             | AlterSecret
             | AlterSink
+            | AlterConnection
             | AlterSource
-            | PurifiedAlterSource
-            | RotateKeys => {
+            | PurifiedAlterSource => {
                 vec![AlteredObject]
             }
             AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],

@@ -25,12 +25,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, ConnectionOption, CreateConnectionOption, CreateConnectionType,
-    CreateSinkConnection, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint,
-    MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
+    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
+    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident,
+    KeyConstraint, MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata,
+    SubscribeOutput, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -71,7 +71,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
-    AlterConnection(AlterConnectionStatement),
+    AlterConnection(AlterConnectionStatement<T>),
     AlterRole(AlterRoleStatement<T>),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
@@ -2183,25 +2183,51 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 
 impl_display_t!(AlterSecretStatement);
 
-/// `ALTER CONNECTION ... ROTATE KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterConnectionStatement {
-    pub name: UnresolvedItemName,
-    pub if_exists: bool,
+pub enum AlterConnectionAction<T: AstInfo> {
+    RotateKeys,
+    SetOption(ConnectionOption<T>),
+    DropOption(ConnectionOptionName),
 }
 
-impl AstDisplay for AlterConnectionStatement {
+impl<T: AstInfo> AstDisplay for AlterConnectionAction<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AlterConnectionAction::RotateKeys => f.write_str("ROTATE KEYS"),
+            AlterConnectionAction::SetOption(option) => {
+                f.write_str("SET ");
+                f.write_node(option);
+            }
+            AlterConnectionAction::DropOption(option) => {
+                f.write_str("DROP ");
+                f.write_node(option);
+            }
+        }
+    }
+}
+impl_display_t!(AlterConnectionAction);
+
+/// `ALTER CONNECTION`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterConnectionStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub if_exists: bool,
+    pub actions: Vec<AlterConnectionAction<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterConnectionStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER CONNECTION ");
         if self.if_exists {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
-        f.write_str(" ROTATE KEYS");
+        f.write_str(" ");
+        f.write_node(&display::comma_separated(&self.actions));
     }
 }
 
-impl_display!(AlterConnectionStatement);
+impl_display_t!(AlterConnectionStatement);
 
 /// `ALTER ROLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
