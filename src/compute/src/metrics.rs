@@ -14,6 +14,14 @@ use mz_repr::GlobalId;
 use prometheus::core::{AtomicF64, GenericCounter};
 
 /// Metrics exposed by compute replicas.
+//
+// Most of the metrics here use the `raw` implementations, rather than the `DeleteOnDrop` wrappers
+// because their labels are fixed throughout the lifetime of the replica process. For example, any
+// metric labeled only by `worker_id` can be `raw` since the number of workers cannot change.
+//
+// Metrics that are labelled by a dimension that can change throughout the lifetime of the process
+// (such as `collection_id`) MUST NOT use the `raw` metric types and must use the `DeleteOnDrop`
+// types instead, to avoid memory leaks.
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
     // command history
