@@ -44,7 +44,7 @@ Next you will add a destination where data will be sent.
 {{< /tab >}}
 {{< /tabs }}
 
-### Step 3. Create a Sync
+## Step 3. Create a Sync
 
 After successfully adding the Materialize source, you can create a sync to send data from Materialize to your downstream destination.
 
