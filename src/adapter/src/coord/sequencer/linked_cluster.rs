@@ -105,7 +105,7 @@ impl Coordinator {
         };
         ops.push(catalog::Op::CreateClusterReplica {
             cluster_id,
-            id: self.catalog().allocate_replica_id().await?,
+            id: self.catalog().allocate_user_replica_id().await?,
             name: LINKED_CLUSTER_REPLICA_NAME.into(),
             config: ReplicaConfig {
                 location,

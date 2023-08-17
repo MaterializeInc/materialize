@@ -205,6 +205,7 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("DatabaseId.value", ATTR)
         .enum_attribute("SchemaId.value", ATTR)
         .enum_attribute("RoleId.value", ATTR)
+        .enum_attribute("ReplicaId.value", ATTR)
         .enum_attribute("ReplicaConfig.location", ATTR)
         .enum_attribute("AuditLogEventV1.details", ATTR)
         .enum_attribute("AuditLogKey.event", ATTR)

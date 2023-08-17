@@ -7,49 +7,84 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::objects::wire_compatible;
+use crate::objects::{wire_compatible, WireCompatible};
 use crate::upgrade::MigrationAction;
 use crate::{StashError, Transaction, TypedCollection};
-
-pub mod objects_v32 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v32.rs"));
-}
 
 pub mod objects_v33 {
     include!(concat!(env!("OUT_DIR"), "/objects_v33.rs"));
 }
 
-wire_compatible!(objects_v32::RoleKey with objects_v33::RoleKey);
-wire_compatible!(objects_v32::RoleValue with objects_v33::RoleValue);
+pub mod objects_v34 {
+    include!(concat!(env!("OUT_DIR"), "/objects_v34.rs"));
+}
 
-const MZ_INTROSPECTION_ROLE_ID: objects_v33::RoleId = objects_v33::RoleId {
-    value: Some(objects_v33::role_id::Value::System(2)),
-};
+wire_compatible!(objects_v33::ClusterReplicaValue with objects_v34::ClusterReplicaValue);
+wire_compatible!(objects_v33::IdAllocKey with objects_v34::IdAllocKey);
+wire_compatible!(objects_v33::IdAllocValue with objects_v34::IdAllocValue);
 
 /// Rename mz_introspection to mz_support
 pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {
-    const ROLES_COLLECTION: TypedCollection<objects_v32::RoleKey, objects_v32::RoleValue> =
-        TypedCollection::new("role");
+    pub const CLUSTER_REPLICA_COLLECTION: TypedCollection<
+        objects_v33::ClusterReplicaKey,
+        objects_v33::ClusterReplicaValue,
+    > = TypedCollection::new("compute_replicas");
 
-    let old_role_key = objects_v33::RoleKey {
-        id: Some(MZ_INTROSPECTION_ROLE_ID),
-    };
+    pub const ID_ALLOCATOR_COLLECTION: TypedCollection<
+        objects_v33::IdAllocKey,
+        objects_v33::IdAllocValue,
+    > = TypedCollection::new("id_alloc");
 
-    ROLES_COLLECTION
-        .migrate_compat::<objects_v33::RoleKey, objects_v33::RoleValue>(tx, |entries| {
+    CLUSTER_REPLICA_COLLECTION
+        .migrate_to::<_, objects_v34::ClusterReplicaValue>(tx, |entries| {
             let mut updates = Vec::new();
             for (key, value) in entries {
-                let new_value = if key == &old_role_key {
-                    objects_v33::RoleValue {
-                        name: "mz_support".to_string(),
-                        ..value.clone()
-                    }
-                } else {
-                    value.clone()
+                let new_key = match (key, &value.cluster_id) {
+                    // Re-use IDs of user clusters
+                    (
+                        objects_v33::ClusterReplicaKey {
+                            id: Some(objects_v33::ReplicaId { value: replica_id }),
+                        },
+                        Some(objects_v33::ClusterId {
+                            value: Some(objects_v33::cluster_id::Value::User(_)),
+                        }),
+                    ) => objects_v34::replica_id::Value::User(*replica_id),
+                    // For system clusters, assign their cluster id. This requires that any system
+                    // has at most one replica.
+                    (
+                        _,
+                        Some(objects_v33::ClusterId {
+                            value: Some(objects_v33::cluster_id::Value::System(cluster_id)),
+                        }),
+                    ) => objects_v34::replica_id::Value::System(*cluster_id),
+                    _ => panic!("Incorrect cluster replica data in stash {key:?} -> {value:?}"),
+                };
+                let new_key = objects_v34::ReplicaId {
+                    value: Some(new_key),
                 };
                 updates.push(MigrationAction::Update(
                     key.clone(),
-                    (key.clone(), new_value),
+                    (new_key, WireCompatible::convert(value)),
+                ));
+            }
+            updates
+        })
+        .await?;
+
+    const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
+    const DEFAULT_SYSTEM_REPLICA_ID: u64 = 1;
+    ID_ALLOCATOR_COLLECTION
+        .migrate_compat(tx, |entries| {
+            let mut updates = Vec::new();
+            let key = objects_v34::IdAllocKey {
+                name: SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(),
+            };
+            if entries.get(&key).is_none() {
+                updates.push(MigrationAction::Insert(
+                    key,
+                    objects_v34::IdAllocValue {
+                        next_id: DEFAULT_SYSTEM_REPLICA_ID + 1,
+                    },
                 ));
             }
             updates

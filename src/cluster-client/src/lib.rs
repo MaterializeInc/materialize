@@ -81,6 +81,8 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::bail;
+use mz_proto::{RustType, TryFromProtoError};
+use mz_stash::objects::proto;
 use serde::{Deserialize, Serialize};
 
 pub mod client;
@@ -142,18 +144,24 @@ impl FromStr for ReplicaId {
     }
 }
 
-/// Identifier of a replica.
-// TODO(#18377): Replace `ReplicaId` with this type.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum NewReplicaId {
-    /// A user replica.
-    User(u64),
-}
+impl RustType<proto::ReplicaId> for ReplicaId {
+    fn into_proto(&self) -> proto::ReplicaId {
+        let value = match self {
+            ReplicaId::User(id) => proto::replica_id::Value::User(*id),
+            ReplicaId::System(id) => proto::replica_id::Value::System(*id),
+        };
 
-impl fmt::Display for NewReplicaId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::User(id) => write!(f, "u{}", id),
-        }
+        proto::ReplicaId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::ReplicaId) -> Result<Self, TryFromProtoError> {
+        let value = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("ClusterId::value"))?;
+        let id = match value {
+            proto::replica_id::Value::User(id) => ReplicaId::User(id),
+            proto::replica_id::Value::System(id) => ReplicaId::System(id),
+        };
+        Ok(id)
     }
 }

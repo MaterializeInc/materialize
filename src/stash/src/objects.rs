@@ -182,7 +182,7 @@ impl From<String> for proto::StringWrapper {
 /// You should not implement this yourself, instead use the `wire_compatible!` macro.
 pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
     /// Converts the type `T` into `Self` by serializing `T` and deserializing as `Self`.
-    fn convert(old: T) -> Self {
+    fn convert(old: &T) -> Self {
         let bytes = old.encode_to_vec();
         // Note: use Bytes to enable possible re-use of the underlying buffer.
         let bytes = Bytes::from(bytes);
