@@ -12,6 +12,7 @@ aliases:
 
 This page describes several SQL queries you can run to diagnose performance issues with Materialize.
 
+
 ## Mental model and basic terminology
 
 When you create a materialized view, an index, or issue an ad-hoc query, Materialize creates a so-called dataflow. A dataflow consists of instructions on how to respond to data input and to changes to that data. Once executed, the dataflow computes the result of the SQL query, waits for updates from the sources, and then incrementally updates the query results when new data arrives.
@@ -294,31 +295,53 @@ is the `ArrangeBy` operator from the materialized view `num_bids`.
 [Arrangements](/overview/arrangements)
 take up most of Materialize's memory use. Arrangements maintain indexes for data
 as it changes. These queries extract the numbers of records and
-batches backing each of the arrangements. The reported records may
+the size of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
 state.
 
 ```sql
--- Extract arrangement records and batches
+-- Extract dataflow records and sizes
+SELECT
+    id,
+    name,
+    records,
+    round(size / 1024 / 1024, 2) AS size_mb
+FROM mz_internal.mz_dataflow_arrangement_sizes
+ORDER BY size DESC
+```
+```
+  id   |     name     | records |   size_mb
+-------+--------------+---------+-------------
+ 19157 | num_bids     | 1612747 |      113.82
+ 19158 | num_bids_idx |      13 |           0
+```
+
+If you need to drill down into individual operators, you can query `mz_arrangement_sizes` instead.
+
+```sql
+-- Extract operator records and sizes
 SELECT
     mdod.id,
     mdod.name,
     mdod.dataflow_name,
-    mas.records
+    mas.records,
+    round(size / 1024 / 1024, 2) AS size_mb
 FROM mz_internal.mz_arrangement_sizes AS mas,
     mz_internal.mz_dataflow_operator_dataflows AS mdod
 WHERE mas.operator_id = mdod.id
 ORDER BY mas.records DESC
 ```
 ```
- id  |          name          |             dataflow_name              | records
------+------------------------+----------------------------------------+---------
- 431 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids     | 1612747
- 442 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids     |  292662
- 619 | ArrangeBy[[Column(0)]] | Dataflow: materialize.qck.num_bids_idx |      17
- 486 | ReduceAccumulable      | Dataflow: materialize.qck.num_bids     |       5
- 484 | ArrangeAccumulable     | Dataflow: materialize.qck.num_bids     |       5
-(5 rows)
+   id    |             name              |               dataflow_name               | records |   size_mb
+---------+-------------------------------+-------------------------------------------+---------+-------------
+ 2722012 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.public.num_bids     | 1612747 |      113.82
+ 2722027 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.public.num_bids     |  292662 |       20.65
+ 2722216 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.public.num_bids_idx |      17 |           0
+ 2722077 | ReduceAccumulable             | Dataflow: materialize.public.num_bids     |       5 |           0
+ 2722073 | ArrangeAccumulable            | Dataflow: materialize.public.num_bids     |       5 |           0
+ 2722081 | AccumulableErrorCheck         | Dataflow: materialize.public.num_bids     |       0 |           0
+ 2722225 | ArrangeBy[[Column(0)]]-errors | Dataflow: materialize.public.num_bids_idx |       0 |           0
+(7 rows)
 ```
 
 We've also bundled an interactive, web-based memory usage visualization tool to
