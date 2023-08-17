@@ -5538,6 +5538,7 @@ mod tests {
             // Extracted during planning; always panics when executed.
             let ignore_names = BTreeSet::from([
                 "avg",
+                "avg_internal_v1",
                 "bool_and",
                 "bool_or",
                 "mod",

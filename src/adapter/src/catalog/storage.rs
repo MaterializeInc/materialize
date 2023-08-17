@@ -1241,6 +1241,24 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub(crate) fn check_migration_has_run(&mut self, name: String) -> Result<bool, Error> {
+        let key = SettingKey { name };
+        // If the key does not exist, then the migration has not been run.
+        let has_run = self.settings.get(&key).as_ref().is_some();
+
+        Ok(has_run)
+    }
+
+    pub(crate) fn mark_migration_has_run(&mut self, name: String) -> Result<(), Error> {
+        let key = SettingKey { name };
+        let val = SettingValue {
+            value: true.to_string(),
+        };
+        self.settings.insert(key, val)?;
+
+        Ok(())
+    }
+
     pub(crate) fn rename_cluster_replica(
         &mut self,
         replica_id: ReplicaId,
