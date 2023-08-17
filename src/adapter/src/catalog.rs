@@ -4825,8 +4825,8 @@ impl Catalog {
         self.storage().await.allocate_user_cluster_id().await
     }
 
-    pub async fn allocate_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage().await.allocate_replica_id().await
+    pub async fn allocate_user_replica_id(&self) -> Result<ReplicaId, Error> {
+        self.storage().await.allocate_user_replica_id().await
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -4840,14 +4840,14 @@ impl Catalog {
         self.storage().await.get_all_persisted_timestamps().await
     }
 
-    /// Get the next user ID without allocating it.
-    pub async fn get_next_user_global_id(&self) -> Result<GlobalId, Error> {
-        self.storage().await.get_next_user_global_id().await
+    /// Get the next system replica id without allocating it.
+    pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
+        self.storage().await.get_next_system_replica_id().await
     }
 
-    /// Get the next replica id without allocating it.
-    pub async fn get_next_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage().await.get_next_replica_id().await
+    /// Get the next user replica id without allocating it.
+    pub async fn get_next_user_replica_id(&self) -> Result<u64, Error> {
+        self.storage().await.get_next_user_replica_id().await
     }
 
     /// Persist new global timestamp for a timeline to disk.
@@ -8882,7 +8882,7 @@ mod tests {
     use std::iter;
 
     use itertools::Itertools;
-    use mz_controller::clusters::ClusterId;
+    use mz_controller::clusters::{ClusterId, ReplicaId};
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -10003,7 +10003,10 @@ mod tests {
 
         assert_eq!(
             mz_sql::catalog::ObjectType::ClusterReplica,
-            catalog.get_object_type(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+            catalog.get_object_type(&ObjectId::ClusterReplica((
+                ClusterId::User(1),
+                ReplicaId::User(1),
+            )))
         );
         assert_eq!(
             mz_sql::catalog::ObjectType::Role,
@@ -10025,7 +10028,7 @@ mod tests {
             None,
             catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
                 ClusterId::User(1),
-                1
+                ReplicaId::User(1),
             ))))
         );
         assert_eq!(

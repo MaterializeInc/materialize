@@ -12,7 +12,6 @@ use std::net::Ipv4Addr;
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
     ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaId, ReplicaLocation,
@@ -255,9 +254,6 @@ impl CatalogState {
             _ => (None, None, None),
         };
 
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let id = NewReplicaId::User(id);
-
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
@@ -305,9 +301,6 @@ impl CatalogState {
             ClusterStatus::NotReady(None) => None,
             ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
         };
-
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let replica_id = NewReplicaId::User(replica_id);
 
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
@@ -1134,9 +1127,6 @@ impl CatalogState {
         last_heartbeat: DateTime<Utc>,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let id = NewReplicaId::User(id);
-
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
             row: Row::pack_slice(&[
@@ -1178,9 +1168,6 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_METRICS);
-
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let replica_id = NewReplicaId::User(replica_id);
 
         let rows = updates.iter().enumerate().map(
             |(

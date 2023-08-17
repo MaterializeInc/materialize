@@ -29,7 +29,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::time::Duration;
 
@@ -74,10 +74,6 @@ pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
 pub type ReplicaId = mz_cluster_client::ReplicaId;
-
-/// Identifier of a replica.
-// TODO(#18377): Replace `ReplicaId` with this type.
-pub type NewReplicaId = mz_cluster_client::NewReplicaId;
 
 /// Responses from the compute controller.
 #[derive(Debug)]
