@@ -249,7 +249,13 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 /// The type of object to be explained
 #[derive(Clone, Debug)]
 pub enum Explainee {
-    /// An object that will be served using a dataflow
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// An object that will be served using a dataflow.
+    ///
+    /// This variant is deprecated and will be removed in #18089.
     Dataflow(GlobalId),
     /// The object to be explained is a one-off query and may or may not served
     /// using a dataflow.

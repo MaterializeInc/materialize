@@ -2721,22 +2721,47 @@ impl Coordinator {
         match plan.stage {
             ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
             _ => {
-                let result = self
-                    .sequence_explain_plan(&mut ctx, plan, target_cluster)
-                    .await;
+                let result = match plan.explainee {
+                    Explainee::Query | Explainee::Dataflow(_) => {
+                        let result = self.explain_query(&mut ctx, plan, target_cluster);
+                        result.await
+                    }
+                    Explainee::MaterializedView(_) => {
+                        let result = self.explain_materialized_view(&mut ctx, plan);
+                        result
+                    }
+                    Explainee::Index(_) => {
+                        let result = self.explain_index(&mut ctx, plan);
+                        result
+                    }
+                };
                 ctx.retire(result);
             }
         }
     }
 
-    async fn sequence_explain_plan(
+    fn explain_materialized_view(
+        &mut self,
+        _ctx: &mut ExecuteContext,
+        _plan: plan::ExplainPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        coord_bail!("unsupported operation: explain_materialized_view");
+    }
+
+    fn explain_index(
+        &mut self,
+        _ctx: &mut ExecuteContext,
+        _plan: plan::ExplainPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        coord_bail!("unsupported operation: explain_index");
+    }
+
+    async fn explain_query(
         &mut self,
         ctx: &mut ExecuteContext,
         plan: plan::ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use ExplainStage::*;
-
         let plan::ExplainPlan {
             raw_plan,
             row_set_finishing,
@@ -2748,14 +2773,18 @@ impl Coordinator {
         } = plan;
 
         assert_ne!(stage, ExplainStage::Timestamp);
+        assert!(matches!(
+            explainee,
+            Explainee::Dataflow(_) | Explainee::Query
+        ));
 
         let optimizer_trace = match stage {
-            Trace => OptimizerTrace::new(), // collect all trace entries
+            ExplainStage::Trace => OptimizerTrace::new(), // collect all trace entries
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
         let pipeline_result = {
-            self.sequence_explain_plan_pipeline(
+            self.explain_optimizer_pipeline(
                 explainee,
                 raw_plan,
                 no_errors,
@@ -2793,7 +2822,7 @@ impl Coordinator {
         )?;
 
         let rows = match stage {
-            Trace => {
+            ExplainStage::Trace => {
                 // For the `Trace` (pseudo-)stage, return the entire trace as (time,
                 // path, plan) triples.
                 let rows = trace
@@ -2832,7 +2861,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn sequence_explain_plan_pipeline(
+    async fn explain_optimizer_pipeline(
         &mut self,
         explainee: Explainee,
         raw_plan: mz_sql::plan::HirRelationExpr,
@@ -2874,6 +2903,7 @@ impl Coordinator {
                 let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
                 (GlobalId::Explain, true, cluster_id)
             }
+            _ => unreachable!(),
         };
 
         // Execute the various stages of the optimization pipeline
@@ -2961,7 +2991,7 @@ impl Coordinator {
             )
         })?;
 
-        // Save the list of indexes used by the dataflow at this point
+        // Collect the list of indexes used by the dataflow at this point
         let mut used_indexes = UsedIndexes::new(
             dataflow
                 .index_imports
