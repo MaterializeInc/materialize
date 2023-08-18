@@ -169,6 +169,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         if db_function.function_name_in_lower_case in {
             "sum",
             "avg",
+            "avg_internal_v1",
             "stddev_samp",
             "stddev_pop",
             "var_samp",
