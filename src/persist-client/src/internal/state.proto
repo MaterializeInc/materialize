@@ -9,8 +9,6 @@
 
 syntax = "proto3";
 
-import "persist-types/src/stats.proto";
-
 package mz_persist_client.internal.state;
 
 message ProtoU64Antichain {

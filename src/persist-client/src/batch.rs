@@ -27,6 +27,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
@@ -42,8 +43,10 @@ use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::stats::PartStats;
-use crate::write::{WriterEnrichedHollowBatch, WriterId};
+use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
+
+include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
 
 /// A handle to a batch of updates that has been written to blob storage but
 /// which has not yet been appended to a shard.
@@ -164,22 +167,20 @@ where
         ret
     }
 
-    /// Turns this [`Batch`] into a [`WriterEnrichedHollowBatch`], which can be
-    /// used to transfer this batch across process boundaries, for example when
+    /// Turns this [`Batch`] into a [`ProtoBatch`], which can be used to
+    /// transfer this batch across process boundaries, for example when
     /// exchanging data between timely workers.
     ///
     /// **NOTE**: If this batch is not eventually appended to a shard or
     /// dropped, the data that it represents will have leaked. The caller is
     /// responsible for turning this back into a [`Batch`] using
-    /// [`WriteHandle::batch_from_hollow_batch`](crate::write::WriteHandle::batch_from_hollow_batch).
-    pub fn into_writer_hollow_batch(mut self) -> WriterEnrichedHollowBatch<T> {
-        let ret = WriterEnrichedHollowBatch {
-            shard_id: self.shard_id,
-            version: self.version.clone(),
-            batch: self.batch.clone(),
-        };
-        self.mark_consumed();
-        ret
+    /// [`WriteHandle::batch_from_transmittable_batch`](crate::write::WriteHandle::batch_from_transmittable_batch).
+    pub fn into_transmittable_batch(self) -> ProtoBatch {
+        ProtoBatch {
+            shard_id: self.shard_id.into_proto(),
+            version: self.version.to_string(),
+            batch: Some(self.batch.into_proto()),
+        }
     }
 }
 
