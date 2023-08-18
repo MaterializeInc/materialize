@@ -408,23 +408,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         self.compute_state.compute_logger = Some(logger);
     }
 
-    /// Disables timely dataflow logging.
-    ///
-    /// This does not unpublish views and is only useful to terminate logging streams to ensure that
-    /// clusterd can terminate cleanly.
-    pub fn shutdown_logging(&mut self) {
-        self.timely_worker.log_register().remove("timely");
-        self.timely_worker
-            .log_register()
-            .remove("timely/reachability");
-        self.timely_worker
-            .log_register()
-            .remove("differential/arrange");
-        self.timely_worker
-            .log_register()
-            .remove("materialize/compute");
-    }
-
     /// Send progress information to the coordinator.
     pub fn report_compute_frontiers(&mut self) {
         let mut new_uppers = Vec::new();
