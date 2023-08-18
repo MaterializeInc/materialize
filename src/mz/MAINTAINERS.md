@@ -17,7 +17,7 @@ cargo test -p mz
 
 3. Run `cargo run -p mz` once to update `Cargo.lcok`
 
-3. Open a PR with your change and get it merged:
+4. Open a PR with your change and get it merged:
 
    ```
    VERSION=vX.Y.Z
@@ -37,13 +37,13 @@ cargo test -p mz
    git push --set-upstream upstream mz-$VERSION
    ```
 
-5. Find the [Deploy mz](https://buildkite.com/materialize/deploy-mz) Buildkite
+6. Find the [Deploy mz](https://buildkite.com/materialize/deploy-mz) Buildkite
    build for your branch.
 
-6. Once it completes, ensure that the new version is available on Docker Hub:
+7. Once it completes, ensure that the new version is available on Docker Hub:
 
    ```
    docker run materialize/mz:$VERSION
    ```
 
-7. Update the [Homebrew tap](https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md).
+8. Update the [Homebrew tap](https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md).
