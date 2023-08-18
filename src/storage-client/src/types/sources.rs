@@ -137,7 +137,26 @@ impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
                     l_key.cmp(r_key)
                 })
                 .all(|r| match r {
-                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    Both(
+                        (
+                            _,
+                            SourceExport {
+                                output_index: _,
+                                storage_metadata: l_metadata,
+                            },
+                        ),
+                        (
+                            _,
+                            SourceExport {
+                                output_index: _,
+                                storage_metadata: r_metadata,
+                            },
+                        ),
+                    ) => {
+                        // the output index may change, but the table's metadata
+                        // may not
+                        l_metadata == r_metadata
+                    }
                     _ => true,
                 }),
             instance_id == &other.instance_id,
