@@ -4427,6 +4427,7 @@ dependencies = [
  "mz-timely-util",
  "num_cpus",
  "num_enum",
+ "paste",
  "prometheus",
  "proptest",
  "proptest-derive",

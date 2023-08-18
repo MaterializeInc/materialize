@@ -23,7 +23,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, error, warn, Instrument, Span};
+use tracing::{debug, debug_span, error, instrument, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use mz_ore::cast::CastFrom;
@@ -149,9 +149,6 @@ where
                     );
                 }
 
-                let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%consolidated_req.shard_id);
-                gc_span.follows_from(&Span::current());
-
                 let start = Instant::now();
                 machine.applier.metrics.gc.started.inc();
                 let (mut maintenance, _stats) = {
@@ -159,9 +156,12 @@ where
                     let mut machine = machine.clone();
                     isolated_runtime
                         .spawn_named(|| name, async move {
-                            Self::gc_and_truncate(&mut machine, consolidated_req)
-                                .instrument(gc_span)
-                                .await
+                            Self::gc_and_truncate(
+                                &mut machine,
+                                consolidated_req,
+                                Default::default(),
+                            )
+                            .await
                         })
                         .await
                         .expect("gc_and_truncate failed")
@@ -215,9 +215,30 @@ where
         Some(gc_completed_receiver)
     }
 
+    #[instrument(
+        level = "debug",
+        parent = None,
+        skip_all,
+        fields(
+            gc_req_seqno_since,
+            gc_current_state_seqno,
+            gc_rollups_to_remove_count,
+            gc_batch_parts_deleted_from_blob_count,
+            gc_rollups_deleted_from_blob_count,
+            shard = %req.shard_id
+        )
+    )]
     pub(crate) async fn gc_and_truncate(
         machine: &mut Machine<K, V, T, D>,
         req: GcReq,
+        GcSpanFields {
+            gc_req_seqno_since: _,
+            gc_current_state_seqno: _,
+            gc_rollups_to_remove_count: _,
+            gc_batch_parts_deleted_from_blob_count: _,
+            gc_rollups_deleted_from_blob_count: _,
+            recorder,
+        }: GcSpanFields,
     ) -> (RoutineMaintenance, GcResults) {
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {
@@ -252,6 +273,10 @@ where
         report_step_timing(&machine.applier.metrics.gc.steps.find_removable_rollups);
 
         let mut gc_results = GcResults::default();
+
+        recorder.gc_current_state_seqno(|| machine.seqno().0);
+        recorder.gc_req_seqno_since(|| req.new_seqno_since.0);
+        recorder.gc_rollups_to_remove_count(|| rollups_to_remove_from_state.len());
 
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
@@ -385,6 +410,10 @@ where
                 .steps
                 .post_gc_calculations_seconds,
         );
+
+        recorder.gc_rollups_deleted_from_blob_count(|| gc_results.rollups_deleted_from_blob);
+        recorder
+            .gc_batch_parts_deleted_from_blob_count(|| gc_results.batch_parts_deleted_from_blob);
 
         (maintenance, gc_results)
     }
@@ -672,3 +701,12 @@ impl GcRollups {
         }
     }
 }
+
+mz_ore::span_field_struct!(
+    GcSpanFields,
+    gc_req_seqno_since,
+    gc_current_state_seqno,
+    gc_rollups_to_remove_count,
+    gc_batch_parts_deleted_from_blob_count,
+    gc_rollups_deleted_from_blob_count,
+);

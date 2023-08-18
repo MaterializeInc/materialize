@@ -451,7 +451,8 @@ async fn force_gc(
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),
     };
-    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let (maintenance, _stats) =
+        GarbageCollector::gc_and_truncate(&mut machine, gc_req, Default::default()).await;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }

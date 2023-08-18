@@ -1524,7 +1524,8 @@ pub mod datadriven {
             new_seqno_since,
         };
         let (maintenance, stats) =
-            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req, Default::default())
+                .await;
         datadriven.routine.push(maintenance);
 
         Ok(format!(
@@ -1876,7 +1877,7 @@ pub mod tests {
     use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
-    use crate::internal::gc::{GarbageCollector, GcReq};
+    use crate::internal::gc::{GarbageCollector, GcReq, GcSpanFields};
     use crate::internal::state::HandleDebugState;
     use crate::tests::new_test_client;
     use crate::ShardId;
@@ -1968,7 +1969,7 @@ pub mod tests {
                 shard_id: machine.shard_id(),
                 new_seqno_since,
             };
-            GarbageCollector::gc_and_truncate(&mut machine, req).await
+            GarbageCollector::gc_and_truncate(&mut machine, req, Default::default()).await
         });
         // Wait for gc to either panic (regression case) or finish (good case)
         // because it happens to not call blob delete.
@@ -1981,7 +1982,9 @@ pub mod tests {
             shard_id: read.machine.shard_id(),
             new_seqno_since,
         };
-        let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
+        let _ =
+            GarbageCollector::gc_and_truncate(&mut read.machine, req.clone(), Default::default())
+                .await;
     }
 
     // A regression test for #20776, where a bug meant that compare_and_append
