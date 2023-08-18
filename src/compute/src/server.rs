@@ -399,14 +399,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    #[allow(dead_code)]
-    fn shut_down(&mut self, response_tx: &mut ResponseSender) {
-        if let Some(mut compute_state) = self.activate_compute(response_tx) {
-            compute_state.compute_state.traces.del_all_traces();
-            compute_state.shutdown_logging();
-        }
-    }
-
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
