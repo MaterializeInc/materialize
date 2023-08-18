@@ -9,8 +9,8 @@
 
 from typing import Any, List, Optional, Sequence
 
-import psycopg2
-from psycopg2.extensions import connection
+import psycopg
+from psycopg.connection import Connection
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import eprint
@@ -19,29 +19,29 @@ from materialize.cloudtest.util.web_request import post
 
 
 def sql_query(
-    conn: connection,
+    conn: Connection,
     query: str,
     vars: Optional[Sequence[Any]] = None,
 ) -> List[List[Any]]:
     cur = conn.cursor()
-    cur.execute(query, vars)  # type: ignore
+    cur.execute(query, vars)
     return [list(row) for row in cur]
 
 
 def sql_execute(
-    conn: connection,
+    conn: Connection,
     query: str,
     vars: Optional[Sequence[Any]] = None,
 ) -> None:
     cur = conn.cursor()
-    cur.execute(query, vars)  # type: ignore[no-untyped-call]
+    cur.execute(query, vars)
 
 
-def pgwire_sql_conn(config: EnvironmentConfig) -> connection:
+def pgwire_sql_conn(config: EnvironmentConfig) -> Connection:
     environment = wait_for_environmentd(config)
     pgwire_url: str = environment["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
-    conn = psycopg2.connect(
+    conn = psycopg.connect(
         dbname="materialize",
         user=config.e2e_test_user_email,
         password=config.auth.app_password,

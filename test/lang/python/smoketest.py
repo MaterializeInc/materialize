@@ -9,7 +9,7 @@
 
 import unittest
 
-import psycopg2
+import psycopg2  # type: ignore
 import psycopg3  # type: ignore
 import sqlalchemy  # type: ignore
 from psycopg3.oids import builtins  # type: ignore
