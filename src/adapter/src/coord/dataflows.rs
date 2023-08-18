@@ -520,52 +520,6 @@ impl<'a> DataflowBuilder<'a> {
         Ok(dataflow)
     }
 
-    /// Builds a dataflow description for the materialized view specified by `id`.
-    ///
-    /// For this, we first build a dataflow for the view expression, then we
-    /// add a sink that writes that dataflow's output to storage.
-    /// `internal_view_id` is the ID we assign to the view dataflow internally,
-    /// so we can connect the sink to it.
-    #[deprecated(note = "please use `build_materialized_view` instead")]
-    pub fn build_materialized_view_dataflow(
-        &mut self,
-        id: GlobalId,
-        internal_view_id: GlobalId,
-    ) -> Result<DataflowDesc, AdapterError> {
-        let mview_entry = self.catalog.get_entry(&id);
-        let mview = match mview_entry.item() {
-            CatalogItem::MaterializedView(mv) => mv,
-            _ => unreachable!(
-                "cannot create materialized view dataflow on something that is not a materialized view"
-            ),
-        };
-
-        let name = self
-            .catalog
-            .resolve_full_name(mview_entry.name(), mview_entry.conn_id())
-            .to_string();
-        let mut dataflow = DataflowDesc::new(name);
-
-        self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
-        }
-
-        let sink_description = ComputeSinkDesc {
-            from: internal_view_id,
-            from_desc: mview.desc.clone(),
-            connection: ComputeSinkConnection::Persist(PersistSinkConnection {
-                value_desc: mview.desc.clone(),
-                storage_metadata: (),
-            }),
-            with_snapshot: true,
-            up_to: Antichain::default(),
-        };
-        self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
-
-        Ok(dataflow)
-    }
-
     /// Determine the given source's monotonicity.
     fn monotonic_source(&self, source: &Source) -> bool {
         // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
