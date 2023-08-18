@@ -8,15 +8,15 @@
 # by the Apache License, Version 2.0.
 
 import os
-import subprocess
 import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import MZ_ROOT, mzbuild
-from materialize.cloudtest.app.application import Application
+from materialize.cloudtest.app.cloudtest_application_base import (
+    CloudtestApplicationBase,
+)
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
 from materialize.cloudtest.k8s.debezium import debezium_resources
@@ -36,7 +36,7 @@ from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClu
 from materialize.cloudtest.util.wait import wait
 
 
-class MaterializeApplication(Application):
+class MaterializeApplication(CloudtestApplicationBase):
     def __init__(
         self,
         release_mode: bool = True,
@@ -44,27 +44,19 @@ class MaterializeApplication(Application):
         aws_region: Optional[str] = None,
         log_filter: Optional[str] = None,
     ) -> None:
+        self.tag = tag
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
-        self.release_mode = release_mode
-        self.aws_region = aws_region
-        self.mz_root = MZ_ROOT
 
         # Register the VpcEndpoint CRD.
         self.register_vpc_endpoint()
 
         self.start_metrics_server()
 
-        self.resources = self.get_resources(release_mode, log_filter, tag)
-        self.images = self.get_images()
+        super().__init__(release_mode, aws_region, log_filter)
 
-        super().__init__()
-        self.create()
-
-    def get_resources(
-        self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
-    ) -> List[K8sResource]:
+    def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
         return [
             *cockroach_resources(),
             *postgres_resources(),
@@ -75,8 +67,8 @@ class MaterializeApplication(Application):
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(
-                release_mode=release_mode,
-                tag=tag,
+                release_mode=self.release_mode,
+                tag=self.tag,
                 log_filter=log_filter,
                 coverage_mode=self.coverage_mode(),
             ),
@@ -117,33 +109,8 @@ class MaterializeApplication(Application):
             '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls" }]',
         )
 
-    def create(self) -> None:
-        super().create()
-        self.wait_create_completed()
-
-    def wait_create_completed(self) -> None:
+    def wait_resource_creation_completed(self) -> None:
         wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
-
-    def acquire_images(self) -> None:
-        repo = mzbuild.Repository(
-            self.mz_root, release_mode=self.release_mode, coverage=self.coverage_mode()
-        )
-        for image in self.images:
-            self._acquire_image(repo, image)
-
-    def _acquire_image(self, repo: mzbuild.Repository, image: str) -> None:
-        deps = repo.resolve_dependencies([repo.images[image]])
-        deps.acquire()
-        for dep in deps:
-            subprocess.check_call(
-                [
-                    "kind",
-                    "load",
-                    "docker-image",
-                    f"--name={self.cluster_name()}",
-                    dep.spec(),
-                ]
-            )
 
     def wait_replicas(self) -> None:
         # NOTE[btv] - This will need to change if the order of

@@ -25,7 +25,7 @@ class Application:
     def __init__(self) -> None:
         pass
 
-    def create(self) -> None:
+    def create_resources(self) -> None:
         self.acquire_images()
         for resource in self.resources:
             resource.create()
