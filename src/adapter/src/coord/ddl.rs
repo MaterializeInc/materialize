@@ -94,7 +94,7 @@ impl Coordinator {
     /// [`CatalogState`]: crate::catalog::CatalogState
     /// [`DataflowDesc`]: mz_compute_client::types::dataflows::DataflowDesc
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn catalog_transact_with<F, R>(
+    pub(crate) async fn catalog_transact_with<'a, F, R>(
         &mut self,
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
@@ -350,7 +350,7 @@ impl Coordinator {
             ..
         } = self;
         let catalog = Arc::make_mut(catalog);
-        let conn = conn_id.map(|id| active_conns.get(id).expect("must exist"));
+        let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
         let TransactionResult {
             builtin_table_updates,
             audit_events,

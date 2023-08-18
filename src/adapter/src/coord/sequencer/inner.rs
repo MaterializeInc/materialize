@@ -496,7 +496,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_role(
         &mut self,
-        conn_id: &ConnectionId,
+        conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog_mut().allocate_oid()?;
@@ -505,7 +505,7 @@ impl Coordinator {
             oid,
             attributes,
         };
-        self.catalog_transact_conn(Some(conn_id), vec![op])
+        self.catalog_transact_conn(conn_id, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }

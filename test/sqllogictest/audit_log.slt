@@ -91,7 +91,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 ----
 1  create  role  {"id":"u1","name":"materialize"}  NULL
 2  grant  cluster  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
-3 grant  database {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
+3  grant  database  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
 4  grant  schema  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
 5  grant  type  {"database_id":null,"grantee_id":"p","privileges":"U","role_id":"p","schema_id":null}  NULL
 6  create  database  {"id":"u1","name":"materialize"}  NULL
@@ -244,3 +244,15 @@ query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
 71  alter  table  {"new_owner_id":"u3","object_id":"Iu17","old_owner_id":"u1"}  mz_system
+
+# Test events for auto-created users, which have the username only in the event details, but not the user column.
+simple conn=c,user=new_user
+SELECT 1
+----
+1
+COMPLETE 1
+
+query ITTTT
+SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
+----
+72  create  role  {"id":"u4","name":"new_user"}  NULL

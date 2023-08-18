@@ -36,7 +36,7 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -46,6 +46,7 @@ use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
+use crate::AdapterNotice;
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -59,9 +60,8 @@ pub enum Command {
     },
 
     Startup {
-        session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
-        tx: oneshot::Sender<Response<StartupResponse>>,
+        tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         /// keys of settings that were set on statup, and thus should not be
         /// overridden by defaults.
         set_setting_keys: Vec<String>,
@@ -70,6 +70,7 @@ pub enum Command {
         secret_key: u32,
         uuid: Uuid,
         application_name: String,
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     },
 
     Execute {
@@ -152,14 +153,14 @@ pub enum Command {
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Startup { session, .. }
-            | Command::Execute { session, .. }
+            Command::Execute { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
@@ -170,14 +171,14 @@ impl Command {
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Startup { session, .. }
-            | Command::Execute { session, .. }
+            Command::Execute { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }

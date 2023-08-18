@@ -163,6 +163,12 @@ impl Client {
         // an in-progress statement.
         let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
+        let user = session.user().clone();
+        let conn_id = session.conn_id().clone();
+        let secret_key = session.secret_key();
+        let uuid = session.uuid();
+        let application_name = session.application_name().into();
+        let notice_tx = session.retain_notice_transmitter();
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
@@ -173,16 +179,16 @@ impl Client {
             segment_client: self.segment_client.clone(),
         };
         let response = client
-            .send(|tx, session| Command::Startup {
+            .send_without_session(|tx| Command::Startup {
                 cancel_tx,
                 tx,
                 set_setting_keys,
-                user: session.user().clone(),
-                conn_id: session.conn_id().clone(),
-                secret_key: session.secret_key(),
-                uuid: session.uuid(),
-                application_name: session.application_name().into(),
-                session,
+                user,
+                conn_id,
+                secret_key,
+                uuid,
+                application_name,
+                notice_tx,
             })
             .await;
         let response = match response {

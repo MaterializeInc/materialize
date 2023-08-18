@@ -16,6 +16,7 @@ use std::sync::Arc;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::role_id::RoleId;
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
@@ -30,7 +31,7 @@ use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
 use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -60,7 +61,6 @@ impl Coordinator {
             });
         }
         match cmd {
-            Command::Startup { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),
             Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
@@ -70,6 +70,9 @@ impl Coordinator {
             Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
             Command::AppendWebhook { tx, .. } => {
                 // We don't care if our listener went away.
+                let _ = tx.send(Err(e));
+            }
+            Command::Startup { tx, .. } => {
                 let _ = tx.send(Err(e));
             }
             Command::Terminate { tx, .. } => {
@@ -92,7 +95,6 @@ impl Coordinator {
         }
         match cmd {
             Command::Startup {
-                session,
                 cancel_tx,
                 tx,
                 set_setting_keys,
@@ -101,11 +103,11 @@ impl Coordinator {
                 secret_key,
                 uuid,
                 application_name,
+                notice_tx,
             } => {
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
                 self.handle_startup(
-                    session,
                     cancel_tx,
                     tx,
                     set_setting_keys,
@@ -114,6 +116,7 @@ impl Coordinator {
                     secret_key,
                     uuid,
                     application_name,
+                    notice_tx,
                 )
                 .await;
             }
@@ -274,108 +277,110 @@ impl Coordinator {
 
     async fn handle_startup(
         &mut self,
-        // session_ is named this way so it is only used by the ClientTransmitter. This will
-        // eventually be removed, so name it like this so it doesn't accumulate any accidental
-        // dependencies.
-        session_: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
-        tx: oneshot::Sender<Response<StartupResponse>>,
+        tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         set_setting_keys: Vec<String>,
         user: User,
         conn_id: ConnectionId,
         secret_key: u32,
         uuid: uuid::Uuid,
         application_name: String,
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
+        // Early return if successful, otherwise cleanup any possible state.
+        match self.handle_startup_inner(&user, &conn_id).await {
+            Ok(role_id) => {
+                let mut set_vars = Vec::new();
+                if !set_setting_keys
+                    .iter()
+                    .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
+                {
+                    let default = self
+                        .catalog()
+                        .state()
+                        .system_config()
+                        .statement_logging_default_sample_rate();
+                    set_vars.push((
+                        STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+                        default.to_string(),
+                    ));
+                }
+
+                let session_type = metrics::session_type_label_value(&user);
+                self.metrics
+                    .active_sessions
+                    .with_label_values(&[session_type])
+                    .inc();
+                let conn = ConnMeta {
+                    cancel_tx,
+                    secret_key,
+                    notice_tx,
+                    drop_sinks: Vec::new(),
+                    // TODO: Switch to authenticated role once implemented.
+                    authenticated_role: role_id,
+                    connected_at: self.now(),
+                    user,
+                    application_name,
+                    role_metadata: RoleMetadata {
+                        current_role: role_id,
+                        session_role: role_id,
+                    },
+                    uuid,
+                    conn_id: conn_id.clone(),
+                };
+                let update = self.catalog().state().pack_session_update(&conn, 1);
+                self.begin_session_for_statement_logging(&conn);
+                self.active_conns.insert(conn_id.clone(), conn);
+                self.send_builtin_table_updates(vec![update]).await;
+
+                let resp = Ok(StartupResponse {
+                    role_id,
+                    set_vars,
+                    catalog: self.owned_catalog(),
+                });
+                if tx.send(resp).is_err() {
+                    // Failed to send to adapter, but everything is setup so we can terminate
+                    // normally.
+                    self.handle_terminate(conn_id).await;
+                }
+            }
+            Err(_) => {
+                // Error during startup or sending to adapter, cleanup possible state created by
+                // handle_startup_inner. A user may have been created and it can stay; no need to
+                // delete it.
+                self.catalog_mut()
+                    .drop_temporary_schema(&conn_id)
+                    .unwrap_or_terminate("unable to drop temporary schema");
+            }
+        }
+    }
+
+    // Failible startup work that needs to be cleaned up on error.
+    async fn handle_startup_inner(
+        &mut self,
+        user: &User,
+        conn_id: &ConnectionId,
+    ) -> Result<RoleId, AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
-            // connecting to an internal port. Therefore it's ok to always create a new role for
-            // the user.
+            // connecting to an internal port. Therefore it's ok to always create a new role for the
+            // user.
             let attributes = RoleAttributes::new();
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,
             };
-            if let Err(err) = self.sequence_create_role_for_startup(&conn_id, plan).await {
-                let _ = tx.send(Response {
-                    result: Err(err),
-                    session: session_,
-                });
-                return;
-            }
+            self.sequence_create_role_for_startup(plan).await?;
         }
-
         let role_id = self
             .catalog()
             .try_get_role_by_name(&user.name)
             .expect("created above")
             .id;
-        // TODO(adapter): Remove role_metadata from Session.
-        let role_metadata = RoleMetadata {
-            current_role: role_id,
-            session_role: role_id,
-        };
-
-        if let Err(e) = self
-            .catalog_mut()
-            .create_temporary_schema(&conn_id, role_id)
-        {
-            let _ = tx.send(Response {
-                result: Err(e.into()),
-                session: session_,
-            });
-            return;
-        }
-
-        let mut set_vars = Vec::new();
-        if !set_setting_keys
-            .iter()
-            .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
-        {
-            let default = self
-                .catalog()
-                .state()
-                .system_config()
-                .statement_logging_default_sample_rate();
-            set_vars.push((
-                STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                default.to_string(),
-            ));
-        }
-
-        let session_type = metrics::session_type_label_value(&user);
-        self.metrics
-            .active_sessions
-            .with_label_values(&[session_type])
-            .inc();
-        let conn = ConnMeta {
-            cancel_tx,
-            secret_key,
-            notice_tx: session_.retain_notice_transmitter(),
-            drop_sinks: Vec::new(),
-            // TODO: Switch to authenticated role once implemented.
-            authenticated_role: role_id,
-            connected_at: self.now(),
-            user,
-            application_name,
-            role_metadata,
-            uuid,
-            conn_id: conn_id.clone(),
-        };
-        let update = self.catalog().state().pack_session_update(&conn, 1);
-        self.begin_session_for_statement_logging(&conn);
-        self.send_builtin_table_updates(vec![update]).await;
-        self.active_conns.insert(conn_id, conn);
-
-        ClientTransmitter::new(tx, self.internal_cmd_tx.clone()).send(
-            Ok(StartupResponse {
-                role_id,
-                set_vars,
-                catalog: self.owned_catalog(),
-            }),
-            session_,
-        )
+        self.catalog_mut()
+            .create_temporary_schema(conn_id, role_id)?;
+        Ok(role_id)
     }
 
     /// Handles an execute command.

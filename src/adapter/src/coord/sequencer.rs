@@ -28,7 +28,6 @@ use mz_sql_parser::ast::{Raw, Statement};
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
-use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
@@ -143,7 +142,7 @@ impl Coordinator {
             }
             Plan::CreateRole(plan) => {
                 let result = self
-                    .sequence_create_role(ctx.session().conn_id(), plan)
+                    .sequence_create_role(Some(ctx.session().conn_id()), plan)
                     .await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
@@ -600,10 +599,15 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_role_for_startup(
         &mut self,
-        conn_id: &ConnectionId,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_create_role(conn_id, plan).await
+        // This does not set conn_id because it's not yet in active_conns. That is because we can't
+        // make a ConnMeta until we have a role id which we don't have until after the catalog txn
+        // is committed. Passing None here means the audit log won't have a user set in the event's
+        // user field. This seems fine because it is indeed the system that is creating this role,
+        // not a user request, and the user name is still recorded in the plan, so we aren't losing
+        // information.
+        self.sequence_create_role(None, plan).await
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(

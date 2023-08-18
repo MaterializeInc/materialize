@@ -5106,11 +5106,16 @@ impl Catalog {
             .map(Op::DropObject)
             .collect()
     }
+
+    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
+    /// Returns Ok if conn_id's temp schema does not exist.
     pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        if !self.state.temporary_schemas[conn_id].items.is_empty() {
+        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
+            return Ok(());
+        };
+        if !schema.items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
-        self.state.temporary_schemas.remove(conn_id);
         Ok(())
     }
 
