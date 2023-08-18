@@ -108,10 +108,10 @@ impl Txn {
                     .finish(Antichain::from_elem(commit_ts + 1))
                     .await
                     .expect("valid usage");
-                let batch = batch.into_writer_hollow_batch();
+                let batch = batch.into_transmittable_batch();
                 // TODO(txn): Proto not serde_json.
                 let batch_raw = serde_json::to_string(&batch).expect("valid json");
-                let batch = data_write.batch_from_hollow_batch(batch);
+                let batch = data_write.batch_from_transmittable_batch(batch);
                 txn_batches.push(batch);
                 debug!(
                     "wrote {:.9} batch {} len={}",

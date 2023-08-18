@@ -35,7 +35,7 @@ use crate::batch::{
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::{Schemas, SerdeWriterEnrichedHollowBatch};
+use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
@@ -84,25 +84,6 @@ impl WriterId {
     pub(crate) fn new() -> Self {
         WriterId(*Uuid::new_v4().as_bytes())
     }
-}
-
-/// A token representing one written batch.
-///
-/// This may be exchanged (including over the network). It is tradeable via
-/// [`WriteHandle::batch_from_transmittable_batch`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "T: Timestamp + Codec64",
-    deserialize = "T: Timestamp + Codec64"
-))]
-#[serde(
-    into = "SerdeWriterEnrichedHollowBatch",
-    from = "SerdeWriterEnrichedHollowBatch"
-)]
-pub struct WriterEnrichedHollowBatch<T> {
-    pub(crate) shard_id: ShardId,
-    pub(crate) version: semver::Version,
-    pub(crate) batch: HollowBatch<T>,
 }
 
 /// A "capability" granting the ability to apply updates to some shard at times
