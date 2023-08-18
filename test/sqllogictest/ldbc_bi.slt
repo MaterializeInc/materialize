@@ -871,9 +871,120 @@ CREATE OR REPLACE MATERIALIZED VIEW PopularityScoreQ06 AS
 statement ok
 CREATE INDEX PopularityScoreQ06_person2id ON PopularityScoreQ06 (person2id);
 
-# TODO(mgree) predicate push down anomaly on Tag.name
+# rewritten query to manually push filter down
 query T multiline
-EXPLAIN WITH(arity, join_impls) WITH poster_w_liker AS (
+EXPLAIN WITH(arity, join_impls)
+WITH applicable_posts AS (
+       SELECT message1.MessageId,
+              message1.CreatorPersonId AS person1id
+         FROM Tag
+         JOIN Message_hasTag_Tag
+           ON Message_hasTag_Tag.TagId = Tag.id
+         JOIN Message message1
+           ON message1.MessageId = Message_hasTag_Tag.MessageId
+        WHERE Tag.name = 'Bob_Geldof'
+     ),
+     poster_w_liker AS (
+        SELECT DISTINCT
+            message1.person1id,
+            like2.PersonId AS person2id
+        FROM applicable_posts message1
+        LEFT JOIN Person_likes_Message like2
+               ON like2.MessageId = message1.MessageId
+           -- we don't need the Person itself as its ID is in the like
+    )
+SELECT pl.person1id AS "person1.id",
+       sum(coalesce(ps.popularityScore, 0)) AS authorityScore
+FROM poster_w_liker pl
+LEFT JOIN PopularityScoreQ06 ps
+         ON ps.person2id = pl.person2id
+GROUP BY pl.person1id
+ORDER BY authorityScore DESC, pl.person1id ASC
+LIMIT 100
+;
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[sum(coalesce(#1, 0))] // { arity: 2 }
+        Union // { arity: 2 }
+          Map (null) // { arity: 2 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l4 // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Get l3 // { arity: 2 }
+          Get l4 // { arity: 2 }
+    With
+      cte l4 =
+        Project (#0, #3) // { arity: 2 }
+          Join on=(#1 = #2) type=differential // { arity: 4 }
+            implementation
+              %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Filter (#1) IS NOT NULL // { arity: 2 }
+                Get l3 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.popularityscoreq06 // { arity: 2 }
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Union // { arity: 2 }
+            Map (null) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Join on=(#0 = #2) type=differential // { arity: 3 }
+                      implementation
+                        %1[#0]UKA » %0:l1[#0]K
+                      Get l1 // { arity: 2 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Distinct group_by=[#0] // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            Get l2 // { arity: 3 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+            Project (#1, #2) // { arity: 2 }
+              Get l2 // { arity: 3 }
+      cte l2 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#0 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l1[#0]K » %1:person_likes_message[#1]K
+            Get l1 // { arity: 2 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
+                Get materialize.public.person_likes_message // { arity: 3 }
+      cte l1 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get l0 // { arity: 2 }
+      cte l0 =
+        Project (#5, #16) // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 20 }
+            Join on=(#0 = #6 AND #5 = #8) type=differential // { arity: 20 }
+              implementation
+                %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
+              ArrangeBy keys=[[#0]] // { arity: 5 }
+                ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.message_hastag_tag // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.popularityscoreq06_person2id (differential join)
+
+EOF
+
+
+# TODO(mgree) predicate push down anomaly on Tag.name
+# original umbra query
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH poster_w_liker AS (
         SELECT DISTINCT
             message1.CreatorPersonId AS person1id,
             like2.PersonId AS person2id

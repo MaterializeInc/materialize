@@ -124,6 +124,38 @@ CREATE INDEX PopularityScoreQ06_person2id ON PopularityScoreQ06 (person2id);
 /* Q6. Most authoritative users on a given topic
 \set tag '\'Arnold_Schwarzenegger\''
  */
+ -- alternative version, with CTE to get a better plan
+WITH applicable_posts AS (
+       SELECT message1.MessageId,
+              message1.CreatorPersonId AS person1id
+         FROM Tag
+         JOIN Message_hasTag_Tag
+           ON Message_hasTag_Tag.TagId = Tag.id
+         JOIN Message message1
+           ON message1.MessageId = Message_hasTag_Tag.MessageId
+        WHERE Tag.name = :tag
+     ),
+     poster_w_liker AS (
+        SELECT DISTINCT
+            message1.person1id,
+            like2.PersonId AS person2id
+        FROM applicable_posts message1
+        LEFT JOIN Person_likes_Message like2
+               ON like2.MessageId = message1.MessageId
+           -- we don't need the Person itself as its ID is in the like
+    )
+SELECT pl.person1id AS "person1.id",
+       sum(coalesce(ps.popularityScore, 0)) AS authorityScore
+FROM poster_w_liker pl
+LEFT JOIN PopularityScoreQ06 ps
+         ON ps.person2id = pl.person2id
+GROUP BY pl.person1id
+ORDER BY authorityScore DESC, pl.person1id ASC
+LIMIT 100
+;
+
+-- original umbra version, experiences filter pushdown anomalies
+/*
 WITH poster_w_liker AS (
         SELECT DISTINCT
             message1.CreatorPersonId AS person1id,
@@ -147,3 +179,4 @@ GROUP BY pl.person1id
 ORDER BY authorityScore DESC, pl.person1id ASC
 LIMIT 100
 ;
+*/
