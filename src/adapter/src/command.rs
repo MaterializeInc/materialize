@@ -133,8 +133,8 @@ pub enum Command {
     },
 
     Terminate {
-        session: Session,
-        tx: Option<oneshot::Sender<Response<()>>>,
+        conn_id: ConnectionId,
+        tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
     },
 
     /// Performs any cleanup and logging actions necessary for
@@ -158,12 +158,12 @@ impl Command {
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. }
-            | Command::Terminate { session, .. } => Some(session),
+            | Command::SetSystemVars { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
+            | Command::Terminate { .. }
             | Command::RetireExecute { .. } => None,
         }
     }
@@ -176,12 +176,12 @@ impl Command {
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. }
-            | Command::Terminate { session, .. } => Some(session),
+            | Command::SetSystemVars { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
+            | Command::Terminate { .. }
             | Command::RetireExecute { .. } => None,
         }
     }

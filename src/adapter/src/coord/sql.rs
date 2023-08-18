@@ -16,6 +16,7 @@ use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
+use crate::client::ConnectionId;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
@@ -178,19 +179,23 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
+        self.clear_connection(session.conn_id());
+        session.clear_transaction()
+    }
+
+    /// Clears coordinator state for a connection.
+    pub(crate) fn clear_connection(&mut self, conn_id: &ConnectionId) {
         let conn_meta = self
             .active_conns
-            .get_mut(session.conn_id())
+            .get_mut(conn_id)
             .expect("must exist for active session");
         let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks);
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(conn_id) {
             self.release_read_hold(&txn_reads);
         }
-
-        session.clear_transaction()
     }
 
     /// Handle adding metadata associated with a SUBSCRIBE query.

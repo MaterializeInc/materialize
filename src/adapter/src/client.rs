@@ -618,9 +618,10 @@ impl SessionClient {
 
     /// Terminates the client session.
     pub async fn terminate(&mut self) {
+        let conn_id = self.session().conn_id().clone();
         let res = self
-            .send(|tx, session| Command::Terminate {
-                session,
+            .send_without_session(|tx| Command::Terminate {
+                conn_id,
                 tx: Some(tx),
             })
             .await;
@@ -768,7 +769,10 @@ impl Drop for SessionClient {
             // We may not have a connection to the Coordinator if the session was
             // prematurely terminated, for example due to a timeout.
             if let Some(inner) = &self.inner {
-                inner.send(Command::Terminate { session, tx: None })
+                inner.send(Command::Terminate {
+                    conn_id: session.conn_id().clone(),
+                    tx: None,
+                })
             }
         }
     }
