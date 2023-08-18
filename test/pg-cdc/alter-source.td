@@ -383,16 +383,27 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
+# Drop a table that's in the publication, which shuffles the tables' output
+# indexes, then add a table to the publication and ensure it can be added.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP TABLE table_c, table_d;
+
 CREATE TABLE table_i (pk INTEGER PRIMARY KEY, f2 an_enum);
 INSERT INTO table_i VALUES (1, 'var0');
 ALTER TABLE table_i REPLICA IDENTITY FULL;
 INSERT INTO table_i VALUES (2, 'var1');
 
+INSERT INTO table_f VALUES (3, 'var1');
+
 > ALTER SOURCE mz_source ADD SUBSOURCE table_i WITH (TEXT COLUMNS [table_i.f2]);
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
+
+> SELECT * FROM table_f
+1 var0
+2 var1
+3 var1
 
 > ALTER SOURCE mz_source DROP SUBSOURCE table_f, table_i;
 
