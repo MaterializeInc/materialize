@@ -184,6 +184,11 @@ where
         }
     }
 
+    /// This handle's shard id.
+    pub fn shard_id(&self) -> ShardId {
+        self.machine.shard_id()
+    }
+
     /// A cached version of the shard-global `upper` frontier.
     ///
     /// This will always be less or equal to the shard-global `upper`.

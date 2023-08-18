@@ -586,6 +586,17 @@ steps:
           composition: persist
           args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
+  - id: persist-txn-maelstrom
+    label: Maelstrom coverage of persist-txn
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist
+          args: [--consensus=mem, --blob=mem, --persist-txn]
+
   - id: persistence-failpoints
     label: Persistence failpoints
     timeout_in_minutes: 30

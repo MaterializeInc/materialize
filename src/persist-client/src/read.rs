@@ -43,7 +43,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
 use crate::internal::watch::StateWatch;
-use crate::{parse_id, GarbageCollector, PersistConfig};
+use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -576,6 +576,11 @@ where
             },
             heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
         }
+    }
+
+    /// This handle's shard id.
+    pub fn shard_id(&self) -> ShardId {
+        self.machine.shard_id()
     }
 
     /// This handle's `since` frontier.

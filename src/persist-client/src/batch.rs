@@ -914,10 +914,7 @@ mod tests {
         cache.cfg.dynamic.set_blob_target_size(0);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(2);
         let client = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed");
         let (mut write, mut read) = client
@@ -998,10 +995,7 @@ mod tests {
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);
         let client = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed");
         let shard_id = ShardId::new();
@@ -1040,10 +1034,7 @@ mod tests {
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.dynamic.set_blob_target_size(0);
         let client = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed");
         let shard_id = ShardId::new();

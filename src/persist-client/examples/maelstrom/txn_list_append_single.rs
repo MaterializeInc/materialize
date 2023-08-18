@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! An implementation of the Maelstrom txn-list-append workload using persist
+//! An implementation of the Maelstrom txn-list-append workload using a single
+//! persist shard.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -39,17 +40,11 @@ use tracing::{debug, info, trace};
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
-use crate::maelstrom::txn::codec_impls::{MaelstromKeySchema, MaelstromValSchema};
+use crate::maelstrom::txn_list_append_single::codec_impls::{
+    MaelstromKeySchema, MaelstromValSchema,
+};
 use crate::maelstrom::Args;
 use crate::BUILD_INFO;
-
-pub fn run(args: Args) -> Result<(), anyhow::Error> {
-    let read = std::io::stdin();
-    let write = std::io::stdout();
-
-    crate::maelstrom::node::run::<_, _, TransactorService>(args, read.lock(), write)?;
-    Ok(())
-}
 
 /// Key of the persist shard used by [Transactor]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -723,7 +718,7 @@ mod codec_impls {
     use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
     use mz_persist_types::Codec;
 
-    use crate::maelstrom::txn::{MaelstromKey, MaelstromVal};
+    use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
 
     impl Codec for MaelstromKey {
         type Schema = MaelstromKeySchema;

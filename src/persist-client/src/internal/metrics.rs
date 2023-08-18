@@ -41,7 +41,6 @@ use crate::{PersistConfig, ShardId};
 ///
 /// Intentionally not Clone because we expect this to be passed around in an
 /// Arc.
-#[derive(Debug)]
 pub struct Metrics {
     _vecs: MetricsVecs,
     _uptime: ComputedGauge,
@@ -91,6 +90,12 @@ pub struct Metrics {
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresConsensusMetrics,
+}
+
+impl std::fmt::Debug for Metrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Metrics").finish_non_exhaustive()
+    }
 }
 
 impl Metrics {
