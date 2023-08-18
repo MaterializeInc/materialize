@@ -518,6 +518,16 @@ mod tests {
 
         assert!(output.trim().starts_with("Healthy: \tyes"));
 
+        let binding = cmd()
+            .arg("region")
+            .arg("show")
+            .arg("--region aws/us-east-1")
+            // .env("PATH", "/opt/homebrew/bin/")
+            .assert()
+            .success();
+        let output = output_to_string(binding);
+
+        assert!(output.trim().starts_with("Healthy: \tyes"));
         // Test - `mz sql`
         //
         // Assert `mz sql -- -q -c "SELECT 1"
