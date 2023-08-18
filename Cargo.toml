@@ -37,6 +37,7 @@ members = [
     "src/orchestrator-tracing",
     "src/ore",
     "src/persist",
+    "src/persist-cli",
     "src/persist-client",
     "src/persist-txn",
     "src/persist-types",
