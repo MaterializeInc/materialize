@@ -14,42 +14,42 @@ from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
-from materialize.zippy.storaged_capabilities import StoragedRunning
+from materialize.zippy.storage_capabilities import StorageRunning
 
 
-class StoragedStart(Action):
-    """Starts a storaged clusterd instance."""
+class StorageStart(Action):
+    """Starts a storage clusterd instance."""
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.up("storaged")
+        c.up("storage")
 
     def provides(self) -> List[Capability]:
-        return [StoragedRunning()]
+        return [StorageRunning()]
 
 
-class StoragedRestart(Action):
-    """Restarts the entire storaged clusterd instance."""
+class StorageRestart(Action):
+    """Restarts the entire storage clusterd instance."""
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, StoragedRunning}
+        return {MzIsRunning, StorageRunning}
 
     def run(self, c: Composition) -> None:
-        c.kill("storaged")
-        c.up("storaged")
+        c.kill("storage")
+        c.up("storage")
 
 
-class StoragedKill(Action):
+class StorageKill(Action):
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, StoragedRunning}
+        return {MzIsRunning, StorageRunning}
 
     def run(self, c: Composition) -> None:
-        c.kill("storaged")
+        c.kill("storage")
 
     def withholds(self) -> Set[Type[Capability]]:
-        return {StoragedRunning}
+        return {StorageRunning}

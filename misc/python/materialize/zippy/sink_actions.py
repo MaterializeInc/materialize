@@ -15,7 +15,7 @@ from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.sink_capabilities import SinkExists
-from materialize.zippy.storaged_capabilities import StoragedRunning
+from materialize.zippy.storage_capabilities import StorageRunning
 from materialize.zippy.view_capabilities import ViewExists
 
 
@@ -24,7 +24,7 @@ class CreateSinkParameterized(ActionFactory):
 
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:
-        return [{MzIsRunning, StoragedRunning, ViewExists}]
+        return [{MzIsRunning, StorageRunning, ViewExists}]
 
     def __init__(self, max_sinks: int = 10) -> None:
         self.max_sinks = max_sinks
@@ -106,7 +106,7 @@ class CreateSink(Action):
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
-                  IN CLUSTER storaged
+                  IN CLUSTER storage
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE

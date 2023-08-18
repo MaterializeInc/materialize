@@ -20,7 +20,14 @@ from materialize.zippy.kafka_actions import (
 )
 from materialize.zippy.kafka_capabilities import Envelope
 from materialize.zippy.minio_actions import MinioRestart, MinioStart
-from materialize.zippy.mz_actions import KillClusterd, MzRestart, MzStart, MzStop
+from materialize.zippy.mz_actions import (
+    ComputeStartDisabledCluster,
+    ComputeStartDisabledReplica,
+    KillClusterd,
+    MzRestart,
+    MzStart,
+    MzStop,
+)
 from materialize.zippy.peek_actions import PeekCancellation
 from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
 from materialize.zippy.postgres_actions import (
@@ -36,11 +43,7 @@ from materialize.zippy.replica_actions import (
 )
 from materialize.zippy.sink_actions import CreateSinkParameterized
 from materialize.zippy.source_actions import CreateSourceParameterized
-from materialize.zippy.storaged_actions import (
-    StoragedKill,
-    StoragedRestart,
-    StoragedStart,
-)
+from materialize.zippy.storage_actions import StorageKill, StorageRestart, StorageStart
 from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
 from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
 
@@ -49,7 +52,11 @@ DEFAULT_BOOTSTRAP: List[ActionOrFactory] = [
     CockroachStart,
     MinioStart,
     MzStart,
-    StoragedStart,
+    StorageStart,
+    # Make sure that non-functional clusters and replicas
+    # do not cause an OOM elsewhere in the product.
+    # ComputeStartDisabledReplica,
+    ComputeStartDisabledCluster,
 ]
 
 
@@ -64,8 +71,8 @@ class KafkaSources(Scenario):
             MzStart: 5,
             MzStop: 1,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            StorageKill: 5,
+            StorageStart: 5,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -87,7 +94,7 @@ class UserTables(Scenario):
             MzStart: 1,
             MzStop: 15,
             KillClusterd: 10,
-            StoragedRestart: 5,
+            StorageRestart: 5,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
             CreateSinkParameterized(): 10,
@@ -112,8 +119,8 @@ class DebeziumPostgres(Scenario):
             CreatePostgresTable: 10,
             CreateDebeziumSource: 10,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            StorageKill: 5,
+            StorageStart: 5,
             CreateViewParameterized(): 10,
             ValidateView: 20,
             PostgresDML: 100,
@@ -131,8 +138,8 @@ class PostgresCdc(Scenario):
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            StorageKill: 5,
+            StorageStart: 5,
             PostgresRestart: 10,
             CreateViewParameterized(): 10,
             ValidateView: 20,
@@ -154,7 +161,7 @@ class ClusterReplicas(Scenario):
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
-            StoragedRestart: 5,
+            StorageRestart: 5,
             CreateReplica: 30,
             DropReplica: 10,
             CreateTopicParameterized(): 10,
@@ -178,8 +185,8 @@ class KafkaParallelInsert(Scenario):
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            StorageKill: 5,
+            StorageStart: 5,
             CreateTopicParameterized(): 10,
             CreateSourceParameterized(): 10,
             CreateViewParameterized(expensive_aggregates=False, max_inputs=1): 5,
@@ -206,7 +213,7 @@ class CrdbMinioRestart(Scenario):
             ValidateView: 15,
             MzRestart: 5,
             KillClusterd: 5,
-            StoragedRestart: 10,
+            StorageRestart: 10,
             CockroachRestart: 15,
             MinioRestart: 15,
         }
@@ -230,7 +237,7 @@ class CrdbRestart(Scenario):
             ValidateView: 15,
             MzRestart: 5,
             KillClusterd: 5,
-            StoragedRestart: 10,
+            StorageRestart: 10,
             CockroachRestart: 15,
         }
 
@@ -307,8 +314,8 @@ class PostgresCdcLarge(Scenario):
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            StorageKill: 5,
+            StorageStart: 5,
             CreateViewParameterized(): 10,
             ValidateView: 20,
             PostgresDML: 100,
