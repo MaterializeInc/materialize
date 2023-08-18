@@ -1,11 +1,21 @@
 # Maintainer instructions for `mz`
 
+## Testing the CLI
+
+All the tests for the CLI reside in a single function inside `./tests/e2e.rs`. To test locally run:
+
+```
+cargo test -p mz
+```
+
 ## Cutting a new release
 
 1. Update the version in [src/mz/Cargo.toml](/src/mz/Cargo.toml).
 
 2. Update the `mz` release notes in the docs with any changes since the last
    version.
+
+3. Run `cargo run -p mz` once to update `Cargo.lcok`
 
 3. Open a PR with your change and get it merged:
 
