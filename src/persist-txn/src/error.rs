@@ -13,9 +13,9 @@ use mz_persist_client::ShardId;
 
 /// The data shard was not registered.
 #[derive(Debug)]
-pub struct NotRegistered {
+pub struct NotRegistered<T> {
     /// The data shard that was not registered.
     pub data_id: ShardId,
     /// The exclusive txns shard time at which it was not registered.
-    pub ts: u64,
+    pub ts: T,
 }

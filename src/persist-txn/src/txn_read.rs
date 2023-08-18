@@ -13,14 +13,18 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use differential_dataflow::hashable::Hashable;
+use differential_dataflow::lattice::Lattice;
 use mz_ore::collections::HashMap;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
-use timely::progress::Antichain;
+use mz_persist_types::Codec64;
+use timely::order::TotalOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::error::NotRegistered;
+use crate::StepForward;
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -52,9 +56,9 @@ use crate::error::NotRegistered;
 /// unchanged and simply manipulating capabilities in response to data and txn
 /// shard progress. TODO(txn): Link to operator once it's added.
 #[derive(Debug)]
-pub struct TxnsCache {
-    pub(crate) progress_exclusive: u64,
-    txns_subscribe: Subscribe<ShardId, String, u64, i64>,
+pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
+    pub(crate) progress_exclusive: T,
+    txns_subscribe: Subscribe<ShardId, String, T, i64>,
 
     next_batch_id: usize,
     /// The batches needing application as of the current progress.
@@ -63,55 +67,55 @@ pub struct TxnsCache {
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    unapplied_batches: BTreeMap<usize, (ShardId, String, u64)>,
+    unapplied_batches: BTreeMap<usize, (ShardId, String, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<String, usize>,
     /// The times at which each data shard has been written.
     ///
     /// Invariant: Times in the Vec are in ascending order.
-    pub(crate) datas: BTreeMap<ShardId, Vec<u64>>,
+    pub(crate) datas: BTreeMap<ShardId, Vec<T>>,
 }
 
-impl TxnsCache {
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
     pub(crate) async fn init(
-        init_ts: u64,
-        txns_read: ReadHandle<ShardId, String, u64, i64>,
-        txns_write: &mut WriteHandle<ShardId, String, u64, i64>,
+        init_ts: T,
+        txns_read: ReadHandle<ShardId, String, T, i64>,
+        txns_write: &mut WriteHandle<ShardId, String, T, i64>,
     ) -> Self {
-        let () = crate::empty_caa(|| "txns init", txns_write, init_ts).await;
+        let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         Self::open(init_ts, txns_read).await
     }
 
-    async fn open(init_ts: u64, txns_read: ReadHandle<ShardId, String, u64, i64>) -> Self {
+    async fn open(init_ts: T, txns_read: ReadHandle<ShardId, String, T, i64>) -> Self {
         // TODO(txn): Figure out the compaction story. This might require
         // sorting inserts before retractions within each timestamp.
         let subscribe = txns_read
-            .subscribe(Antichain::from_elem(0))
+            .subscribe(Antichain::from_elem(T::minimum()))
             .await
             .expect("handle holds a capability");
         let mut ret = TxnsCache {
-            progress_exclusive: 0,
+            progress_exclusive: T::minimum(),
             txns_subscribe: subscribe,
             next_batch_id: 0,
             unapplied_batches: BTreeMap::new(),
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
         };
-        ret.update_gt(init_ts).await;
+        ret.update_gt(&init_ts).await;
         ret
     }
 
     /// Returns the minimum timestamp at which the data shard can be read.
     ///
     /// Returns Err if that data has not been registered.
-    pub fn data_since(&self, data_id: &ShardId) -> Result<u64, NotRegistered> {
+    pub fn data_since(&self, data_id: &ShardId) -> Result<T, NotRegistered<T>> {
         let time = self
             .datas
             .get(data_id)
-            .and_then(|times| times.first().copied());
+            .and_then(|times| times.first().cloned());
         time.ok_or(NotRegistered {
             data_id: *data_id,
-            ts: self.progress_exclusive,
+            ts: self.progress_exclusive.clone(),
         })
     }
 
@@ -127,14 +131,14 @@ impl TxnsCache {
     /// to return. Panics otherwise.
     ///
     /// Returns Err if that data has not been registered.
-    pub fn to_data_inclusive(&self, data_id: &ShardId, ts: u64) -> Result<u64, NotRegistered> {
+    pub fn to_data_inclusive(&self, data_id: &ShardId, ts: T) -> Result<T, NotRegistered<T>> {
         assert!(self.progress_exclusive > ts);
         self.datas
             .get(data_id)
             .and_then(|all| {
-                let ret = all.iter().rev().find(|x| **x <= ts).copied();
+                let ret = all.iter().rev().find(|x| **x <= ts).cloned();
                 debug!(
-                    "to_data_inclusive {:.9} t={} ret={:?}: all={:?}",
+                    "to_data_inclusive {:.9} t={:?} ret={:?}: all={:?}",
                     data_id.to_string(),
                     ts,
                     ret,
@@ -144,39 +148,39 @@ impl TxnsCache {
             })
             .ok_or(NotRegistered {
                 data_id: *data_id,
-                ts: self.progress_exclusive,
+                ts: self.progress_exclusive.clone(),
             })
     }
 
     /// Returns the batches needing application as of the current progress.
-    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, String, u64)> {
+    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, String, T)> {
         self.unapplied_batches.values()
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
-    pub(crate) async fn update_gt(&mut self, ts: u64) {
+    pub(crate) async fn update_gt(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive > ts)
             .await;
-        debug_assert!(self.progress_exclusive > ts);
+        debug_assert!(&self.progress_exclusive > ts);
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
-    pub(crate) async fn update_ge(&mut self, ts: u64) {
+    pub(crate) async fn update_ge(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive >= ts)
             .await;
-        debug_assert!(self.progress_exclusive >= ts);
+        debug_assert!(&self.progress_exclusive >= ts);
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    async fn update<F: Fn(u64) -> bool>(&mut self, done: F) {
-        while !done(self.progress_exclusive) {
+    async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
+        while !done(&self.progress_exclusive) {
             let events = self.txns_subscribe.fetch_next().await;
             for event in events {
                 let mut updates = match event {
                     ListenEvent::Progress(frontier) => {
-                        self.progress_exclusive = *frontier
-                            .as_option()
+                        self.progress_exclusive = frontier
+                            .into_option()
                             .expect("nothing should close the txns shard");
                         continue;
                     }
@@ -193,7 +197,7 @@ impl TxnsCache {
             }
         }
         debug!(
-            "cache correct before {} len={} least_ts={:?}",
+            "cache correct before {:?} len={} least_ts={:?}",
             self.progress_exclusive,
             self.unapplied_batches.len(),
             self.unapplied_batches
@@ -202,23 +206,23 @@ impl TxnsCache {
         );
     }
 
-    fn push(&mut self, data_id: ShardId, batch: String, ts: u64, diff: i64) {
+    fn push(&mut self, data_id: ShardId, batch: String, ts: T, diff: i64) {
         if batch.is_empty() {
             assert_eq!(diff, 1);
             // This is just a data registration.
             debug!(
-                "cache learned {:.9} registered t={}",
+                "cache learned {:.9} registered t={:?}",
                 data_id.to_string(),
                 ts
             );
-            let prev = self.datas.insert(data_id, vec![ts]);
+            let prev = self.datas.insert(data_id, vec![ts.clone()]);
             if let Some(prev) = prev {
-                panic!("{} registered at both {:?} and {}", data_id, prev, ts);
+                panic!("{} registered at both {:?} and {:?}", data_id, prev, ts);
             }
             return;
         }
         debug!(
-            "cache learned {:.9} b={} t={} d={}",
+            "cache learned {:.9} b={} t={:?} d={}",
             data_id.to_string(),
             batch.hashed(),
             ts,
@@ -232,7 +236,9 @@ impl TxnsCache {
             // anywhere important.
             let prev = self.batch_idx.insert(batch.clone(), idx);
             assert_eq!(prev, None);
-            let prev = self.unapplied_batches.insert(idx, (data_id, batch, ts));
+            let prev = self
+                .unapplied_batches
+                .insert(idx, (data_id, batch, ts.clone()));
             assert_eq!(prev, None);
             self.datas
                 .get_mut(&data_id)
@@ -260,20 +266,20 @@ impl TxnsCache {
         // TODO(txn): Replace asserts with return Err.
         assert_eq!(self.unapplied_batches.len(), self.batch_idx.len());
 
-        let mut prev_ts = 0;
+        let mut prev_ts = T::minimum();
         for (idx, (_, batch, ts)) in self.unapplied_batches.iter() {
             assert_eq!(batch.is_empty(), false);
             assert_eq!(self.batch_idx.get(batch), Some(idx));
             assert!(ts >= &prev_ts);
-            prev_ts = *ts;
+            prev_ts = ts.clone();
         }
 
         for (_, times) in self.datas.iter() {
             assert_eq!(times.is_empty(), false);
-            let mut prev_ts = 0;
+            let mut prev_ts = T::minimum();
             for ts in times.iter() {
                 assert!(prev_ts < *ts);
-                prev_ts = *ts;
+                prev_ts = ts.clone();
             }
         }
 
