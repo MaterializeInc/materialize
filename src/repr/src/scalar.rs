@@ -16,7 +16,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc, NaiveDate};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -2725,6 +2725,13 @@ impl<'a> ScalarType {
                 Datum::Int16(i16::MIN),
                 Datum::Int16(i16::MIN + 1),
                 Datum::Int16(i16::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int16(127),
+                Datum::Int16(128),
+                Datum::Int16(-128),
+                Datum::Int16(-129),
             ])
         });
         static INT32: Lazy<Row> = Lazy::new(|| {
@@ -2735,6 +2742,17 @@ impl<'a> ScalarType {
                 Datum::Int32(i32::MIN),
                 Datum::Int32(i32::MIN + 1),
                 Datum::Int32(i32::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int32(127),
+                Datum::Int32(128),
+                Datum::Int32(-128),
+                Datum::Int32(-129),
+                Datum::Int32(32767),
+                Datum::Int32(32768),
+                Datum::Int32(-32768),
+                Datum::Int32(-32769),
             ])
         });
         static INT64: Lazy<Row> = Lazy::new(|| {
@@ -2745,6 +2763,21 @@ impl<'a> ScalarType {
                 Datum::Int64(i64::MIN),
                 Datum::Int64(i64::MIN + 1),
                 Datum::Int64(i64::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int64(127),
+                Datum::Int64(128),
+                Datum::Int64(-128),
+                Datum::Int64(-129),
+                Datum::Int64(32767),
+                Datum::Int64(32768),
+                Datum::Int64(-32768),
+                Datum::Int64(-32769),
+                Datum::Int64(2147483647),
+                Datum::Int64(2147483648),
+                Datum::Int64(-2147483648),
+                Datum::Int64(-2147483649),
             ])
         });
         static UINT16: Lazy<Row> = Lazy::new(|| {
@@ -2831,6 +2864,16 @@ impl<'a> ScalarType {
                         .and_hms_opt(23, 59, 59)
                         .unwrap()
                         .try_into()
+                        .unwrap(),
+                ),
+                // Leap second
+                Datum::Timestamp(
+                    CheckedTimestamp::from_timestamplike(
+                        NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
+                            .unwrap()
+                            .and_hms_milli_opt(14, 32, 11, 1234)
+                            .unwrap(),
+                    )
                         .unwrap(),
                 ),
             ])

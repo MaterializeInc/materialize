@@ -180,7 +180,7 @@ WHERE l_quantity = 24
   OR l_linenumber = 6
   AND l_quantity BETWEEN 3 AND 2 + 2
 ----
-26 values hashing to b8d07ecb87ec94562c873071d7939da4
+26 values hashing to 7932727188e5ab32fa967cba92950a40
 
 
 query T multiline
@@ -277,7 +277,7 @@ WHERE l_shipDATE BETWEEN '1995-04-19' AND '1995-11-14'
 GROUP BY 1,
          2
 ----
-60 values hashing to bf00a961bb64d74c2b059630076a7730
+60 values hashing to 725a94c2e90eed0166336768e10e6ff6
 
 
 query T multiline

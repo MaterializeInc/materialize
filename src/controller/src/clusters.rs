@@ -10,7 +10,7 @@
 //! Cluster management.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, atomic};
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -516,6 +516,9 @@ where
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
                         ];
+                        if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
+                            args.push("--variable-length-row-encoding".to_string());
+                        }
                         if let Some(memory_limit) = location.allocation.memory_limit {
                             args.push(format!(
                                 "--announce-memory-limit={}",

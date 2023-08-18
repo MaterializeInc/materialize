@@ -75,7 +75,7 @@
 
 use std::path::PathBuf;
 use std::process;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 
 use anyhow::Context;
 use axum::http::StatusCode;
@@ -182,6 +182,11 @@ struct Args {
     /// Optional memory limit (bytes) of the cluster replica
     #[clap(long)]
     announce_memory_limit: Option<usize>,
+
+    /// Whether to use the new variable-length encoding scheme
+    /// in row.rs
+    #[clap(long)]
+    variable_length_row_encoding: bool,
 }
 
 #[tokio::main]
@@ -198,6 +203,8 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+        .store(args.variable_length_row_encoding, atomic::Ordering::SeqCst);
     let metrics_registry = MetricsRegistry::new();
     let (tracing_handle, _tracing_guard) = args
         .tracing
