@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of, transmute};
 use std::str;
 
@@ -27,6 +28,7 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
+use yoke::Yoke;
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -1059,6 +1061,17 @@ impl Row {
         }
     }
 
+    /// Unpack `self` into an `OwnedDatums` for efficient random access. This method consumes the
+    /// row and in return allows the caller to keep the unpacked row around.
+    pub fn unpack_owned(self) -> OwnedDatums {
+        let data = self.data.into_vec();
+        OwnedDatums(Yoke::attach_to_cart(data, |data| {
+            // SAFETY: data is a valid Row encoding because we just extracted it from one
+            let row_ref = unsafe { RowRef::from_bytes_unchecked(data) };
+            DatumVecYoke(row_ref.unpack())
+        }))
+    }
+
     /// Creates a new row from supplied bytes.
     ///
     /// # Safety
@@ -1132,6 +1145,92 @@ impl Row {
         inline_size.saturating_add(heap_size)
     }
 }
+
+/// The type returned by [Row::unpack_owned]
+pub struct OwnedDatums(Yoke<DatumVecYoke<'static>, Vec<u8>>);
+
+impl OwnedDatums {
+    /// Access the unerdlying slice of Datums
+    pub fn get(&self) -> &[Datum] {
+        &self.0.get().0
+    }
+
+    /// Convert this unpacked row back into a normal [Row]
+    pub fn into_row(self) -> Row {
+        let data = self.0.into_backing_cart();
+        // SAFETY: data is a valid Row encoding because OwnedDatums can only be constructed from a
+        // Row and the buffer remains immutable throughout its lifetime
+        unsafe { Row::from_bytes_unchecked(data) }
+    }
+}
+
+impl PartialEq for OwnedDatums {
+    fn eq(&self, other: &Self) -> bool {
+        self.get().eq(other.get())
+    }
+}
+
+impl Eq for OwnedDatums {}
+
+impl PartialOrd for OwnedDatums {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.get().partial_cmp(other.get())
+    }
+}
+
+impl Ord for OwnedDatums {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.get().cmp(other.get())
+    }
+}
+
+impl Debug for OwnedDatums {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        self.get().fmt(f)
+    }
+}
+
+impl Hash for OwnedDatums {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.get().hash(state)
+    }
+}
+
+impl Clone for OwnedDatums {
+    fn clone(&self) -> Self {
+        let data = self.0.backing_cart().clone();
+        // SAFETY: data is a valid Row encoding because OwnedDatums can only be constructed from a
+        // Row and the buffer remains immutable throughout its lifetime
+        let row = unsafe { Row::from_bytes_unchecked(data) };
+        row.unpack_owned()
+    }
+}
+
+impl Serialize for OwnedDatums {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        self.0.backing_cart().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OwnedDatums {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        let row = Row::deserialize(deserializer)?;
+        Ok(row.unpack_owned())
+    }
+}
+
+/// Wrapper type of a Vec of Datums so that we can implement Yokeable.
+#[derive(Debug, yoke::Yokeable)]
+pub struct DatumVecYoke<'a>(Vec<Datum<'a>>);
 
 impl RowPacker<'_> {
     /// Constructs a row packer that will pack additional datums into the

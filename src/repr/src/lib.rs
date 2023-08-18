@@ -120,8 +120,8 @@ pub use crate::row::encoding::{
     RowEncoder,
 };
 pub use crate::row::{
-    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
-    RowArena, RowPacker, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, OwnedDatums, ProtoRow,
+    Row, RowArena, RowPacker, RowRef,
 };
 pub use crate::scalar::{
     arb_datum, arb_range_type, ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum,
