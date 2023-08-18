@@ -332,16 +332,6 @@ ALTER SYSTEM SET enable_with_mutually_recursive TO true;
 ----
 COMPLETE 0
 
-statement ok
-CREATE TABLE Person_knows_Person (
-    creationDate timestamp with time zone NOT NULL,
-    Person1id bigint NOT NULL,
-    Person2id bigint NOT NULL
-)
-
-statement ok
-CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
-
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
@@ -448,6 +438,6 @@ Explained Query:
         Get materialize.public.person_knows_person
 
 Used Indexes:
-  - materialize.public.person_knows_person_person1id_person2id
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
 
 EOF
