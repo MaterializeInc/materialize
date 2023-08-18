@@ -22,7 +22,7 @@ except ImportError:
 
 from materialize.mzcompose import Composition
 
-ROOT = Path(os.environ["MZ_ROOT"])
+MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 
 def nonce(digits: int) -> str:

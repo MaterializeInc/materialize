@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import ROOT, ci_util
+from materialize import MZ_ROOT, ci_util
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Cockroach, SqlLogicTest
 
@@ -49,4 +49,4 @@ def run_sqllogictest(c: Composition, command: str) -> None:
 
         c.run(*args)
     finally:
-        ci_util.upload_junit_report(c.name, ROOT / junit_report)
+        ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report)
