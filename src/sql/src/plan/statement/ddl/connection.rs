@@ -79,11 +79,12 @@ generate_extracted_config!(
 );
 
 impl ConnectionOptionExtracted {
-    fn ensure_only_valid_options(
-        mut seen: BTreeSet<ConnectionOptionName>,
+    pub(super) fn ensure_only_valid_options(
+        &self,
         t: CreateConnectionType,
     ) -> Result<(), PlanError> {
         use mz_sql_parser::ast::ConnectionOptionName::*;
+        let mut seen = self.seen.clone();
 
         let permitted_options = match t {
             CreateConnectionType::Aws => [
@@ -154,8 +155,8 @@ impl ConnectionOptionExtracted {
         self,
         scx: &StatementContext,
         connection_type: CreateConnectionType,
-    ) -> Result<Connection<ReferencedConnection>, PlanError> {
-        Self::ensure_only_valid_options(self.seen.clone(), connection_type)?;
+    ) -> Result<Connection, PlanError> {
+        self.ensure_only_valid_options(connection_type)?;
 
         let connection: Connection<ReferencedConnection> = match connection_type {
             CreateConnectionType::Aws => {

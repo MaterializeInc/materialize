@@ -4620,7 +4620,11 @@ impl<'a> Parser<'a> {
                 ROTATE => {
                     self.expect_keyword(KEYS)
                         .map_parser_err(StatementKind::AlterConnection)?;
-                    Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
+                    Statement::AlterConnection(AlterConnectionStatement {
+                        name,
+                        actions: vec![AlterConnectionAction::RotateKeys],
+                        if_exists,
+                    })
                 }
                 OWNER => {
                     self.expect_keyword(TO)

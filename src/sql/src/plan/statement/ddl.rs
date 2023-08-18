@@ -35,10 +35,11 @@ use mz_sql_parser::ast::{
     AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
     AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DropOwnedStatement, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DropOwnedStatement, SetRoleVar, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName,
+    Value,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::Connection;
@@ -99,12 +100,12 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    AlterClusterReplicaRenamePlan, AlterConnectionPlan, AlterIndexResetOptionsPlan,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
+    AlterRolePlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
@@ -4430,6 +4431,93 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
+pub fn describe_alter_connection(
+    _: &StatementContext,
+    _: AlterConnectionStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_connection(
+    scx: &StatementContext,
+    conn_name: UnresolvedItemName,
+    if_exists: bool,
+    set_options: Vec<ConnectionOption<Aug>>,
+    reset_options: Vec<ConnectionOptionName>,
+    drop_options: Vec<ConnectionOptionName>,
+) -> Result<Plan, PlanError> {
+    let conn_name = normalize::unresolved_item_name(conn_name)?;
+    let entry = match scx.catalog.resolve_item(&conn_name) {
+        Ok(sink) => sink,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: conn_name.to_string(),
+                object_type: ObjectType::Sink,
+            });
+
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Sink,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut total_options = set_options.clone();
+    total_options.extend(reset_options.iter().chain(drop_options.iter()).map(|name| {
+        ConnectionOption {
+            name: *name,
+            value: None,
+        }
+    }));
+
+    // Type check values + avoid duplicates; we don't want to e.g. let users
+    // drop and set the same option in the same statement, so treating drops as
+    // sets here is fine.
+    let connection_options_extracted =
+        connection::ConnectionOptionExtracted::try_from(total_options)?;
+
+    let connection = entry.connection()?;
+
+    let connection_type = match connection {
+        Connection::Aws(_) => CreateConnectionType::Aws,
+        Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
+        Connection::Kafka(_) => CreateConnectionType::Kafka,
+        Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::Postgres(_) => CreateConnectionType::Postgres,
+        Connection::Ssh(_) => CreateConnectionType::Ssh,
+    };
+
+    // Ensure only this connection type's options were provided.
+    connection_options_extracted.ensure_only_valid_options(connection_type)?;
+
+    // Turn any reset options into a `None` which when re-planned will convert
+    // them back to default values if they're available.
+    let set_options: BTreeMap<_, _> = set_options
+        .into_iter()
+        .map(|o| (o.name, o.value))
+        .chain(reset_options.into_iter().map(|name| (name, None)))
+        .collect();
+
+    let drop_options: BTreeSet<_> = drop_options.into_iter().collect();
+
+    // Handle any mutually exclusive options.
+    //
+    // e.g. if we're setting BROKER or BROKERS, we need to ensure we clear out
+    // the previous definition of BROKER or BROKERS.
+    if set_options.contains_key(&ConnectionOptionName::Broker)
+        || set_options.contains_key(&ConnectionOptionName::Brokers)
+    {
+        drop_options.insert(ConnectionOptionName::Broker);
+        drop_options.insert(ConnectionOptionName::Brokers);
+    }
+
+    Ok(Plan::AlterConnection(AlterConnectionPlan {
+        id: entry.id(),
+        set_options,
+        drop_options,
+    }))
+}
+
 pub fn describe_alter_sink(
     _: &StatementContext,
     _: AlterSinkStatement<Aug>,
@@ -4509,13 +4597,6 @@ pub fn describe_alter_source(
     _: AlterSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     // TODO: put the options here, right?
-    Ok(StatementDesc::new(None))
-}
-
-pub fn describe_alter_connection(
-    _: &StatementContext,
-    _: AlterConnectionStatement,
-) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
