@@ -45,6 +45,7 @@ impl TraceManager {
     /// will not be physically merged until the method is called again. This is mostly due to limitations
     /// of differential dataflow, which requires users to perform this explicitly; if that changes we may
     /// be able to remove this code.
+    #[inline]
     pub fn maintenance(&mut self) {
         let start = Instant::now();
         self.metrics.maintenance_active_info.set(1);

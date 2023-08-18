@@ -48,10 +48,12 @@ pub trait Vector<T> {
 }
 
 impl<T> Vector<T> for Vec<T> {
+    #[inline]
     fn push(&mut self, value: T) {
         Vec::push(self, value)
     }
 
+    #[inline]
     fn extend_from_slice(&mut self, other: &[T])
     where
         T: Copy,
@@ -65,10 +67,12 @@ impl<A> Vector<A::Item> for SmallVec<A>
 where
     A: smallvec::Array,
 {
+    #[inline]
     fn push(&mut self, value: A::Item) {
         SmallVec::push(self, value)
     }
 
+    #[inline]
     fn extend_from_slice(&mut self, other: &[A::Item])
     where
         A::Item: Copy,

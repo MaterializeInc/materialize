@@ -39,6 +39,7 @@ macro_rules! cast_from {
         paste::paste! {
             impl crate::cast::CastFrom<$from> for $to {
                 #[allow(clippy::as_conversions)]
+                #[inline(always)]
                 fn cast_from(from: $from) -> $to {
                     from as $to
                 }
@@ -49,6 +50,7 @@ macro_rules! cast_from {
             /// This is equivalent to the [`crate::cast::CastFrom`] implementation but is
             /// available as a `const fn`.
             #[allow(clippy::as_conversions)]
+            #[inline(always)]
             pub const fn [< $from _to_ $to >](from: $from) -> $to {
                 from as $to
             }

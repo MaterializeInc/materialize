@@ -151,18 +151,21 @@ impl Timestamp {
 }
 
 impl From<u64> for Timestamp {
+    #[inline(always)]
     fn from(internal: u64) -> Self {
         Self { internal }
     }
 }
 
 impl From<Timestamp> for u64 {
+    #[inline(always)]
     fn from(ts: Timestamp) -> Self {
         ts.internal
     }
 }
 
 impl From<Timestamp> for u128 {
+    #[inline(always)]
     fn from(ts: Timestamp) -> Self {
         u128::from(ts.internal)
     }
@@ -171,18 +174,21 @@ impl From<Timestamp> for u128 {
 impl TryFrom<Timestamp> for i64 {
     type Error = TryFromIntError;
 
+    #[inline]
     fn try_from(value: Timestamp) -> Result<Self, Self::Error> {
         value.internal.try_into()
     }
 }
 
 impl From<&Timestamp> for u64 {
+    #[inline(always)]
     fn from(ts: &Timestamp) -> Self {
         ts.internal
     }
 }
 
 impl From<Timestamp> for Numeric {
+    #[inline(always)]
     fn from(ts: Timestamp) -> Self {
         ts.internal.into()
     }
@@ -191,6 +197,7 @@ impl From<Timestamp> for Numeric {
 impl std::ops::Rem<Timestamp> for Timestamp {
     type Output = Timestamp;
 
+    #[inline]
     fn rem(self, rhs: Timestamp) -> Self::Output {
         Self {
             internal: self.internal % rhs.internal,
@@ -199,6 +206,7 @@ impl std::ops::Rem<Timestamp> for Timestamp {
 }
 
 impl Serialize for Timestamp {
+    #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -208,6 +216,7 @@ impl Serialize for Timestamp {
 }
 
 impl<'de> Deserialize<'de> for Timestamp {
+    #[inline]
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -219,6 +228,7 @@ impl<'de> Deserialize<'de> for Timestamp {
 }
 
 impl timely::order::PartialOrder for Timestamp {
+    #[inline(always)]
     fn less_equal(&self, other: &Self) -> bool {
         self.internal.less_equal(&other.internal)
     }
@@ -277,10 +287,12 @@ impl mz_persist_types::Codec64 for Timestamp {
         u64::codec_name()
     }
 
+    #[inline(always)]
     fn encode(&self) -> [u8; 8] {
         self.internal.encode()
     }
 
+    #[inline(always)]
     fn decode(buf: [u8; 8]) -> Self {
         Self {
             internal: u64::decode(buf),
