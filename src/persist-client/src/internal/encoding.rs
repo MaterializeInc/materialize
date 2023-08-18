@@ -49,7 +49,6 @@ use crate::internal::state_diff::{
 use crate::internal::trace::Trace;
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
-use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
@@ -1153,43 +1152,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
             .map(|x| T::decode(x.to_le_bytes()))
             .collect::<Vec<_>>();
         Ok(Antichain::from(elements))
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeWriterEnrichedHollowBatch {
-    pub(crate) shard_id: ShardId,
-    pub(crate) version: Version,
-    pub(crate) batch: Vec<u8>,
-}
-
-impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterEnrichedHollowBatch {
-    fn from(x: WriterEnrichedHollowBatch<T>) -> Self {
-        SerdeWriterEnrichedHollowBatch {
-            shard_id: x.shard_id,
-            version: x.version,
-            batch: x.batch.into_proto().encode_to_vec(),
-        }
-    }
-}
-
-impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnrichedHollowBatch<T> {
-    fn from(x: SerdeWriterEnrichedHollowBatch) -> Self {
-        let SerdeWriterEnrichedHollowBatch {
-            shard_id,
-            version,
-            batch,
-        } = x;
-        let proto_batch = ProtoHollowBatch::decode(batch.as_slice())
-            .expect("internal error: could not decode WriterEnrichedHollowBatch");
-        let batch = proto_batch
-            .into_rust()
-            .expect("internal error: could not decode WriterEnrichedHollowBatch");
-        WriterEnrichedHollowBatch {
-            shard_id,
-            version,
-            batch,
-        }
     }
 }
 

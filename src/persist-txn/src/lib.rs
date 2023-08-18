@@ -390,7 +390,7 @@ async fn apply_caa(
     commit_ts: u64,
 ) -> bool {
     let batch = serde_json::from_str(batch_raw).expect("valid batch");
-    let mut batch = data_write.batch_from_hollow_batch(batch);
+    let mut batch = data_write.batch_from_transmittable_batch(batch);
     let mut upper = *data_write
         .upper()
         .as_option()
