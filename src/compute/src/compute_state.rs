@@ -225,21 +225,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.
-        let sink_ids = dataflow
-            .sink_exports
-            .iter()
-            .map(|(sink_id, sink)| (*sink_id, sink.from));
-        let index_ids = dataflow
-            .index_exports
-            .iter()
-            .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
-        let exported_ids = index_ids.chain(sink_ids);
-
         let dataflow_index = self.timely_worker.next_dataflow_index();
 
         // Initialize compute and logging state for each object.
         let worker_id = self.timely_worker.index();
-        for (object_id, collection_id) in exported_ids {
+        for object_id in dataflow.export_ids() {
             let metrics = self
                 .compute_state
                 .metrics
@@ -258,7 +248,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 );
             }
 
-            // Log dataflow construction, frontier construction, and any dependencies.
+            // Log dataflow construction and frontier construction.
             if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                 logger.log(ComputeEvent::Export {
                     id: object_id,
@@ -269,12 +259,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     time: timely::progress::Timestamp::minimum(),
                     diff: 1,
                 });
-                for import_id in dataflow.depends_on_imports(collection_id) {
-                    logger.log(ComputeEvent::ExportDependency {
-                        export_id: object_id,
-                        import_id,
-                    })
-                }
             }
         }
 
