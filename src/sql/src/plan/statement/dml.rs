@@ -316,7 +316,7 @@ pub fn plan_explain(
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
             (
-                mz_repr::explain::Explainee::Dataflow(mview.id()),
+                mz_repr::explain::Explainee::MaterializedView(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
             )
         }

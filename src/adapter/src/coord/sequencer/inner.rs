@@ -25,6 +25,7 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_expr::explain::ExplainContext;
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -36,7 +37,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, Explainee, UsedIndexes};
+use mz_repr::explain::{Explain, ExplainFormat, Explainee, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -101,6 +102,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::explain::Explainable;
 use crate::notice::AdapterNotice;
 use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -2754,10 +2756,65 @@ impl Coordinator {
 
     fn explain_materialized_view(
         &mut self,
-        _ctx: &mut ExecuteContext,
-        _plan: plan::ExplainPlan,
+        ctx: &mut ExecuteContext,
+        plan: plan::ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        coord_bail!("unsupported operation: explain_materialized_view");
+        let plan::ExplainPlan {
+            raw_plan: _,
+            row_set_finishing,
+            stage,
+            format,
+            config,
+            no_errors: _,
+            explainee,
+        } = plan;
+
+        assert!(row_set_finishing.is_none());
+
+        let Explainee::MaterializedView(id) = explainee else {
+            // This is currently asserted in the `sequence_explain` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
+            // This is currently asserted in the planner. However, this
+            // assumption might change when we make changes for #18089.
+            unreachable!()
+        };
+
+        if !matches!(stage, ExplainStage::OptimizedPlan) {
+            coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+        }
+
+        let Some(mut optimized_plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+            tracing::error!("cannot find OPTIMIZED PLAN FOR MATERIALIZED VIEW {id} in catalog");
+            coord_bail!("cannot find OPTIMIZED PLAN FOR MATERIALIZED VIEW in catalog");
+        };
+
+        // Collect the list of indexes used by the dataflow at this point.
+        let used_indexes = UsedIndexes::new(
+            optimized_plan
+                .index_imports
+                .iter()
+                .map(|(id, index_import)| {
+                    (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
+                })
+                .collect(),
+        );
+
+        let context = ExplainContext {
+            config: &config,
+            humanizer: &self.catalog().for_session(ctx.session()),
+            used_indexes,
+            finishing: None,
+            duration: Duration::default(),
+        };
+
+        let explain = Explainable::new(&mut optimized_plan).explain(&format, &context)?;
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
     }
 
     fn explain_index(
