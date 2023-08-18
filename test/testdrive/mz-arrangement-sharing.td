@@ -829,7 +829,6 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "ArrangeByKey Compute(ArrangementHeapCapacity)"
 "ArrangeByKey Compute(ArrangementHeapSize)"
 "ArrangeByKey Compute(DataflowCurrent)"
-"ArrangeByKey Compute(DataflowDependency)"
 "ArrangeByKey Compute(FrontierCurrent)"
 "ArrangeByKey Compute(FrontierDelay)"
 "ArrangeByKey Compute(ImportFrontierCurrent)"
