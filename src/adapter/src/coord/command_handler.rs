@@ -901,7 +901,7 @@ impl Coordinator {
 
         self.clear_transaction(session);
 
-        self.drop_temp_items(session).await;
+        self.drop_temp_items(session.conn_id()).await;
         self.catalog_mut()
             .drop_temporary_schema(session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");

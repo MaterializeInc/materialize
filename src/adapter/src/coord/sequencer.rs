@@ -389,18 +389,13 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(ctx.session()).await;
+                self.drop_temp_items(ctx.session().conn_id()).await;
                 ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
-                    self.drop_temp_items(ctx.session()).await;
-                    let conn_meta = self
-                        .active_conns
-                        .get_mut(ctx.session().conn_id())
-                        .expect("must exist for active session");
-                    let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
-                    self.drop_compute_sinks(drop_sinks);
+                    self.clear_transaction(ctx.session_mut());
+                    self.drop_temp_items(ctx.session().conn_id()).await;
                     ctx.session_mut().reset();
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
