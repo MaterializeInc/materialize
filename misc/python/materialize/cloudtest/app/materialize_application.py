@@ -48,13 +48,14 @@ class MaterializeApplication(CloudtestApplicationBase):
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
+        super().__init__(release_mode, aws_region, log_filter)
 
         # Register the VpcEndpoint CRD.
         self.register_vpc_endpoint()
 
         self.start_metrics_server()
 
-        super().__init__(release_mode, aws_region, log_filter)
+        self.create_resources_and_wait()
 
     def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
         return [

@@ -30,6 +30,7 @@ class CloudtestApplicationBase(Application):
         self.resources = self.get_resources(log_filter)
         self.images = self.get_images()
 
+    def create_resources_and_wait(self) -> None:
         self.create_resources()
         self.wait_resource_creation_completed()
 
