@@ -118,7 +118,7 @@ true
   ORDER BY
     l_returnflag,
     l_linestatus;
-4 values hashing to e350d21706985f8be572176f2301222f
+4 values hashing to 87d2cbecfc8cdcd9c9614dfb7e6d236f
 
 # Query 02
 > SELECT
@@ -839,7 +839,7 @@ true
   ORDER BY
     l_returnflag,
     l_linestatus;
-4 values hashing to e350d21706985f8be572176f2301222f
+4 values hashing to 87d2cbecfc8cdcd9c9614dfb7e6d236f
 
 # Query 02
 > SELECT

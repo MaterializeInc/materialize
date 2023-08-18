@@ -3159,8 +3159,26 @@ pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Laz
 
 pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
-    use ScalarType::*;
+    use ScalarBaseType::*;
     builtins! {
+        // Note: this is the original version of the AVG(...) function, as it existed prior to
+        // v0.66. We updated the internal type promotion used when summing values to increase
+        // precision, but objects (e.g. materialized views) that already used the AVG(...) function
+        // could not be changed. So we migrated all existing uses of the AVG(...) function to this
+        // version.
+        //
+        // TODO(parkmycar): When objects no longer depend on this function we can safely delete it.
+        "avg_internal_v1" => Scalar {
+            params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Numeric, oid::FUNC_AVG_INTERNAL_V1_INT64_OID;
+            params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Numeric, oid::FUNC_AVG_INTERNAL_V1_INT32_OID;
+            params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Numeric, oid::FUNC_AVG_INTERNAL_V1_INT16_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Numeric, oid::FUNC_AVG_INTERNAL_V1_UINT64_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Numeric, oid::FUNC_AVG_INTERNAL_V1_UINT32_OID;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Numeric, oid::FUNC_AVG_INTERNAL_V1_UINT16_OID;
+            params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Float64, oid::FUNC_AVG_INTERNAL_V1_FLOAT32_OID;
+            params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Float64, oid::FUNC_AVG_INTERNAL_V1_FLOAT64_OID;
+            params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg_internal_v1")) => Interval, oid::FUNC_AVG_INTERNAL_V1_INTERVAL_OID;
+        },
         "csv_extract" => Table {
             params!(Int64, String) => Operation::binary(move |_ecx, ncols, input| {
                 let ncols = match ncols.into_literal_int64() {
@@ -3341,7 +3359,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             vec![ListAny] => UnaryFunc::ListLength(func::ListLength) => Int32, oid::FUNC_LIST_LENGTH_OID;
         },
         "list_length_max" => Scalar {
-            vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
+            vec![ListAny, Plain(ScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
@@ -3493,6 +3511,39 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_any" => Aggregate {
             params!(Any) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
         },
+        // Note: See "avg_internal_v1" for why this duplicate function exists.
+        //
+        // TODO(parkmycar): Once there are no customers with objects using `avg_internal_v1` we can
+        // delete this function.
+        "mz_avg_promotion_internal_v1" => Scalar {
+            // Promotes a numeric type to the smallest fractional type that
+            // can represent it. This is primarily useful for the avg
+            // aggregate function, so that the avg of an integer column does
+            // not get truncated to an integer, which would be surprising to
+            // users (#549).
+            params!(Float32) => Operation::identity() => Float32, oid::FUNC_MZ_AVG_PROMOTION_F32_OID_INTERNAL_V1;
+            params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID_INTERNAL_V1;
+            params!(Int16) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID_INTERNAL_V1;
+            params!(Int32) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID_INTERNAL_V1;
+            params!(UInt16) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID_INTERNAL_V1;
+            params!(UInt32) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID_INTERNAL_V1;
+        },
         "mz_avg_promotion" => Scalar {
             // Promotes a numeric type to the smallest fractional type that
             // can represent it. This is primarily useful for the avg
@@ -3511,6 +3562,11 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
+            params!(Int64) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I64_OID;
             params!(UInt16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
@@ -3521,6 +3577,16 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
+            params!(UInt64) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U64_OID;
+            params!(Numeric) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
