@@ -339,6 +339,9 @@ statement ok
 CREATE INDEX Message_CreatorPersonId ON Message (CreatorPersonId)
 
 statement ok
+CREATE INDEX Message_RootPostLanguage ON Message (RootPostLanguage)
+
+statement ok
 CREATE OR REPLACE VIEW Comment_View AS
     SELECT creationDate, MessageId AS id, locationIP, browserUsed, content, length, CreatorPersonId, LocationCountryId, ParentMessageId
     FROM Message
@@ -1606,7 +1609,7 @@ EXPLAIN WITH(arity, join_impls) WITH
     WHERE Message.content IS NOT NULL
       AND Message.length < 120
       AND Message.creationDate > '2012-06-03'::TIMESTAMP
-      AND Message.RootPostLanguage = ANY ('{es, ta, pt}'::varchar[]) -- MZ change to use postgres containment check
+      AND Message.RootPostLanguage IN ('es', 'ta', 'pt') -- MZ change to use postgres containment check
   ),
   person_w_posts AS (
     SELECT Person.id, count(matching_message.MessageId) as messageCount
@@ -1651,29 +1654,19 @@ Explained Query:
       cte l1 =
         Project (#1, #12) // { arity: 2 }
           Filter (#19 < 120) AND (#11 > 2012-06-03 00:00:00 UTC) AND (#1) IS NOT NULL AND (#15) IS NOT NULL // { arity: 25 }
-            Join on=(#1 = #20 AND #14 = #24) type=differential // { arity: 25 }
+            Join on=(#1 = #20) type=differential // { arity: 25 }
               implementation
-                %0:l0[#1]KA » %1:message[#9]KAiif » %2[#0]UKAiif
+                %1:message[#9]KAeiif » %0:l0[#1]KAeiif
               Get l0 // { arity: 11 }
-              ArrangeBy keys=[[#9]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
-              ArrangeBy keys=[[#0]] // { arity: 1 }
-                Distinct group_by=[#0] // { arity: 1 }
-                  Project (#0) // { arity: 1 }
-                    Filter (#0 = varchar_to_text(#1)) // { arity: 2 }
-                      FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
-                        Distinct group_by=[#0] // { arity: 1 }
-                          Project (#3) // { arity: 1 }
-                            Filter (#8 < 120) AND (#0 > 2012-06-03 00:00:00 UTC) AND (#4) IS NOT NULL // { arity: 13 }
-                              Get materialize.public.message // { arity: 13 }
+              ArrangeBy keys=[[#9]] // { arity: 14 }
+                ReadExistingIndex materialize.public.message lookup_values=[("es"); ("pt"); ("ta")] // { arity: 14 }
       cte l0 =
         ArrangeBy keys=[[#1]] // { arity: 11 }
           Get materialize.public.person // { arity: 11 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, differential join)
-  - materialize.public.message_messageid (*** full scan ***)
-  - materialize.public.message_creatorpersonid (differential join)
+  - materialize.public.message_rootpostlanguage (lookup)
 
 EOF
 

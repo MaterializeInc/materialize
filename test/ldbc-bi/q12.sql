@@ -1,6 +1,7 @@
+-- TODO(mgree) we're using a different parameter format (raw table for IN expression) instead of an array
 \set startDate '\'2012-06-03\''::timestamp
 \set lengthThreshold '120'
-\set languages '\'{es, ta, pt}\''::varchar[]
+\set languages '(\'es\', \'ta\', \'pt\')'
 -- materialize=> \i q12.sql
 --  messagecount | personcount
 -- --------------+-------------
@@ -195,7 +196,7 @@ WITH
     WHERE Message.content IS NOT NULL
       AND Message.length < :lengthThreshold
       AND Message.creationDate > :startDate
-      AND Message.RootPostLanguage = ANY (:languages) -- MZ change to use postgres containment check
+      AND Message.RootPostLanguage IN :languages -- MZ change to use postgres containment check
   ),
   person_w_posts AS (
     SELECT Person.id, count(matching_message.MessageId) as messageCount

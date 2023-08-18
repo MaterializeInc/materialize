@@ -122,6 +122,7 @@ WITH MUTUALLY RECURSIVE
 CREATE INDEX Message_MessageId ON Message (MessageId);
 CREATE INDEX Message_ParentMessageId ON Message (ParentMessageId);
 CREATE INDEX Message_CreatorPersonId ON Message (CreatorPersonId);
+CREATE INDEX Message_RootPostLanguage ON Message (RootPostLanguage);
 
 -- views
 
