@@ -85,16 +85,26 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
-    let cloud_provider = cx.get_cloud_provider().await?;
 
-    loading_spinner.set_message("Disabling region...");
-    cx.cloud_client()
-        .delete_region(cloud_provider.clone())
-        .await?;
+    // The `delete_region` method retries disabling a region,
+    // has an inner timeout, and manages a `504` response.
+    // For any other type of error response, we handle it here
+    // with a retry loop.
+    Retry::default()
+        .max_duration(Duration::from_secs(360))
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async(|_| async {
+            let cloud_provider = cx.get_cloud_provider().await?;
 
-    loading_spinner.finish_with_message("Region disabled.");
+            loading_spinner.set_message("Disabling region...");
+            cx.cloud_client()
+                .delete_region(cloud_provider.clone())
+                .await?;
 
-    Ok(())
+            loading_spinner.finish_with_message("Region disabled.");
+            Ok(())
+        })
+        .await
 }
 
 /// Lists all the available regions and their status.
