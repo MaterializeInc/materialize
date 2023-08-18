@@ -152,18 +152,18 @@ CREATE OR REPLACE MATERIALIZED VIEW Top100PopularForumsQ04 AS
     T.maxNumberOfMembers AS maxNumberOfMembers
   FROM (SELECT
           ForumId AS id,
-	  MAX(numberOfMembers) AS maxNumberOfMembers
+          MAX(numberOfMembers) AS maxNumberOfMembers
         FROM (SELECT
-	        Forum_hasMember_Person.ForumId AS ForumId,
-		count(Person.id) AS numberOfMembers,
-		City.PartOfCountryId AS CountryId
+                Forum_hasMember_Person.ForumId AS ForumId,
+                count(Person.id) AS numberOfMembers,
+                City.PartOfCountryId AS CountryId
               FROM Forum_hasMember_Person
               JOIN Person
               ON Person.id = Forum_hasMember_Person.PersonId
               JOIN City
               ON City.id = Person.LocationCityId
               GROUP BY City.PartOfCountryId, Forum_hasMember_Person.ForumId)
-	      ForumMembershipPerCountry
+              ForumMembershipPerCountry
         GROUP BY ForumId) T, Forum
   WHERE T.id = Forum.id;
 CREATE INDEX Top100PopularForumsQ04_id ON Top100PopularForumsQ04 (id);
