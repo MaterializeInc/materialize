@@ -26,7 +26,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::StatementEndedExecutionReason;
-use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
@@ -48,7 +48,16 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
 
 #[derive(Debug)]
+pub struct CatalogSnapshot {
+    pub catalog: Arc<Catalog>,
+}
+
+#[derive(Debug)]
 pub enum Command {
+    CatalogSnapshot {
+        tx: oneshot::Sender<CatalogSnapshot>,
+    },
+
     Startup {
         session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
@@ -61,30 +70,6 @@ pub enum Command {
         secret_key: u32,
         uuid: Uuid,
         application_name: String,
-    },
-
-    Declare {
-        name: String,
-        stmt: Statement<Raw>,
-        inner_sql: String,
-        param_types: Vec<Option<ScalarType>>,
-        session: Session,
-        tx: oneshot::Sender<Response<ExecuteResponse>>,
-    },
-
-    Prepare {
-        name: String,
-        stmt: Option<Statement<Raw>>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
-    },
-
-    VerifyPreparedStatement {
-        name: String,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
     },
 
     Execute {
@@ -168,9 +153,6 @@ impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
             Command::Startup { session, .. }
-            | Command::Declare { session, .. }
-            | Command::Prepare { session, .. }
-            | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
@@ -179,6 +161,7 @@ impl Command {
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
             | Command::RetireExecute { .. } => None,
@@ -188,9 +171,6 @@ impl Command {
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
             Command::Startup { session, .. }
-            | Command::Declare { session, .. }
-            | Command::Prepare { session, .. }
-            | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
@@ -199,6 +179,7 @@ impl Command {
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
             | Command::RetireExecute { .. } => None,

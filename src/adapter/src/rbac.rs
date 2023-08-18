@@ -135,9 +135,6 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
             }
         }
         Command::Startup { .. }
-        | Command::Declare { .. }
-        | Command::Prepare { .. }
-        | Command::VerifyPreparedStatement { .. }
         | Command::Execute { .. }
         | Command::Commit { .. }
         | Command::CancelRequest { .. }
@@ -147,6 +144,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::SetSystemVars { .. }
         | Command::AppendWebhook { .. }
         | Command::Terminate { .. }
+        | Command::CatalogSnapshot { .. }
         | Command::RetireExecute { .. } => Ok(()),
     }
 }

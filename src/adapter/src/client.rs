@@ -39,11 +39,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
 
+use crate::catalog::Catalog;
 use crate::command::{
-    AppendWebhookResponse, Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse,
-    Response,
+    AppendWebhookResponse, Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse,
+    GetVariablesResponse, Response,
 };
-use crate::coord::ExecuteContextExtra;
+use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
@@ -397,12 +398,8 @@ impl SessionClient {
         &mut self,
         name: &str,
     ) -> Result<&PreparedStatement, AdapterError> {
-        self.send(|tx, session| Command::VerifyPreparedStatement {
-            name: name.to_string(),
-            session,
-            tx,
-        })
-        .await?;
+        let catalog = self.catalog_snapshot().await;
+        Coordinator::verify_prepared_statement(&catalog, self.session(), name)?;
         Ok(self
             .session()
             .get_prepared_statement_unverified(name)
@@ -420,15 +417,31 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Prepare {
+        let catalog = self.catalog_snapshot().await;
+
+        // Note: This failpoint is used to simulate a request outliving the external connection
+        // that made it.
+        let mut async_pause = false;
+        (|| {
+            fail::fail_point!("async_prepare", |val| {
+                async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
+            });
+        })();
+        if async_pause {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        };
+
+        let desc = Coordinator::describe(&catalog, self.session(), stmt.clone(), param_types)?;
+        let now = self.now();
+        self.session().set_prepared_statement(
             name,
             stmt,
             sql,
-            param_types,
-            session,
-            tx,
-        })
-        .await
+            desc,
+            catalog.transient_revision(),
+            now,
+        );
+        Ok(())
     }
 
     /// Binds a statement to a portal.
@@ -439,16 +452,32 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Declare {
+        let catalog = self.catalog_snapshot().await;
+        self.declare_inner(&catalog, name, stmt, sql, param_types)
+    }
+
+    fn declare_inner(
+        &mut self,
+        catalog: &Catalog,
+        name: String,
+        stmt: Statement<Raw>,
+        sql: String,
+        param_types: Vec<Option<ScalarType>>,
+    ) -> Result<(), AdapterError> {
+        let desc = Coordinator::describe(catalog, self.session(), Some(stmt.clone()), param_types)?;
+        let params = vec![];
+        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let logging = self.session().mint_logging(sql);
+        self.session().set_portal(
             name,
-            stmt,
-            inner_sql: sql,
-            param_types,
-            session,
-            tx,
-        })
-        .await
-        .map(|_| ())
+            desc,
+            Some(stmt),
+            logging,
+            params,
+            result_formats,
+            catalog.transient_revision(),
+        )?;
+        Ok(())
     }
 
     /// Executes a previously-bound portal.
@@ -522,6 +551,14 @@ impl SessionClient {
         self.session = Some(session);
     }
 
+    /// Fetches the catalog.
+    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+        let CatalogSnapshot { catalog } = self
+            .send_without_session(|tx| Command::CatalogSnapshot { tx })
+            .await;
+        catalog
+    }
+
     /// Dumps the catalog to a JSON string.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
@@ -537,7 +574,7 @@ impl SessionClient {
     ) {
         if !data.is_trivial() {
             let cmd = Command::RetireExecute { data, reason };
-            self.inner_mut().send(cmd);
+            self.inner().send(cmd);
         }
     }
 
@@ -605,9 +642,13 @@ impl SessionClient {
         self.inner.as_ref().expect("inner invariant violated")
     }
 
-    /// Returns a mutable reference to the inner client.
-    pub fn inner_mut(&mut self) -> &mut Client {
-        self.inner.as_mut().expect("inner invariant violated")
+    async fn send_without_session<T, F>(&self, f: F) -> T
+    where
+        F: FnOnce(oneshot::Sender<T>) -> Command,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.inner().send(f(tx));
+        rx.await.expect("sender dropped")
     }
 
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
@@ -631,18 +672,16 @@ impl SessionClient {
         let name_hint = ApplicationNameHint::from_str(application_name);
         let (tx, mut rx) = oneshot::channel();
         let conn_id = session.conn_id().clone();
-        self.inner_mut().send({
+        self.inner().send({
             let cmd = f(tx, session);
             // Measure the success and error rate of certain commands:
             // - declare reports success of SQL statement planning
             // - execute reports success of dataflow execution
             match cmd {
-                Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::AppendWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
-                | Command::Prepare { .. }
-                | Command::VerifyPreparedStatement { .. }
+                | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }

@@ -12,12 +12,10 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::ScalarType;
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
@@ -39,8 +37,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    AppendWebhookResponse, AppendWebhookValidator, Canceled, Command, ExecuteResponse,
-    GetVariablesResponse, Response, StartupResponse,
+    AppendWebhookResponse, AppendWebhookValidator, Canceled, CatalogSnapshot, Command,
+    ExecuteResponse, GetVariablesResponse, Response, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -63,9 +61,6 @@ impl Coordinator {
         }
         match cmd {
             Command::Startup { tx, session, .. } => send(tx, session, e),
-            Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Prepare { tx, session, .. } => send(tx, session, e),
-            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),
             Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
@@ -82,6 +77,7 @@ impl Coordinator {
                     send(tx, session, e)
                 }
             }
+            Command::CatalogSnapshot { .. } => panic!("Command::CatalogSnapshot is infallible"),
             Command::RetireExecute { .. } => panic!("Command::RetireExecute is infallible"),
         }
     }
@@ -139,36 +135,6 @@ impl Coordinator {
             }
 
             Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
-
-            Command::Declare {
-                name,
-                stmt,
-                inner_sql: sql,
-                param_types,
-                session,
-                tx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let ctx = ExecuteContext::from_parts(
-                    tx,
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    Default::default(),
-                );
-                self.declare(ctx, name, stmt, sql, param_types);
-            }
-
-            Command::Prepare {
-                name,
-                stmt,
-                sql,
-                param_types,
-                session,
-                tx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.handle_prepare(tx, session, name, stmt, sql, param_types);
-            }
 
             Command::CancelRequest {
                 conn_id,
@@ -301,16 +267,9 @@ impl Coordinator {
                     .await;
             }
 
-            Command::VerifyPreparedStatement {
-                name,
-                mut session,
-                tx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let catalog = self.owned_catalog();
-                mz_ore::task::spawn(|| "coord::VerifyPreparedStatement", async move {
-                    let result = Self::verify_prepared_statement(&catalog, &mut session, &name);
-                    tx.send(result, session);
+            Command::CatalogSnapshot { tx } => {
+                let _ = tx.send(CatalogSnapshot {
+                    catalog: self.owned_catalog(),
                 });
             }
         }
@@ -753,48 +712,6 @@ impl Coordinator {
                 Err(e) => ctx.retire(Err(e)),
             },
         }
-    }
-
-    fn handle_prepare(
-        &self,
-        tx: ClientTransmitter<()>,
-        mut session: Session,
-        name: String,
-        stmt: Option<Statement<Raw>>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-    ) {
-        let catalog = self.owned_catalog();
-        let now = self.now();
-        mz_ore::task::spawn(|| "coord::handle_prepare", async move {
-            // Note: This failpoint is used to simulate a request outliving the external connection
-            // that made it.
-            let mut async_pause = false;
-            (|| {
-                fail::fail_point!("async_prepare", |val| {
-                    async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
-                });
-            })();
-            if async_pause {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            };
-
-            let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
-                Ok(desc) => {
-                    session.set_prepared_statement(
-                        name,
-                        stmt,
-                        sql,
-                        desc,
-                        catalog.transient_revision(),
-                        now,
-                    );
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            };
-            tx.send(res, session);
-        });
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
