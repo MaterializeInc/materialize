@@ -49,6 +49,7 @@ CREATE TABLE Tag (
 );
 
 CREATE INDEX Tag_id ON Tag (id);
+CREATE INDEX Tag_name ON Tag (name);
 
 CREATE TABLE TagClass (
     id bigint,
@@ -58,6 +59,7 @@ CREATE TABLE TagClass (
 );
 
 CREATE INDEX TagClass_id ON TagClass (id);
+CREATE INDEX TagClass_name ON TagClass (name);
 
 -- dynamic tables
 
