@@ -337,11 +337,9 @@ def workflow_test_github_15531(c: Composition) -> None:
     assert controller_command_count > 0, "controller history cannot be empty"
     assert (
         controller_dataflow_count == 1
-    ), "more dataflows than expected in controller history"
+    ), "expected a single dataflow in controller history"
     assert replica_command_count > 0, "replica history cannot be empty"
-    assert (
-        replica_dataflow_count == 1
-    ), "more dataflows than expected in replica history"
+    assert replica_dataflow_count == 1, "expected a single dataflow in replica history"
 
     # execute 400 fast- and slow-path peeks
     for _ in range(20):
@@ -370,8 +368,8 @@ def workflow_test_github_15531(c: Composition) -> None:
             """
         )
 
-    # check that dataflow count is the same and
-    # that history size is well-behaved
+    # Check that history size and dataflow count are well-behaved.
+    # Dataflow count can plausibly be more than 1, if compaction is delayed.
     (
         controller_command_count,
         controller_dataflow_count,
@@ -382,11 +380,17 @@ def workflow_test_github_15531(c: Composition) -> None:
         controller_command_count < 100
     ), "controller history grew more than expected after peeks"
     assert (
+        controller_dataflow_count > 0
+    ), "at least one dataflow expected in controller history"
+    assert (
         controller_dataflow_count < 5
     ), "more dataflows than expected in controller history"
     assert (
         replica_command_count < 100
     ), "replica history grew more than expected after peeks"
+    assert (
+        replica_dataflow_count > 0
+    ), "at least one dataflow expected in replica history"
     assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 

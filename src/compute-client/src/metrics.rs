@@ -316,14 +316,14 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 /// Metrics keyed by `ComputeCommand` type.
 #[derive(Debug)]
 pub struct CommandMetrics<M> {
-    create_timely: M,
-    create_instance: M,
-    create_dataflow: M,
-    allow_compaction: M,
-    peek: M,
-    cancel_peek: M,
-    initialization_complete: M,
-    update_configuration: M,
+    pub create_timely: M,
+    pub create_instance: M,
+    pub create_dataflow: M,
+    pub allow_compaction: M,
+    pub peek: M,
+    pub cancel_peek: M,
+    pub initialization_complete: M,
+    pub update_configuration: M,
 }
 
 impl<M> CommandMetrics<M> {
