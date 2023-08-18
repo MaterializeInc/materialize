@@ -19,7 +19,7 @@ from materialize.cloudtest.util.web_request import post
 
 
 def sql_query(
-    conn: Connection,
+    conn: Connection[Any],
     query: str,
     vars: Optional[Sequence[Any]] = None,
 ) -> List[List[Any]]:
@@ -29,7 +29,7 @@ def sql_query(
 
 
 def sql_execute(
-    conn: Connection,
+    conn: Connection[Any],
     query: str,
     vars: Optional[Sequence[Any]] = None,
 ) -> None:
@@ -37,7 +37,7 @@ def sql_execute(
     cur.execute(query, vars)
 
 
-def pgwire_sql_conn(config: EnvironmentConfig) -> Connection:
+def pgwire_sql_conn(config: EnvironmentConfig) -> Connection[Any]:
     environment = wait_for_environmentd(config)
     pgwire_url: str = environment["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
