@@ -14,16 +14,6 @@ ALTER SYSTEM SET enable_table_keys = true
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t1 (a int, b text)
 
@@ -55,7 +45,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a_b
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (*** full scan ***)
 
 EOF
 
@@ -83,7 +73,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2)]
 
 Used Indexes:
-  - materialize.public.idx_t1_a
+  - materialize.public.idx_t1_a (lookup)
 
 EOF
 
@@ -106,7 +96,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a_b lookup_value=(2, "l2")
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -140,7 +130,7 @@ Explained Query:
           ReadExistingIndex materialize.public.t1 lookup_values=[(2, "l2"); (3, "l3")] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -168,7 +158,7 @@ Explained Query:
       Mfp
         project=(#0)
         map=(0)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -203,7 +193,7 @@ Explained Query:
               - (3, "l3")
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -218,7 +208,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a_b
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (*** full scan ***)
 
 EOF
 
@@ -239,7 +229,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_a lookup_value=(1)
 
 Used Indexes:
-  - materialize.public.idx_t1_a
+  - materialize.public.idx_t1_a (lookup)
 
 EOF
 
@@ -261,7 +251,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2")]
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -283,7 +273,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "a"); (1, "l1")]
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -314,7 +304,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t2_a_b_c lookup_values=[(1, 2, 3); (1, 4, 5); (1, 4, 7)]
 
 Used Indexes:
-  - materialize.public.idx_t2_a_b_c
+  - materialize.public.idx_t2_a_b_c (lookup)
 
 EOF
 
@@ -346,7 +336,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (3)]
 
 Used Indexes:
-  - materialize.public.idx_t1_a
+  - materialize.public.idx_t1_a (lookup)
 
 EOF
 
@@ -369,7 +359,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a_b
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (*** full scan ***)
 
 EOF
 
@@ -394,7 +384,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_aa lookup_value=(2)
 
 Used Indexes:
-  - materialize.public.idx_t1_aa
+  - materialize.public.idx_t1_aa (lookup)
 
 EOF
 
@@ -416,7 +406,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(1); (2); (3); (6); (7); (9); (-1)]
 
 Used Indexes:
-  - materialize.public.idx_t1_aa
+  - materialize.public.idx_t1_aa (lookup)
 
 EOF
 
@@ -442,7 +432,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(2); (6)]
 
 Used Indexes:
-  - materialize.public.idx_t1_aa
+  - materialize.public.idx_t1_aa (lookup)
 
 EOF
 
@@ -470,7 +460,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t2_a lookup_values=[(1); (2); (3)]
 
 Used Indexes:
-  - materialize.public.idx_t2_a
+  - materialize.public.idx_t2_a (lookup)
 
 EOF
 
@@ -523,7 +513,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_b lookup_values=[("l1"); ("l2"); ("l3"); ("l9")]
 
 Used Indexes:
-  - materialize.public.idx_t1_b
+  - materialize.public.idx_t1_b (lookup)
 
 EOF
 
@@ -547,7 +537,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_b lookup_values=[("l1"); ("l2"); ("l3"); ("l9")]
 
 Used Indexes:
-  - materialize.public.idx_t1_b
+  - materialize.public.idx_t1_b (lookup)
 
 EOF
 
@@ -568,7 +558,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2")]
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -592,7 +582,7 @@ Explained Query (fast path):
         ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
+  - materialize.public.idx_t1_a_b (lookup)
 
 EOF
 
@@ -625,7 +615,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2)]
 
 Used Indexes:
-  - materialize.public.idx_t1_a
+  - materialize.public.idx_t1_a (lookup)
 
 EOF
 
@@ -660,7 +650,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a lookup_value=(9)
 
 Used Indexes:
-  - materialize.public.idx_t1_a
+  - materialize.public.idx_t1_a (lookup)
 
 EOF
 
@@ -673,7 +663,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_t1_a lookup_value=(2)
 
 Used Indexes:
-  - materialize.public.idx_t1_a
+  - materialize.public.idx_t1_a (lookup)
 
 EOF
 
@@ -718,8 +708,8 @@ Explained Query:
           Get materialize.public.t2 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.idx_t2_a
-  - materialize.public.idx_t1_b
+  - materialize.public.idx_t2_a (differential join)
+  - materialize.public.idx_t1_b (lookup)
 
 EOF
 
@@ -753,8 +743,8 @@ Explained Query:
           Get materialize.public.t2 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.idx_t2_a
-  - materialize.public.idx_t1_b
+  - materialize.public.idx_t2_a (differential join)
+  - materialize.public.idx_t1_b (lookup)
 
 EOF
 
@@ -790,8 +780,8 @@ Explained Query:
         ReadExistingIndex materialize.public.t2 lookup_value=(2) // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b
-  - materialize.public.idx_t2_a
+  - materialize.public.idx_t1_a_b (lookup)
+  - materialize.public.idx_t2_a (lookup)
 
 EOF
 
@@ -823,7 +813,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.foo_primary_idx lookup_value=(0, 1, 2, "xxx")
 
 Used Indexes:
-  - materialize.public.foo_primary_idx
+  - materialize.public.foo_primary_idx (lookup)
 
 EOF
 
@@ -836,7 +826,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.foo_primary_idx lookup_value=(0, 1, 2, "xxx")
 
 Used Indexes:
-  - materialize.public.foo_primary_idx
+  - materialize.public.foo_primary_idx (lookup)
 
 EOF
 
@@ -860,7 +850,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_a lookup_value=(0)
 
 Used Indexes:
-  - materialize.public.idx_foo_a
+  - materialize.public.idx_foo_a (lookup)
 
 EOF
 
@@ -882,7 +872,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_a lookup_value=(3)
 
 Used Indexes:
-  - materialize.public.idx_foo_a
+  - materialize.public.idx_foo_a (lookup)
 
 EOF
 
@@ -904,7 +894,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_a lookup_value=(3)
 
 Used Indexes:
-  - materialize.public.idx_foo_a
+  - materialize.public.idx_foo_a (lookup)
 
 EOF
 
@@ -931,7 +921,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_a_cast lookup_value=(0)
 
 Used Indexes:
-  - materialize.public.idx_foo_a_cast
+  - materialize.public.idx_foo_a_cast (lookup)
 
 EOF
 
@@ -955,7 +945,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_v_cast lookup_value=("xxx")
 
 Used Indexes:
-  - materialize.public.idx_foo_v_cast
+  - materialize.public.idx_foo_v_cast (lookup)
 
 EOF
 
@@ -980,7 +970,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_a lookup_value=(0)
 
 Used Indexes:
-  - materialize.public.idx_foo_a
+  - materialize.public.idx_foo_a (lookup)
 
 EOF
 
@@ -1005,7 +995,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.idx_foo_v lookup_value=("xxx")
 
 Used Indexes:
-  - materialize.public.idx_foo_v
+  - materialize.public.idx_foo_v (lookup)
 
 EOF
 
@@ -1045,7 +1035,7 @@ Explained Query (fast path):
         ReadExistingIndex materialize.public.idx_t2_a_b_c
 
 Used Indexes:
-  - materialize.public.idx_t2_a_b_c
+  - materialize.public.idx_t2_a_b_c (*** full scan ***)
 
 EOF
 
@@ -1066,7 +1056,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.bar_expr_idx lookup_value=(true)
 
 Used Indexes:
-  - materialize.public.bar_expr_idx
+  - materialize.public.bar_expr_idx (lookup)
 
 EOF
 
@@ -1092,7 +1082,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.t3i0
 
 Used Indexes:
-  - materialize.public.t3i0
+  - materialize.public.t3i0 (*** full scan ***)
 
 EOF
 
@@ -1115,7 +1105,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.t3i0 lookup_values=[(0.6); (0.1); (-0.1)]
 
 Used Indexes:
-  - materialize.public.t3i0
+  - materialize.public.t3i0 (lookup)
 
 EOF
 
@@ -1137,7 +1127,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.t3i0 lookup_values=[(1); (-0.1)]
 
 Used Indexes:
-  - materialize.public.t3i0
+  - materialize.public.t3i0 (lookup)
 
 EOF
 
@@ -1184,7 +1174,7 @@ Explained Query:
           ReadExistingIndex materialize.public.t4 lookup_values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
 
 Used Indexes:
-  - materialize.public.idx_t4_a_b_c
+  - materialize.public.idx_t4_a_b_c (lookup)
 
 EOF
 
@@ -1248,6 +1238,6 @@ Explained Query:
                   Get l0
 
 Used Indexes:
-  - materialize.public.idx_t5_f1
+  - materialize.public.idx_t5_f1 (*** full scan ***, lookup)
 
 EOF

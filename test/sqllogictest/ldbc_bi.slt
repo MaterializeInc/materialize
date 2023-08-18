@@ -421,7 +421,7 @@ Explained Query:
               Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.message_messageid
+  - materialize.public.message_messageid (*** full scan ***)
 
 EOF
 
@@ -515,9 +515,9 @@ Explained Query:
                   Get materialize.public.tag // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.tag_id
-  - materialize.public.tagclass_name
-  - materialize.public.message_messageid
+  - materialize.public.tag_id (*** full scan ***)
+  - materialize.public.tagclass_name (lookup)
+  - materialize.public.message_messageid (differential join)
 
 EOF
 
@@ -592,13 +592,13 @@ Explained Query:
                           Get materialize.public.message_hastag_tag // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.tag_id
-  - materialize.public.tagclass_name
-  - materialize.public.forum_id
-  - materialize.public.person_id
-  - materialize.public.country_id
-  - materialize.public.city_id
-  - materialize.public.message_messageid
+  - materialize.public.tag_id (*** full scan ***)
+  - materialize.public.tagclass_name (lookup)
+  - materialize.public.forum_id (differential join)
+  - materialize.public.person_id (differential join)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (differential join)
+  - materialize.public.message_messageid (differential join)
 
 EOF
 
@@ -743,9 +743,10 @@ Explained Query:
                 Get materialize.public.top100popularforumsq04 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.message_creatorpersonid
-  - materialize.public.top100popularforumsq04_id
+  - materialize.public.person_id (*** full scan ***, delta join 1st input (full scan))
+  - materialize.public.message_messageid (*** full scan ***)
+  - materialize.public.message_creatorpersonid (differential join)
+  - materialize.public.top100popularforumsq04_id (*** full scan ***)
 
 EOF
 
@@ -843,8 +844,8 @@ Explained Query:
                 Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.tag_name
-  - materialize.public.message_messageid
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (*** full scan ***, differential join)
 
 EOF
 
@@ -966,9 +967,9 @@ Explained Query:
                 Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.tag_id
-  - materialize.public.message_messageid
-  - materialize.public.popularityscoreq06_person2id
+  - materialize.public.tag_id (differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.popularityscoreq06_person2id (differential join)
 
 EOF
 
@@ -1062,9 +1063,9 @@ Explained Query:
           Get materialize.public.message_hastag_tag // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.tag_id
-  - materialize.public.tag_name
-  - materialize.public.message_parentmessageid
+  - materialize.public.tag_id (differential join)
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_parentmessageid (differential join)
 
 EOF
 
@@ -1255,10 +1256,10 @@ Explained Query:
           Get materialize.public.person // { arity: 11 }
 
 Used Indexes:
-  - materialize.public.tag_name
-  - materialize.public.person_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.message_messageid
+  - materialize.public.tag_name (lookup)
+  - materialize.public.person_id (differential join)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.message_messageid (differential join)
 
 EOF
 
@@ -1308,9 +1309,9 @@ Explained Query:
                     Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.message_messageid
-  - materialize.public.message_creatorpersonid
+  - materialize.public.person_id (delta join 1st input (full scan))
+  - materialize.public.message_messageid (*** full scan ***, delta join lookup)
+  - materialize.public.message_creatorpersonid (delta join lookup)
 
 EOF
 
@@ -1484,13 +1485,13 @@ Explained Query:
             Get materialize.public.person_knows_person // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.tag_id
-  - materialize.public.tagclass_name
-  - materialize.public.person_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.country_id
-  - materialize.public.city_id
-  - materialize.public.message_messageid
+  - materialize.public.tag_id (*** full scan ***, differential join)
+  - materialize.public.tagclass_name (lookup)
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
 
 EOF
 
@@ -1581,10 +1582,10 @@ Explained Query:
                   Get materialize.public.person_knows_person // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.country_id
-  - materialize.public.city_id
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***)
 
 EOF
 
@@ -1670,8 +1671,9 @@ Explained Query:
           Get materialize.public.person // { arity: 11 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.message_creatorpersonid
+  - materialize.public.person_id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (*** full scan ***)
+  - materialize.public.message_creatorpersonid (differential join)
 
 EOF
 
@@ -1752,8 +1754,8 @@ Explained Query:
               Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.message_messageid
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
 
 EOF
 
@@ -1919,11 +1921,11 @@ Explained Query:
                   Get materialize.public.person // { arity: 11 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.country_id
-  - materialize.public.city_id
-  - materialize.public.message_messageid
-  - materialize.public.message_creatorpersonid
+  - materialize.public.person_id (*** full scan ***, differential join)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_creatorpersonid (differential join)
 
 EOF
 
@@ -2131,12 +2133,12 @@ Explained Query:
           Get materialize.public.country // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.country_id
-  - materialize.public.city_id
-  - materialize.public.message_messageid
-  - materialize.public.message_parentmessageid
+  - materialize.public.person_id (*** full scan ***, differential join)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_parentmessageid (differential join)
 
 EOF
 
@@ -2308,10 +2310,10 @@ Explained Query:
                 Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.forum_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.message_messageid
-  - materialize.public.message_parentmessageid
+  - materialize.public.forum_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_parentmessageid (differential join)
 
 EOF
 
@@ -2726,10 +2728,10 @@ Explained Query:
               Get materialize.public.message // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.forum_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.message_messageid
-  - materialize.public.message_parentmessageid
+  - materialize.public.forum_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_parentmessageid (differential join)
 
 EOF
 
@@ -2924,10 +2926,10 @@ Explained Query:
                 Get materialize.public.person // { arity: 11 }
 
 Used Indexes:
-  - materialize.public.tag_name
-  - materialize.public.person_id
-  - materialize.public.person_knows_person_person1id_person2id
-  - materialize.public.message_messageid
+  - materialize.public.tag_name (lookup)
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
 
 EOF
 
@@ -3049,8 +3051,8 @@ Explained Query:
                             ReadExistingIndex materialize.public.tag lookup_value=("Cosmic_Egg") // { arity: 5 }
 
 Used Indexes:
-  - materialize.public.tag_name
-  - materialize.public.message_messageid
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (differential join)
 
 EOF
 
@@ -3141,8 +3143,8 @@ Explained Query:
           Get materialize.public.person_knows_person // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.tag_name
-  - materialize.public.person_knows_person_person1id_person2id
+  - materialize.public.tag_name (lookup)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
 
 EOF
 
@@ -3273,8 +3275,8 @@ Explained Query:
                     Get materialize.public.pathq19 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.pathq19_src
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.pathq19_src (differential join)
 
 EOF
 
@@ -3456,8 +3458,8 @@ Explained Query:
                   Get l6 // { arity: 1 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.pathq19_src
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.pathq19_src (differential join)
 
 EOF
 
@@ -3689,8 +3691,8 @@ Explained Query:
               Get l7 // { arity: 6 }
 
 Used Indexes:
-  - materialize.public.person_id
-  - materialize.public.pathq19_src
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.pathq19_src (differential join)
 
 EOF
 
@@ -3813,8 +3815,8 @@ Explained Query:
                     - (10995116285979, 0)
 
 Used Indexes:
-  - materialize.public.company_id
-  - materialize.public.pathq20_src
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
 
 EOF
 
@@ -3915,8 +3917,8 @@ Explained Query:
                 - (10995116285979, 0)
 
 Used Indexes:
-  - materialize.public.company_id
-  - materialize.public.pathq20_src
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
 
 EOF
 
@@ -4027,8 +4029,8 @@ Explained Query:
                       - (10995116285979, 0, 0)
 
 Used Indexes:
-  - materialize.public.company_id
-  - materialize.public.pathq20_src
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
 
 EOF
 
@@ -4336,7 +4338,7 @@ Explained Query:
                 Get materialize.public.company // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.company_id
-  - materialize.public.pathq20_src
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
 
 EOF

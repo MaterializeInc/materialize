@@ -272,7 +272,7 @@ Explained Query:
               Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_orderline_order (*** full scan ***)
 
 EOF
 
@@ -352,9 +352,10 @@ Source materialize.public.region
   filter=(like["EUROP%"](padchar(#1)))
 
 Used Indexes:
-  - materialize.public.fk_stock_supplier
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_stock_supplier (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***, differential join)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***, differential join)
 
 EOF
 
@@ -398,9 +399,9 @@ Explained Query:
                 Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (differential join)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -452,8 +453,8 @@ Explained Query:
             Get materialize.public.order // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -517,12 +518,12 @@ Source materialize.public.region
   filter=((#1 = "EUROPE"))
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -555,7 +556,7 @@ Explained Query:
               Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_orderline_order (*** full scan ***)
 
 EOF
 
@@ -626,12 +627,12 @@ Explained Query:
               Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (*** full scan ***)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -712,12 +713,12 @@ Source materialize.public.region
   filter=((#1 = "EUROPE"))
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -771,11 +772,11 @@ Source materialize.public.item
   filter=(like["%BB"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -821,10 +822,10 @@ Explained Query:
                   Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
 
 EOF
 
@@ -877,9 +878,9 @@ Explained Query:
                   Get materialize.public.nation // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.fk_stock_supplier
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_stock_supplier (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (differential join)
 
 EOF
 
@@ -915,8 +916,8 @@ Explained Query:
               Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -967,8 +968,8 @@ Explained Query:
                 Get materialize.public.order // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (differential join)
 
 EOF
 
@@ -1011,7 +1012,7 @@ Explained Query:
                     Get materialize.public.item // { arity: 5 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
+  - materialize.public.fk_orderline_item (differential join)
 
 EOF
 
@@ -1080,9 +1081,9 @@ Explained Query:
                     Get materialize.public.stock // { arity: 18 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_stock
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_orderline_stock (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -1148,8 +1149,8 @@ Source materialize.public.item
   filter=(NOT(like["zz%"](padchar(#4))))
 
 Used Indexes:
-  - materialize.public.fk_stock_item
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_stock_item (differential join)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -1211,7 +1212,7 @@ Source materialize.public.item
   filter=(like["%b"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
+  - materialize.public.fk_orderline_item (differential join)
 
 EOF
 
@@ -1249,9 +1250,9 @@ Explained Query:
                   Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (differential join)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -1316,7 +1317,7 @@ Source materialize.public.item
   map=(padchar(#4))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
+  - materialize.public.fk_orderline_item (differential join)
 
 EOF
 
@@ -1386,10 +1387,10 @@ Source materialize.public.item
   filter=(like["co%"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
-  - materialize.public.fk_stock_item
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_orderline_item (differential join)
+  - materialize.public.fk_stock_item (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (differential join)
 
 EOF
 
@@ -1473,11 +1474,11 @@ Explained Query:
           Get materialize.public.orderline // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -1553,7 +1554,7 @@ Explained Query:
           Get materialize.public.customer // { arity: 22 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
 
 EOF

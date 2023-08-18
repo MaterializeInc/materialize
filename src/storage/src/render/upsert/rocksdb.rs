@@ -46,13 +46,16 @@ impl UpsertStateBackend for RocksDB {
                     match (&value, previous_persisted_size) {
                         (Some(_), Some(ps)) => {
                             p_stats.size_diff -= ps;
+                            p_stats.updates += 1;
                         }
                         (None, Some(ps)) => {
                             p_stats.size_diff -= ps;
                             p_stats.values_diff -= 1;
+                            p_stats.deletes += 1;
                         }
                         (Some(_), None) => {
                             p_stats.values_diff += 1;
+                            p_stats.inserts += 1;
                         }
                         (None, None) => {}
                     }
@@ -94,6 +97,8 @@ impl UpsertStateBackend for RocksDB {
             .await?;
 
         g_stats.processed_gets += stats.processed_gets;
+        g_stats.processed_gets_size += stats.processed_gets_size;
+        g_stats.returned_gets += stats.returned_gets;
         Ok(g_stats)
     }
 }

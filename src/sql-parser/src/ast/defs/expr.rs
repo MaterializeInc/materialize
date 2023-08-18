@@ -20,6 +20,9 @@
 
 use std::{fmt, mem};
 
+use mz_ore::soft_assert_eq;
+use mz_sql_lexer::keywords::*;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
 
@@ -816,6 +819,33 @@ pub struct Function<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for Function<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        // This block handles printing function calls that have special parsing. In stable mode, the
+        // name is quoted and so won't get the special parsing. We only need to print the special
+        // formats in non-stable mode.
+        if !f.stable() {
+            let special: Option<(&str, &[Option<Keyword>])> =
+                match self.name.to_ast_string_stable().as_str() {
+                    r#""extract""# if self.args.len() == Some(2) => {
+                        Some(("extract", &[None, Some(FROM)]))
+                    }
+                    r#""position""# if self.args.len() == Some(2) => {
+                        Some(("position", &[None, Some(IN)]))
+                    }
+
+                    // "trim" doesn't need to appear here because it changes the function name (to
+                    // "btrim", "ltrim", or "rtrim"), but only "trim" is parsed specially. "substring"
+                    // supports comma-delimited arguments, so doesn't need to be here.
+                    _ => None,
+                };
+            if let Some((name, kws)) = special {
+                f.write_str(name);
+                f.write_str("(");
+                self.args.intersperse_function_argument_keywords(f, kws);
+                f.write_str(")");
+                return;
+            }
+        }
+
         f.write_node(&self.name);
         f.write_str("(");
         if self.distinct {
@@ -852,6 +882,38 @@ impl<T: AstInfo> FunctionArgs<T> {
         Self::Args {
             args,
             order_by: vec![],
+        }
+    }
+
+    /// Returns the number of arguments. Star (`*`) is None.
+    fn len(&self) -> Option<usize> {
+        match self {
+            FunctionArgs::Star => None,
+            FunctionArgs::Args { args, .. } => Some(args.len()),
+        }
+    }
+
+    /// Prints associated keywords before each argument
+    fn intersperse_function_argument_keywords<W: fmt::Write>(
+        &self,
+        f: &mut AstFormatter<W>,
+        kws: &[Option<Keyword>],
+    ) {
+        let args = match self {
+            FunctionArgs::Star => unreachable!(),
+            FunctionArgs::Args { args, .. } => args,
+        };
+        soft_assert_eq!(args.len(), kws.len());
+        let mut delim = "";
+        for (arg, kw) in args.iter().zip(kws) {
+            if let Some(kw) = kw {
+                f.write_str(delim);
+                f.write_str(kw.as_str());
+                delim = " ";
+            }
+            f.write_str(delim);
+            f.write_node(arg);
+            delim = " ";
         }
     }
 }

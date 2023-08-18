@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -30,6 +30,8 @@ pub struct Metrics {
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
+    pub introspection_logins: IntCounter,
+    pub statement_logging_actual_bytes: IntCounterVec,
 }
 
 impl Metrics {
@@ -53,7 +55,7 @@ impl Metrics {
             queue_busy_seconds: registry.register(metric!(
                 name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
-                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+                buckets: histogram_seconds_buckets(0.000_128, 32.0)
             )),
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
@@ -101,6 +103,14 @@ impl Metrics {
                 name: "mz_statement_logging_unsampled_bytes",
                 help: "The total amount of SQL text that would have been logged if statement logging were unsampled.",
             )),
+            introspection_logins: registry.register(metric!(
+                name: "mz_introspection_logins",
+                help: "Number of times mz_introspection used the psql interface",
+            )),
+            statement_logging_actual_bytes: registry.register(metric!(
+                name: "mz_statement_logging_actual_bytes",
+                help: "The total amount of SQL text that was logged by statement logging.",
+            ))
         }
     }
 }

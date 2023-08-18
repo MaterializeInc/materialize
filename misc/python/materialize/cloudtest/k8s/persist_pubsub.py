@@ -9,11 +9,13 @@
 
 from kubernetes.client import V1ObjectMeta, V1Service, V1ServicePort, V1ServiceSpec
 
-from materialize.cloudtest.k8s import K8sService
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class PersistPubSubService(K8sService):
-    def __init__(self) -> None:
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
         self.service = V1Service(
             api_version="v1",
             kind="Service",

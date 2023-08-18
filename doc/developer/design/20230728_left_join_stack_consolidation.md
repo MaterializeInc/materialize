@@ -128,6 +128,8 @@ How `consolidate` works is that it buffers up some data before it actually conso
 
 The total effect of the feature on memory usage will still be beneficial, as the unconsolidated records are currently consolidated several times when they go into joins (e.g., the 2 unconsolidated records coming from `l1` are currently consolidated both when forming the arrangement for the join in `l2` and also similarly in `l4`). One situation when we might have a net increase in memory usage is when there is only one LEFT JOIN, and there are no other operators downstream that would benefit from a consolidation, but this is probably not so common. Another situation when the consolidation is not helping much is if most records from the left side of a LEFT JOIN don't have a match on the right side.
 
+Also note that the ArrangeBy of the Join that the Union-Negate pattern feeds (e.g., the second usage of `l1`) will have a smaller memory usage after the consolidation.
+
 # Testing and Rollout
 [rollout]: #rollout
 

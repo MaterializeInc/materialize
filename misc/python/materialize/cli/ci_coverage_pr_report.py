@@ -16,7 +16,7 @@ from typing import Callable, Dict, Optional
 
 import junit_xml
 
-from materialize import ROOT, ci_util
+from materialize import MZ_ROOT, ci_util
 
 # - None value indicates that this line is interesting, but we don't know yet
 #   if it can actually be covered.
@@ -259,7 +259,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
     test_cases.append(test_case)
 
     junit_suite = junit_xml.TestSuite("Code Coverage", test_cases)
-    junit_report = ROOT / ci_util.junit_report_filename("coverage")
+    junit_report = MZ_ROOT / ci_util.junit_report_filename("coverage")
     with junit_report.open("w") as f:
         junit_xml.to_xml_report_file(f, [junit_suite])
 

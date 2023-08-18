@@ -425,6 +425,7 @@ impl TrimStats for ProtoPrimitiveStats {
         }
     }
 }
+
 impl TrimStats for ProtoPrimitiveBytesStats {
     fn trim(&mut self) {
         let common_prefix = self
@@ -502,27 +503,53 @@ impl TrimStats for ProtoStructStats {
 /// returns true for that column. The resulting StructStats object is
 /// guaranteed to fit within the passed budget, except when the columns that
 /// are force-kept are collectively larger than the budget.
+///
+/// The number of bytes trimmed is returned.
 pub fn trim_to_budget(
     stats: &mut ProtoStructStats,
     budget: usize,
     force_keep_col: impl Fn(&str) -> bool,
-) {
+) -> usize {
     // No trimming necessary should be the overwhelming common case in practice.
-    if stats.encoded_len() <= budget {
-        return;
+    let original_cost = stats.encoded_len();
+    if original_cost <= budget {
+        return 0;
     }
 
     // First try any lossy trimming that doesn't lose an entire column.
     stats.trim();
-    if stats.encoded_len() <= budget {
-        return;
+    let new_cost = stats.encoded_len();
+    if new_cost <= budget {
+        return original_cost.saturating_sub(new_cost);
     }
 
-    // That wasn't enough. Sort the columns in order of ascending size and
-    // keep however many fit within the budget. This strategy both keeps the
-    // largest total number of columns and also optimizes for the sort of
-    // columns we expect to need stats in practice (timestamps are numbers
-    // or small strings).
+    // That wasn't enough. Try recursively trimming out entire cols.
+    //
+    // TODO: There are certainly more elegant things we could do here. One idea
+    // would be to call `trim_to_budget_struct` but with a closure for
+    // force_keep_col that always returns false. That would potentially at least
+    // keep _something_. Another possibility would be to replace this whole bit
+    // with some sort of recursive max-cost search with force_keep_col things
+    // weighted after everything else.
+    let mut budget_shortfall = new_cost.saturating_sub(budget);
+    trim_to_budget_struct(stats, &mut budget_shortfall, &force_keep_col);
+    original_cost.saturating_sub(stats.encoded_len())
+}
+
+/// Recursively trims cols in the struct, greatest-size first, keeping force
+/// kept cols and ancestors of force kept cols.
+fn trim_to_budget_struct(
+    stats: &mut ProtoStructStats,
+    budget_shortfall: &mut usize,
+    force_keep_col: &impl Fn(&str) -> bool,
+) {
+    // Sort the columns in order of ascending size and keep however many fit
+    // within the budget. This strategy both keeps the largest total number of
+    // columns and also optimizes for the sort of columns we expect to need
+    // stats in practice (timestamps are numbers or small strings).
+    //
+    // Note: even though we sort in ascending order, we use `.pop()` to iterate
+    // over the elements, which takes from the back of the Vec.
     let mut col_costs: Vec<_> = stats
         .cols
         .iter()
@@ -530,13 +557,7 @@ pub fn trim_to_budget(
         .collect();
     col_costs.sort_unstable_by_key(|(_, c)| *c);
 
-    // We'd like to remove columns until the overall stats' encoded_len
-    // is less than the budget, but we don't want to call encoded_len
-    // for every column we remove, to avoid quadratic costs in the number
-    // of columns. Instead, we keep a running upper-bound estimate of
-    // encoded_len as we go.
-    let mut encoded_len = stats.encoded_len();
-    while encoded_len > budget {
+    while *budget_shortfall > 0 {
         let Some((name, cost)) = col_costs.pop() else {
             break;
         };
@@ -545,12 +566,117 @@ pub fn trim_to_budget(
             continue;
         }
 
-        stats.cols.remove(&name);
-        // Each field costs at least the cost of serializing the value
-        // and a byte for the tag. (Though a tag may be more than one
-        // byte in extreme cases.)
-        encoded_len -= cost + 1;
+        // Otherwise, if the col is a struct, recurse into it.
+        //
+        // TODO: Do this same recursion for json stats.
+        let col_stats = stats.cols.get_mut(&name).expect("col exists");
+        match &mut col_stats.kind {
+            Some(proto_dyn_stats::Kind::Struct(col_struct)) => {
+                trim_to_budget_struct(col_struct, budget_shortfall, force_keep_col);
+                // This recursion might have gotten us under budget.
+                if *budget_shortfall == 0 {
+                    break;
+                }
+                // Otherwise, if any columns are left, they must have been force
+                // kept, which means we need to force keep this struct as well.
+                if !col_struct.cols.is_empty() {
+                    continue;
+                }
+                // We have to recompute the cost because trim_to_budget_struct might
+                // have already accounted for some of the shortfall.
+                *budget_shortfall = budget_shortfall.saturating_sub(col_struct.encoded_len() + 1);
+                stats.cols.remove(&name);
+            }
+            Some(proto_dyn_stats::Kind::Bytes(ProtoBytesStats {
+                kind:
+                    Some(proto_bytes_stats::Kind::Json(ProtoJsonStats {
+                        kind: Some(proto_json_stats::Kind::Maps(col_jsonb)),
+                    })),
+            })) => {
+                trim_to_budget_jsonb(col_jsonb, budget_shortfall, force_keep_col);
+                // This recursion might have gotten us under budget.
+                if *budget_shortfall == 0 {
+                    break;
+                }
+                // Otherwise, if any columns are left, they must have been force
+                // kept, which means we need to force keep this struct as well.
+                if !col_jsonb.elements.is_empty() {
+                    continue;
+                }
+                // We have to recompute the cost because trim_to_budget_jsonb might
+                // have already accounted for some of the shortfall.
+                *budget_shortfall = budget_shortfall.saturating_sub(col_jsonb.encoded_len() + 1);
+                stats.cols.remove(&name);
+            }
+            _ => {
+                stats.cols.remove(&name);
+                // Each field costs at least the cost of serializing the value
+                // and a byte for the tag. (Though a tag may be more than one
+                // byte in extreme cases.)
+                *budget_shortfall = budget_shortfall.saturating_sub(cost + 1);
+            }
+        }
     }
+}
+
+fn trim_to_budget_jsonb(
+    stats: &mut ProtoJsonMapStats,
+    budget_shortfall: &mut usize,
+    force_keep_col: &impl Fn(&str) -> bool,
+) {
+    // Sort the columns in order of ascending size and keep however many fit
+    // within the budget. This strategy both keeps the largest total number of
+    // columns and also optimizes for the sort of columns we expect to need
+    // stats in practice (timestamps are numbers or small strings).
+    //
+    // Note: even though we sort in ascending order, we use `.pop()` to iterate
+    // over the elements, which takes from the back of the Vec.
+    stats
+        .elements
+        .sort_unstable_by_key(|element| element.encoded_len());
+
+    // Our strategy is to pop of stats until there are no more, or we're under
+    // budget. As we trim anything we want to keep, e.g. with force_keep_col,
+    // we stash it here, and later re-append.
+    let mut stats_to_keep = Vec::with_capacity(stats.elements.len());
+
+    while *budget_shortfall > 0 {
+        let Some(mut column) = stats.elements.pop() else {
+            break;
+        };
+
+        // We're force keeping this column.
+        if force_keep_col(&column.name) {
+            stats_to_keep.push(column);
+            continue;
+        }
+
+        // If the col is another JSON map, recurse into it and trim its stats.
+        if let Some(ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(ref mut col_jsonb)),
+        }) = column.stats
+        {
+            trim_to_budget_jsonb(col_jsonb, budget_shortfall, force_keep_col);
+
+            // We still have some columns left after trimming, so we want to keep these stats.
+            if !col_jsonb.elements.is_empty() {
+                stats_to_keep.push(column);
+            }
+
+            // We've trimmed enough, so we can stop recursing!
+            if *budget_shortfall == 0 {
+                break;
+            }
+        } else {
+            // Each field costs at least the cost of serializing the value
+            // and a byte for the tag. (Though a tag may be more than one
+            // byte in extreme cases.)
+            *budget_shortfall = budget_shortfall.saturating_sub(column.encoded_len() + 1);
+        }
+    }
+
+    // Re-add all of the stats we want to keep.
+    stats.elements.extend(stats_to_keep);
 }
 
 mod impls {
@@ -1615,9 +1741,10 @@ mod tests {
             let mut budget = stats.encoded_len().next_power_of_two();
             while budget > 0 {
                 let cost_before = stats.encoded_len();
-                trim_to_budget(&mut stats, budget, |col| Some(col) == required);
+                let trimmed = trim_to_budget(&mut stats, budget, |col| Some(col) == required);
                 let cost_after = stats.encoded_len();
                 assert!(cost_before >= cost_after);
+                assert_eq!(trimmed, cost_before - cost_after);
                 if let Some(required) = required {
                     assert!(stats.cols.contains_key(required));
                 } else {
@@ -1631,6 +1758,160 @@ mod tests {
         testcase(&[("a", 100)], None);
         testcase(&[("a", 1), ("b", 2), ("c", 4)], None);
         testcase(&[("a", 1), ("b", 2), ("c", 4)], Some("b"));
+    }
+
+    #[mz_ore::test]
+    fn jsonb_trim_to_budget() {
+        #[track_caller]
+        fn testcase(cols: &[(&str, usize)], required: Option<&str>) {
+            let cols = cols
+                .iter()
+                .map(|(key, cost)| {
+                    let stats = JsonStats::Numerics(PrimitiveStats {
+                        lower: vec![],
+                        upper: vec![0u8; *cost],
+                    });
+                    let len = stats.debug_json().to_string().len();
+                    ((*key).to_owned(), JsonMapElementStats { len, stats })
+                })
+                .collect();
+
+            // Serialize into proto and extract the necessary type.
+            let stats: ProtoJsonStats = RustType::into_proto(&JsonStats::Maps(cols));
+            let ProtoJsonStats {
+                kind: Some(proto_json_stats::Kind::Maps(mut stats)),
+            } = stats else {
+                panic!("serialized produced wrong type!");
+            };
+
+            let mut budget = stats.encoded_len().next_power_of_two();
+            while budget > 0 {
+                let cost_before = stats.encoded_len();
+                trim_to_budget_jsonb(&mut stats, &mut budget, &|col| Some(col) == required);
+                let cost_after = stats.encoded_len();
+                assert!(cost_before >= cost_after);
+
+                // Assert force keep columns were kept.
+                if let Some(required) = required {
+                    assert!(stats
+                        .elements
+                        .iter()
+                        .any(|element| element.name == required));
+                } else {
+                    assert!(cost_after <= budget);
+                }
+
+                budget = budget / 2;
+            }
+        }
+
+        testcase(&[], None);
+        testcase(&[("a", 100)], None);
+        testcase(&[("a", 1), ("b", 2), ("c", 4)], None);
+        testcase(&[("a", 1), ("b", 2), ("c", 4)], Some("b"));
+    }
+
+    #[mz_ore::test]
+    fn jsonb_trim_to_budget_smoke() {
+        let og_stats = JsonStats::Maps(
+            [
+                (
+                    "a".to_string(),
+                    JsonMapElementStats {
+                        len: 1,
+                        stats: JsonStats::Strings(PrimitiveStats {
+                            lower: "foobar".to_string(),
+                            upper: "foobaz".to_string(),
+                        }),
+                    },
+                ),
+                (
+                    "context".to_string(),
+                    JsonMapElementStats {
+                        len: 100,
+                        stats: JsonStats::Maps(
+                            [
+                                (
+                                    "b".to_string(),
+                                    JsonMapElementStats {
+                                        len: 99,
+                                        stats: JsonStats::Numerics(PrimitiveStats {
+                                            lower: vec![],
+                                            upper: vec![42u8; 99],
+                                        }),
+                                    },
+                                ),
+                                (
+                                    "c".to_string(),
+                                    JsonMapElementStats {
+                                        len: 1,
+                                        stats: JsonStats::Bools(PrimitiveStats {
+                                            lower: false,
+                                            upper: true,
+                                        }),
+                                    },
+                                ),
+                            ]
+                            .into(),
+                        ),
+                    },
+                ),
+            ]
+            .into(),
+        );
+
+        // Serialize into proto and extract the necessary type.
+        let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
+        let ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(mut stats)),
+        } = stats else {
+            panic!("serialized produced wrong type!");
+        };
+
+        let mut budget_shortfall = 50;
+        // We should recurse into the "context" message and only drop the "b" column.
+        trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|_name| false);
+
+        let mut elements = stats
+            .elements
+            .into_iter()
+            .map(|element| (element.name.clone(), element))
+            .collect::<BTreeMap<String, _>>();
+        assert!(elements.remove("a").is_some());
+
+        let context = elements.remove("context").expect("trimmed too much");
+        let Some(ProtoJsonStats { kind: Some(proto_json_stats::Kind::Maps(context)) }) = context.stats else {
+            panic!("serialized produced wrong type!")
+        };
+
+        // We should only have one element in "context" because we trimmed "b".
+        assert_eq!(context.elements.len(), 1);
+        assert_eq!(context.elements[0].name, "c");
+
+        // Redo the triming, force keeping the largest column.
+
+        // Serialize into proto and extract the necessary type.
+        let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
+        let ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(mut stats)),
+        } = stats else {
+            panic!("serialized produced wrong type!");
+        };
+
+        let mut budget_shortfall = 50;
+        // We're force keeping "b" which is larger than our budgets_shortfall, so we should drop
+        // everything else.
+        trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|name| name == "b");
+
+        assert_eq!(stats.elements.len(), 1);
+        assert_eq!(stats.elements[0].name, "context");
+
+        let Some(ProtoJsonStats { kind: Some(proto_json_stats::Kind::Maps(context)) }) = &stats.elements[0].stats else {
+            panic!("serialized produced wrong type!")
+        };
+
+        assert_eq!(context.elements.len(), 1);
+        assert_eq!(context.elements[0].name, "b");
     }
 
     // Regression test for a bug found during code review of initial stats
@@ -1684,5 +1965,57 @@ mod tests {
         trim_to_budget(&mut proto_stats, 30, |_| false);
         assert!(proto_stats.cols.contains_key("foo"));
         assert!(!proto_stats.cols.contains_key("bar"));
+    }
+
+    // Regression test for a bug found by a customer: trim_to_budget method only
+    // operates on the top level struct columns. This (sorta) worked before
+    // #19309, but now there are always two columns at the top level, "ok" and
+    // "err", and the real columns are all nested under "ok".
+    #[mz_ore::test]
+    fn stats_trim_to_budget_regression_recursion() {
+        fn str_stats(n: usize, l: &str, u: &str) -> Box<dyn DynStats> {
+            let stats: Box<dyn DynStats> = Box::new(OptionStats {
+                none: n,
+                some: PrimitiveStats {
+                    lower: l.to_owned(),
+                    upper: u.to_owned(),
+                },
+            });
+            stats
+        }
+
+        const BIG: usize = 100;
+
+        // Model our ok/err structure for SourceData stats for a RelationDesc
+        // with wide columns.
+        let mut cols = BTreeMap::new();
+        for col in 'a'..='z' {
+            let col = col.to_string();
+            let stats = str_stats(2, "", &col.repeat(BIG));
+            cols.insert(col, stats);
+        }
+        cols.insert("foo_timestamp".to_string(), str_stats(2, "foo", "foo"));
+        let source_data_stats = StructStats {
+            len: 2,
+            cols: BTreeMap::from([
+                ("err".to_owned(), str_stats(2, "", "")),
+                ("ok".to_owned(), Box::new(StructStats { len: 2, cols })),
+            ]),
+        };
+        let mut proto_stats = RustType::into_proto(&source_data_stats);
+        let trimmed = trim_to_budget(&mut proto_stats, BIG, |x| {
+            x.ends_with("timestamp") || x == "err"
+        });
+        // Sanity-check that the test is trimming something.
+        assert!(trimmed > 0);
+        // We don't want to trim either "ok" or "err".
+        assert!(proto_stats.cols.contains_key("ok"));
+        assert!(proto_stats.cols.contains_key("err"));
+        // Assert that we kept the timestamp column.
+        let ok = proto_stats.cols.get("ok").unwrap();
+        let proto_dyn_stats::Kind::Struct(ok_struct) = ok.kind.as_ref().unwrap() else {
+            panic!("ok was of unexpected type {:?}", ok);
+        };
+        assert!(ok_struct.cols.contains_key("foo_timestamp"));
     }
 }

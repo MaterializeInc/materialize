@@ -55,10 +55,11 @@ EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
 #### Matching multi-column indexes to multi-column `WHERE` clauses
 
 In general, your index key should exactly match the columns that are constrained in the `WHERE` clause. In more detail:
-- If the `WHERE` clause constrains fewer fields than your index key includes, then **the index will not be used**. For example, an index on `(x, y)` cannot be used to speed up `WHERE x = 7`.
+- **_If the `WHERE` clause constrains fewer fields than your index key includes, then the index will not be used_** for a lookup, but will be fully scanned. For example, an index on `(x, y)` cannot be used to execute `WHERE x = 7` as a point lookup.
 - If the `WHERE` clause constrains more fields than your index key includes, then the index might still provide some speedup, but it won't necessarily be optimal: In this case, the index lookup is performed using only those constraints that are included in the index key, and the rest of the constraints will be used to subsequently filter the result of the index lookup.
 - If `OR` is used and not all arguments constrain the same fields, create an index for the intersection of the constrained fields. For example, if you have `WHERE (x = 51 AND y = 'bbb') OR (x = 76 AND z = 9)`, create an index just on `x`.
 - If `OR` is used and its arguments constrain completely disjoint sets of fields (e.g. `WHERE x = 5 OR y = 'aaa'`), try to rewrite your query using a `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the original `OR` arguments.
+- If the same input is being used in a join as well as being constrained by equalities to literals, then an index can be used to speed up either the join (see below) or the literal equalities (see above). Which of these will perform better depends on data characteristics.
 
 ### `JOIN`
 

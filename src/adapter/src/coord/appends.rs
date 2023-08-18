@@ -318,7 +318,7 @@ impl Coordinator {
         let append_fut = self
             .controller
             .storage
-            .append(appends)
+            .append_table(appends)
             .expect("invalid updates");
         if should_block {
             // We may panic here if the storage controller has shut down, because we cannot

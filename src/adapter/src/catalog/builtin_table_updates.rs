@@ -14,8 +14,8 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
-    ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
-    ReplicaLocation,
+    ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaId, ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
@@ -189,26 +189,40 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
-        let (size, disk, replication_factor) = match &cluster.config.variant {
+        let (size, disk, replication_factor, azs) = match &cluster.config.variant {
             ClusterVariant::Managed(config) => (
                 Some(config.size.as_str()),
                 Some(config.disk),
                 Some(config.replication_factor),
+                if config.availability_zones.is_empty() {
+                    None
+                } else {
+                    Some(config.availability_zones.clone())
+                },
             ),
-            ClusterVariant::Unmanaged => (None, None, None),
+            ClusterVariant::Unmanaged => (None, None, None, None),
         };
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([
+            Datum::String(&id.to_string()),
+            Datum::String(name),
+            Datum::String(&cluster.owner_id.to_string()),
+            privileges,
+            cluster.is_managed().into(),
+            size.into(),
+            replication_factor.into(),
+            disk.into(),
+        ]);
+        if let Some(azs) = azs {
+            packer.push_list(azs.iter().map(|az| Datum::String(az)));
+        } else {
+            packer.push(Datum::Null);
+        }
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(name),
-                Datum::String(&cluster.owner_id.to_string()),
-                privileges,
-                cluster.is_managed().into(),
-                size.into(),
-                replication_factor.into(),
-                disk.into(),
-            ]),
+            row,
             diff,
         }
     }
@@ -224,14 +238,21 @@ impl CatalogState {
         let replica = &cluster.replicas_by_id[&id];
 
         let (size, disk, az) = match &replica.config.location {
+            // TODO(guswynn): The column should be `availability_zones`, not
+            // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
-                availability_zone,
-                az_user_specified: _,
+                availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), Some(availability_zone.as_str())),
-            ReplicaLocation::Unmanaged(_) => (None, None, None),
+            }) => (Some(&**size), Some(*disk), Some(az.as_str())),
+            ReplicaLocation::Managed(ManagedReplicaLocation {
+                size,
+                availability_zones: _,
+                allocation: _,
+                disk,
+            }) => (Some(&**size), Some(*disk), None),
+            _ => (None, None, None),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
@@ -1167,6 +1188,7 @@ impl CatalogState {
                 ServiceProcessMetrics {
                     cpu_nano_cores,
                     memory_bytes,
+                    disk_usage_bytes,
                 },
             )| {
                 Row::pack_slice(&[
@@ -1174,8 +1196,7 @@ impl CatalogState {
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
-                    // TODO(guswynn): disk usage will be filled in later.
-                    Datum::Null,
+                    (*disk_usage_bytes).into(),
                 ])
             },
         );
@@ -1425,17 +1446,13 @@ impl CatalogState {
         packer.extend([
             // finished_at
             Datum::Null,
-            // was_successful
-            Datum::Null,
-            // was_canceled
-            Datum::Null,
-            // was_aborted
+            // finished_status
             Datum::Null,
             // error_message
             Datum::Null,
             // rows_returned
             Datum::Null,
-            // was_fast_path
+            // execution_status
             Datum::Null,
         ]);
         BuiltinTableUpdate {

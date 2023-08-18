@@ -96,7 +96,15 @@ v12 ok
 # We can still read data
 snapshot as_of=2
 ----
+<batch [0]-[2]>
+<run 0>
+<part 0>
+k1 2 1
 k2 2 1
+<batch [2]-[]>
+<run 0>
+<part 0>
+k1 2 -1
 
 # Flush out any maintenance so we ensure the tombstone process creates the
 # maintenance it needs.

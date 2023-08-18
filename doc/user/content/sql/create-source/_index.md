@@ -30,6 +30,7 @@ Materialize bundles **native connectors** for the following external systems:
 {{</ linkbox >}}
 {{< linkbox title="Datagen" >}}
 - [Load generator](/sql/create-source/load-generator)
+- [Webhook](/sql/create-source/webhook)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 

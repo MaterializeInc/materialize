@@ -9,11 +9,13 @@
 
 from kubernetes.client import V1ClusterRole, V1ObjectMeta, V1PolicyRule
 
-from materialize.cloudtest.k8s import K8sClusterRole
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_cluster_role import K8sClusterRole
 
 
 class VpcEndpointsClusterRole(K8sClusterRole):
-    def __init__(self) -> None:
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
         metadata = V1ObjectMeta(
             name="vpcendpoints",
             labels={"rbac.authorization.k8s.io/aggregate-to-admin": "true"},

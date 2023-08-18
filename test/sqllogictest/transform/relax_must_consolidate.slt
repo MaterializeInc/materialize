@@ -13,16 +13,6 @@
 # PR https://github.com/MaterializeInc/materialize/pull/19680
 #
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t (a int, b int);
 
@@ -62,7 +52,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -120,7 +110,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -178,7 +168,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -246,7 +236,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -317,7 +307,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -341,7 +331,7 @@ Explained Query:
           ArrangeBy
             raw=false
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
-            Union
+            Union consolidate_output=true
               Get::Collection materialize.public.t
                 filter=((1 = (#0 % 2)))
                 raw=true
@@ -402,7 +392,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l1
               project=()
@@ -441,7 +431,7 @@ Explained Query:
         arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
 
 Used Indexes:
-  - materialize.public.t_idx
+  - materialize.public.t_idx (differential join)
 
 EOF
 
@@ -502,7 +492,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -579,7 +569,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -638,7 +628,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -736,7 +726,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l1
               project=()
@@ -818,7 +808,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -878,7 +868,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -992,7 +982,7 @@ Explained Query:
       Mfp
         project=(#0)
         map=(null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -1058,7 +1048,7 @@ Explained Query:
       Mfp
         project=(#0)
         map=(null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -1124,7 +1114,7 @@ Explained Query:
         Mfp
           project=(#0)
           map=(null)
-          Union
+          Union consolidate_output=true
             Negate
               Get::Arrangement l1
                 project=()

@@ -204,7 +204,7 @@ class PgCdcBase:
                         ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
 
                     Used Indexes:
-                      - materialize.public.postgres_source_tablea_primary_idx
+                      - materialize.public.postgres_source_tablea_primary_idx (*** full scan ***)
                     """
                 )
                 if self.base_version >= MzVersion.parse("0.50.0-dev")
@@ -258,7 +258,7 @@ class PgCdcMzNow(Check):
                 > CREATE SOURCE postgres_mz_now_source
                   FROM POSTGRES CONNECTION postgres_mz_now_conn
                   (PUBLICATION 'postgres_mz_now_publication')
-                  FOR ALL TABLES;
+                  FOR TABLES (postgres_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS

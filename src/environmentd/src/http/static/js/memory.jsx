@@ -164,7 +164,7 @@ function Views(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          id, name, records
+          id, name, batches, records, size, capacity, allocations
         FROM
           mz_internal.mz_records_per_dataflow
         ${whereFragment}
@@ -209,12 +209,16 @@ function Views(props) {
         <div>error: {error}</div>
       ) : (
         <div>
-          <table>
+          <table class="dataflows">
             <thead>
               <tr>
                 <th>dataflow id</th>
                 <th>index name</th>
+                <th>batches</th>
                 <th>records</th>
+                <th>size [KiB]</th>
+                <th>capacity [KiB]</th>
+                <th>allocations</th>
               </tr>
             </thead>
             <tbody>
@@ -230,6 +234,10 @@ function Views(props) {
                     {v[1]}
                   </td>
                   <td>{v[2]}</td>
+                  <td>{v[3]}</td>
+                  <td>{Math.round(v[4]/1024)}</td>
+                  <td>{Math.round(v[5]/1024)}</td>
+                  <td>{v[6]}</td>
                 </tr>
               ))}
             </tbody>
@@ -271,7 +279,7 @@ function View(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          name, records
+          name, batches, records, size
         FROM
           mz_internal.mz_records_per_dataflow
         WHERE
@@ -303,7 +311,7 @@ function View(props) {
             );
 
         SELECT
-          id, from_index, to_index, sent
+          id, from_index, to_index, sent, batch_sent
         FROM
           mz_internal.mz_dataflow_channels AS channels
           LEFT JOIN mz_internal.mz_message_counts AS counts
@@ -335,7 +343,7 @@ function View(props) {
             );
 
         SELECT
-          id, records
+          id, records, size
         FROM
           mz_internal.mz_records_per_dataflow_operator
         WHERE
@@ -347,7 +355,9 @@ function View(props) {
       const stats_row = stats_table.rows[0];
       const stats = {
         name: stats_row[0],
-        records: stats_row[1],
+        batches: stats_row[1],
+        records: stats_row[2],
+        size: stats_row[3],
       };
       setStats(stats);
 
@@ -366,11 +376,14 @@ function View(props) {
 
       // {id: [source, target]}.
       const chans = Object.fromEntries(
-        chan_table.rows.map(([id, source, target, sent]) => [id, [source, target, sent]])
+        chan_table.rows.map(([id, source, target, sent, batch_sent]) => [id, [source, target, sent, batch_sent]])
       );
       setChans(chans);
 
-      setRecords(Object.fromEntries(records_table.rows));
+      const records = Object.fromEntries(
+        records_table.rows.map(([id, records, size]) => [id, [records, size]])
+      )
+      setRecords(records);
 
       setElapsed(Object.fromEntries(elapsed_table.rows));
 
@@ -399,7 +412,10 @@ function View(props) {
     const lookup = Object.fromEntries(
       Object.entries(addrs).map(([id, addr]) => [addrStr(addr), id])
     );
-    const max_record_count = Math.max.apply(Math, Object.values(records));
+    const max_record_count = Math.max.apply(
+      Math,
+      Object.values(records).map(([records, size]) => records)
+    );
     const scopes = {};
     // Find all the scopes.
     Object.entries(opers).forEach(([id, name]) => {
@@ -427,7 +443,7 @@ function View(props) {
       sg.push('}');
       return sg.join('\n');
     });
-    const edges = Object.entries(chans).map(([id, [source, target, sent]]) => {
+    const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
       if (!(id in addrs)) {
         return `// ${id} not in addrs`;
       }
@@ -443,7 +459,7 @@ function View(props) {
       }
       return sent == null
         ? `_${from_id} -> _${to_id} [style="dashed"];`
-        : `_${from_id} -> _${to_id} [label="sent ${sent}"];`;
+        : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
       if (!addrs[id].length) {
@@ -451,14 +467,15 @@ function View(props) {
       }
       const notes = [`id: ${id}`];
       let style = '';
-      if (id in records) {
-        const record_count = records[id];
+      if (id in records && records[id][0] > 0) {
+        const record_count = records[id][0];
+        const size = Math.ceil(records[id][1]/1024);
         // Any operator that can have records will have a red border (even if it
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
-        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xff) : 0;
+        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xa0) : 0;
         const alpha = pct.toString(16).padStart(2, '0');
-        notes.push(`${record_count} records`);
+        notes.push(`${record_count} rows, ${size} KiB`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
       // Only display elapsed time if it's more than 1s.
@@ -469,7 +486,7 @@ function View(props) {
       if (name.length > maxLen + 3) {
         name = name.slice(0, maxLen) + '...';
       }
-      return `_${id} [label="${name} (${notes.join(', ')})"${style}]`;
+      return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
     });
     oper_labels.unshift('');
     clusters.unshift('');

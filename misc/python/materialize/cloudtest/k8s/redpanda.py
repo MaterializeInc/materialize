@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List
 
 from kubernetes.client import (
     V1Container,
@@ -20,11 +21,18 @@ from kubernetes.client import (
     V1ServiceSpec,
 )
 
-from materialize.cloudtest.k8s import K8sDeployment, K8sService
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class RedpandaDeployment(K8sDeployment):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str,
+    ) -> None:
+        super().__init__(namespace)
         container = V1Container(
             name="redpanda",
             image="vectorized/redpanda:v21.11.13",
@@ -49,12 +57,12 @@ class RedpandaDeployment(K8sDeployment):
                 "--set",
                 "redpanda.auto_create_topics_enabled=true",
                 "--advertise-kafka-addr",
-                "redpanda:9092",
+                f"redpanda.{namespace}:9092",
             ],
         )
 
         template = V1PodTemplateSpec(
-            metadata=V1ObjectMeta(labels={"app": "redpanda"}),
+            metadata=V1ObjectMeta(namespace=namespace, labels={"app": "redpanda"}),
             spec=V1PodSpec(containers=[container]),
         )
 
@@ -65,24 +73,33 @@ class RedpandaDeployment(K8sDeployment):
         self.deployment = V1Deployment(
             api_version="apps/v1",
             kind="Deployment",
-            metadata=V1ObjectMeta(name="redpanda"),
+            metadata=V1ObjectMeta(name="redpanda", namespace=namespace),
             spec=spec,
         )
 
 
 class RedpandaService(K8sService):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str,
+    ) -> None:
+        super().__init__(namespace)
         ports = [
             V1ServicePort(name="kafka", port=9092),
             V1ServicePort(name="schema-registry", port=8081),
         ]
 
         self.service = V1Service(
-            metadata=V1ObjectMeta(name="redpanda", labels={"app": "redpanda"}),
+            metadata=V1ObjectMeta(
+                name="redpanda", namespace=namespace, labels={"app": "redpanda"}
+            ),
             spec=V1ServiceSpec(
                 type="NodePort", ports=ports, selector={"app": "redpanda"}
             ),
         )
 
 
-REDPANDA_RESOURCES = [RedpandaDeployment(), RedpandaService()]
+def redpanda_resources(
+    namespace: str = DEFAULT_K8S_NAMESPACE,
+) -> List[K8sResource]:
+    return [RedpandaDeployment(namespace), RedpandaService(namespace)]

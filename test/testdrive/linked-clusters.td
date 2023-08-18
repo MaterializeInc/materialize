@@ -17,7 +17,7 @@ $ set-sql-timeout duration=1s
 > CREATE MATERIALIZED VIEW v AS SELECT 1 AS a
 
 # Test that only the default replicas exist at start.
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -29,7 +29,7 @@ mz_system         r1  1
 # Test that creating a source without an explicit size creates a linked cluster
 # with the default size. (Unsafe mode only.)
 > CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -44,7 +44,7 @@ materialize_public_lg  linked  ${arg.default-storage-size}
 # Test that creating sources with an explicit size creates linked clusters, each
 # with a replica named "linked" with the size specified in the source.
 > CREATE SOURCE lg1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -60,7 +60,7 @@ materialize_public_lg1  linked  1
   WHERE s.id LIKE 'u%'
 lg1  materialize_public_lg1
 > CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER WITH (SIZE = '2')
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -113,7 +113,7 @@ contains:cannot modify linked cluster "materialize_public_lg1"
 contains:cannot execute queries on cluster containing sources or sinks
 ! SUBSCRIBE v
 contains:cannot execute queries on cluster containing sources or sinks
-! EXPLAIN SELECT 1
+! EXPLAIN SELECT * FROM v
 contains:cannot execute queries on cluster containing sources or sinks
 > SET cluster = default
 
@@ -121,7 +121,7 @@ contains:cannot execute queries on cluster containing sources or sinks
 # the sources.
 > DROP SOURCE lg1
 > DROP SOURCE lg2
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -135,7 +135,7 @@ mz_system               r1      1
 > CREATE SINK snk FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -152,7 +152,7 @@ materialize_public_snk  linked  ${arg.default-storage-size}
 > CREATE SINK snk1 FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '1')
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -170,7 +170,7 @@ snk1  materialize_public_snk1
 > CREATE SINK snk2 FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '2')
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -199,7 +199,7 @@ materialize_public_snk2  linked  ${arg.default-storage-size}
 # the sinks.
 > DROP SINK snk1
 > DROP SINK snk2
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -219,7 +219,7 @@ mz_system               r1      1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -243,7 +243,7 @@ materialize_schema2_s1  linked  ${arg.default-storage-size}
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
@@ -266,7 +266,7 @@ materialize_public_S1  linked  ${arg.default-storage-size}
 > CREATE CLUSTER materialize_public_s1 REPLICAS (r1 (SIZE '1'));
 > CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER
 
-> SHOW CLUSTERS
+> SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system

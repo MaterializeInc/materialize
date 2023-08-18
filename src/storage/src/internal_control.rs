@@ -35,6 +35,8 @@ pub struct DataflowParameters {
     /// used in `UPSERT/DEBEZIUM` sources.
     pub storage_dataflow_max_inflight_bytes_config:
         mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
+    /// Configuration for basic hydration backpressure.
+    pub delay_sources_past_rehydration: bool,
 }
 
 impl DataflowParameters {
@@ -45,12 +47,14 @@ impl DataflowParameters {
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
         storage_dataflow_max_inflight_bytes_config: mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
+        delay_sources_past_rehydration: bool,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
         self.auto_spill_config = auto_spill_config;
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
+        self.delay_sources_past_rehydration = delay_sources_past_rehydration;
     }
 }
 
@@ -101,6 +105,8 @@ pub enum InternalStorageCommand {
             mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
         /// Upsert autospill configuration.
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
+        /// Configuration for basic hydration backpressure.
+        delay_sources_past_rehydration: bool,
     },
 }
 

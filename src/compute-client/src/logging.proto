@@ -32,6 +32,8 @@ message ProtoTimelyLog {
         google.protobuf.Empty messages_sent = 7;
         google.protobuf.Empty messages_received = 8;
         google.protobuf.Empty reachability = 9;
+        google.protobuf.Empty batches_sent = 10;
+        google.protobuf.Empty batches_received = 11;
     }
 }
 
@@ -52,6 +54,10 @@ message ProtoComputeLog {
         google.protobuf.Empty peek_duration = 5;
         google.protobuf.Empty frontier_delay = 6;
         google.protobuf.Empty import_frontier_current = 7;
+        google.protobuf.Empty arrangement_heap_size = 8;
+        google.protobuf.Empty arrangement_heap_capacity = 9;
+        google.protobuf.Empty arrangement_heap_allocations = 10;
+        google.protobuf.Empty shutdown_duration = 11;
     }
 }
 message ProtoLogVariant {

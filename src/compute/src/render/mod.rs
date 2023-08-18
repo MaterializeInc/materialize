@@ -106,8 +106,6 @@ use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::izip;
 use mz_compute_client::plan::Plan;
@@ -133,6 +131,8 @@ use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogImportFrontiers;
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::typedefs::{ErrSpine, RowKeySpine};
@@ -280,6 +280,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_arrangement_size_logging =
+                    compute_state.enable_arrangement_size_logging;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -293,7 +295,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let export_ids = dataflow.export_ids().collect();
-                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
+                    context.import_index(
+                        compute_state,
+                        &mut tokens,
+                        export_ids,
+                        *idx_id,
+                        &idx.desc,
+                    );
                 }
 
                 // Build declared objects.
@@ -334,6 +342,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().region_named(&build_name, |region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_arrangement_size_logging =
+                    compute_state.enable_arrangement_size_logging;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -347,7 +357,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let export_ids = dataflow.export_ids().collect();
-                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
+                    context.import_index(
+                        compute_state,
+                        &mut tokens,
+                        export_ids,
+                        *idx_id,
+                        &idx.desc,
+                    );
                 }
 
                 // Build declared objects.
@@ -567,12 +583,18 @@ where
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .arrange_named("Arrange export iterative");
+                    .mz_arrange(
+                        "Arrange export iterative",
+                        self.enable_arrangement_size_logging,
+                    );
                 oks.stream.probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .arrange_named("Arrange export iterative err");
+                    .mz_arrange(
+                        "Arrange export iterative err",
+                        self.enable_arrangement_size_logging,
+                    );
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -689,10 +711,15 @@ where
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
+                let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
-                    .reduce_abelian::<_, ErrSpine<_, _, _>>(
+                    .mz_arrange::<ErrSpine<DataflowError, _, _>>(
+                        "Arrange recursive err",
+                        self.enable_arrangement_size_logging,
+                    )
+                    .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
                         "Distinct recursive err",
+                        self.enable_arrangement_size_logging,
                         move |_k, _s, t| t.push(((), 1)),
                     )
                     .as_collection(|k, _| k.clone());
@@ -887,7 +914,10 @@ where
                 let input = self.render_plan(*input);
                 self.render_threshold(input, threshold_plan)
             }
-            Plan::Union { inputs } => {
+            Plan::Union {
+                inputs,
+                consolidate_output,
+            } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
@@ -895,7 +925,10 @@ where
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                if consolidate_output {
+                    oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("UnionConsolidation")
+                }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
@@ -906,7 +939,13 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.until.clone(),
+                    self.enable_arrangement_size_logging,
+                )
             }
         }
     }

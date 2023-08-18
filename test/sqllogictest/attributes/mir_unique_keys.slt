@@ -86,7 +86,7 @@ Source materialize.public.t
   filter=((#1) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.v_primary_idx
+  - materialize.public.v_primary_idx (*** full scan ***)
 
 EOF
 
@@ -132,7 +132,7 @@ Source materialize.public.u
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.v_primary_idx
+  - materialize.public.v_primary_idx (*** full scan ***)
 
 EOF
 

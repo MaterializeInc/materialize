@@ -82,8 +82,8 @@ materialize.public.test1:
         Get materialize.public.t // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.t_a_idx
-  - materialize.public.u_d_idx
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.u_d_idx (differential join)
 
 EOF
 
@@ -122,7 +122,7 @@ Explained Query:
               Get materialize.public.u // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.u_d_idx
+  - materialize.public.u_d_idx (*** full scan ***)
 
 EOF
 
@@ -165,6 +165,6 @@ Source materialize.public.v
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.u_d_idx
+  - materialize.public.u_d_idx (*** full scan ***, differential join)
 
 EOF

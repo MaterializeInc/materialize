@@ -36,6 +36,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
             "enable_unmanaged_cluster_replicas": "true",
+            "storage_dataflow_delay_sources_past_rehydration": "true",
         },
         environment_extra=materialized_environment_extra,
     ),
@@ -156,7 +157,7 @@ def workflow_rehydration(c: Composition) -> None:
         "clusterd1",
     ]
 
-    for (style, mz, clusterd) in [
+    for style, mz, clusterd in [
         (
             "with DISK",
             Materialized(
@@ -168,8 +169,9 @@ def workflow_rehydration(c: Composition) -> None:
                     "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
-                    "storage_dataflow_max_inflight_bytes_to_cluster_size_percent": "1",
+                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -190,8 +192,9 @@ def workflow_rehydration(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
-                    "storage_dataflow_max_inflight_bytes_to_cluster_size_percent": "1",
+                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -200,7 +203,6 @@ def workflow_rehydration(c: Composition) -> None:
             ),
         ),
     ]:
-
         with c.override(
             mz,
             clusterd,
@@ -254,7 +256,6 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-
         dependencies = ["zookeeper", "kafka", "clusterd1", "materialized"]
         c.up(*dependencies)
         c.run("testdrive", "failpoint/02-source.td")
@@ -293,12 +294,13 @@ def workflow_incident_49(c: Composition) -> None:
         "schema-registry",
     ]
 
-    for (style, mz) in [
+    for style, mz in [
         (
             "with DISK",
             Materialized(
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "true"
+                    "disk_cluster_replicas_default": "true",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -307,13 +309,13 @@ def workflow_incident_49(c: Composition) -> None:
             "without DISK",
             Materialized(
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "false"
+                    "disk_cluster_replicas_default": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
             ),
         ),
     ]:
-
         with c.override(
             mz,
             Testdrive(no_reset=True, consistent_seed=True),
@@ -369,7 +371,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert", False),
     ]
 
-    for (testdrive_file, drop_stmt, cluster_dropped) in scenarios:
+    for testdrive_file, drop_stmt, cluster_dropped in scenarios:
         with c.override(
             Testdrive(no_reset=True),
         ):
@@ -413,6 +415,7 @@ def workflow_autospill(c: Composition) -> None:
                 "upsert_source_disk_default": "true",
                 "upsert_rocksdb_auto_spill_to_disk": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "200",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
             },
         ),
     ):

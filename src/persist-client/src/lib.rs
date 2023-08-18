@@ -86,10 +86,12 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -98,7 +100,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cache::StateCache;
+use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
@@ -175,6 +177,16 @@ pub struct PersistLocation {
 
     /// Uri string that identifies the consensus system.
     pub consensus_uri: String,
+}
+
+impl PersistLocation {
+    /// Returns a PersistLocation indicating in-mem blob and consensus.
+    pub fn new_in_mem() -> Self {
+        PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        }
+    }
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
@@ -313,6 +325,15 @@ impl PersistClient {
             shared_states,
             pubsub_sender,
         })
+    }
+
+    /// Returns a new in-mem [PersistClient] for tests and examples.
+    pub async fn new_for_tests() -> Self {
+        let cache = PersistClientCache::new_no_metrics();
+        cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid")
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -711,6 +732,20 @@ impl PersistClient {
     }
 }
 
+impl Codec for ShardId {
+    type Schema = TodoSchema<ShardId>;
+    fn codec_name() -> String {
+        "ShardId".into()
+    }
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        buf.put(self.to_string().as_bytes())
+    }
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
+        shard_id.parse()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -819,10 +854,7 @@ mod tests {
     pub async fn new_test_client() -> PersistClient {
         let cache = new_test_client_cache();
         cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
     }
@@ -1911,10 +1943,7 @@ mod tests {
         cache.cfg.reader_lease_duration = Duration::from_millis(1);
         cache.cfg.writer_lease_duration = Duration::from_millis(1);
         let (_write, mut read) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())

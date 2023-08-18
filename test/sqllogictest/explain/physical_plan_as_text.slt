@@ -7,16 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t (
   a int,
@@ -126,7 +116,7 @@ Explained Query:
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -155,7 +145,7 @@ Explained Query:
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -189,7 +179,7 @@ materialize.public.ov:
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -208,7 +198,7 @@ Explained Query:
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -222,7 +212,7 @@ Explained Query:
     ArrangeBy
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      Union
+      Union consolidate_output=true
         Get::Arrangement materialize.public.t
           project=(#0)
           key=#0
@@ -236,7 +226,7 @@ Source materialize.public.mv
   project=(#1)
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -267,7 +257,7 @@ Explained Query:
         ArrangeBy
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=() }
-          Union
+          Union consolidate_output=true
             Get::Arrangement materialize.public.t
               project=(#0)
               key=#0
@@ -281,7 +271,7 @@ Source materialize.public.mv
   project=(#1)
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -300,7 +290,7 @@ Explained Query:
       ArrangeBy
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        Union
+        Union consolidate_output=true
           Join::Linear
             linear_stage[0]
               closure
@@ -325,7 +315,7 @@ Source materialize.public.mv
   filter=((#1 = 5))
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (lookup)
 
 EOF
 
@@ -343,7 +333,7 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -363,7 +353,7 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -391,7 +381,7 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -415,7 +405,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, 0)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -440,7 +430,7 @@ Explained Query:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -464,7 +454,7 @@ materialize.public.hierarchical_group_by:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -489,7 +479,7 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -510,7 +500,7 @@ materialize.public.hierarchical_global:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -536,7 +526,7 @@ materialize.public.hierarchical_global:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -557,7 +547,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -584,7 +574,7 @@ Explained Query:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -613,7 +603,7 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -637,7 +627,7 @@ Explained Query:
       Mfp
         project=(#0, #1)
         map=(null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -663,7 +653,7 @@ Explained Query:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -696,7 +686,7 @@ materialize.public.collated_group_by:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -730,7 +720,7 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -751,7 +741,7 @@ materialize.public.collated_global:
       Mfp
         project=(#0..=#5)
         map=(0, null, null, null, null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -786,7 +776,7 @@ materialize.public.collated_global:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -807,7 +797,7 @@ Explained Query:
       Mfp
         project=(#0..=#5)
         map=(0, null, null, null, null, null)
-        Union
+        Union consolidate_output=true
           Negate
             Get::Arrangement l0
               project=()
@@ -843,7 +833,7 @@ Explained Query:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -892,7 +882,7 @@ Source materialize.public.v
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (differential join)
 
 EOF
 
@@ -951,9 +941,9 @@ Explained Query:
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
-  - materialize.public.u_c_idx
-  - materialize.public.v_e_idx
+  - materialize.public.t_a_idx (differential join)
+  - materialize.public.u_c_idx (*** full scan ***)
+  - materialize.public.v_e_idx (*** full scan ***)
 
 EOF
 
@@ -1019,9 +1009,9 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
-  - materialize.public.u_c_idx
-  - materialize.public.v_e_idx
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
 
 EOF
 
@@ -1135,7 +1125,7 @@ Explained Query:
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
 
@@ -1164,6 +1154,6 @@ Explained Query:
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx
+  - materialize.public.t_a_idx (*** full scan ***)
 
 EOF

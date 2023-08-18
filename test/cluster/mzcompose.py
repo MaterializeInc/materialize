@@ -314,7 +314,7 @@ def workflow_test_github_15531(c: Composition) -> None:
             STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            WORKERS 1
         ));
         SET cluster = cluster1;
         -- table for fast-path peeks
@@ -337,11 +337,9 @@ def workflow_test_github_15531(c: Composition) -> None:
     assert controller_command_count > 0, "controller history cannot be empty"
     assert (
         controller_dataflow_count == 1
-    ), "more dataflows than expected in controller history"
+    ), "expected a single dataflow in controller history"
     assert replica_command_count > 0, "replica history cannot be empty"
-    assert (
-        replica_dataflow_count == 1
-    ), "more dataflows than expected in replica history"
+    assert replica_dataflow_count == 1, "expected a single dataflow in replica history"
 
     # execute 400 fast- and slow-path peeks
     for _ in range(20):
@@ -370,8 +368,8 @@ def workflow_test_github_15531(c: Composition) -> None:
             """
         )
 
-    # check that dataflow count is the same and
-    # that history size is well-behaved
+    # Check that history size and dataflow count are well-behaved.
+    # Dataflow count can plausibly be more than 1, if compaction is delayed.
     (
         controller_command_count,
         controller_dataflow_count,
@@ -382,11 +380,17 @@ def workflow_test_github_15531(c: Composition) -> None:
         controller_command_count < 100
     ), "controller history grew more than expected after peeks"
     assert (
+        controller_dataflow_count > 0
+    ), "at least one dataflow expected in controller history"
+    assert (
         controller_dataflow_count < 5
     ), "more dataflows than expected in controller history"
     assert (
         replica_command_count < 100
     ), "replica history grew more than expected after peeks"
+    assert (
+        replica_dataflow_count > 0
+    ), "at least one dataflow expected in replica history"
     assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 
@@ -1052,12 +1056,6 @@ def workflow_test_github_19610(c: Composition) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
-            port=6877,
-            user="mz_system",
-        )
-
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -1162,12 +1160,6 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            "ALTER SYSTEM SET enable_monotonic_oneshot_selects = true;",
             port=6877,
             user="mz_system",
         )
@@ -2116,12 +2108,12 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     assert count == 1, f"unexpected create_instance count: {count}"
     count = metrics.get_command_count("allow_compaction")
     assert count > 0, f"unexpected allow_compaction count: {count}"
-    count = metrics.get_command_count("create_dataflows")
-    assert count > 0, f"unexpected create_dataflows count: {count}"
+    count = metrics.get_command_count("create_dataflow")
+    assert count > 0, f"unexpected create_dataflow count: {count}"
     count = metrics.get_command_count("peek")
     assert count <= 2, f"unexpected peek count: {count}"
-    count = metrics.get_command_count("cancel_peeks")
-    assert count == 0, f"unexpected cancel_peeks count: {count}"
+    count = metrics.get_command_count("cancel_peek")
+    assert count == 0, f"unexpected cancel_peek count: {count}"
     count = metrics.get_command_count("initialization_complete")
     assert count == 0, f"unexpected initialization_complete count: {count}"
     count = metrics.get_command_count("update_configuration")

@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 import psutil
 
-from materialize import ROOT, rustc_flags, spawn, ui
+from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
@@ -139,9 +139,9 @@ def main() -> int:
             return build_retcode
 
         if args.release:
-            path = ROOT / "target" / "release" / args.program
+            path = MZ_ROOT / "target" / "release" / args.program
         else:
-            path = ROOT / "target" / "debug" / args.program
+            path = MZ_ROOT / "target" / "debug" / args.program
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -160,8 +160,8 @@ def main() -> int:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
-            mzdata = ROOT / "mzdata"
-            scratch = ROOT / "scratch"
+            mzdata = MZ_ROOT / "mzdata"
+            scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:

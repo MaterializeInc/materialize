@@ -29,9 +29,9 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
-    UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
+    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
+    ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
@@ -70,7 +70,7 @@ use mz_sql::plan::{
     Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookValidation,
 };
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
@@ -98,8 +98,8 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
-    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
+    BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
@@ -108,7 +108,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
@@ -746,7 +746,13 @@ impl CatalogState {
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
+        let plan = mz_sql::plan::plan(
+            None,
+            &session_catalog,
+            stmt,
+            &Params::empty(),
+            &resolved_ids,
+        )?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer =
@@ -1902,9 +1908,9 @@ impl Cluster {
     pub fn role(&self) -> ClusterRole {
         // NOTE - These roles power monitoring systems. Do not change
         // them without talking to the cloud or observability groups.
-        if self.name == SYSTEM_USER.name {
+        if self.name == MZ_SYSTEM_CLUSTER.name {
             ClusterRole::SystemCritical
-        } else if self.name == INTROSPECTION_USER.name {
+        } else if self.name == MZ_INTROSPECTION_CLUSTER.name {
             ClusterRole::System
         } else {
             ClusterRole::User
@@ -3567,6 +3573,7 @@ impl Catalog {
         }
 
         let clusters = catalog.storage().await.load_clusters().await?;
+        let mut cluster_azs = BTreeMap::new();
         for storage::Cluster {
             id,
             name,
@@ -3607,6 +3614,10 @@ impl Catalog {
                 )
                 .await?;
 
+            if let ClusterVariant::Managed(managed) = &config.variant {
+                cluster_azs.insert(id, managed.availability_zones.clone());
+            }
+
             catalog.state.insert_cluster(
                 id,
                 name,
@@ -3632,8 +3643,11 @@ impl Catalog {
                 interval: serialized_config.logging.interval,
             };
             let config = ReplicaConfig {
-                location: catalog
-                    .concretize_replica_location(serialized_config.location, &vec![])?,
+                location: catalog.concretize_replica_location(
+                    serialized_config.location,
+                    &vec![],
+                    cluster_azs.get(&cluster_id).map(|zones| &**zones),
+                )?,
                 compute: ComputeReplicaConfig {
                     logging,
                     idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
@@ -4647,7 +4661,6 @@ impl Catalog {
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
                 bootstrap_role: None,
             },
             None,
@@ -4952,7 +4965,7 @@ impl Catalog {
         // be very easy for a code path to accidentally avoid this check by
         // calling `resolve_cluster(session.vars().cluster())`.
         if session.user().name != SYSTEM_USER.name
-            && session.user().name != INTROSPECTION_USER.name
+            && session.user().name != SUPPORT_USER.name
             && session.vars().cluster() == SYSTEM_USER.name
         {
             coord_bail!(
@@ -5210,6 +5223,7 @@ impl Catalog {
         &self,
         location: SerializedReplicaLocation,
         allowed_sizes: &Vec<String>,
+        allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
             SerializedReplicaLocation::Unmanaged {
@@ -5218,19 +5232,32 @@ impl Catalog {
                 computectl_addrs,
                 compute_addrs,
                 workers,
-            } => ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            }),
+            } => {
+                if allowed_availability_zones.is_some() {
+                    coord_bail!(
+                        "internal error: tried concretize unmanaged replica \
+                        with specific availability_zones"
+                    );
+                }
+                ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
+                    storagectl_addrs,
+                    storage_addrs,
+                    computectl_addrs,
+                    compute_addrs,
+                    workers,
+                })
+            }
             SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
-                az_user_specified,
                 disk,
             } => {
+                if allowed_availability_zones.is_some() && availability_zone.is_some() {
+                    coord_bail!(
+                        "internal error: tried concretize managed replica with \
+                        specific availability zones and availability zone"
+                    );
+                }
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.state.cluster_replica_sizes;
 
@@ -5240,9 +5267,17 @@ impl Catalog {
                         .get(&size)
                         .expect("catalog out of sync")
                         .clone(),
-                    availability_zone,
+                    availability_zones: match (availability_zone, allowed_availability_zones) {
+                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
+                        (None, Some(azs)) if azs.is_empty() => {
+                            ManagedReplicaAvailabilityZones::FromCluster(None)
+                        }
+                        (None, Some(azs)) => {
+                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
+                        }
+                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
+                    },
                     size,
-                    az_user_specified,
                     disk,
                 })
             }
@@ -5447,7 +5482,7 @@ impl Catalog {
                     }
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
-                    tx.update_role(id, existing_role.clone().into())?;
+                    tx.update_role(id, existing_role.clone())?;
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {
                         builtin_table_updates.push(builtin_update);
                     }
@@ -5871,12 +5906,8 @@ impl Catalog {
                         )));
                     }
                     let membership = RoleMembership::new();
-                    let serialized_role = SerializedRole {
-                        name: name.clone(),
-                        attributes: attributes.clone(),
-                        membership: membership.clone(),
-                    };
-                    let id = tx.insert_user_role(serialized_role)?;
+                    let id =
+                        tx.insert_user_role(name.clone(), attributes.clone(), membership.clone())?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -6467,7 +6498,7 @@ impl Catalog {
                     }
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.insert(role_id, grantor_id);
-                    tx.update_role(member_id, member_role.clone().into())?;
+                    tx.update_role(member_id, member_role.clone())?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, 1));
 
@@ -6501,7 +6532,7 @@ impl Catalog {
                         .push(state.pack_role_members_update(role_id, member_id, -1));
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.remove(&role_id);
-                    tx.update_role(member_id, member_role.clone().into())?;
+                    tx.update_role(member_id, member_role.clone())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -7077,9 +7108,37 @@ impl Catalog {
                 }
                 Op::UpdateItem { id, name, to_item } => {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    Self::update_item(state, builtin_table_updates, id, name, to_item, &drop_ids)?;
+                    Self::update_item(
+                        state,
+                        builtin_table_updates,
+                        id,
+                        name.clone(),
+                        to_item.clone(),
+                        &drop_ids,
+                    )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry)?;
+
+                    if Self::should_audit_log_item(&to_item) {
+                        let name = Self::full_name_detail(
+                            &state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id())),
+                        );
+
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Alter,
+                            catalog_type_to_audit_object_type(to_item.typ()),
+                            EventDetails::UpdateItemV1(mz_audit_log::UpdateItemV1 {
+                                id: id.to_string(),
+                                name,
+                            }),
+                        )?;
+                    }
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
@@ -7188,16 +7247,39 @@ impl Catalog {
         );
 
         let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = &mut state.get_schema_mut(
+        let schema = state.get_schema_mut(
             &old_entry.name().qualifiers.database_spec,
             &old_entry.name().qualifiers.schema_spec,
             conn_id,
         );
         schema.items.remove(&old_entry.name().item);
+
+        // We only need to install this item on items in the `used_by` of new
+        // dependencies.
+        let new_deps: Vec<_> = to_item
+            .uses()
+            .0
+            .difference(&old_entry.uses().0)
+            .cloned()
+            .collect();
+
         let mut new_entry = old_entry.clone();
         new_entry.name = to_name;
         new_entry.item = to_item;
+
         schema.items.insert(new_entry.name().item.clone(), id);
+
+        for u in new_deps {
+            match state.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.used_by.push(new_entry.id),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while updating {}",
+                    &u,
+                    state.resolve_full_name(&new_entry.name, new_entry.conn_id())
+                ),
+            }
+        }
+
         state.entry_by_id.insert(id, new_entry);
         builtin_table_updates.extend(state.pack_item_update(id, 1));
         Ok(())
@@ -7384,7 +7466,8 @@ impl Catalog {
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
+        let plan =
+            mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
@@ -7997,10 +8080,8 @@ pub enum SerializedReplicaLocation {
     },
     Managed {
         size: String,
-        availability_zone: String,
-        /// `true` if the AZ was specified by the user and must be respected;
-        /// `false` if it was picked arbitrarily by Materialize.
-        az_user_specified: bool,
+        /// `Some(az)` if the AZ was specified by the user and must be respected;
+        availability_zone: Option<String>,
         disk: bool,
     },
 }
@@ -8024,45 +8105,19 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 allocation: _,
                 size,
-                availability_zone,
-                az_user_specified,
+                availability_zones,
                 disk,
             }) => SerializedReplicaLocation::Managed {
                 size,
-                availability_zone,
-                az_user_specified,
+                availability_zone: if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
+                    availability_zones
+                {
+                    Some(az)
+                } else {
+                    None
+                },
                 disk,
             },
-        }
-    }
-}
-
-/// A [`Role`] that is serialized as JSON and persisted to the catalog
-/// stash. This is a separate type to allow us to evolve the on-disk format
-/// independently from the SQL layer.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub struct SerializedRole {
-    pub name: String,
-    pub attributes: RoleAttributes,
-    pub membership: RoleMembership,
-}
-
-impl From<Role> for SerializedRole {
-    fn from(role: Role) -> Self {
-        SerializedRole {
-            name: role.name,
-            attributes: role.attributes,
-            membership: role.membership,
-        }
-    }
-}
-
-impl From<&BuiltinRole> for SerializedRole {
-    fn from(role: &BuiltinRole) -> Self {
-        SerializedRole {
-            name: role.name.to_string(),
-            attributes: role.attributes.clone(),
-            membership: RoleMembership::new(),
         }
     }
 }
@@ -8264,6 +8319,10 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .map(|schema| schema as &dyn CatalogSchema),
             )
             .collect()
+    }
+
+    fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        self.state().get_mz_internal_schema_id()
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {

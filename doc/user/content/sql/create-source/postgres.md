@@ -290,6 +290,21 @@ CREATE SOURCE mz_source
   WITH (SIZE = '3xsmall');
 ```
 
+### Adding/dropping tables to/from a source
+
+To handle upstream [schema changes](#schema-changes), use the [`ALTER SOURCE...DROP SUBSOURCE`](/sql/alter-source/#context) syntax to drop the affected subsource, and then `ALTER SOURCE...ADD SUBSOURCE` to add the subsource back to the source.
+
+```sql
+-- List all subsources in mz_source
+SHOW SUBSOURCES ON mz_source;
+
+-- Get rid of an outdated or errored subsource
+ALTER SOURCE mz_source DROP SUBSOURCE table_1;
+
+-- Start ingesting the table with the updated schema or fix
+ALTER SOURCE mz_source ADD SUBSOURCE table_1;
+```
+
 ### Sizing a source
 
 To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:

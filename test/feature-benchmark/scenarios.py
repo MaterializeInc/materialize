@@ -37,6 +37,7 @@ class FastPathFilterNoIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view and return"""
 
     SCALE = 7
+    FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
     def init(self) -> List[Action]:
         return [
@@ -67,6 +68,7 @@ class MFPPushdown(Scenario):
     """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
 
     SCALE = 7
+    FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
     def init(self) -> List[Action]:
         return [

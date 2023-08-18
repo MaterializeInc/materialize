@@ -95,10 +95,11 @@ use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{stack, task};
+use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
+use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
@@ -108,7 +109,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
@@ -144,6 +145,8 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::{flags, AdapterNotice, TimestampProvider};
 
 pub(crate) mod dataflows;
+use self::statement_logging::{StatementLogging, StatementLoggingId};
+
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
@@ -180,10 +183,6 @@ pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
-/// A dummy availability zone to use when no availability zones are explicitly
-/// specified.
-pub const DUMMY_AVAILABILITY_ZONE: &str = "";
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -216,16 +215,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-    // Like Command::Execute, but its context has already been allocated.
-    Execute {
-        portal_name: String,
-        ctx: ExecuteContext,
-        span: tracing::Span,
-    },
+
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
     },
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
@@ -651,10 +646,44 @@ impl PendingRead {
 /// to produce a value that will cause the coordinator to do nothing, and
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
-// Currently nothing; planned to be data related to statement logging
-// at some point in the future.
+///
+/// This struct must not be dropped if it contains non-trivial
+/// state. The only valid way to get rid of it is to pass it to the
+/// coordinator for retirement. To enforce this, we assert in the
+/// `Drop` implementation.
 #[derive(Debug, Default)]
-pub struct ExecuteContextExtra;
+#[must_use]
+pub struct ExecuteContextExtra {
+    statement_uuid: Option<StatementLoggingId>,
+}
+
+impl ExecuteContextExtra {
+    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
+        Self { statement_uuid }
+    }
+    pub fn is_trivial(&self) -> bool {
+        let Self { statement_uuid } = self;
+        statement_uuid.is_none()
+    }
+    /// Take responsibility for the contents.  This should only be
+    /// called from code that knows what to do to finish up logging
+    /// based on the inner value.
+    #[must_use]
+    fn retire(mut self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = &mut self;
+        statement_uuid.take()
+    }
+}
+
+impl Drop for ExecuteContextExtra {
+    fn drop(&mut self) {
+        let Self { statement_uuid } = &*self;
+        soft_assert_or_log!(
+            statement_uuid.is_none(),
+            "execute context dropped without being properly retired."
+        )
+    }
+}
 
 /// Bundle of state related to statement execution.
 ///
@@ -740,10 +769,121 @@ impl ExecuteContext {
             session,
             extra,
         } = self;
+        let reason = if extra.is_trivial() {
+            None
+        } else {
+            Some(match &result {
+                Ok(ok) => match ok {
+                    ExecuteResponse::CopyTo { resp, .. } => match resp.as_ref() {
+                        // NB [btv]: It's not clear that this combination
+                        // can ever actually happen.
+                        ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: Some(u64::cast_from(rows.len())),
+                                execution_strategy: Some(StatementExecutionStrategy::Constant),
+                            }
+                        }
+                        ExecuteResponse::SendingRows { .. } => {
+                            panic!("SELECTs terminate on peek finalization, not here.")
+                        }
+                        ExecuteResponse::Subscribing { .. } => {
+                            panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                        }
+                        _ => panic!("Invalid COPY response type"),
+                    },
+                    ExecuteResponse::CopyFrom { .. } => {
+                        panic!("COPY FROMs terminate in the protocol layer, not here.")
+                    }
+                    ExecuteResponse::Fetch { .. } => {
+                        panic!("FETCHes terminate after a follow-up message is sent.")
+                    }
+                    ExecuteResponse::SendingRows { .. } => {
+                        panic!("SELECTs terminate on peek finalization, not here.")
+                    }
+                    ExecuteResponse::Subscribing { .. } => {
+                        panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                    }
+
+                    ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: Some(u64::cast_from(rows.len())),
+                            execution_strategy: Some(StatementExecutionStrategy::Constant),
+                        }
+                    }
+                    ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
+
+                    ExecuteResponse::AlteredDefaultPrivileges
+                    | ExecuteResponse::AlteredObject(_)
+                    | ExecuteResponse::AlteredIndexLogicalCompaction
+                    | ExecuteResponse::AlteredRole
+                    | ExecuteResponse::AlteredSystemConfiguration
+                    | ExecuteResponse::ClosedCursor
+                    | ExecuteResponse::CreatedConnection
+                    | ExecuteResponse::CreatedDatabase
+                    | ExecuteResponse::CreatedSchema
+                    | ExecuteResponse::CreatedRole
+                    | ExecuteResponse::CreatedCluster
+                    | ExecuteResponse::CreatedClusterReplica
+                    | ExecuteResponse::CreatedIndex
+                    | ExecuteResponse::CreatedSecret
+                    | ExecuteResponse::CreatedSink
+                    | ExecuteResponse::CreatedSource
+                    | ExecuteResponse::CreatedTable
+                    | ExecuteResponse::CreatedView
+                    | ExecuteResponse::CreatedViews
+                    | ExecuteResponse::CreatedWebhookSource { .. }
+                    | ExecuteResponse::CreatedMaterializedView
+                    | ExecuteResponse::CreatedType
+                    | ExecuteResponse::Deallocate { .. }
+                    | ExecuteResponse::DeclaredCursor
+                    | ExecuteResponse::Deleted(_)
+                    | ExecuteResponse::DiscardedTemp
+                    | ExecuteResponse::DiscardedAll
+                    | ExecuteResponse::DroppedObject(_)
+                    | ExecuteResponse::DroppedOwned
+                    | ExecuteResponse::EmptyQuery
+                    | ExecuteResponse::GrantedPrivilege
+                    | ExecuteResponse::GrantedRole
+                    | ExecuteResponse::Inserted(_)
+                    | ExecuteResponse::Prepare
+                    | ExecuteResponse::Raised
+                    | ExecuteResponse::ReassignOwned
+                    | ExecuteResponse::RevokedPrivilege
+                    | ExecuteResponse::RevokedRole
+                    | ExecuteResponse::SetVariable { .. }
+                    | ExecuteResponse::StartedTransaction
+                    | ExecuteResponse::TransactionCommitted { .. }
+                    | ExecuteResponse::TransactionRolledBack { .. }
+                    | ExecuteResponse::Updated(_)
+                    | ExecuteResponse::ValidatedConnection { .. } => {
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: None,
+                            execution_strategy: None,
+                        }
+                    }
+                },
+                Err(e) => StatementEndedExecutionReason::Errored {
+                    error: e.to_string(),
+                },
+            })
+        };
         tx.send(result, session);
-        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
-            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        if let Some(reason) = reason {
+            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                data: extra,
+                reason,
+            }) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         }
+    }
+
+    pub fn extra(&self) -> &ExecuteContextExtra {
+        &self.extra
+    }
+
+    pub fn extra_mut(&mut self) -> &mut ExecuteContextExtra {
+        &mut self.extra
     }
 }
 
@@ -870,6 +1010,9 @@ pub struct Coordinator {
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
+
+    /// Data used by the statement logging feature.
+    statement_logging: StatementLogging,
 }
 
 impl Coordinator {
@@ -889,6 +1032,10 @@ impl Coordinator {
         self.controller.compute.update_configuration(compute_config);
         let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
+        let orchestrator_scheduling_config =
+            flags::orchestrator_scheduling_config(self.catalog().system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(orchestrator_scheduling_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
@@ -1068,7 +1215,10 @@ impl Coordinator {
                     source_status_collection_id,
                 ),
                 // Subsources use source statuses.
-                DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                DataSourceDesc::Source => (
+                    DataSource::Other(DataSourceOther::Source),
+                    source_status_collection_id,
+                ),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, source_status_collection_id)
                 }
@@ -1095,11 +1245,17 @@ impl Coordinator {
                             Some((entry.id(), source_desc(source_status_collection_id, source)))
                         }
                         CatalogItem::Table(table) => {
-                            let collection_desc = table.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                table.desc.clone(),
+                                DataSourceOther::TableWrites,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = mview.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                mview.desc.clone(),
+                                DataSourceOther::Compute,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         _ => None,
@@ -1116,7 +1272,10 @@ impl Coordinator {
         for entry in &entries {
             match entry.item() {
                 CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
                     collections_to_create.push((entry.id(), collection_desc));
                 }
                 // User sources can have dependencies, so do avoid them in the
@@ -1209,18 +1368,20 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
-                        let dataflow_plan =
-                            vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
+                        let dataflow_plan = self.must_finalize_dataflow(dataflow, idx.cluster_id);
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.cluster_id, dataflow_plan)
+                            .create_dataflow(idx.cluster_id, dataflow_plan)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
                     // Re-create the storage collection.
-                    let collection_desc = mview.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
                     self.controller
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
@@ -1422,7 +1583,7 @@ impl Coordinator {
             .collect();
         self.controller
             .storage
-            .append(appends)
+            .append_table(appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
@@ -1561,19 +1722,51 @@ impl Coordinator {
     ) {
         // // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
+
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-        spawn(|| "coord idle metric", async move {
+        spawn(|| "coord watchdog", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last
             // processed. If it is idle, this will result in some microseconds
             // of measurement.
             let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // If we end up having to wait more than 5 seconds for the coord to respond, then the
+            // behavior of Delay results in the interval "restarting" from whenever we yield
+            // instead of trying to catch up.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            // Track if we become stuck to de-dupe error reporting.
+            let mut coord_stuck = false;
+
             loop {
                 interval.tick().await;
-                // If the buffer is full (or the channel is closed), ignore and
-                // try again later.
-                let _ = idle_tx.try_send(idle_metric.start_timer());
+
+                // Wait for space in the channel, if we timeout then the coordinator is stuck!
+                let duration = tokio::time::Duration::from_secs(60);
+                let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
+                let Ok(maybe_permit) = timeout else {
+                    // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                    if !coord_stuck {
+                        tracing::error!("Coordinator is stuck, did not respond after {duration:?}");
+                    }
+                    coord_stuck = true;
+
+                    continue;
+                };
+
+                // We got a permit, we're not stuck!
+                if coord_stuck {
+                    tracing::info!("Coordinator became unstuck");
+                }
+                coord_stuck = false;
+
+                // If we failed to acquire a permit it's because we're shutting down.
+                let Ok(permit) = maybe_permit else {
+                    break;
+                };
+
+                permit.send(idle_metric.start_timer());
             }
         });
 
@@ -1680,6 +1873,16 @@ impl Coordinator {
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
         &self.active_conns
     }
+
+    pub(crate) fn retire_execution(
+        &mut self,
+        reason: StatementEndedExecutionReason,
+        ctx_extra: ExecuteContextExtra,
+    ) {
+        if let Some(uuid) = ctx_extra.retire() {
+            self.end_statement_execution(uuid, reason);
+        }
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -1708,7 +1911,7 @@ pub async fn serve(
         cluster_replica_sizes,
         default_storage_cluster_size,
         system_parameter_defaults,
-        mut availability_zones,
+        availability_zones,
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
@@ -1731,12 +1934,6 @@ pub async fn serve(
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
         coord_bail!("availability zones must be unique");
-    }
-    // Later on, we choose an AZ for every replica, so we need to have at least
-    // one. If we're using an orchestrator that doesn't have the notion of AZs,
-    // just create a fake, blank one.
-    if availability_zones.is_empty() {
-        availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
 
     let aws_principal_context = if aws_account_id.is_some()
@@ -1848,6 +2045,7 @@ pub async fn serve(
                 segment_client,
                 metrics,
                 tracing_handle,
+                statement_logging: StatementLogging::new(),
             };
             let bootstrap = handle.block_on(async {
                 coord

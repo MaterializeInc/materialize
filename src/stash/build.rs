@@ -234,7 +234,7 @@ fn error_message(og_hash: String, hash: String, filename: String) -> String {
     let body2 = format!(
         "Otherwise you can update the hash for '{filename}' in '{PROTO_HASHES}' to be '{hash}'."
     );
-    let hashes = format!("persisted_hash({og_hash}) =! current_hash({hash})\nFile: {filename}");
+    let hashes = format!("persisted_hash({og_hash}) != current_hash({hash})\nFile: {filename}");
 
     format!("{title}\n\n{body1}\n{body2}\n\n{hashes}")
 }

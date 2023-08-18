@@ -37,7 +37,7 @@ use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
-use crate::types::dataflows::{BuildDesc, DataflowDescription};
+use crate::types::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 
 pub mod interpret;
 pub mod join;
@@ -330,6 +330,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
     Union {
         /// The input collections
         inputs: Vec<Plan<T>>,
+        /// Whether to consolidate the output, e.g., cancel negated records.
+        consolidate_output: bool,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -380,7 +382,7 @@ impl<T> Plan<T> {
             | ArrangeBy { input, .. } => {
                 first = Some(&mut **input);
             }
-            Join { inputs, .. } | Union { inputs } => {
+            Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
             }
         }
@@ -512,8 +514,11 @@ impl Arbitrary for Plan {
                     })
                     .boxed(),
                 // Plan::Union
-                prop::collection::vec(inner.clone(), 0..2)
-                    .prop_map(|x| Plan::Union { inputs: x })
+                (prop::collection::vec(inner.clone(), 0..2), any::<bool>())
+                    .prop_map(|(x, b)| Plan::Union {
+                        inputs: x,
+                        consolidate_output: b,
+                    })
                     .boxed(),
                 //Plan::ArrangeBy
                 (
@@ -692,8 +697,12 @@ impl RustType<ProtoPlan> for Plan {
                     }
                     .into(),
                 ),
-                Plan::Union { inputs } => Union(ProtoPlanUnion {
+                Plan::Union {
+                    inputs,
+                    consolidate_output,
+                } => Union(ProtoPlanUnion {
                     inputs: inputs.into_proto(),
+                    consolidate_output: consolidate_output.into_proto(),
                 }),
                 Plan::ArrangeBy {
                     input,
@@ -831,6 +840,7 @@ impl RustType<ProtoPlan> for Plan {
             },
             Union(proto) => Plan::Union {
                 inputs: proto.inputs.into_rust()?,
+                consolidate_output: proto.consolidate_output.into_rust()?,
             },
             ArrangeBy(proto) => Plan::ArrangeBy {
                 input: proto.input.into_rust_if_some("ProtoPlanArrangeBy::input")?,
@@ -1575,7 +1585,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     })
                     .collect();
                 // Return the plan and no arrangements.
-                let plan = Plan::Union { inputs: plans };
+                let plan = Plan::Union {
+                    inputs: plans,
+                    consolidate_output: false,
+                };
                 (plan, AvailableCollections::new_raw())
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
@@ -1714,6 +1727,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
+        enable_consolidate_after_union_negate: bool,
         enable_monotonic_oneshot_selects: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
@@ -1721,6 +1735,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
+
+        if enable_consolidate_after_union_negate {
+            Self::refine_union_negate_consolidation(&mut dataflow);
+        }
 
         if enable_monotonic_oneshot_selects {
             Self::refine_single_time_operator_selection(&mut dataflow);
@@ -1739,9 +1757,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     dataflow
                         .index_imports
                         .iter()
-                        .filter_map(
-                            |(id, (_, _, monotonic))| if *monotonic { Some(id) } else { None },
-                        ),
+                        .filter_map(|(id, index_import)| {
+                            if index_import.monotonic {
+                                Some(id)
+                            } else {
+                                None
+                            }
+                        }),
                 )
                 .cloned()
                 .collect::<BTreeSet<_>>();
@@ -1771,7 +1793,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
         let mut arrangements = BTreeMap::new();
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
-        for (index_desc, r#type, _monotonic) in desc.index_imports.values() {
+        for IndexImport {
+            desc: index_desc,
+            typ,
+            ..
+        } in desc.index_imports.values()
+        {
             let key = index_desc.key.clone();
             // TODO[btv] - We should be told the permutation by
             // `index_desc`, and it should have been generated
@@ -1781,7 +1808,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             // a bit of a refactor, so for now we just
             // _assume_ that they were both generated by `permutation_for_arrangement`,
             // and recover it here.
-            let (permutation, thinning) = permutation_for_arrangement(&key, r#type.arity());
+            let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
             arrangements
                 .entry(Id::Global(index_desc.on_id))
                 .or_insert_with(AvailableCollections::default)
@@ -1877,6 +1904,37 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 };
                 mfp.optimize();
                 source.arguments.operators = Some(mfp);
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
+    }
+
+    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_union_negate_consolidation")
+    )]
+    fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                match expression {
+                    Plan::Union {
+                        inputs,
+                        consolidate_output,
+                    } => {
+                        if inputs
+                            .iter()
+                            .any(|input| matches!(input, Plan::Negate { .. }))
+                        {
+                            *consolidate_output = true;
+                        }
+                    }
+                    _ => {}
+                }
+                todo.extend(expression.children_mut());
             }
         }
         mz_repr::explain::trace_plan(dataflow);
@@ -2126,7 +2184,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         threshold_plan: threshold_plan.clone(),
                     })
                     .collect(),
-                Plan::Union { inputs } => {
+                Plan::Union {
+                    inputs,
+                    consolidate_output,
+                } => {
                     let mut inputs_parts = vec![Vec::new(); parts];
                     for input in inputs.into_iter() {
                         for (index, input_part) in
@@ -2137,7 +2198,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     inputs_parts
                         .into_iter()
-                        .map(|inputs| Plan::Union { inputs })
+                        .map(|inputs| Plan::Union {
+                            inputs,
+                            consolidate_output,
+                        })
                         .collect()
                 }
                 Plan::ArrangeBy {
@@ -2189,7 +2253,11 @@ impl<T> CollectionPlan for Plan<T> {
                 }
                 body.depends_on_into(out);
             }
-            Plan::Join { inputs, plan: _ } | Plan::Union { inputs } => {
+            Plan::Join { inputs, plan: _ }
+            | Plan::Union {
+                inputs,
+                consolidate_output: _,
+            } => {
                 for input in inputs {
                     input.depends_on_into(out);
                 }
@@ -2236,6 +2304,8 @@ impl<T> CollectionPlan for Plan<T> {
 /// Returns bucket sizes, descending, suitable for hierarchical decomposition of an operator, based
 /// on the expected number of rows that will have the same group key.
 fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64> {
+    // NOTE(vmarcos): The fan-in of 16 defined below is used in the tuning advice built-in view
+    // mz_internal.mz_expected_group_size_advice.
     let mut buckets = vec![];
     let mut current = 16;
 

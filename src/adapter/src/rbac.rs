@@ -25,7 +25,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan;
 use mz_sql::plan::{MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
-use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
 
@@ -89,7 +89,7 @@ pub enum UnauthorizedError {
     MzSystem { action: String },
     /// The action cannot be performed by the mz_introspection role.
     #[error("permission denied to {action}")]
-    MzIntrospection { action: String },
+    MzSupport { action: String },
 }
 
 impl UnauthorizedError {
@@ -101,9 +101,9 @@ impl UnauthorizedError {
             UnauthorizedError::MzSystem { .. } => {
                 Some(format!("You must be the '{}' role", SYSTEM_USER.name))
             }
-            UnauthorizedError::MzIntrospection { .. } => Some(format!(
+            UnauthorizedError::MzSupport { .. } => Some(format!(
                 "The '{}' role has very limited privileges",
-                INTROSPECTION_USER.name
+                SUPPORT_USER.name
             )),
             UnauthorizedError::Ownership { .. }
             | UnauthorizedError::RoleMembership { .. }
@@ -146,7 +146,8 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         | Command::GetSystemVars { .. }
         | Command::SetSystemVars { .. }
         | Command::AppendWebhook { .. }
-        | Command::Terminate { .. } => Ok(()),
+        | Command::Terminate { .. }
+        | Command::RetireExecute { .. } => Ok(()),
     }
 }
 
@@ -323,6 +324,7 @@ pub fn generate_required_role_membership(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
@@ -399,6 +401,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::CopyFrom(_)
         | Plan::CopyRows(_)
         | Plan::Explain(_)
@@ -793,7 +796,29 @@ fn generate_required_privileges(
                 role_id,
             )]
         }
+        Plan::ShowColumns(plan::ShowColumnsPlan {
+            id,
+            select_plan,
+            new_resolved_ids,
+        }) => {
+            let item = catalog.get_item(id);
+            let mut privileges = vec![(
+                SystemObjectId::Object(item.name().qualifiers.clone().into()),
+                AclMode::USAGE,
+                role_id,
+            )];
 
+            for privilege in generate_required_privileges(
+                catalog,
+                &Plan::Select(select_plan.clone()),
+                target_cluster_id,
+                new_resolved_ids,
+                role_id,
+            ) {
+                privileges.push(privilege);
+            }
+            privileges
+        }
         Plan::Select(plan::SelectPlan {
             source,
             when: _,

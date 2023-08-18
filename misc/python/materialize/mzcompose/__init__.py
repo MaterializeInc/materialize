@@ -137,6 +137,15 @@ class Composition:
             {
                 "mzdata": None,
                 "pgdata": None,
+                # Used for certain pg-cdc scenarios. The memory will not be
+                # allocated for compositions that do not require this volume.
+                "pgdata_512Mb": {
+                    "driver_opts": {
+                        "device": "tmpfs",
+                        "type": "tmpfs",
+                        "o": "size=512m",
+                    }
+                },
                 "mydata": None,
                 "tmp": None,
                 "secrets": None,
@@ -474,10 +483,13 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
+        port: Optional[int] = None,
         password: Optional[str] = None,
     ) -> Any:
         """Execute and return results of a SQL query."""
-        with self.sql_cursor(service=service, user=user, password=password) as cursor:
+        with self.sql_cursor(
+            service=service, user=user, port=port, password=password
+        ) as cursor:
             cursor.execute(sql)
             return cursor.fetchall()
 

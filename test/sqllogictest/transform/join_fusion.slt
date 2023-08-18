@@ -126,9 +126,9 @@ Explained Query:
           Get materialize.public.customer // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_customer_custkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -180,8 +180,9 @@ Explained Query:
       ReadExistingIndex materialize.public.lineitem lookup_value=(38) // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey
-  - materialize.public.fk_lineitem_orderkey
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+  - materialize.public.fk_lineitem_orderkey (lookup)
 
 EOF
 
@@ -217,9 +218,9 @@ Explained Query:
           - (134)
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_customer_custkey (lookup)
+  - materialize.public.fk_orders_custkey (lookup)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 
@@ -253,9 +254,9 @@ Explained Query:
           - (229)
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey
-  - materialize.public.fk_orders_custkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.pk_customer_custkey (lookup)
+  - materialize.public.fk_orders_custkey (lookup)
+  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 EOF
 

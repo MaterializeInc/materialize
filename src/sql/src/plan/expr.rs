@@ -12,14 +12,14 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to lower().
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::{fmt, mem};
 
 use itertools::Itertools;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{func, LetRecLimit};
+use mz_expr::{func, CollectionPlan, Id, LetRecLimit};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
@@ -1690,6 +1690,67 @@ impl HirRelationExpr {
                 outputs: finishing.project,
             }
         }
+    }
+
+    /// The HirRelationExpr is considered potentially expensive if and only if
+    /// at least one of the following conditions is true:
+    ///
+    ///  - It contains at least one CallTable or a Reduce operator.
+    ///  - It contains at least one HirScalarExpr with a function call.
+    ///
+    /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    pub fn could_run_expensive_function(&self) -> bool {
+        let mut result = false;
+        if let Err(_) = self.visit_pre(&mut |e: &HirRelationExpr| {
+            use HirRelationExpr::*;
+            use HirScalarExpr::*;
+
+            self.visit_children(|scalar: &HirScalarExpr| {
+                if let Err(_) = scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
+                    result |= match scalar {
+                        Column(_)
+                        | Literal(_, _)
+                        | CallUnmaterializable(_)
+                        | If { .. }
+                        | Parameter(..)
+                        | Select(..)
+                        | Exists(..) => false,
+                        // Function calls are considered expensive
+                        CallUnary { .. }
+                        | CallBinary { .. }
+                        | CallVariadic { .. }
+                        | Windowing(..) => true,
+                    };
+                }) {
+                    // Conservatively set `true` on RecursionLimitError.
+                    result = true;
+                }
+            });
+
+            // CallTable has a table function; Reduce has an aggregate function.
+            // Other constructs use MirScalarExpr to run a function
+            result |= matches!(e, CallTable { .. } | Reduce { .. });
+        }) {
+            // Conservatively set `true` on RecursionLimitError.
+            result = true;
+        }
+
+        result
+    }
+}
+
+impl CollectionPlan for HirRelationExpr {
+    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        if let Self::Get {
+            id: Id::Global(id), ..
+        } = self
+        {
+            out.insert(*id);
+        }
+        self.visit_children(|expr: &HirRelationExpr| expr.depends_on_into(out))
     }
 }
 

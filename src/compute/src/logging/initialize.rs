@@ -5,11 +5,12 @@
 
 //! Initialization of logging dataflows.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::logging::DifferentialEvent;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_repr::{Diff, Timestamp};
@@ -20,16 +21,19 @@ use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
+use crate::compute_state::ComputeState;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
-use crate::logging::{BatchLogger, EventQueue};
+use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 
 /// Initialize logging dataflows.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records.
-pub fn initialize<A: Allocate>(
+pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
+    compute_state: &ComputeState,
     config: &LoggingConfig,
 ) -> (super::compute::Logger, BTreeMap<LogVariant, TraceBundle>) {
     let interval_ms = std::cmp::max(1, config.interval.as_millis())
@@ -47,6 +51,7 @@ pub fn initialize<A: Allocate>(
     let mut context = LoggingContext {
         worker,
         config,
+        compute_state,
         interval_ms,
         now,
         start_offset,
@@ -54,6 +59,7 @@ pub fn initialize<A: Allocate>(
         r_event_queue: EventQueue::new("r"),
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
+        shared_state: Default::default(),
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -74,6 +80,7 @@ pub fn initialize<A: Allocate>(
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
     config: &'a LoggingConfig,
+    compute_state: &'a ComputeState,
     interval_ms: u64,
     now: Instant,
     start_offset: Duration,
@@ -81,37 +88,50 @@ struct LoggingContext<'a, A: Allocate> {
     r_event_queue: EventQueue<ReachabilityEvent>,
     d_event_queue: EventQueue<DifferentialEvent>,
     c_event_queue: EventQueue<ComputeEvent>,
+    shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
-impl<A: Allocate> LoggingContext<'_, A> {
+impl<A: Allocate + 'static> LoggingContext<'_, A> {
     fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         let mut traces = BTreeMap::new();
         traces.extend(super::timely::construct(
             self.worker,
             self.config,
             self.t_event_queue.clone(),
+            Rc::clone(&self.shared_state),
+            self.compute_state,
         ));
         traces.extend(super::reachability::construct(
             self.worker,
             self.config,
             self.r_event_queue.clone(),
+            self.compute_state,
         ));
         traces.extend(super::differential::construct(
             self.worker,
             self.config,
             self.d_event_queue.clone(),
+            Rc::clone(&self.shared_state),
+            self.compute_state,
         ));
         traces.extend(super::compute::construct(
             self.worker,
             self.config,
             self.c_event_queue.clone(),
+            Rc::clone(&self.shared_state),
+            self.compute_state,
         ));
 
         let errs = self
             .worker
             .dataflow_named("Dataflow: logging errors", |scope| {
-                Collection::<_, DataflowError, Diff>::empty(scope)
-                    .arrange_named("Arrange logging err")
+                let collection: KeyCollection<_, DataflowError, Diff> =
+                    Collection::empty(scope).into();
+                collection
+                    .mz_arrange(
+                        "Arrange logging err",
+                        self.compute_state.enable_arrangement_size_logging,
+                    )
                     .trace
             });
 
@@ -125,20 +145,18 @@ impl<A: Allocate> LoggingContext<'_, A> {
     }
 
     fn register_loggers(&self) {
-        self.worker
-            .log_register()
-            .insert_logger("timely", self.simple_logger(self.t_event_queue.clone()));
-        self.worker
-            .log_register()
-            .insert_logger("timely/reachability", self.reachability_logger());
-        self.worker.log_register().insert_logger(
-            "differential/arrange",
-            self.simple_logger(self.d_event_queue.clone()),
-        );
-        self.worker.log_register().insert_logger(
-            "materialize/compute",
-            self.simple_logger(self.c_event_queue.clone()),
-        );
+        let t_logger = self.simple_logger(self.t_event_queue.clone());
+        let r_logger = self.reachability_logger();
+        let d_logger = self.simple_logger(self.d_event_queue.clone());
+        let c_logger = self.simple_logger(self.c_event_queue.clone());
+
+        let mut register = self.worker.log_register();
+        register.insert_logger("timely", t_logger);
+        register.insert_logger("timely/reachability", r_logger);
+        register.insert_logger("differential/arrange", d_logger);
+        register.insert_logger("materialize/compute", c_logger.clone());
+
+        self.shared_state.borrow_mut().compute_logger = Some(c_logger);
     }
 
     fn simple_logger<E: 'static>(&self, event_queue: EventQueue<E>) -> Logger<E> {

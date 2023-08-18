@@ -67,6 +67,7 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::ops::RangeBounds;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
@@ -515,6 +516,13 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
+pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("max_identifier_length"),
+    value: &mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
+    description: "The maximum length of object identifiers in bytes (PostgreSQL).",
+    internal: false,
+};
+
 /// The logical compaction window for builtin tables and sources that have the
 /// `retained_metrics_relation` flag set.
 ///
@@ -765,6 +773,15 @@ mod upsert_rocksdb {
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
+    pub static UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB: ServerVar<Option<u32>> =
+        ServerVar {
+            name: UncasedStr::new("upsert_rocksdb_point_lookup_block_cache_size_mb"),
+            value: &None,
+            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+            internal: true,
+        };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -887,16 +904,26 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
     internal: true,
 };
 
-/// The percentage of the cluster replica size to be used as the maximum number of
+/// Whether or not to delay sources producing values in some scenarios
+/// (namely, upsert) till after rehydration is finished.
+const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_delay_sources_past_rehydration"),
+    value: &false,
+    description: "Whether or not to delay sources producing values in some scenarios \
+                  (namely, upsert) till after rehydration is finished",
+    internal: true,
+};
+
+/// The fraction of the cluster replica size to be used as the maximum number of
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT: ServerVar<Option<Numeric>> =
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: ServerVar<Option<Numeric>> =
     ServerVar {
-        name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_percent"),
+        name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
         value: &None,
         description:
-            "The percentage of the cluster replica size to be used as the maximum number of \
+            "The fraction of the cluster replica size to be used as the maximum number of \
     in-flight bytes emitted by persist_sources feeding storage dataflows. \
     If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
         internal: true,
@@ -1070,6 +1097,17 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
+pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("statement_logging_sample_rate"),
+    value: &DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE,
+    description: "User-facing session variable indicating how many statement executions should be \
+    logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize).",
+    internal: false,
+}
+});
+
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
@@ -1088,6 +1126,25 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
         "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
 };
+
+static DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("statement_logging_max_sample_rate"),
+    value: &DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+    description: "The maximum rate at which statements may be logged. If this value is less than \
+that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
+    internal: false,
+});
+
+static DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("statement_logging_default_sample_rate"),
+        value: &DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+        description:
+            "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
+        internal: false,
+    });
 
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
@@ -1127,6 +1184,13 @@ const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_consolidate_after_union_negate"),
+    value: &true,
+    description: "consolidation after Unions that have a Negated input (Materialize).",
+    internal: false,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -1152,31 +1216,126 @@ mod grpc_client {
     };
 }
 
-// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
-// availability of features.
-//
-// Note that not all ServerVar<bool> are feature flags. Feature flags are for variables that:
-// - Belong to `SystemVars`, _not_ `SessionVars`
-// - Default to false and must be explicitly enabled
+/// Configuration for how cluster replicas are scheduled.
+mod cluster_scheduling {
+    use super::*;
+    use mz_orchestrator::scheduling_config::*;
+
+    pub const CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT: ServerVar<Option<i32>> =
+        ServerVar {
+            name: UncasedStr::new("cluster_multi_process_replica_az_affinity_weight"),
+            value: &DEFAULT_POD_AZ_AFFINITY_WEIGHT,
+            description:
+                "Whether or not to add an availability zone affinity between instances of \
+            multi-process replicas. Either an affinity weight or empty (off) (Materialize).",
+            internal: true,
+        };
+
+    pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_soften_replication_anti_affinity"),
+        value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
+        description: "Whether or not to turn the node-scope anti affinity between replicas \
+            in the same cluster into a preference (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("cluster_soften_replication_anti_affinity_weight"),
+        value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+        description:
+            "The preference weight for `cluster_soften_replication_anti_affinity` (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_ENABLE_TOPOLOGY_SPREAD: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_enable_topology_spread"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_ENABLED,
+        description:
+            "Whether or not to add topology spread constraints among replicas in the same cluster (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_topology_spread_ignore_non_singular_scale"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+        description:
+            "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("cluster_topology_spread_max_skew"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+        description: "The `maxSkew` for replica topology spread constraints (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_TOPOLOGY_SPREAD_SOFT: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_topology_spread_soft"),
+        value: &DEFAULT_TOPOLOGY_SPREAD_SOFT,
+        description: "If true, soften the topology spread constraints for replicas (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_SOFTEN_AZ_AFFINITY: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_soften_az_affinity"),
+        value: &DEFAULT_SOFTEN_AZ_AFFINITY,
+        description: "Whether or not to turn the az-scope node affinity for replicas. \
+            Note this could violate requests from the user (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("cluster_soften_az_affinity_weight"),
+        value: &DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
+        description: "The preference weight for `cluster_soften_az_affinity` (Materialize).",
+        internal: true,
+    };
+}
+
+/// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
+/// availability of features.
+///
+/// The arguments to `feature_flags!` are:
+/// - `$name`, which will be the name of the feature flag, in snake_case,
+/// - `$feature_desc`, a human-readable description of the feature,
+/// - `$value`, which if not provided, defaults to `false` and also defaults `$internal` to `true`.
+/// - `$internal`, which if not provided, defaults to `true`. Requires `$value`.
+///
+/// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
+/// - Belong to `SystemVars`, _not_ `SessionVars`
+/// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 macro_rules! feature_flags {
-    ($(($name:expr, $feature_desc:literal)),+ $(,)?) => {
+    // Match `$name, $feature_desc`, default `$value` to false.
+    (@inner $name:expr, $feature_desc:literal) => {
+        feature_flags!(@inner $name, $feature_desc, false);
+    };
+    // Match `$name, $feature_desc, $value`, default `$internal` to false.
+    (@inner $name:expr, $feature_desc:literal, $value:expr) => {
+        feature_flags!(@inner $name, $feature_desc, $value, true);
+    };
+    // Match `$name, $feature_desc, $value, $internal`.
+    (@inner $name:expr, $feature_desc:literal, $value:expr, $internal:expr) => {
         paste::paste!{
-            $(
-                // Note that the ServerVar is not directly exported; we expect these to be
-                // accessible through their FeatureFlag variant.
-                static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
-                    name: UncasedStr::new(stringify!($name)),
-                    value: &false,
-                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true
-                };
+            // Note that the ServerVar is not directly exported; we expect these to be
+            // accessible through their FeatureFlag variant.
+            static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
+                name: UncasedStr::new(stringify!($name)),
+                value: &$value,
+                description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                internal: $internal
+            };
 
-                pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
-                    flag: &[<$name:upper _VAR>],
-                    feature_desc: $feature_desc,
-                };
-            )+
+            pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
+                flag: &[<$name:upper _VAR>],
+                feature_desc: $feature_desc,
+            };
+        }
+    };
+    ($(($name:expr, $feature_desc:literal $(, $($extra:expr),+)?)),+ $(,)?) => {
+        $(feature_flags!(@inner $name, $feature_desc $(, $($extra),+)?);)+
 
+        paste::paste!{
             impl SystemVars {
                 fn with_feature_flags(self) -> Self
                 {
@@ -1306,7 +1465,24 @@ feature_flags!(
         enable_try_parse_monotonic_iso8601_timestamp,
         "the try_parse_monotonic_iso8601_timestamp function"
     ),
-    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax")
+    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax"),
+    (
+        enable_dangerous_functions,
+        "executing potentially dangerous functions"
+    ),
+    (
+        enable_managed_cluster_availability_zones,
+        "MANAGED, AVAILABILITY ZONES syntax"
+    ),
+    (
+        enable_arrangement_size_logging,
+        "arrangement size logging",
+        true
+    ),
+    (
+        statement_logging_use_reproducible_rng,
+        "statement logging with reproducible RNG"
+    ),
 );
 
 /// Represents the input to a variable.
@@ -1403,6 +1579,11 @@ impl SessionVars {
                 &ENABLE_CARDINALITY_ESTIMATES,
             )
             .with_var(&MAX_QUERY_RESULT_SIZE)
+            .with_var(&MAX_IDENTIFIER_LENGTH)
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1560,6 +1741,10 @@ impl SessionVars {
             Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
+        } else if name == MAX_IDENTIFIER_LENGTH.name {
+            Err(VarError::ReadOnlyParameter(
+                MAX_IDENTIFIER_LENGTH.name.as_str(),
+            ))
         } else {
             self.vars
                 .get_mut(name)
@@ -1792,6 +1977,10 @@ impl SessionVars {
         self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
             .expect("setting cluster from string succeeds");
     }
+
+    pub fn get_statement_logging_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_SAMPLE_RATE)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1921,6 +2110,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -1930,8 +2120,9 @@ impl SystemVars {
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
-            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+            .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -1958,13 +2149,33 @@ impl SystemVars {
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
+            .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
-            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT);
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .with_var(&cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD)
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE)
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
+            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            );
+
         vars.refresh_internal_state();
         vars
     }
@@ -2324,6 +2535,10 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
     }
 
+    pub fn upsert_rocksdb_point_lookup_block_cache_size_mb(&self) -> Option<u32> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -2409,9 +2624,14 @@ impl SystemVars {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
-    /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_percent` configuration parameter.
-    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_percent(&self) -> Option<Numeric> {
-        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT)
+    /// Returns the `storage_dataflow_max_inflight_bytes_to_cluster_size_fraction` configuration parameter.
+    pub fn storage_dataflow_max_inflight_bytes_to_cluster_size_fraction(&self) -> Option<Numeric> {
+        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
+    pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
+        *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -2502,6 +2722,10 @@ impl SystemVars {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
     }
 
+    pub fn enable_consolidate_after_union_negate(&self) -> bool {
+        *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
+    }
+
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
@@ -2529,6 +2753,52 @@ impl SystemVars {
 
     pub fn grpc_connect_timeout(&self) -> Duration {
         *self.expect_value(&grpc_client::CONNECT_TIMEOUT)
+    }
+
+    pub fn cluster_multi_process_replica_az_affinity_weight(&self) -> Option<i32> {
+        *self.expect_value(&cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT)
+    }
+
+    pub fn cluster_soften_replication_anti_affinity(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY)
+    }
+
+    pub fn cluster_soften_replication_anti_affinity_weight(&self) -> i32 {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT)
+    }
+
+    pub fn cluster_enable_topology_spread(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD)
+    }
+
+    pub fn cluster_topology_spread_ignore_non_singular_scale(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE)
+    }
+
+    pub fn cluster_topology_spread_max_skew(&self) -> i32 {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
+    }
+
+    pub fn cluster_topology_spread_soft(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
+    }
+
+    pub fn cluster_soften_az_affinity(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
+    }
+
+    pub fn cluster_soften_az_affinity_weight(&self) -> i32 {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+    }
+
+    /// Returns the `statement_logging_max_sample_rate` configuration parameter.
+    pub fn statement_logging_max_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_MAX_SAMPLE_RATE)
+    }
+
+    /// Returns the `statement_logging_default_sample_rate` configuration parameter.
+    pub fn statement_logging_default_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
     }
 }
 
@@ -3238,6 +3508,22 @@ impl Value for usize {
     }
 }
 
+impl Value for f64 {
+    fn type_name() -> String {
+        "double-precision floating-point number".to_string()
+    }
+
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<f64, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct NumericNonNegNonNan;
 
@@ -3248,6 +3534,44 @@ impl DomainConstraint<Numeric> for NumericNonNegNonNan {
                 parameter: var.into(),
                 values: vec![n.to_string()],
                 reason: "only supports non-negative, non-NaN numeric values".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct NumericInRange<R>(R);
+
+impl<R> DomainConstraint<Numeric> for NumericInRange<R>
+where
+    R: RangeBounds<f64> + std::fmt::Debug + Send + Sync,
+{
+    fn check(&self, var: &(dyn Var + Send + Sync), n: &Numeric) -> Result<(), VarError> {
+        let n: f64 = (*n)
+            .try_into()
+            .map_err(|_e| VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                // This first check can fail if the value is NaN, out of range,
+                // OR if it underflows (i.e. is very close to 0 without actually being 0, and the closest
+                // representable float is 0).
+                //
+                // The underflow case is very unlikely to be accidentally hit by a user, so let's
+                // not make the error message more confusing by talking about it, even though that makes
+                // the error message slightly inaccurate.
+                //
+                // If the user tries to set the paramater to 0.000<hundreds more zeros>001
+                // and gets the message "only supports values in range [0.0..=1.0]", I think they will
+                // understand, or at least accept, what's going on.
+                reason: format!("only supports values in range {:?}", self.0),
+            })?;
+        if !self.0.contains(&n) {
+            Err(VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                reason: format!("only supports values in range {:?}", self.0),
             })
         } else {
             Ok(())
@@ -3880,6 +4204,7 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -3893,8 +4218,9 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_PERCENT.name()
+        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
+        || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -3916,6 +4242,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
@@ -3937,6 +4264,19 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_FILTER_ENABLED.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+}
+
+/// Returns whether the named variable is a cluster scheduling config
+pub fn is_cluster_scheduling_var(name: &str) -> bool {
+    name == cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD.name()
+        || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE.name()
+        || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW.name()
+        || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
+        || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

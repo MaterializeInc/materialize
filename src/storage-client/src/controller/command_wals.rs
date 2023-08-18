@@ -18,7 +18,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::{Diff, TimestampManipulation};
+use mz_repr::TimestampManipulation;
 use mz_stash::{self, TypedCollection};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -85,7 +85,7 @@ where
         async fn tx_peek<'tx, KP, VP, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             typed: &TypedCollection<KP, VP>,
-        ) -> Vec<(K, V, Diff)>
+        ) -> Vec<(K, V)>
         where
             KP: mz_stash::Data,
             VP: mz_stash::Data,
@@ -96,14 +96,14 @@ where
                 .collection::<KP, VP>(typed.name())
                 .await
                 .expect("named collection must exist");
-            tx.peek(collection)
+            tx.peek_one(collection)
                 .await
                 .expect("peek succeeds")
                 .into_iter()
-                .map(|(k, v, diff)| {
+                .map(|(k, v)| {
                     let k = K::from_proto(k).expect("deserialization to succeed");
                     let v = V::from_proto(v).expect("deserialization to succeed");
-                    (k, v, diff)
+                    (k, v)
                 })
                 .collect()
         }
@@ -125,27 +125,14 @@ where
             .expect("stash operation succeeds");
 
         // Partition metadata into the collections we want to have and those we failed to drop.
-        let (in_use_collections, leaked_collections): (Vec<_>, Vec<_>) =
-            metadata.into_iter().partition(|(id, _, diff)| {
-                assert_eq!(
-                    *diff, 1,
-                    "expected METADATA_COLLECTION to contain reconciled state"
-                );
-
-                self.collection(*id).is_ok()
-            });
+        let (in_use_collections, leaked_collections): (Vec<_>, Vec<_>) = metadata
+            .into_iter()
+            .partition(|(id, _)| self.collection(*id).is_ok());
 
         // Get all shard IDs
         let shard_finalization: BTreeSet<_> = shard_finalization
             .into_iter()
-            .map(|(id, _, diff): (_, (), _)| {
-                assert_eq!(
-                    diff, 1,
-                    "expected SHARD_FINALIZATION to contain reconciled state"
-                );
-
-                id
-            })
+            .map(|(id, _): (_, ())| id)
             .collect();
 
         // Collect all shards from in-use collections
@@ -153,7 +140,7 @@ where
             .iter()
             // n.b we do not include remap shards here because they are the data shards of their own
             // collections.
-            .map(|(_, DurableCollectionMetadata { data_shard, .. }, _)| *data_shard)
+            .map(|(_, DurableCollectionMetadata { data_shard, .. })| *data_shard)
             .collect();
 
         // Determine if there are any shards that belong to in-use collections
@@ -175,7 +162,7 @@ where
             let mut shards_to_finalize = Vec::with_capacity(leaked_collections.len());
             let mut ids_to_drop = BTreeSet::new();
 
-            for (id, DurableCollectionMetadata { data_shard, .. }, _) in leaked_collections {
+            for (id, DurableCollectionMetadata { data_shard, .. }) in leaked_collections {
                 shards_to_finalize.push(data_shard);
                 ids_to_drop.insert(id);
             }

@@ -80,6 +80,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         config: RawSourceCreationConfig,
         _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<
             G,

@@ -17,7 +17,7 @@ from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
     DEFAULT_INSTANCE_PROFILE_NAME,
     DEFAULT_SECURITY_GROUP_NAME,
-    ROOT,
+    MZ_ROOT,
     MachineDesc,
     launch_cluster,
     mssh,
@@ -122,7 +122,7 @@ def run(args: argparse.Namespace) -> None:
     extra_tags["LaunchedBy"] = whoami()
 
     if args.machine:
-        with open(ROOT / "misc" / "scratch" / "{}.json".format(args.machine)) as f:
+        with open(MZ_ROOT / "misc" / "scratch" / "{}.json".format(args.machine)) as f:
 
             print("Reading machine configs from {}".format(f.name))
             descs = [MachineDesc.parse_obj(obj) for obj in multi_json(f.read())]

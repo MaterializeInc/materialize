@@ -9,10 +9,15 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get -qy install \
+RUN apt-get update && apt-get -qy install --no-install-recommends \
     ca-certificates \
+    curl \
+    dnsutils \
+    iputils-ping \
     postgresql-client \
-    wait-for-it
+    ssh \
+    wait-for-it \
+    wget
 
 COPY testdrive /usr/local/bin/
 

@@ -23,7 +23,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_databases_ind
 
 Used Indexes:
-  - mz_internal.mz_show_databases_ind
+  - mz_internal.mz_show_databases_ind (*** full scan ***)
 
 EOF
 
@@ -36,7 +36,7 @@ Explained Query (fast path):
       ReadExistingIndex mz_internal.mz_show_schemas_ind
 
 Used Indexes:
-  - mz_internal.mz_show_schemas_ind
+  - mz_internal.mz_show_schemas_ind (*** full scan ***)
 
 EOF
 
@@ -48,7 +48,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_connections_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_connections_ind
+  - mz_internal.mz_show_connections_ind (lookup)
 
 EOF
 
@@ -60,7 +60,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_tables_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_tables_ind
+  - mz_internal.mz_show_tables_ind (lookup)
 
 EOF
 
@@ -72,7 +72,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_sources_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind
+  - mz_internal.mz_show_sources_ind (lookup)
 
 EOF
 
@@ -84,7 +84,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_views_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_views_ind
+  - mz_internal.mz_show_views_ind (lookup)
 
 EOF
 
@@ -97,7 +97,7 @@ Explained Query (fast path):
       ReadExistingIndex mz_internal.mz_show_materialized_views_ind
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind
+  - mz_internal.mz_show_materialized_views_ind (*** full scan ***)
 
 EOF
 
@@ -110,7 +110,7 @@ Explained Query (fast path):
       ReadExistingIndex mz_internal.mz_show_indexes_ind
 
 Used Indexes:
-  - mz_internal.mz_show_indexes_ind
+  - mz_internal.mz_show_indexes_ind (*** full scan ***)
 
 EOF
 
@@ -122,7 +122,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_sinks_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_sinks_ind
+  - mz_internal.mz_show_sinks_ind (lookup)
 
 EOF
 
@@ -134,7 +134,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_types_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_types_ind
+  - mz_internal.mz_show_types_ind (lookup)
 
 EOF
 
@@ -146,7 +146,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_all_objects_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_all_objects_ind
+  - mz_internal.mz_show_all_objects_ind (lookup)
 
 EOF
 
@@ -161,21 +161,32 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_columns_ind lookup_value=("u1")
 
 Used Indexes:
-  - mz_internal.mz_show_columns_ind
+  - mz_internal.mz_show_columns_ind (lookup)
 
 EOF
 
-query T multiline
-EXPLAIN SHOW CLUSTERS
-----
-Explained Query (fast path):
-  Project (#0)
-    ReadExistingIndex mz_internal.mz_show_clusters_ind
-
-Used Indexes:
-  - mz_internal.mz_show_clusters_ind
-
-EOF
+# TODO[btv] - We should probably someday
+# optimize `SELECT name FROM (SHOW CLUSTERS)`
+# to do the same thing as `SELECT name FROM mz_clusters`;
+# i.e., just read out of the index we have on the latter table.
+# However, today we cannot do that. It's probably fine in practice
+# as there won't be more than a few dozen clusters/replicas in any
+# real world deployment, so spinning up a dataflow with joins
+# etc. is only mildly bad.
+#
+# See discussion here: https://materializeinc.slack.com/archives/C02PPB50ZHS/p1691531471306959
+#
+# query T multiline
+# EXPLAIN SELECT name FROM (SHOW CLUSTERS)
+# ----
+# Explained Query (fast path):
+#   Project (#0)
+#     ReadExistingIndex mz_internal.mz_show_clusters_ind
+#
+# Used Indexes:
+#   - mz_internal.mz_show_clusters_ind
+#
+# EOF
 
 query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS
@@ -184,7 +195,7 @@ Explained Query (fast path):
   ReadExistingIndex mz_internal.mz_show_cluster_replicas_ind
 
 Used Indexes:
-  - mz_internal.mz_show_cluster_replicas_ind
+  - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
 
 EOF
 
@@ -196,7 +207,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_secrets_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_secrets_ind
+  - mz_internal.mz_show_secrets_ind (lookup)
 
 EOF
 
@@ -216,8 +227,8 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #5, #13)
-      Join on=(#0 = #12 AND #2 = #4) type=differential
+    Project (#0..=#3, #5, #14)
+      Join on=(#0 = #13 AND #2 = #4) type=differential
         ArrangeBy keys=[[#2]]
           Project (#0..=#3)
             Get mz_catalog.mz_cluster_replicas
@@ -236,10 +247,10 @@ Explained Query:
                     Get mz_internal.mz_cluster_replica_metrics
 
 Used Indexes:
-  - mz_internal.mz_clusters_ind
-  - mz_internal.mz_cluster_replicas_ind
-  - mz_internal.mz_cluster_replica_sizes_ind
-  - mz_internal.mz_cluster_replica_metrics_ind
+  - mz_internal.mz_clusters_ind (differential join)
+  - mz_internal.mz_cluster_replicas_ind (*** full scan ***, differential join)
+  - mz_internal.mz_cluster_replica_sizes_ind (differential join)
+  - mz_internal.mz_cluster_replica_metrics_ind (differential join)
 
 EOF
 
@@ -282,8 +293,8 @@ Explained Query:
           Get mz_catalog.mz_sources
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind
-  - mz_internal.mz_source_statuses_ind
+  - mz_internal.mz_show_sources_ind (*** full scan ***)
+  - mz_internal.mz_source_statuses_ind (differential join)
 
 EOF
 
@@ -307,7 +318,7 @@ Explained Query:
               ReadExistingIndex mz_internal.mz_source_status_history lookup_value=("u6")
 
 Used Indexes:
-  - mz_internal.mz_source_status_history_ind
+  - mz_internal.mz_source_status_history_ind (lookup)
 
 EOF
 

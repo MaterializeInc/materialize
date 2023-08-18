@@ -324,7 +324,7 @@ Explained Query (fast path):
     ReadExistingIndex materialize.public.bareformatconfluent_primary_idx
 
 Used Indexes:
-  - materialize.public.bareformatconfluent_primary_idx
+  - materialize.public.bareformatconfluent_primary_idx (*** full scan ***)
 
 > CREATE SOURCE envelope_none_with_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -352,4 +352,4 @@ Explained Query:
       Get materialize.public.envelope_none_with_key
 
 Used Indexes:
-  - materialize.public.envelope_none_with_key_primary_idx
+  - materialize.public.envelope_none_with_key_primary_idx (*** full scan ***)

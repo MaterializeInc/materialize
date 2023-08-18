@@ -650,7 +650,7 @@ where
                 );
                 assert_eq!(
                     tx.peek_one(orders).await.unwrap_err().to_string(),
-                    "stash error: unexpected peek multiplicity"
+                    "stash error: unexpected peek multiplicity of 2"
                 );
                 tx.compact(orders.id, &Antichain::from_elem(3), None)
                     .await

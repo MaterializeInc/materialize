@@ -479,64 +479,54 @@ impl PersistSourceDataStats<'_> {
 
     fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
         let value_range = self.col_values(id, arena).unwrap_or(ResultSpec::anything());
-        let json_range = self.col_json(id, arena);
+        let json_range = self.col_json(id, arena).unwrap_or(ResultSpec::anything());
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.
         value_range.intersect(json_range)
     }
 
-    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> ResultSpec<'a> {
+    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
         let name = self.desc.get_name(idx);
         let typ = &self.desc.typ().column_types[idx];
+        let ok_stats = self
+            .stats
+            .key
+            .col::<Option<DynStruct>>("ok")
+            .expect("ok column should be a struct")?;
+        let stats = ok_stats.some.cols.get(name.as_str())?;
         match typ {
             ColumnType {
                 scalar_type: ScalarType::Jsonb,
                 nullable: false,
             } => {
-                let stats = self
-                    .stats
-                    .key
-                    .col::<Vec<u8>>(name.as_str())
-                    .expect("stats type should match column");
-                if let Some(byte_stats) = stats {
-                    let value_range = match byte_stats {
-                        BytesStats::Json(json_stats) => {
-                            Self::json_spec(self.stats.key.len, json_stats, arena)
-                        }
-                        BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-                    };
-                    value_range
-                } else {
-                    ResultSpec::anything()
-                }
+                let byte_stats = downcast_stats::<Vec<u8>>(&**stats)?;
+                let value_range = match byte_stats {
+                    BytesStats::Json(json_stats) => {
+                        Self::json_spec(ok_stats.some.len, json_stats, arena)
+                    }
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                };
+                Some(value_range)
             }
             ColumnType {
                 scalar_type: ScalarType::Jsonb,
                 nullable: true,
             } => {
-                let stats = self
-                    .stats
-                    .key
-                    .col::<Option<Vec<u8>>>(name.as_str())
-                    .expect("stats type should match column");
-                if let Some(option_stats) = stats {
-                    let null_range = match option_stats.none {
-                        0 => ResultSpec::nothing(),
-                        _ => ResultSpec::null(),
-                    };
-                    let value_range = match &option_stats.some {
-                        BytesStats::Json(json_stats) => {
-                            Self::json_spec(self.stats.key.len, json_stats, arena)
-                        }
-                        BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-                    };
-                    null_range.union(value_range)
-                } else {
-                    ResultSpec::anything()
-                }
+                let option_stats = downcast_stats::<Option<Vec<u8>>>(&**stats)?;
+                let null_range = match option_stats.none {
+                    0 => ResultSpec::nothing(),
+                    _ => ResultSpec::null(),
+                };
+                let value_range = match &option_stats.some {
+                    BytesStats::Json(json_stats) => {
+                        Self::json_spec(ok_stats.some.len, json_stats, arena)
+                    }
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                };
+                Some(null_range.union(value_range))
             }
-            _ => ResultSpec::anything(),
+            _ => None,
         }
     }
 

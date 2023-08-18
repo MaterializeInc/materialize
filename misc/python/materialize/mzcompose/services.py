@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import toml
 
-from materialize import ROOT
+from materialize import MZ_ROOT
 from materialize.mzcompose import (
     Service,
     ServiceConfig,
@@ -52,7 +52,12 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
+    "enable_with_mutually_recursive": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_dangerous_functions": "true",
+    "enable_disk_cluster_replicas": "true",
+    "statement_logging_max_sample_rate": "1.0",
+    "statement_logging_default_sample_rate": "1.0",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
@@ -545,7 +550,7 @@ class Cockroach(Service):
 
         if setup_materialize:
             path = os.path.relpath(
-                ROOT / "misc" / "cockroach" / "setup_materialize.sql",
+                MZ_ROOT / "misc" / "cockroach" / "setup_materialize.sql",
                 loader.composition_path,
             )
             volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
@@ -596,6 +601,7 @@ class Postgres(Service):
             "max_connections=5000",
         ],
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        volumes: List[str] = [],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
@@ -608,6 +614,7 @@ class Postgres(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+                "volumes": volumes,
             }
         )
         super().__init__(name=name, config=config)
@@ -998,7 +1005,7 @@ class SshBastionHost(Service):
         max_startups: Optional[str] = None,
     ) -> None:
         setup_path = os.path.relpath(
-            ROOT / "misc" / "images" / "sshd" / "setup.sh",
+            MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
             loader.composition_path,
         )
         super().__init__(
@@ -1030,7 +1037,6 @@ class Mz(Service):
         name: str = "mz",
         region: str = "aws/us-east-1",
         environment: str = "staging",
-        username: str,
         app_password: str,
     ) -> None:
         # We must create the temporary config file in a location
@@ -1046,13 +1052,13 @@ class Mz(Service):
         )
         toml.dump(
             {
-                "current_profile": "default",
+                "profile": "default",
                 "profiles": {
                     "default": {
-                        "email": username,
                         "app-password": app_password,
                         "region": region,
-                        "endpoint": f"https://{environment}.cloud.materialize.com/",
+                        "cloud-endpoint": f"https://{environment}.cloud.materialize.com",
+                        "admin-endpoint": f"https://admin.{environment}.cloud.materialize.com",
                     },
                 },
             },
@@ -1063,7 +1069,7 @@ class Mz(Service):
             name=name,
             config={
                 "mzbuild": "mz",
-                "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
+                "volumes": [f"{config.name}:/root/.config/materialize/mz.toml"],
             },
         )
 
@@ -1076,7 +1082,9 @@ class Prometheus(Service):
                 "image": "prom/prometheus:v2.41.0",
                 "ports": ["9090"],
                 "volumes": [
-                    str(ROOT / "misc" / "mzcompose" / "prometheus" / "prometheus.yml")
+                    str(
+                        MZ_ROOT / "misc" / "mzcompose" / "prometheus" / "prometheus.yml"
+                    )
                     + ":/etc/prometheus/prometheus.yml",
                     "mzdata:/mnt/mzdata",
                 ],
@@ -1096,7 +1104,7 @@ class Grafana(Service):
                     "GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
                 ],
                 "volumes": [
-                    str(ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
+                    str(MZ_ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
                     + ":/etc/grafana/provisioning/datasources",
                 ],
             },

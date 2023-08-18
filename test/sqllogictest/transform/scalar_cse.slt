@@ -93,3 +93,53 @@ Explained Query:
       Get materialize.public.x // { arity: 2 }
 
 EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/21178
+
+statement ok
+CREATE TABLE t(x int);
+
+query T multiline
+explain select * from t where 2*x + 2*x > 0
+----
+Explained Query:
+  Project (#0)
+    Filter ((#1 + #1) > 0)
+      Map ((2 * #0))
+        Get materialize.public.t
+
+Source materialize.public.t
+  filter=(((#1 + #1) > 0))
+  map=((2 * #0))
+
+EOF
+
+query T multiline
+explain select * from t where 2*x + 2*x + 2*x > 0
+----
+Explained Query:
+  Project (#0)
+    Filter (((#1 + #1) + #1) > 0)
+      Map ((2 * #0))
+        Get materialize.public.t
+
+Source materialize.public.t
+  filter=((((#1 + #1) + #1) > 0))
+  map=((2 * #0))
+
+EOF
+
+query T multiline
+explain select * from t where 2*x + 5*x + 2*x > 0
+----
+Explained Query:
+  Project (#0)
+    Filter (((#1 + (5 * #0)) + #1) > 0)
+      Map ((2 * #0))
+        Get materialize.public.t
+
+Source materialize.public.t
+  filter=((((#1 + (5 * #0)) + #1) > 0))
+  map=((2 * #0))
+
+EOF

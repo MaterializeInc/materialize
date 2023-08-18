@@ -41,18 +41,36 @@
 //! naming closures like above.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use futures::FutureExt;
 use tokio::runtime::{Handle, Runtime};
-use tokio::task::{self, JoinHandle};
+use tokio::task::{self, JoinError, JoinHandle};
 
 /// Wraps a [`JoinHandle`] to abort the underlying task when dropped.
 #[derive(Debug)]
 pub struct AbortOnDropHandle<T>(JoinHandle<T>);
 
+impl<T> AbortOnDropHandle<T> {
+    /// Checks if the task associated with this [`AbortOnDropHandle`] has finished.a
+    pub fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+}
+
 impl<T> Drop for AbortOnDropHandle<T> {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+impl<T> Future for AbortOnDropHandle<T> {
+    type Output = Result<T, JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.poll_unpin(cx)
     }
 }
 

@@ -303,8 +303,7 @@ message ReplicaConfig {
 
     message ManagedLocation {
         string size = 1;
-        string availability_zone = 2;
-        bool az_user_specified = 3;
+        optional string availability_zone = 2;
         bool disk = 4;
     }
 
@@ -558,13 +557,18 @@ message AuditLogEventV1 {
         StringWrapper database_name = 3;
     }
 
+    message UpdateItemV1 {
+        string id = 1;
+        FullNameV1 name = 2;
+    }
+
     uint64 id = 1;
     EventType event_type = 2;
     ObjectType object_type = 3;
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
 
-    // next-id: 26
+    // next-id: 27
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
@@ -586,5 +590,6 @@ message AuditLogEventV1 {
         IdNameV1 id_name_v1 = 17;
         SchemaV1 schema_v1 = 18;
         SchemaV2 schema_v2 = 19;
+        UpdateItemV1 update_item_v1 = 26;
     }
 }

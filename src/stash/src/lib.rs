@@ -86,6 +86,7 @@ use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use tokio_postgres::error::SqlState;
 
 pub mod objects;
 
@@ -106,12 +107,12 @@ pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 /// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
 /// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 30;
+pub const STASH_VERSION: u64 = 33;
 
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub(crate) const MIN_STASH_VERSION: u64 = 15;
+pub(crate) const MIN_STASH_VERSION: u64 = 25;
 
 // TODO(jkosh44) There's some circular logic going on with this key across crates.
 // mz_adapter::catalog::storage::stash initializes uses this value to initialize
@@ -215,7 +216,7 @@ impl StashError {
     /// or a retry is not safe due to an indeterminate state).
     pub fn is_unrecoverable(&self) -> bool {
         match &self.inner {
-            InternalStashError::Fence(_) => true,
+            InternalStashError::Fence(_) | InternalStashError::StashNotWritable(_) => true,
             _ => false,
         }
     }
@@ -224,6 +225,16 @@ impl StashError {
     pub fn can_recover_with_write_mode(&self) -> bool {
         match &self.inner {
             InternalStashError::StashNotWritable(_) => true,
+            _ => false,
+        }
+    }
+
+    /// The underlying transaction failed in a way that must be resolved by retrying
+    pub fn should_retry(&self) -> bool {
+        match &self.inner {
+            InternalStashError::Postgres(e) => {
+                matches!(e.code(), Some(&SqlState::T_R_SERIALIZATION_FAILURE))
+            }
             _ => false,
         }
     }

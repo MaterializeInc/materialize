@@ -34,7 +34,7 @@ use crate::coord::{
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
     SinkConnectionReady,
 };
-use crate::util::ResultExt;
+use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
@@ -58,14 +58,6 @@ impl Coordinator {
                 self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::Execute {
-                portal_name,
-                ctx,
-                span,
-            } => {
-                let span = tracing::debug_span!(parent: &span, "message (execute)");
-                self.handle_execute(portal_name, ctx).instrument(span).await;
-            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -101,8 +93,8 @@ impl Coordinator {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
-            Message::RetireExecute { data } => {
-                self.retire_execute(data);
+            Message::RetireExecute { data, reason } => {
+                self.retire_execution(reason, data);
             }
             Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
@@ -260,6 +252,11 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
+                        let csid = ComputeSinkId {
+                            cluster_id: active_subscribe.cluster_id,
+                            global_id: sink_id,
+                        };
+                        self.drop_compute_sinks([csid]);
                         self.remove_active_subscribe(sink_id).await;
                     }
                 }
@@ -383,6 +380,7 @@ impl Coordinator {
                 ctx.session(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
+                &resolved_ids,
             ) {
                 Ok(Plan::CreateSource(plan)) => plan,
                 Ok(_) => {
@@ -407,7 +405,7 @@ impl Coordinator {
 
         let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
 
-        match self.plan_statement(ctx.session(), stmt, &params) {
+        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
             Ok(Plan::CreateSource(plan)) => {
                 let source_id = match self.catalog_mut().allocate_user_id().await {
                     Ok(id) => id,
@@ -733,7 +731,7 @@ impl Coordinator {
                 id_bundle,
             } => {
                 let result = self.sequence_explain_timestamp_finish(
-                    ctx.session_mut(),
+                    &mut ctx,
                     format,
                     cluster_id,
                     optimized_plan,

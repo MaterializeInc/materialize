@@ -10,11 +10,6 @@
 # Test requires stable object IDs
 reset-server
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_monotonic_oneshot_selects = true
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t (
   a int,
@@ -699,7 +694,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                         }
                       }
                     }
-                  ]
+                  ],
+                  "consolidate_output": true
                 }
               },
               "forms": {
@@ -955,7 +951,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                             }
                           }
                         }
-                      ]
+                      ],
+                      "consolidate_output": true
                     }
                   },
                   "forms": {
@@ -1143,7 +1140,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                     }
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }
@@ -1338,7 +1336,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                             }
                           }
                         }
-                      ]
+                      ],
+                      "consolidate_output": true
                     }
                   },
                   "forms": {
@@ -2000,7 +1999,8 @@ FROM t
                               }
                             }
                           }
-                        ]
+                        ],
+                        "consolidate_output": true
                       }
                     },
                     "mfp": {
@@ -2054,7 +2054,8 @@ FROM t
                     "input_key_val": null
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }
@@ -2466,7 +2467,8 @@ VIEW hierarchical_global
                               }
                             }
                           }
-                        ]
+                        ],
+                        "consolidate_output": true
                       }
                     },
                     "mfp": {
@@ -2512,7 +2514,8 @@ VIEW hierarchical_global
                     "input_key_val": null
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }
@@ -2726,7 +2729,8 @@ SELECT * FROM hierarchical_global
                               }
                             }
                           }
-                        ]
+                        ],
+                        "consolidate_output": true
                       }
                     },
                     "mfp": {
@@ -2772,7 +2776,8 @@ SELECT * FROM hierarchical_global
                     "input_key_val": null
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }
@@ -3713,7 +3718,8 @@ FROM t
                               }
                             }
                           }
-                        ]
+                        ],
+                        "consolidate_output": true
                       }
                     },
                     "mfp": {
@@ -3759,7 +3765,8 @@ FROM t
                     "input_key_val": null
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }
@@ -5346,7 +5353,8 @@ VIEW collated_global
                               }
                             }
                           }
-                        ]
+                        ],
+                        "consolidate_output": true
                       }
                     },
                     "mfp": {
@@ -5464,7 +5472,8 @@ VIEW collated_global
                     "input_key_val": null
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }
@@ -6083,7 +6092,8 @@ SELECT * FROM collated_global
                               }
                             }
                           }
-                        ]
+                        ],
+                        "consolidate_output": true
                       }
                     },
                     "mfp": {
@@ -6201,7 +6211,8 @@ SELECT * FROM collated_global
                     "input_key_val": null
                   }
                 }
-              ]
+              ],
+              "consolidate_output": false
             }
           }
         }

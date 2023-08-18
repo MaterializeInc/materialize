@@ -181,6 +181,13 @@ async fn main() -> ExitCode {
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),
+        persist_dir: match tempfile::tempdir() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error creating state dir: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
 
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {

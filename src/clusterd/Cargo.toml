@@ -1,14 +1,14 @@
 [package]
 name = "mz-clusterd"
 description = "Materialize's cluster server."
-version = "0.64.0-dev"
+version = "0.66.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-axum = "0.6.7"
+axum = "0.6.20"
 clap = { version = "3.2.24", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"

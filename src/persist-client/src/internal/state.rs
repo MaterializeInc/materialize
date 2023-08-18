@@ -162,6 +162,10 @@ pub struct HollowBatchPart {
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
+    /// A lower bound on the keys in the part. (By default, this the minimum
+    /// possible key: `vec![]`.)
+    #[serde(serialize_with = "serialize_part_bytes")]
+    pub key_lower: Vec<u8>,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
     #[proptest(strategy = "super::encoding::any_some_lazy_part_stats()")]
@@ -1335,6 +1339,11 @@ where
     }
 }
 
+fn serialize_part_bytes<S: Serializer>(val: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    let val = hex::encode(val);
+    val.serialize(s)
+}
+
 fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
@@ -1606,6 +1615,7 @@ pub(crate) mod tests {
                 .map(|x| HollowBatchPart {
                     key: PartialBatchKey((*x).to_owned()),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 })
                 .collect(),

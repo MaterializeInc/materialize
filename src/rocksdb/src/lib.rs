@@ -88,10 +88,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use itertools::Itertools;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::DeleteOnDropHistogram;
+use mz_ore::metrics::{DeleteOnDropCounter, DeleteOnDropHistogram};
 use mz_ore::retry::{Retry, RetryResult};
+use prometheus::core::AtomicU64;
 use rocksdb::{Env, Error as RocksDBError, ErrorKind, Options as RocksDBOptions, WriteOptions, DB};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -167,17 +168,30 @@ impl InstanceOptions {
     }
 }
 
-/// Metrics about an instances usage of RocksDB. User-provided
+/// Shared metrics about an instances usage of RocksDB. User-provided
 /// so the user can choose the labels.
-pub struct RocksDBMetrics {
+pub struct RocksDBSharedMetrics {
     /// Latency of multi_gets, in fractional seconds.
     pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    /// Size of multi_get batches.
-    pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
     pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+}
+
+/// Worker metrics about an instances usage of RocksDB. User-provided
+/// so the user can choose the labels.
+pub struct RocksDBInstanceMetrics {
+    /// Size of multi_get batches.
+    pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// Size of multi_get non-empty results.
+    pub multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// Total size of bytes returned in the result
+    pub multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// The number of calls to rocksdb multi_get
+    pub multi_get_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    /// The number of calls to rocksdb multi_put
+    pub multi_put_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Size of write batches.
-    pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 /// The result type for `multi_get`.
@@ -185,6 +199,10 @@ pub struct RocksDBMetrics {
 pub struct MultiGetResult {
     /// The number of keys we fetched.
     pub processed_gets: u64,
+    /// The total size of values fetched.
+    pub processed_gets_size: u64,
+    /// The number of records returns.
+    pub returned_gets: u64,
 }
 
 /// The result type for individual gets.
@@ -267,16 +285,18 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O>(
+    pub async fn new<M, O, IM>(
         instance_path: &Path,
         options: InstanceOptions,
         tuning_config: RocksDBConfig,
-        metrics: M,
+        shared_metrics: M,
+        instance_metrics: IM,
         enc_opts: O,
     ) -> Result<Self, Error>
     where
         O: bincode::Options + Copy + Send + Sync + 'static,
-        M: Deref<Target = RocksDBMetrics> + Send + 'static,
+        M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
+        IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
@@ -307,7 +327,8 @@ where
                 tuning_config,
                 instance_path,
                 rx,
-                metrics,
+                shared_metrics,
+                instance_metrics,
                 creation_error_tx,
                 enc_opts,
             )
@@ -379,7 +400,11 @@ where
         if multi_get_vec.is_empty() {
             self.multi_get_scratch = multi_get_vec;
             self.multi_get_results_scratch = results_vec;
-            return Ok(MultiGetResult { processed_gets: 0 });
+            return Ok(MultiGetResult {
+                processed_gets: 0,
+                processed_gets_size: 0,
+                returned_gets: 0,
+            });
         }
 
         let (tx, rx) = oneshot::channel();
@@ -486,19 +511,21 @@ where
     }
 }
 
-fn rocksdb_core_loop<K, V, M, O>(
+fn rocksdb_core_loop<K, V, M, O, IM>(
     options: InstanceOptions,
     tuning_config: RocksDBConfig,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
-    metrics: M,
+    shared_metrics: M,
+    instance_metrics: IM,
     creation_error_tx: oneshot::Sender<Error>,
     enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
-    M: Deref<Target = RocksDBMetrics> + Send + 'static,
+    M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
+    IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
     let rocksdb_options = options.as_rocksdb_options(&tuning_config);
@@ -556,13 +583,15 @@ fn rocksdb_core_loop<K, V, M, O>(
                         let gets: Result<Vec<_>, _> = gets.into_iter().collect();
                         match gets {
                             Ok(gets) => {
-                                metrics.multi_get_latency.observe(latency.as_secs_f64());
-                                metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
-                                let result = MultiGetResult {
-                                    processed_gets: gets.len().try_into().unwrap(),
-                                };
+                                shared_metrics
+                                    .multi_get_latency
+                                    .observe(latency.as_secs_f64());
+                                instance_metrics
+                                    .multi_get_size
+                                    .inc_by(batch_size.try_into().unwrap());
+                                instance_metrics.multi_get_count.inc();
 
-                                RetryResult::Ok((result, gets))
+                                RetryResult::Ok(gets)
                             }
                             Err(e) => match e.kind() {
                                 ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
@@ -572,15 +601,20 @@ fn rocksdb_core_loop<K, V, M, O>(
                     });
 
                 let _ = match retry_result {
-                    Ok((result, gets)) => {
+                    Ok(gets) => {
+                        let processed_gets: u64 = gets.len().try_into().unwrap();
+                        let mut processed_gets_size = 0;
+                        let mut returned_gets: u64 = 0;
                         for previous_value in gets {
                             let get_result = match previous_value {
                                 Some(previous_value) => {
                                     match enc_opts.deserialize(&previous_value) {
-                                        Ok(value) => Some(GetResult {
-                                            value,
-                                            size: u64::cast_from(previous_value.len()),
-                                        }),
+                                        Ok(value) => {
+                                            let size = u64::cast_from(previous_value.len());
+                                            processed_gets_size += size;
+                                            returned_gets += 1;
+                                            Some(GetResult { value, size })
+                                        }
                                         Err(e) => {
                                             let _ =
                                                 response_sender.send(Err(Error::DecodeError(e)));
@@ -592,8 +626,23 @@ fn rocksdb_core_loop<K, V, M, O>(
                             };
                             results_scratch.push(get_result);
                         }
+
+                        instance_metrics
+                            .multi_get_result_count
+                            .inc_by(returned_gets);
+                        instance_metrics
+                            .multi_get_result_bytes
+                            .inc_by(processed_gets_size);
                         batch.clear();
-                        response_sender.send(Ok((result, batch, results_scratch)))
+                        response_sender.send(Ok((
+                            MultiGetResult {
+                                processed_gets,
+                                processed_gets_size,
+                                returned_gets,
+                            },
+                            batch,
+                            results_scratch,
+                        )))
                     }
                     Err(e) => response_sender.send(Err(e)),
                 };
@@ -658,8 +707,13 @@ fn rocksdb_core_loop<K, V, M, O>(
                         match db.write_opt(writes, &wo) {
                             Ok(()) => {
                                 let latency = now.elapsed();
-                                metrics.multi_put_latency.observe(latency.as_secs_f64());
-                                metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
+                                shared_metrics
+                                    .multi_put_latency
+                                    .observe(latency.as_secs_f64());
+                                instance_metrics
+                                    .multi_put_size
+                                    .inc_by(batch_size.try_into().unwrap());
+                                instance_metrics.multi_put_count.inc();
                                 RetryResult::Ok(())
                             }
                             Err(e) => match e.kind() {

@@ -29,7 +29,7 @@ from typing import IO, Any, DefaultDict, Dict, List, Optional, Set, Tuple
 import click
 import toml
 
-from materialize import ROOT, spawn
+from materialize import MZ_ROOT, spawn
 
 DepBuilder = DefaultDict[str, List[str]]
 DepMap = Dict[str, List[str]]
@@ -65,7 +65,7 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
         else:
             diagram_file = "crates.svg"
 
-    root_cargo = ROOT / "Cargo.toml"
+    root_cargo = MZ_ROOT / "Cargo.toml"
     with root_cargo.open() as fh:
         data = toml.load(fh)
 
@@ -74,10 +74,10 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
     member_meta = {}
     all_deps = {}
     for member_path in data["workspace"]["members"]:
-        path = ROOT / member_path / "Cargo.toml"
+        path = MZ_ROOT / member_path / "Cargo.toml"
         with path.open() as fh:
             member = toml.load(fh)
-        has_bin = any(ROOT.joinpath(member_path).glob("src/**/main.rs"))
+        has_bin = any(MZ_ROOT.joinpath(member_path).glob("src/**/main.rs"))
         name = member["package"]["name"]
 
         member_meta[name] = {
@@ -107,7 +107,7 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
     if roots:
         (local_deps, areas) = filter_to_roots(areas, local_deps, roots)
 
-    diagram_file = ROOT / diagram_file
+    diagram_file = MZ_ROOT / diagram_file
     with NamedTemporaryFile(mode="w+", prefix="mz-arch-diagram-") as out:
         write_dot_graph(member_meta, local_deps, areas, out)
 

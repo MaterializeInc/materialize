@@ -16,9 +16,10 @@ c 0 1
 ----
 parts=1 len=4
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 b 0 1
 c 0 1
@@ -34,9 +35,10 @@ b 0 1
 ----
 parts=1 len=1
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=b>
 b 0 1
 <run 0>
 part 0
@@ -50,7 +52,7 @@ b 4 1
 ----
 parts=0 len=0
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <empty>
 
@@ -68,18 +70,22 @@ h 0 1
 ----
 parts=4 len=8
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 b 0 1
 <part 1>
+<key lower=a>
 a 0 1
 d 0 1
 <part 2>
+<key lower=e>
 e 0 1
 f 0 1
 <part 3>
+<key lower=g>
 g 0 1
 h 0 1
 <run 0>
@@ -99,12 +105,14 @@ z 0 1
 ----
 parts=2 len=4
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 m 0 1
 <part 1>
+<key lower=b>
 b 0 1
 z 0 1
 <run 0>
@@ -130,24 +138,30 @@ z 0 1
 ----
 parts=6 len=12
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 b 0 1
 <part 1>
+<key lower=c>
 c 0 1
 d 0 1
 <part 2>
+<key lower=g>
 g 0 1
 h 0 1
 <part 3>
+<key lower=e>
 e 0 1
 f 0 1
 <part 4>
+<key lower=a>
 a 0 1
 x 0 1
 <part 5>
+<key lower=y>
 y 0 1
 z 0 1
 <run 0>
@@ -167,11 +181,13 @@ a 1 1
 ----
 parts=2 len=2
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 9 1
 <part 1>
+<key lower=a>
 a 1 1
 <run 0>
 part 0
@@ -186,12 +202,14 @@ d 0 1
 ----
 parts=2 len=3
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 b 0 1
 <part 1>
+<key lower=d>
 d 0 1
 <run 0>
 part 0
@@ -206,12 +224,14 @@ d 0 1
 ----
 parts=2 len=4
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 b 0 1
 <part 1>
+<key lower=c>
 c 0 1
 d 0 1
 <run 0>
@@ -248,7 +268,7 @@ c 0 1
 ----
 parts=1 len=4
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
 d 0 1
@@ -271,7 +291,7 @@ a 0 1
 ----
 parts=4 len=8
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
 y 0 1
@@ -293,3 +313,57 @@ part 1
 part 2
 <run 3>
 part 3
+
+# raw key stats are bounded size
+write-batch output=b0 lower=0 upper=2 target_size=50
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBB 0 1
+----
+parts=1 len=1
+
+fetch-batch input=b0 stats=lower
+----
+<part 0>
+<key lower=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA>
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBB 0 1
+<run 0>
+part 0
+
+# parts from different batches appended together get different runs
+write-batch output=b0 lower=0 upper=2 target_size=10
+a 0 1
+b 0 1
+----
+parts=2 len=2
+
+write-batch output=b1 lower=0 upper=2 target_size=10 consolidate=false
+c 0 1
+d 0 1
+----
+parts=2 len=2
+
+write-batch output=b2 lower=0 upper=2 target_size=10
+e 1 1
+----
+parts=1 len=1
+
+compare-and-append-batches expected_upper=0 new_upper=2 batches=(b0,b1,b2)
+----
+ok
+
+snapshot as_of=1
+----
+<batch [0]-[2]>
+<run 0>
+<part 0>
+a 1 1
+<part 1>
+b 1 1
+<run 1>
+<part 0>
+c 1 1
+<run 2>
+<part 0>
+d 1 1
+<run 3>
+<part 0>
+e 1 1

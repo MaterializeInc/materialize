@@ -34,7 +34,7 @@ from typing import IO, Any, List, Optional, Sequence, Text, Tuple, Union
 import junit_xml
 from humanize import naturalsize
 
-from materialize import ROOT, ci_util, mzbuild, mzcompose, spawn, ui
+from materialize import MZ_ROOT, ci_util, mzbuild, mzcompose, spawn, ui
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (2, 6, 0)
@@ -140,7 +140,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
 
 def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
     """Loads the composition specified by the command-line arguments."""
-    repo = mzbuild.Repository.from_arguments(ROOT, args)
+    repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
     try:
         return mzcompose.Composition(
             repo,
@@ -232,7 +232,7 @@ class GenShortcutsCommand(Command):
     help = "generate shortcut `mzcompose` shell scripts in mzcompose directories"
 
     def run(self, args: argparse.Namespace) -> None:
-        repo = mzbuild.Repository.from_arguments(ROOT, args)
+        repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         template = """#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
@@ -260,7 +260,7 @@ class ListCompositionsCommand(Command):
     help = "list the directories that contain compositions and their summaries"
 
     def run(cls, args: argparse.Namespace) -> None:
-        repo = mzbuild.Repository.from_arguments(ROOT, args)
+        repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
             print(os.path.relpath(path, repo.root))
             composition = mzcompose.Composition(repo, name, munge_services=False)
@@ -414,6 +414,8 @@ class DockerComposeCommand(Command):
             .strip()
             .strip("v")
             .split("+")[0]
+            # remove suffix like "-desktop.1"
+            .split("-")[0]
         )
         version = tuple(int(i) for i in output.split("."))
         if version < MIN_COMPOSE_VERSION:

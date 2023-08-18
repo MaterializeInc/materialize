@@ -19,7 +19,7 @@ use std::num::NonZeroUsize;
 use futures::TryFutureExt;
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_client::types::dataflows::{DataflowDescription, IndexImport};
 use mz_controller::clusters::ClusterId;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
@@ -29,6 +29,7 @@ use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
+use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -36,9 +37,10 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
+
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::util::{send_immediate_rows, ResultExt};
-use crate::AdapterError;
+use crate::util::ResultExt;
+use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -47,6 +49,10 @@ pub(crate) struct PendingPeek {
     pub(crate) cluster_id: ClusterId,
     /// All `GlobalId`s that the peek depend on.
     pub(crate) depends_on: BTreeSet<GlobalId>,
+    /// Context about the execute that produced this peek,
+    /// needed by the coordinator for retiring it.
+    pub(crate) ctx_extra: ExecuteContextExtra,
+    pub(crate) is_fast_path: bool,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -204,7 +210,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                 mz_expr::MirRelationExpr::Get { id, .. } => {
                     // Just grab any arrangement
                     // Nothing to be done if an arrangement does not exist
-                    for (index_id, (desc, _typ, _monotonic)) in dataflow_plan.index_imports.iter() {
+                    for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
                         if Id::Global(desc.on_id) == *id {
                             return Ok(Some(FastPathPlan::PeekExisting(
                                 *index_id,
@@ -220,7 +226,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                     {
                         // We should only get excited if we can track down an index for `id`.
                         // If `keys` is non-empty, that means we think one exists.
-                        for (index_id, (desc, _typ, _monotonic)) in
+                        for (index_id, IndexImport { desc, .. }) in
                             dataflow_plan.index_imports.iter()
                         {
                             if desc.on_id == *id && &desc.key == key {
@@ -294,6 +300,7 @@ impl crate::coord::Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_peek_plan(
         &mut self,
+        ctx_extra: &mut ExecuteContextExtra,
         plan: PlannedPeek,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
@@ -336,10 +343,24 @@ impl crate::coord::Coordinator {
                 }
             }
             let results = finishing.finish(results, max_result_size);
-            return match results {
-                Ok(rows) => Ok(send_immediate_rows(rows)),
-                Err(e) => Err(AdapterError::ResultSize(e)),
+            let (ret, reason) = match results {
+                Ok(rows) => {
+                    let rows_returned = u64::cast_from(rows.len());
+                    (
+                        Ok(Self::send_immediate_rows(rows)),
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: Some(rows_returned),
+                            execution_strategy: Some(StatementExecutionStrategy::Constant),
+                        },
+                    )
+                }
+                Err(error) => (
+                    Err(AdapterError::ResultSize(error.clone())),
+                    StatementEndedExecutionReason::Errored { error },
+                ),
             };
+            self.retire_execution(reason, std::mem::take(ctx_extra));
+            return ret;
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
@@ -350,7 +371,7 @@ impl crate::coord::Coordinator {
         // differently.
 
         // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow) = match fast_path {
+        let (peek_command, drop_dataflow, is_fast_path) = match fast_path {
             PeekPlan::FastPath(FastPathPlan::PeekExisting(
                 id,
                 literal_constraints,
@@ -358,6 +379,7 @@ impl crate::coord::Coordinator {
             )) => (
                 (id, literal_constraints, timestamp, map_filter_project),
                 None,
+                true,
             ),
             PeekPlan::SlowPath(PeekDataflowPlan {
                 desc: dataflow,
@@ -374,7 +396,7 @@ impl crate::coord::Coordinator {
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .active_compute()
-                    .create_dataflows(compute_instance, vec![dataflow])
+                    .create_dataflow(compute_instance, dataflow)
                     .unwrap_or_terminate("cannot fail to create dataflows");
                 self.initialize_compute_read_policies(
                     output_ids,
@@ -406,6 +428,7 @@ impl crate::coord::Coordinator {
                         map_filter_project,
                     ),
                     Some(index_id),
+                    false,
                 )
             }
             _ => {
@@ -432,6 +455,8 @@ impl crate::coord::Coordinator {
                 conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
+                ctx_extra: std::mem::take(ctx_extra),
+                is_fast_path,
             },
         );
         self.client_pending_peeks
@@ -494,21 +519,26 @@ impl crate::coord::Coordinator {
             for (uuid, compute_instance) in &uuids {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
             }
+            let mut compute = self.controller.active_compute();
             for (compute_instance, uuids) in inverse {
                 // It's possible that this compute instance no longer exists because it was dropped
                 // while the peek was in progress. In this case we ignore the error and move on
                 // because the dataflow no longer exists.
                 // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
-                let _ = self
-                    .controller
-                    .active_compute()
-                    .cancel_peeks(compute_instance, uuids);
+                for uuid in uuids {
+                    let _ = compute.cancel_peek(compute_instance, uuid);
+                }
             }
 
-            uuids
+            let mut ret = uuids
                 .iter()
                 .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
-                .collect()
+                .collect::<Vec<_>>();
+            for peek in &mut ret {
+                let ctx_extra = std::mem::take(&mut peek.ctx_extra);
+                self.retire_execution(StatementEndedExecutionReason::Canceled, ctx_extra);
+            }
+            ret
         } else {
             Vec::new()
         }
@@ -527,8 +557,28 @@ impl crate::coord::Coordinator {
             conn_id: _,
             cluster_id: _,
             depends_on: _,
+            ctx_extra,
+            is_fast_path,
         }) = self.remove_pending_peek(&uuid)
         {
+            let reason = match &response {
+                PeekResponse::Rows(r) => {
+                    let rows_returned: u64 = r.iter().map(|(_, n)| u64::cast_from(n.get())).sum();
+                    StatementEndedExecutionReason::Success {
+                        rows_returned: Some(rows_returned),
+                        execution_strategy: Some(if is_fast_path {
+                            StatementExecutionStrategy::FastPath
+                        } else {
+                            StatementExecutionStrategy::Standard
+                        }),
+                    }
+                }
+                PeekResponse::Error(e) => {
+                    StatementEndedExecutionReason::Errored { error: e.clone() }
+                }
+                PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
+            };
+            self.retire_execution(reason, ctx_extra);
             otel_ctx.attach_as_parent();
             // Peek cancellations are best effort, so we might still
             // receive a response, even though the recipient is gone.
@@ -552,6 +602,16 @@ impl crate::coord::Coordinator {
             }
         }
         pending_peek
+    }
+
+    /// Constructs an [`ExecuteResponse`] that that will send some rows to the
+    /// client immediately, as opposed to asking the dataflow layer to send along
+    /// the rows after some computation.
+    pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
+        ExecuteResponse::SendingRowsImmediate {
+            rows,
+            span: tracing::Span::none(),
+        }
     }
 }
 

@@ -96,7 +96,9 @@ use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
-use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql::session::user::{
+    INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, INTROSPECTION_USER, SUPPORT_USER, SYSTEM_USER,
+};
 use mz_storage_client::types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
@@ -320,6 +322,7 @@ fn test_drop_connection_race() {
 #[mz_ore::test]
 fn test_time() {
     let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Confirm that `now()` and `current_timestamp()` both return a
@@ -1551,6 +1554,7 @@ fn test_utilization_hold() {
 fn test_github_12546() {
     let config = util::Config::default().with_propagate_crashes(false);
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     server
         .runtime
@@ -1921,6 +1925,11 @@ fn test_internal_users() {
         .is_ok());
     assert!(server
         .pg_config_internal()
+        .user(&SUPPORT_USER.name)
+        .connect(postgres::NoTls)
+        .is_ok());
+    assert!(server
+        .pg_config_internal()
         .user("mz_something_else")
         .connect(postgres::NoTls)
         .is_err());
@@ -1931,7 +1940,7 @@ fn test_internal_users_cluster() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
-    for user in INTERNAL_USER_NAMES.iter() {
+    for (user, expected_cluster) in INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.iter() {
         let mut internal_client = server
             .pg_config_internal()
             .user(user)
@@ -1942,7 +1951,7 @@ fn test_internal_users_cluster() {
             .query_one("SHOW CLUSTER", &[])
             .unwrap()
             .get::<_, String>(0);
-        assert_eq!(user, &cluster);
+        assert_eq!(expected_cluster, &cluster);
     }
 }
 
@@ -2130,76 +2139,80 @@ fn test_load_generator() {
 
 #[mz_ore::test]
 fn test_introspection_user_permissions() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    for user in [&INTROSPECTION_USER, &SUPPORT_USER] {
+        tracing::info!("testing {}", user.name);
+        let config = util::Config::default();
+        let server = util::start_server(config).unwrap();
 
-    let mut external_client = server.connect(postgres::NoTls).unwrap();
-    let mut introspection_client = server
-        .pg_config_internal()
-        .user(&INTROSPECTION_USER.name)
-        .connect(postgres::NoTls)
-        .unwrap();
+        let mut external_client = server.connect(postgres::NoTls).unwrap();
+        let mut introspection_client = server
+            .pg_config_internal()
+            .user(&user.name)
+            .connect(postgres::NoTls)
+            .unwrap();
 
-    external_client
-        .batch_execute("CREATE TABLE materialize.public.t1 (a INT)")
-        .unwrap();
+        external_client
+            .batch_execute("CREATE TABLE materialize.public.t1 (a INT)")
+            .unwrap();
 
-    introspection_client
-        .batch_execute("SET CLUSTER TO 'mz_introspection'")
-        .unwrap();
+        introspection_client
+            .batch_execute("SET CLUSTER TO 'mz_introspection'")
+            .unwrap();
 
-    assert!(introspection_client
-        .query("SELECT * FROM materialize.public.t1", &[])
-        .is_err());
-    assert!(introspection_client
-        .batch_execute("INSERT INTO materialize.public.t1 VALUES (1)")
-        .is_err());
-    assert!(introspection_client
-        .batch_execute("CREATE TABLE t2 (a INT)")
-        .is_err());
+        assert!(introspection_client
+            .query("SELECT * FROM materialize.public.t1", &[])
+            .is_err());
+        assert!(introspection_client
+            .batch_execute("INSERT INTO materialize.public.t1 VALUES (1)")
+            .is_err());
+        assert!(introspection_client
+            .batch_execute("CREATE TABLE t2 (a INT)")
+            .is_err());
 
-    assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
-        .is_ok());
-    assert!(introspection_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(introspection_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+            .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM mz_catalog.mz_tables", &[])
+            .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM pg_catalog.pg_namespace", &[])
+            .is_ok());
 
-    introspection_client
-        .batch_execute("SET CLUSTER TO 'mz_system'")
-        .unwrap();
-    assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
-        .is_ok());
-    assert!(introspection_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(introspection_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+        introspection_client
+            .batch_execute("SET CLUSTER TO 'mz_system'")
+            .unwrap();
+        assert!(introspection_client
+            .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+            .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM mz_catalog.mz_tables", &[])
+            .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM pg_catalog.pg_namespace", &[])
+            .is_ok());
 
-    introspection_client
-        .batch_execute("SET CLUSTER TO 'default'")
-        .unwrap();
-    assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
-    assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
-        .is_ok());
-    assert!(introspection_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(introspection_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+        introspection_client
+            .batch_execute("SET CLUSTER TO 'default'")
+            .unwrap();
+        assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
+        assert!(introspection_client
+            .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+            .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM mz_catalog.mz_tables", &[])
+            .is_ok());
+        assert!(introspection_client
+            .query("SELECT * FROM pg_catalog.pg_namespace", &[])
+            .is_ok());
+    }
 }
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client

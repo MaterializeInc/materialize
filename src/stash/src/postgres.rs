@@ -359,7 +359,7 @@ impl StashFactory {
                 Ok(()) => break,
                 Err(err) => {
                     warn!("initial stash connection error, retrying: {err}");
-                    if retry.next().await.is_none() {
+                    if err.is_unrecoverable() || retry.next().await.is_none() {
                         return Err(err);
                     }
                 }
@@ -908,21 +908,14 @@ impl Stash {
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                            15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
-                            16 => upgrade::v16_to_v17::upgrade(),
-                            17 => upgrade::v17_to_v18::upgrade(&mut tx).await?,
-                            18 => upgrade::v18_to_v19::upgrade(&mut tx).await?,
-                            19 => upgrade::v19_to_v20::upgrade(&mut tx).await?,
-                            20 => upgrade::v20_to_v21::upgrade(&mut tx).await?,
-                            21 => upgrade::v21_to_v22::upgrade(&mut tx).await?,
-                            22 => upgrade::v22_to_v23::upgrade(&mut tx).await?,
-                            23 => upgrade::v23_to_v24::upgrade(&mut tx).await?,
-                            24 => upgrade::v24_to_v25::upgrade(&mut tx).await?,
                             25 => upgrade::v25_to_v26::upgrade(),
                             26 => upgrade::v26_to_v27::upgrade(),
                             27 => upgrade::v27_to_v28::upgrade(&mut tx).await?,
                             28 => upgrade::v28_to_v29::upgrade(&mut tx).await?,
                             29 => upgrade::v29_to_v30::upgrade(),
+                            30 => upgrade::v30_to_v31::upgrade(),
+                            31 => upgrade::v31_to_v32::upgrade(&mut tx).await?,
+                            32 => upgrade::v32_to_v33::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),

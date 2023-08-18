@@ -15,11 +15,11 @@ from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT, mzbuild
+from materialize import MZ_ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
-from materialize.cloudtest.k8s import K8sResource
-from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
-from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.k8s.cockroach import cockroach_resources
+from materialize.cloudtest.k8s.debezium import debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
@@ -27,13 +27,13 @@ from materialize.cloudtest.k8s.environmentd import (
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
-from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
-from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
+from materialize.cloudtest.k8s.postgres import postgres_resources
+from materialize.cloudtest.k8s.redpanda import redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
-from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
+from materialize.cloudtest.k8s.ssh import ssh_resources
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.util.wait import wait
 
 
 class MaterializeApplication(Application):
@@ -49,7 +49,7 @@ class MaterializeApplication(Application):
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
         self.release_mode = release_mode
         self.aws_region = aws_region
-        self.root = ROOT
+        self.mz_root = MZ_ROOT
 
         # Register the VpcEndpoint CRD.
         self.register_vpc_endpoint()
@@ -66,11 +66,11 @@ class MaterializeApplication(Application):
         self, release_mode: bool, log_filter: Optional[str], tag: Optional[str]
     ) -> List[K8sResource]:
         return [
-            *COCKROACH_RESOURCES,
-            *POSTGRES_RESOURCES,
-            *REDPANDA_RESOURCES,
-            *DEBEZIUM_RESOURCES,
-            *SSH_RESOURCES,
+            *cockroach_resources(),
+            *postgres_resources(),
+            *redpanda_resources(),
+            *debezium_resources(),
+            *ssh_resources(),
             Minio(),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
@@ -94,7 +94,7 @@ class MaterializeApplication(Application):
             "apply",
             "-f",
             os.path.join(
-                os.path.abspath(self.root),
+                os.path.abspath(self.mz_root),
                 "src/cloud-resources/src/crd/gen/vpcendpoints.json",
             ),
         )
@@ -126,7 +126,7 @@ class MaterializeApplication(Application):
 
     def acquire_images(self) -> None:
         repo = mzbuild.Repository(
-            self.root, release_mode=self.release_mode, coverage=self.coverage_mode()
+            self.mz_root, release_mode=self.release_mode, coverage=self.coverage_mode()
         )
         for image in self.images:
             self._acquire_image(repo, image)

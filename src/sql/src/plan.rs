@@ -122,6 +122,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
+    ShowColumns(ShowColumnsPlan),
     ShowVariable(ShowVariablePlan),
     InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
@@ -262,6 +263,7 @@ impl Plan {
                 PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
+                PlanKind::ShowColumns,
                 PlanKind::ShowAllVariables,
                 PlanKind::InspectShard,
             ],
@@ -313,6 +315,7 @@ impl Plan {
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
+            Plan::ShowColumns(_) => "show columns",
             Plan::ShowVariable(_) => "show variable",
             Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
@@ -759,12 +762,26 @@ impl SubscribeFrom {
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
         }
     }
+
+    pub fn contains_temporal(&self) -> bool {
+        match self {
+            SubscribeFrom::Id(_) => false,
+            SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct ShowCreatePlan {
     pub id: GlobalId,
     pub row: Row,
+}
+
+#[derive(Debug)]
+pub struct ShowColumnsPlan {
+    pub id: GlobalId,
+    pub select_plan: SelectPlan,
+    pub new_resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
@@ -1236,7 +1253,7 @@ impl QueryWhen {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum MutationKind {
     Insert,
     Update,

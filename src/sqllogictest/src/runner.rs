@@ -696,7 +696,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
     }
 }
 
-fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String> {
+fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     let mut formatted: Vec<String> = vec![];
     for i in 0..row.len() {
         let t: Option<Slt> = row.get::<usize, Option<Slt>>(i);
@@ -706,19 +706,8 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
             None => "NULL".into(),
         });
     }
-    if mode == Mode::Cockroach && sort.yes() {
-        formatted
-            .iter()
-            .flat_map(|s| {
-                crate::parser::split_cols(s, types.len())
-                    .into_iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    } else {
-        formatted
-    }
+
+    formatted
 }
 
 impl<'a> Runner<'a> {
@@ -918,10 +907,9 @@ impl<'a> RunnerInner<'a> {
             });
             client
                 .batch_execute(
-                    "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
-                     DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
+                    "DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
-                     CREATE SCHEMA sqllogictest_consensus;
+                     CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
                 )
@@ -970,7 +958,10 @@ impl<'a> RunnerInner<'a> {
                 clusterd_image: "clusterd".into(),
                 init_container_image: None,
                 persist_location: PersistLocation {
-                    blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                    blob_uri: format!(
+                        "file://{}/persist/blob",
+                        config.persist_dir.path().display()
+                    ),
                     consensus_uri,
                 },
                 persist_clients,
@@ -1083,16 +1074,24 @@ impl<'a> RunnerInner<'a> {
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // If auto_index_selects is on, we should turn on enable_monotonic_oneshot_selects.
-        // TODO(vmarcos): Remove this code when we retire the feature flag.
-        if self.auto_index_selects {
-            self.system_client
-                .execute(
-                    "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
-                    &[],
-                )
-                .await?;
-        }
+        // We turn on enable_monotonic_oneshot_selects and enable_with_mutually_recursive,
+        // as these two features have reached enough maturity to do so.
+        // TODO(vmarcos): Remove this code when we retire these feature flags.
+        self.system_client
+            .execute(
+                "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
+                &[],
+            )
+            .await?;
+
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_with_mutually_recursive = on", &[])
+            .await?;
+
+        // Dangerous functions are useful for tests so we enable it for all tests.
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_dangerous_functions = on", &[])
+            .await?;
         Ok(())
     }
 
@@ -1387,7 +1386,7 @@ impl<'a> RunnerInner<'a> {
                     location,
                 });
             }
-            let row = format_row(row, expected_types, *mode, sort);
+            let row = format_row(row, expected_types, *mode);
             formatted_rows.push(row);
         }
 
@@ -1690,6 +1689,11 @@ pub struct RunConfig<'a> {
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Persist state is handled specially because:
+    /// - Persist background workers do not necessarily shut down immediately once the server is
+    ///   shut down, and may panic if their storage is delete out from under them.
+    /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
+    pub persist_dir: TempDir,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

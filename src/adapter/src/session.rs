@@ -25,7 +25,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
-use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYSTEM_USER};
+use mz_sql::session::user::{
+    ExternalUserMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+};
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
@@ -177,12 +179,10 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
-        let default_cluster = INTERNAL_USER_NAMES
-            .contains(&user.name)
-            .then(|| user.name.clone());
+        let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
         let mut vars = SessionVars::new(build_info, user);
         if let Some(default_cluster) = default_cluster {
-            vars.set_cluster(default_cluster);
+            vars.set_cluster(default_cluster.clone());
         }
         Session {
             conn_id,
@@ -491,7 +491,6 @@ impl<T: TimestampManipulation> Session<T> {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        // TODO[btv] - This will be used by statement logging
         sql: String,
         desc: StatementDesc,
         catalog_revision: u64,

@@ -326,6 +326,7 @@ pub enum EventDetails {
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
     SchemaV2(SchemaV2),
+    UpdateItemV1(UpdateItemV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -949,6 +950,31 @@ impl RustType<proto::audit_log_event_v1::SchemaV2> for SchemaV2 {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct UpdateItemV1 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+impl RustType<proto::audit_log_event_v1::UpdateItemV1> for UpdateItemV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdateItemV1 {
+        proto::audit_log_event_v1::UpdateItemV1 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdateItemV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdateItemV1 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("UpdateItemV1::name")?,
+        })
+    }
+}
+
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -980,6 +1006,7 @@ impl EventDetails {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::UpdateOwnerV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::UpdateItemV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
@@ -1017,6 +1044,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::IdNameV1(details) => IdNameV1(details.into_proto()),
             EventDetails::SchemaV1(details) => SchemaV1(details.into_proto()),
             EventDetails::SchemaV2(details) => SchemaV2(details.into_proto()),
+            EventDetails::UpdateItemV1(details) => UpdateItemV1(details.into_proto()),
         }
     }
 
@@ -1056,6 +1084,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             IdNameV1(details) => Ok(EventDetails::IdNameV1(details.into_rust()?)),
             SchemaV1(details) => Ok(EventDetails::SchemaV1(details.into_rust()?)),
             SchemaV2(details) => Ok(EventDetails::SchemaV2(details.into_rust()?)),
+            UpdateItemV1(details) => Ok(EventDetails::UpdateItemV1(details.into_rust()?)),
         }
     }
 }

@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List
 
 from kubernetes.client import (
     V1Container,
@@ -22,11 +23,15 @@ from kubernetes.client import (
     V1ServiceSpec,
 )
 
-from materialize.cloudtest.k8s import K8sDeployment, K8sService
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class DebeziumDeployment(K8sDeployment):
-    def __init__(self) -> None:
+    def __init__(self, namespace: str, redpanda_namespace: str) -> None:
+        super().__init__(namespace)
         ports = [V1ContainerPort(container_port=8083, name="debezium")]
 
         env = [
@@ -44,11 +49,11 @@ class DebeziumDeployment(K8sDeployment):
             ),
             V1EnvVar(
                 name="CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL",
-                value="http://redpanda:8081",
+                value=f"http://redpanda.{redpanda_namespace}:8081",
             ),
             V1EnvVar(
                 name="CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL",
-                value="http://redpanda:8081",
+                value=f"http://redpanda.{redpanda_namespace}:8081",
             ),
             V1EnvVar(
                 name="CONNECT_OFFSET_COMMIT_POLICY", value="AlwaysCommitOffsetPolicy"
@@ -62,7 +67,7 @@ class DebeziumDeployment(K8sDeployment):
         )
 
         template = V1PodTemplateSpec(
-            metadata=V1ObjectMeta(labels={"app": "debezium"}),
+            metadata=V1ObjectMeta(namespace=namespace, labels={"app": "debezium"}),
             spec=V1PodSpec(containers=[container]),
         )
 
@@ -73,23 +78,36 @@ class DebeziumDeployment(K8sDeployment):
         self.deployment = V1Deployment(
             api_version="apps/v1",
             kind="Deployment",
-            metadata=V1ObjectMeta(name="debezium"),
+            metadata=V1ObjectMeta(name="debezium", namespace=namespace),
             spec=spec,
         )
 
 
 class DebeziumService(K8sService):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str,
+    ) -> None:
+        super().__init__(namespace)
         ports = [
             V1ServicePort(name="debezium", port=8083),
         ]
 
         self.service = V1Service(
-            metadata=V1ObjectMeta(name="debezium", labels={"app": "debezium"}),
+            metadata=V1ObjectMeta(
+                name="debezium", namespace=namespace, labels={"app": "debezium"}
+            ),
             spec=V1ServiceSpec(
                 type="NodePort", ports=ports, selector={"app": "debezium"}
             ),
         )
 
 
-DEBEZIUM_RESOURCES = [DebeziumDeployment(), DebeziumService()]
+def debezium_resources(
+    debezium_namespace: str = DEFAULT_K8S_NAMESPACE,
+    redpanda_namespace: str = DEFAULT_K8S_NAMESPACE,
+) -> List[K8sResource]:
+    return [
+        DebeziumDeployment(debezium_namespace, redpanda_namespace=redpanda_namespace),
+        DebeziumService(debezium_namespace),
+    ]

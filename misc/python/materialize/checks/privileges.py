@@ -191,10 +191,10 @@ class Privileges(Check):
                 privilege_db2  materialize=UC/materialize
                 privilege_db3  materialize=UC/materialize
                 privilege_db4  materialize=UC/materialize
-                privilege_db1  mz_introspection=U/materialize
-                privilege_db2  mz_introspection=U/materialize
-                privilege_db3  mz_introspection=U/materialize
-                privilege_db4  mz_introspection=U/materialize
+                privilege_db1  mz_support=U/materialize
+                privilege_db2  mz_support=U/materialize
+                privilege_db3  mz_support=U/materialize
+                privilege_db4  mz_support=U/materialize
                 privilege_db1  role_1=UC/materialize
                 privilege_db2  role_1=UC/materialize
                 privilege_db3  role_1=UC/materialize
@@ -205,10 +205,10 @@ class Privileges(Check):
                 privilege_schema2  materialize=UC/materialize
                 privilege_schema3  materialize=UC/materialize
                 privilege_schema4  materialize=UC/materialize
-                privilege_schema1  mz_introspection=U/materialize
-                privilege_schema2  mz_introspection=U/materialize
-                privilege_schema3  mz_introspection=U/materialize
-                privilege_schema4  mz_introspection=U/materialize
+                privilege_schema1  mz_support=U/materialize
+                privilege_schema2  mz_support=U/materialize
+                privilege_schema3  mz_support=U/materialize
+                privilege_schema4  mz_support=U/materialize
                 privilege_schema1  role_1=UC/materialize
                 privilege_schema2  role_1=UC/materialize
                 privilege_schema3  role_1=UC/materialize
@@ -276,7 +276,7 @@ class Privileges(Check):
                 contains: column "privileges" does not exist
 
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'privilege_cluster%'
-                privilege_cluster1 mz_introspection=U/materialize
+                privilege_cluster1 mz_support=U/materialize
                 privilege_cluster1 materialize=UC/materialize
                 privilege_cluster1 role_1=UC/materialize
 

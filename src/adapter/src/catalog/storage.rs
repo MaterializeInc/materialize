@@ -10,14 +10,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use std::iter::once;
+use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -44,7 +47,7 @@ use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
     self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
+    SerializedReplicaLocation, SerializedReplicaLogging, SystemObjectMapping,
 };
 use crate::coord::timeline;
 
@@ -61,7 +64,7 @@ pub use stash::{
 };
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
-pub const MZ_INTROSPECTION_ROLE_ID: RoleId = RoleId::System(2);
+pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
 
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
@@ -155,8 +158,7 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
     SerializedReplicaConfig {
         location: SerializedReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
-            availability_zone: bootstrap_args.default_availability_zone.clone(),
-            az_user_specified: false,
+            availability_zone: None,
             disk: false,
         },
         logging: default_logging_config(),
@@ -175,7 +177,6 @@ fn default_logging_config() -> SerializedReplicaLogging {
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
-    pub default_availability_zone: String,
     pub bootstrap_role: Option<String>,
 }
 
@@ -201,28 +202,71 @@ impl Connection {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = pin::pin!(retry);
+        loop {
+            match Self::open_inner(stash, now.clone(), bootstrap_args, deploy_generation).await {
+                Ok(conn) => {
+                    return Ok(conn);
+                }
+                Err((given_stash, err)) => {
+                    stash = given_stash;
+                    let should_retry =
+                        matches!(&err, Error{ kind: ErrorKind::Stash(se)} if se.should_retry());
+                    if !should_retry || retry.next().await.is_none() {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+    }
+
+    #[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
+    async fn open_inner(
+        mut stash: Stash,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, (Stash, Error)> {
         // Initialize the Stash if it hasn't been already
-        let mut conn = if !stash.is_initialized().await? {
+        let mut conn = if !match stash.is_initialized().await {
+            Ok(is_init) => is_init,
+            Err(e) => {
+                return Err((stash, e.into()));
+            }
+        } {
             // Get the current timestamp so we can record when we booted.
             let previous_now = mz_repr::Timestamp::MIN;
             let boot_ts = timeline::monotonic_now(now, previous_now);
 
             // Initialize the Stash
             let args = bootstrap_args.clone();
-            stash
+            match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
                         stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
                     })
                 })
-                .await?;
+                .await
+            {
+                Ok(()) => {}
+                Err(e) => return Err((stash, e.into())),
+            }
 
             Connection { stash, boot_ts }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
             if !stash.is_readonly() {
-                stash.upgrade().await?;
+                match stash.upgrade().await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        return Err((stash, e.into()));
+                    }
+                }
             }
 
             // Choose a time at which to boot. This is the time at which we will run
@@ -231,19 +275,35 @@ impl Connection {
             //
             // This time is usually the current system time, but with protection
             // against backwards time jumps, even across restarts.
-            let previous = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
-                .await?
-                .unwrap_or(mz_repr::Timestamp::MIN);
+            let previous =
+                match try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds).await {
+                    Ok(ts) => ts.unwrap_or(mz_repr::Timestamp::MIN),
+                    Err(e) => {
+                        return Err((stash, e));
+                    }
+                };
             let boot_ts = timeline::monotonic_now(now, previous);
 
             let mut conn = Connection { stash, boot_ts };
 
             if !conn.stash.is_readonly() {
                 // IMPORTANT: we durably record the new timestamp before using it.
-                conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await?;
+                match conn
+                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        return Err((conn.stash, e));
+                    }
+                }
                 if let Some(deploy_generation) = deploy_generation {
-                    conn.persist_deploy_generation(deploy_generation).await?;
+                    match conn.persist_deploy_generation(deploy_generation).await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            return Err((conn.stash, e));
+                        }
+                    }
                 }
             }
 
@@ -252,10 +312,31 @@ impl Connection {
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            let mut txn = transaction(&mut conn.stash).await?;
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-            txn.commit().await?;
+            let mut txn = match transaction(&mut conn.stash).await {
+                Ok(txn) => txn,
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            };
+
+            match add_new_builtin_clusters_migration(&mut txn) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match txn.commit().await {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
         }
 
         Ok(conn)
@@ -355,9 +436,9 @@ impl Connection {
             .map(RustType::from_proto)
             .map_ok(|(k, v): (RoleKey, RoleValue)| Role {
                 id: k.id,
-                name: v.role.name,
-                attributes: v.role.attributes,
-                membership: v.role.membership,
+                name: v.name,
+                attributes: v.attributes,
+                membership: v.membership,
             })
             .collect::<Result<_, _>>()?;
 
@@ -872,7 +953,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         items: TableTransaction::new(items, |a: &ItemValue, b| {
             a.schema_id == b.schema_id && a.name == b.name
         })?,
-        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.role.name == b.role.name)?,
+        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
         clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
         cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
@@ -1027,11 +1108,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn insert_user_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+    pub(crate) fn insert_user_role(
+        &mut self,
+        name: String,
+        attributes: RoleAttributes,
+        membership: RoleMembership,
+    ) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
-        let name = role.name.clone();
-        match self.roles.insert(RoleKey { id }, RoleValue { role }) {
+        match self.roles.insert(
+            RoleKey { id },
+            RoleValue {
+                name: name.clone(),
+                attributes,
+                membership,
+            },
+        ) {
             Ok(_) => Ok(id),
             Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(name))),
         }
@@ -1303,7 +1395,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub(crate) fn remove_role(&mut self, name: &str) -> Result<(), Error> {
-        let roles = self.roles.delete(|_k, v| v.role.name == name);
+        let roles = self.roles.delete(|_k, v| v.name == name);
         assert!(
             roles.iter().all(|(k, _)| k.id.is_user()),
             "cannot delete non-user roles"
@@ -1449,10 +1541,10 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub(crate) fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
+    pub(crate) fn update_role(&mut self, id: RoleId, role: catalog::Role) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
-                Some(RoleValue { role: role.clone() })
+                Some(RoleValue::from(role.clone()))
             } else {
                 None
             }
@@ -1504,7 +1596,7 @@ impl<'a> Transaction<'a> {
     /// Returns an error if `id` is not found.
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
-    /// DO NOT call this function in a loop, use [`Self::update_clusters`] instead.
+    /// DO NOT call this function in a loop.
     pub(crate) fn update_cluster(
         &mut self,
         id: ClusterId,
@@ -1531,47 +1623,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Updates all clusters with ids matching the keys of `clusters` in the transaction, to the
-    /// corresponding value in `clusters`.
-    ///
-    /// Returns an error if any id in `clusters` is not found.
-    ///
-    /// NOTE: On error, there still may be some clusters updated in the transaction. It is
-    /// up to the called to either abort the transaction or commit.
-    pub(crate) fn update_clusters(
-        &mut self,
-        clusters: BTreeMap<ClusterId, catalog::Cluster>,
-    ) -> Result<(), Error> {
-        let n = self.clusters.update(|k, _v| {
-            if let Some(cluster) = clusters.get(&k.id) {
-                Some(ClusterValue {
-                    name: cluster.name().to_string(),
-                    linked_object_id: cluster.linked_object_id(),
-                    owner_id: cluster.owner_id,
-                    privileges: cluster.privileges().all_values_owned().collect(),
-                    config: cluster.config.clone(),
-                })
-            } else {
-                None
-            }
-        })?;
-        let n = usize::try_from(n).expect("Must be positive and fit in usize");
-        if n == clusters.len() {
-            Ok(())
-        } else {
-            let update_ids: BTreeSet<_> = clusters.into_keys().collect();
-            let cluster_ids: BTreeSet<_> = self.clusters.items().keys().map(|k| k.id).collect();
-            let mut unknown = update_ids.difference(&cluster_ids);
-            Err(SqlCatalogError::UnknownCluster(unknown.join(", ")).into())
-        }
-    }
-
     /// Updates cluster replica `replica_id` in the transaction to `replica`.
     ///
     /// Returns an error if `replica_id` is not found.
     ///
     /// Runtime is linear with respect to the total number of cluster replicas in the stash.
-    /// DO NOT call this function in a loop, use [`Self::update_cluster_replicas`] instead.
+    /// DO NOT call this function in a loop.
     pub(crate) fn update_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
@@ -1595,41 +1652,6 @@ impl<'a> Transaction<'a> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownClusterReplica(replica_id.to_string()).into())
-        }
-    }
-
-    /// Updates all cluster replicas with ids matching the keys of `replicas` in the
-    /// transaction, to the corresponding value in `replicas`.
-    ///
-    /// Returns an error if any id in `replicas` is not found.
-    ///
-    /// NOTE: On error, there still may be some cluster replicas updated in the transaction. It is
-    /// up to the called to either abort the transaction or commit.
-    pub(crate) fn update_cluster_replicas(
-        &mut self,
-        replicas: BTreeMap<ReplicaId, (ClusterId, catalog::ClusterReplica)>,
-    ) -> Result<(), Error> {
-        let n = self.cluster_replicas.update(|k, _v| {
-            if let Some((cluster_id, replica)) = replicas.get(&k.id) {
-                Some(ClusterReplicaValue {
-                    cluster_id: *cluster_id,
-                    name: replica.name.clone(),
-                    config: replica.config.clone().into(),
-                    owner_id: replica.owner_id,
-                })
-            } else {
-                None
-            }
-        })?;
-        let n = usize::try_from(n).expect("Must be positive and fit in usize");
-        if n == replicas.len() {
-            Ok(())
-        } else {
-            let update_ids: BTreeSet<_> = replicas.into_keys().collect();
-            let replica_ids: BTreeSet<_> =
-                self.cluster_replicas.items().keys().map(|k| k.id).collect();
-            let mut unknown = update_ids.difference(&replica_ids);
-            Err(SqlCatalogError::UnknownClusterReplica(unknown.join(", ")).into())
         }
     }
 
@@ -2067,7 +2089,19 @@ pub struct RoleKey {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
-    role: SerializedRole,
+    name: String,
+    attributes: RoleAttributes,
+    membership: RoleMembership,
+}
+
+impl From<catalog::Role> for RoleValue {
+    fn from(role: catalog::Role) -> Self {
+        RoleValue {
+            name: role.name,
+            attributes: role.attributes,
+            membership: role.membership,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]

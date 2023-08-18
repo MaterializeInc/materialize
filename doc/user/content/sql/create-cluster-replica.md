@@ -48,14 +48,9 @@ _replica_name_ | A name for this replica.
 {{% replica-options %}}
 
 {{< note >}}
-If you do not specify an availability zone, Materialize will automatically
-assign the availability zone with the least existing replicas for the
-associated cluster to increase the cluster's tolerance to availability zone
-failure.
-
-To check the availability zone associated with each replica in a cluster, use
-the [`mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
-system table.
+If you do not specify an availability zone, Materialize will assign the replica
+to an arbitrary availability zone. For details on how replicas are assigned
+between availability zones, see [Availability zone assignment](/sql/create-cluster/#availability-zone-assignment).
 {{< /note >}}
 
 ## Details
@@ -103,8 +98,6 @@ cluster. In these cases, the slower machines will likely be continually burdened
 with a backlog of work. If all of the faster machines become unreachable, the
 system might experience delays in replying to requests while the slower machines
 catch up to the last known time that the faster machines had computed.
-
-
 
 ## Example
 
