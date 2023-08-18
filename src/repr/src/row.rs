@@ -15,7 +15,7 @@ use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 use std::str;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
@@ -375,9 +375,6 @@ enum Tag {
     Null,
     False,
     True,
-    Int16,
-    Int32,
-    Int64,
     UInt8,
     UInt32,
     Float32,
@@ -408,6 +405,83 @@ enum Tag {
     Range,
     MzAclItem,
     AclItem,
+    // Everything except leap seconds and times beyond the range of
+    // i64 nanoseconds. (Note that Materialize does not support leap
+    // seconds, but this module does).
+    CheapTimestamp,
+    // Everything except leap seconds and times beyond the range of
+    // i64 nanoseconds. (Note that Materialize does not support leap
+    // seconds, but this module does).
+    CheapTimestampTz,
+    // ORDER MATTERS for all the IntN_K tags,
+    // because we use arithmetic to figure out which tag to use during encoding.
+    Int16_0_NonNegative,
+    Int16_8_NonNegative,
+    Int16_NonNegative,
+
+    Int32_0_NonNegative,
+    Int32_8_NonNegative,
+    Int32_16_NonNegative,
+    Int32_24_NonNegative,
+    Int32_NonNegative,
+
+    Int64_0_NonNegative,
+    Int64_8_NonNegative,
+    Int64_16_NonNegative,
+    Int64_24_NonNegative,
+    Int64_32_NonNegative,
+    Int64_40_NonNegative,
+    Int64_48_NonNegative,
+    Int64_56_NonNegative,
+    Int64_NonNegative,
+
+    Int16_0_Negative,
+    Int16_8_Negative,
+    Int16_Negative,
+
+    Int32_0_Negative,
+    Int32_8_Negative,
+    Int32_16_Negative,
+    Int32_24_Negative,
+    Int32_Negative,
+
+    Int64_0_Negative,
+    Int64_8_Negative,
+    Int64_16_Negative,
+    Int64_24_Negative,
+    Int64_32_Negative,
+    Int64_40_Negative,
+    Int64_48_Negative,
+    Int64_56_Negative,
+    Int64_Negative,
+}
+
+impl Tag {
+    fn actual_int_length(self) -> usize {
+        use Tag::*;
+        match self {
+            Int16_0_NonNegative | Int32_0_NonNegative | Int64_0_NonNegative => 0,
+            Int16_8_NonNegative | Int32_8_NonNegative | Int64_8_NonNegative => 1,
+            Int16_NonNegative | Int32_16_NonNegative | Int64_16_NonNegative => 2,
+            Int32_24_NonNegative | Int64_24_NonNegative => 3,
+            Int32_NonNegative | Int64_32_NonNegative => 4,
+            Int64_40_NonNegative => 5,
+            Int64_48_NonNegative => 6,
+            Int64_56_NonNegative => 7,
+            Int64_NonNegative => 8,
+            Int16_0_Negative | Int32_0_Negative | Int64_0_Negative => 0,
+            Int16_8_Negative | Int32_8_Negative | Int64_8_Negative => 1,
+            Int16_Negative | Int32_16_Negative | Int64_16_Negative => 2,
+            Int32_24_Negative | Int64_24_Negative => 3,
+            Int32_Negative | Int64_32_Negative => 4,
+            Int64_40_Negative => 5,
+            Int64_48_Negative => 6,
+            Int64_56_Negative => 7,
+            Int64_Negative => 8,
+
+            _ => panic!(),
+        }
+    }
 }
 
 // --------------------------------------------------------------------------------
@@ -463,6 +537,37 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
     byte
 }
 
+unsafe fn read_byte_array_sign_extending<const N: usize, const Fill: u8>(
+    data: &[u8],
+    offset: &mut usize,
+    length: usize,
+) -> [u8; N] {
+    let mut raw = [Fill; N];
+    for i in 0..length {
+        debug_assert!(i < raw.len());
+        debug_assert!(*offset + i < data.len());
+        *raw.get_unchecked_mut(i) = *data.get_unchecked(*offset + i);
+    }
+    *offset += length;
+    raw
+}
+
+unsafe fn read_byte_array_extending_negative<const N: usize>(
+    data: &[u8],
+    offset: &mut usize,
+    length: usize,
+) -> [u8; N] {
+    read_byte_array_sign_extending::<N, 255>(data, offset, length)
+}
+
+unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
+    data: &[u8],
+    offset: &mut usize,
+    length: usize,
+) -> [u8; N] {
+    read_byte_array_sign_extending::<N, 0>(data, offset, length)
+}
+
 fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
     let mut raw = [0; N];
     raw.copy_from_slice(&data[*offset..*offset + N]);
@@ -501,18 +606,79 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
-        Tag::Int16 => {
-            let i = i16::from_le_bytes(read_byte_array(data, offset));
+        Tag::Int16_0_NonNegative | Tag::Int16_NonNegative | Tag::Int16_8_NonNegative => {
+            let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
             Datum::Int16(i)
         }
-        Tag::Int32 => {
-            let i = i32::from_le_bytes(read_byte_array(data, offset));
+        Tag::Int32_0_NonNegative
+        | Tag::Int32_NonNegative
+        | Tag::Int32_8_NonNegative
+        | Tag::Int32_16_NonNegative
+        | Tag::Int32_24_NonNegative => {
+            let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
             Datum::Int32(i)
         }
-        Tag::Int64 => {
-            let i = i64::from_le_bytes(read_byte_array(data, offset));
+        Tag::Int64_0_NonNegative
+        | Tag::Int64_NonNegative
+        | Tag::Int64_8_NonNegative
+        | Tag::Int64_16_NonNegative
+        | Tag::Int64_24_NonNegative
+        | Tag::Int64_32_NonNegative
+        | Tag::Int64_40_NonNegative
+        | Tag::Int64_48_NonNegative
+        | Tag::Int64_56_NonNegative => {
+            let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
             Datum::Int64(i)
         }
+        Tag::Int16_0_Negative | Tag::Int16_Negative | Tag::Int16_8_Negative => {
+            let i = i16::from_le_bytes(read_byte_array_extending_negative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
+            Datum::Int16(i)
+        }
+        Tag::Int32_0_Negative
+        | Tag::Int32_Negative
+        | Tag::Int32_8_Negative
+        | Tag::Int32_16_Negative
+        | Tag::Int32_24_Negative => {
+            let i = i32::from_le_bytes(read_byte_array_extending_negative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
+            Datum::Int32(i)
+        }
+        Tag::Int64_0_Negative
+        | Tag::Int64_Negative
+        | Tag::Int64_8_Negative
+        | Tag::Int64_16_Negative
+        | Tag::Int64_24_Negative
+        | Tag::Int64_32_Negative
+        | Tag::Int64_40_Negative
+        | Tag::Int64_48_Negative
+        | Tag::Int64_56_Negative => {
+            let i = i64::from_le_bytes(read_byte_array_extending_negative(
+                data,
+                offset,
+                tag.actual_int_length(),
+            ));
+            Datum::Int64(i)
+        }
+
         Tag::UInt8 => {
             let i = u8::from_le_bytes(read_byte_array(data, offset));
             Datum::UInt8(i)
@@ -539,6 +705,27 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::Date => Datum::Date(read_date(data, offset)),
         Tag::Time => Datum::Time(read_time(data, offset)),
+        Tag::CheapTimestamp => {
+            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let secs = ts.div_euclid(1_000_000_000);
+            let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
+            let ndt = NaiveDateTime::from_timestamp_opt(secs, nsecs)
+                .expect("We only write round-trippable timestamps");
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(ndt).expect("unexpected timestamp"),
+            )
+        }
+        Tag::CheapTimestampTz => {
+            let ts = i64::from_le_bytes(read_byte_array(data, offset));
+            let secs = ts.div_euclid(1_000_000_000);
+            let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
+            let ndt = NaiveDateTime::from_timestamp_opt(secs, nsecs)
+                .expect("We only write round-trippable timestamps");
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(DateTime::from_utc(ndt, Utc))
+                    .expect("unexpected timestamp"),
+            )
+        }
         Tag::Timestamp => {
             let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
@@ -739,6 +926,43 @@ where
     data.extend_from_slice(&u32::to_le_bytes(time.nanosecond()));
 }
 
+/// Returns an i64 representing a `NaiveDateTime`, if
+/// said i64 can be round-tripped back to a `NaiveDateTime`.
+///
+/// The only exotic NDTs for which this can't happen are those that
+/// are hundreds of years in the future or past, or those that
+/// represent a leap second. (Note that Materialize does not support
+/// leap seconds, but this module does).
+// This function is inspired by `NaiveDateTime::timestamp_nanos`,
+// with extra checking.
+fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
+    let subsec_nanos = dt.timestamp_subsec_nanos();
+    if subsec_nanos >= 1_000_000_000 {
+        return None;
+    }
+    let as_ns = dt.timestamp().checked_mul(1_000_000_000)?;
+    as_ns.checked_add(i64::from(subsec_nanos))
+}
+
+#[inline(always)]
+fn min_bytes_signed<T>(i: T) -> u8
+where
+    T: Into<i64>,
+{
+    let i: i64 = i.into();
+
+    // To fit in n bytes, we require that
+    // everything but the leading sign bits fits in n*8
+    // bits.
+    let n_sign_bits = if i.is_negative() {
+        i.leading_ones() as u8
+    } else {
+        i.leading_zeros() as u8
+    };
+
+    (64 - n_sign_bits + 7) / 8
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -748,16 +972,37 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            data.push(Tag::Int16.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbs = min_bytes_signed(i);
+            let tag = u8::from(if i.is_negative() {
+                Tag::Int16_0_Negative
+            } else {
+                Tag::Int16_0_NonNegative
+            }) + mbs;
+
+            data.push(tag.into());
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
-            data.push(Tag::Int32.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbs = min_bytes_signed(i);
+            let tag = u8::from(if i.is_negative() {
+                Tag::Int32_0_Negative
+            } else {
+                Tag::Int32_0_NonNegative
+            }) + mbs;
+
+            data.push(tag.into());
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
-            data.push(Tag::Int64.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbs = min_bytes_signed(i);
+            let tag = u8::from(if i.is_negative() {
+                Tag::Int64_0_Negative
+            } else {
+                Tag::Int64_0_NonNegative
+            }) + mbs;
+
+            data.push(tag.into());
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::UInt8(i) => {
             data.push(Tag::UInt8.into());
@@ -792,16 +1037,26 @@ where
             push_time(data, t);
         }
         Datum::Timestamp(t) => {
-            data.push(Tag::Timestamp.into());
             let datetime = t.to_naive();
-            push_naive_date(data, datetime.date());
-            push_time(data, datetime.time());
+            if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                data.push(Tag::CheapTimestamp.into());
+                data.extend_from_slice(&nanos.to_le_bytes());
+            } else {
+                data.push(Tag::Timestamp.into());
+                push_naive_date(data, datetime.date());
+                push_time(data, datetime.time());
+            }
         }
         Datum::TimestampTz(t) => {
-            data.push(Tag::TimestampTz.into());
             let datetime = t.to_naive();
-            push_naive_date(data, datetime.date());
-            push_time(data, datetime.time());
+            if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                data.push(Tag::CheapTimestampTz.into());
+                data.extend_from_slice(&nanos.to_le_bytes());
+            } else {
+                data.push(Tag::TimestampTz.into());
+                push_naive_date(data, datetime.date());
+                push_time(data, datetime.time());
+            }
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval.into());
@@ -951,9 +1206,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Null => 1,
         Datum::False => 1,
         Datum::True => 1,
-        Datum::Int16(_) => 1 + size_of::<i16>(),
-        Datum::Int32(_) => 1 + size_of::<i32>(),
-        Datum::Int64(_) => 1 + size_of::<i64>(),
+        Datum::Int16(i) => 1 + usize::from(min_bytes_signed(*i)),
+        Datum::Int32(i) => 1 + usize::from(min_bytes_signed(*i)),
+        Datum::Int64(i) => 1 + usize::from(min_bytes_signed(*i)),
         Datum::UInt8(_) => 1 + size_of::<u8>(),
         Datum::UInt16(_) => 1 + size_of::<u16>(),
         Datum::UInt32(_) => 1 + size_of::<u32>(),
@@ -962,8 +1217,20 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Float64(_) => 1 + size_of::<f64>(),
         Datum::Date(_) => 1 + size_of::<i32>(),
         Datum::Time(_) => 1 + 8,
-        Datum::Timestamp(_) => 1 + 16,
-        Datum::TimestampTz(_) => 1 + 16,
+        Datum::Timestamp(t) => {
+            1 + if checked_timestamp_nanos(t.to_naive()).is_some() {
+                8
+            } else {
+                16
+            }
+        }
+        Datum::TimestampTz(t) => {
+            1 + if checked_timestamp_nanos(t.naive_utc()).is_some() {
+                8
+            } else {
+                16
+            }
+        }
         Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i32>() + size_of::<i64>(),
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
@@ -1903,6 +2170,8 @@ impl Default for RowArena {
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
+    use crate::ScalarType;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1957,6 +2226,12 @@ mod tests {
         }
 
         round_trip(vec![]);
+        round_trip(
+            ScalarType::enumerate()
+                .iter()
+                .flat_map(|r#type| r#type.interesting_datums())
+                .collect(),
+        );
         round_trip(vec![
             Datum::Null,
             Datum::Null,
