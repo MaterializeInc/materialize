@@ -80,6 +80,7 @@ use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
     StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
+use crate::client::ConnectionId;
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{
@@ -97,7 +98,7 @@ use crate::coord::{
     peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
     PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    SessionMeta, SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -492,10 +493,10 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, session))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_role(
         &mut self,
-        session: &impl SessionMeta,
+        conn_id: &ConnectionId,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog_mut().allocate_oid()?;
@@ -504,7 +505,7 @@ impl Coordinator {
             oid,
             attributes,
         };
-        self.catalog_transact(Some(session), vec![op])
+        self.catalog_transact_conn(Some(conn_id), vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
@@ -719,7 +720,7 @@ impl Coordinator {
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
         let result = self
-            .catalog_transact_with(Some(ctx.session()), ops, move |txn| {
+            .catalog_transact_with(Some(ctx.session().conn_id()), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
                     .storage
@@ -1002,7 +1003,7 @@ impl Coordinator {
         });
 
         match self
-            .catalog_transact_with(Some(session), ops, |txn| {
+            .catalog_transact_with(Some(session.conn_id()), ops, |txn| {
                 // Create a dataflow that materializes the view query and sinks
                 // it to storage.
                 let df = txn
@@ -1103,7 +1104,7 @@ impl Coordinator {
             owner_id,
         };
         match self
-            .catalog_transact_with(Some(session), vec![op], |txn| {
+            .catalog_transact_with(Some(session.conn_id()), vec![op], |txn| {
                 let mut builder = txn.dataflow_builder(cluster_id);
                 let df = builder.build_index_dataflow(id)?;
                 Ok(df)

@@ -151,6 +151,7 @@ impl Severity {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
             },
+            AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
         }
     }
 }

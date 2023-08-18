@@ -11,6 +11,7 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
@@ -48,7 +49,7 @@ use crate::catalog::{
 use crate::client::ConnectionId;
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::{Coordinator, ReplicaMetadata, SessionMeta};
+use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
@@ -65,10 +66,21 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact(
         &mut self,
-        session: Option<&impl SessionMeta>,
+        session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_with(session, ops, |_| Ok(())).await
+        self.catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await
+    }
+
+    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn catalog_transact_conn(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        self.catalog_transact_with(conn_id, ops, |_| Ok(())).await
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
@@ -84,7 +96,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact_with<F, R>(
         &mut self,
-        session: Option<&impl SessionMeta>,
+        conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
         f: F,
     ) -> Result<R, AdapterError>
@@ -319,12 +331,7 @@ impl Coordinator {
                 .map(catalog::Op::DropTimeline),
         );
 
-        self.validate_resource_limits(
-            &ops,
-            session
-                .map(|session| session.conn_id())
-                .unwrap_or(&SYSTEM_CONN_ID),
-        )?;
+        self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
 
         // This will produce timestamps that are guaranteed to increase on each
         // call, and also never be behind the system clock. If the system clock
@@ -336,13 +343,20 @@ impl Coordinator {
         // regress or pause for 10s.
         let oracle_write_ts = self.get_local_write_ts().await.timestamp;
 
-        let (catalog, controller) = self.catalog_and_controller_mut();
+        let Coordinator {
+            catalog,
+            controller,
+            active_conns,
+            ..
+        } = self;
+        let catalog = Arc::make_mut(catalog);
+        let conn = conn_id.map(|id| active_conns.get(id).expect("must exist"));
         let TransactionResult {
             builtin_table_updates,
             audit_events,
             result,
         } = catalog
-            .transact(oracle_write_ts, session, ops, |catalog| {
+            .transact(oracle_write_ts, conn, ops, |catalog| {
                 f(CatalogTxn {
                     dataflow_client: controller,
                     catalog,
@@ -474,9 +488,10 @@ impl Coordinator {
         }
         .await;
 
+        let conn = conn_id.and_then(|id| self.active_conns.get(id));
         if let (Some(segment_client), Some(user_metadata)) = (
             &self.segment_client,
-            session.and_then(|s| s.user().external_metadata.as_ref()),
+            conn.and_then(|s| s.user().external_metadata.as_ref()),
         ) {
             for VersionedEvent::V1(event) in audit_events {
                 let event_type = format!(
@@ -484,11 +499,9 @@ impl Coordinator {
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
-                // Note: when there is no Session, that means something internal to
+                // Note: when there is no ConnMeta, that means something internal to
                 // environmentd initiated the transaction, hence the default name.
-                let application_name = session
-                    .map(|s| s.application_name())
-                    .unwrap_or("environmentd");
+                let application_name = conn.map(|s| s.application_name()).unwrap_or("environmentd");
                 segment_client.environment_track(
                     &self.catalog().config().environment_id,
                     application_name,

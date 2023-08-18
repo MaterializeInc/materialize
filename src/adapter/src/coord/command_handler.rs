@@ -21,14 +21,15 @@ use mz_repr::ScalarType;
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
-use mz_sql::catalog::{RoleAttributes, SessionCatalog};
+use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
 };
+use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, OwnedVarInput, Var, VarInput, STATEMENT_LOGGING_SAMPLE_RATE,
+    EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{oneshot, watch};
@@ -39,14 +40,14 @@ use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
     AppendWebhookResponse, AppendWebhookValidator, Canceled, Command, ExecuteResponse,
-    GetVariablesResponse, Response, StartupMessage, StartupResponse,
+    GetVariablesResponse, Response, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::session::{RoleMetadata, Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac, ExecuteContext};
 
@@ -99,11 +100,26 @@ impl Coordinator {
                 cancel_tx,
                 tx,
                 set_setting_keys,
+                user,
+                conn_id,
+                secret_key,
+                uuid,
+                application_name,
             } => {
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
-                self.handle_startup(session, cancel_tx, tx, set_setting_keys)
-                    .await;
+                self.handle_startup(
+                    session,
+                    cancel_tx,
+                    tx,
+                    set_setting_keys,
+                    user,
+                    conn_id,
+                    secret_key,
+                    uuid,
+                    application_name,
+                )
+                .await;
             }
 
             Command::Execute {
@@ -302,29 +318,33 @@ impl Coordinator {
 
     async fn handle_startup(
         &mut self,
-        mut session: Session,
+        // session_ is named this way so it is only used by the ClientTransmitter. This will
+        // eventually be removed, so name it like this so it doesn't accumulate any accidental
+        // dependencies.
+        session_: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
         set_setting_keys: Vec<String>,
+        user: User,
+        conn_id: ConnectionId,
+        secret_key: u32,
+        uuid: uuid::Uuid,
+        application_name: String,
     ) {
-        if self
-            .catalog()
-            .try_get_role_by_name(&session.user().name)
-            .is_none()
-        {
+        if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for
             // the user.
             let attributes = RoleAttributes::new();
             let plan = CreateRolePlan {
-                name: session.user().name.to_string(),
+                name: user.name.to_string(),
                 attributes,
             };
-            if let Err(err) = self.sequence_create_role_for_startup(&session, plan).await {
+            if let Err(err) = self.sequence_create_role_for_startup(&conn_id, plan).await {
                 let _ = tx.send(Response {
                     result: Err(err),
-                    session,
+                    session: session_,
                 });
                 return;
             }
@@ -332,74 +352,74 @@ impl Coordinator {
 
         let role_id = self
             .catalog()
-            .try_get_role_by_name(&session.user().name)
+            .try_get_role_by_name(&user.name)
             .expect("created above")
             .id;
-        session.initialize_role_metadata(role_id);
+        // TODO(adapter): Remove role_metadata from Session.
+        let role_metadata = RoleMetadata {
+            current_role: role_id,
+            session_role: role_id,
+        };
 
         if let Err(e) = self
             .catalog_mut()
-            .create_temporary_schema(session.conn_id(), role_id)
+            .create_temporary_schema(&conn_id, role_id)
         {
             let _ = tx.send(Response {
                 result: Err(e.into()),
-                session,
+                session: session_,
             });
             return;
         }
 
-        let mut messages = vec![];
-        let catalog = self.catalog();
-        let catalog = catalog.for_session(&session);
-        if catalog.active_database().is_none() {
-            messages.push(StartupMessage::UnknownSessionDatabase(
-                session.vars().database().into(),
-            ));
-        }
+        let mut set_vars = Vec::new();
         if !set_setting_keys
             .iter()
             .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
         {
-            let default = catalog
+            let default = self
+                .catalog()
                 .state()
                 .system_config()
                 .statement_logging_default_sample_rate();
-            session
-                .vars_mut()
-                .set(
-                    None,
-                    STATEMENT_LOGGING_SAMPLE_RATE.name(),
-                    VarInput::Flat(&default.to_string()),
-                    false,
-                )
-                .expect("constrained to be valid");
-            session
-                .vars_mut()
-                .end_transaction(EndTransactionAction::Commit);
+            set_vars.push((
+                STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+                default.to_string(),
+            ));
         }
 
-        let session_type = metrics::session_type_label_value(session.user());
+        let session_type = metrics::session_type_label_value(&user);
         self.metrics
             .active_sessions
             .with_label_values(&[session_type])
             .inc();
-        self.active_conns.insert(
-            session.conn_id().clone(),
-            ConnMeta {
-                cancel_tx,
-                secret_key: session.secret_key(),
-                notice_tx: session.retain_notice_transmitter(),
-                drop_sinks: Vec::new(),
-                // TODO: Switch to authenticated role once implemented.
-                authenticated_role: session.session_role_id().clone(),
-            },
-        );
-        let update = self.catalog().state().pack_session_update(&session, 1);
-        self.begin_session_for_statement_logging(&session);
+        let conn = ConnMeta {
+            cancel_tx,
+            secret_key,
+            notice_tx: session_.retain_notice_transmitter(),
+            drop_sinks: Vec::new(),
+            // TODO: Switch to authenticated role once implemented.
+            authenticated_role: role_id,
+            connected_at: self.now(),
+            user,
+            application_name,
+            role_metadata,
+            uuid,
+            conn_id: conn_id.clone(),
+        };
+        let update = self.catalog().state().pack_session_update(&conn, 1);
+        self.begin_session_for_statement_logging(&conn);
         self.send_builtin_table_updates(vec![update]).await;
+        self.active_conns.insert(conn_id, conn);
 
-        ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
-            .send(Ok(StartupResponse { messages }), session)
+        ClientTransmitter::new(tx, self.internal_cmd_tx.clone()).send(
+            Ok(StartupResponse {
+                role_id,
+                set_vars,
+                catalog: self.owned_catalog(),
+            }),
+            session_,
+        )
     }
 
     /// Handles an execute command.
@@ -890,10 +910,13 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.active_conns.remove(session.conn_id());
-        self.cancel_pending_peeks(session.conn_id());
-        self.end_session_for_statement_logging(session.uuid());
-        let update = self.catalog().state().pack_session_update(session, -1);
+        let conn = self
+            .active_conns
+            .remove(session.conn_id())
+            .expect("conn must exist");
+        self.cancel_pending_peeks(conn.conn_id());
+        self.end_session_for_statement_logging(conn.uuid());
+        let update = self.catalog().state().pack_session_update(&conn, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }
 

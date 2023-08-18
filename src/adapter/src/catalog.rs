@@ -105,7 +105,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{SessionMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
@@ -1632,7 +1632,7 @@ impl CatalogState {
     fn add_to_audit_log(
         &self,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&impl SessionMeta>,
+        session: Option<&ConnMeta>,
         tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
@@ -4039,7 +4039,7 @@ impl Catalog {
                         }
                     }))
                     .collect::<Vec<_>>();
-                self.transact(boot_ts, None::<&Session>, ops, |_| Ok(()))
+                self.transact(boot_ts, None, ops, |_| Ok(()))
                     .await
                     .unwrap_or_terminate("cannot fail to transact");
                 tracing::info!("parameter sync on boot: end sync");
@@ -5351,16 +5351,15 @@ impl Catalog {
     }
 
     #[tracing::instrument(name = "catalog::transact", level = "debug", skip_all)]
-    pub async fn transact<F, R, S>(
+    pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&S>,
+        session: Option<&ConnMeta>,
         ops: Vec<Op>,
         f: F,
     ) -> Result<TransactionResult<R>, AdapterError>
     where
         F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
-        S: SessionMeta,
     {
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
@@ -5432,7 +5431,7 @@ impl Catalog {
     #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&impl SessionMeta>,
+        session: Option<&ConnMeta>,
         ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -8999,7 +8998,7 @@ mod tests {
             catalog
                 .transact(
                     mz_repr::Timestamp::MIN,
-                    None::<&Session>,
+                    None,
                     vec![Op::CreateDatabase {
                         name: "test".to_string(),
                         oid: 1,
@@ -9292,7 +9291,7 @@ mod tests {
             catalog
                 .transact(
                     mz_repr::Timestamp::MIN,
-                    None::<&Session>,
+                    None,
                     vec![Op::CreateItem {
                         id,
                         oid,
@@ -9880,7 +9879,7 @@ mod tests {
             catalog
                 .transact(
                     SYSTEM_TIME().into(),
-                    None::<&Session>,
+                    None,
                     vec![Op::CreateItem {
                         item,
                         name: QualifiedItemName {

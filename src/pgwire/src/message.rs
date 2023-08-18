@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_adapter::session::TransactionCode;
-use mz_adapter::{AdapterError, AdapterNotice, Severity, StartupMessage};
+use mz_adapter::{AdapterError, AdapterNotice, Severity};
 use mz_repr::{ColumnName, RelationDesc};
 use postgres::error::SqlState;
 
@@ -316,17 +316,6 @@ impl ErrorResponse {
             message: notice.to_string(),
             detail: notice.detail(),
             hint: notice.hint(),
-            position: None,
-        }
-    }
-
-    pub fn from_startup_message(message: StartupMessage) -> ErrorResponse {
-        ErrorResponse {
-            severity: Severity::Notice,
-            code: SqlState::SUCCESSFUL_COMPLETION,
-            message: message.to_string(),
-            detail: message.detail(),
-            hint: message.hint(),
             position: None,
         }
     }

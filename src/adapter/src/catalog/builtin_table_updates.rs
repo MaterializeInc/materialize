@@ -61,7 +61,7 @@ use crate::catalog::{
     Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
     StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
-use crate::session::Session;
+use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
 
 /// An update to a built-in table.
@@ -1264,13 +1264,13 @@ impl CatalogState {
         }
     }
 
-    pub fn pack_session_update(&self, session: &Session, diff: Diff) -> BuiltinTableUpdate {
-        let connect_dt = mz_ore::now::to_datetime(session.connect_time());
+    pub fn pack_session_update(&self, conn: &ConnMeta, diff: Diff) -> BuiltinTableUpdate {
+        let connect_dt = mz_ore::now::to_datetime(conn.connected_at());
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
-                Datum::UInt32(session.conn_id().unhandled()),
-                Datum::String(&session.session_role_id().to_string()),
+                Datum::UInt32(conn.conn_id().unhandled()),
+                Datum::String(&conn.session_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
             diff,

@@ -28,9 +28,10 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
-use mz_sql::catalog::EnvironmentId;
+use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
+use mz_sql::session::vars::VarInput;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -40,14 +41,14 @@ use uuid::Uuid;
 
 use crate::command::{
     AppendWebhookResponse, Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse,
-    Response, StartupResponse,
+    Response,
 };
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
-use crate::PeekResponseUnary;
+use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
 
 /// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
 ///
@@ -134,7 +135,7 @@ impl Client {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, conn_id, user, (self.now)())
+        Session::new(self.build_info, conn_id, user)
     }
 
     /// Upgrades this client to a session client.
@@ -152,7 +153,7 @@ impl Client {
         // keys of settings that were set on statup, and thus should not be
         // overridden by defaults.
         set_setting_keys: Vec<String>,
-    ) -> Result<(SessionClient, StartupResponse), AdapterError> {
+    ) -> Result<SessionClient, AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -172,22 +173,55 @@ impl Client {
         };
         let response = client
             .send(|tx, session| Command::Startup {
-                session,
                 cancel_tx,
                 tx,
                 set_setting_keys,
+                user: session.user().clone(),
+                conn_id: session.conn_id().clone(),
+                secret_key: session.secret_key(),
+                uuid: session.uuid(),
+                application_name: session.application_name().into(),
+                session,
             })
             .await;
-        match response {
-            Ok(response) => Ok((client, response)),
+        let response = match response {
+            Ok(response) => response,
             Err(e) => {
                 // When startup fails, no need to call terminate. Remove the
                 // session from the client to sidestep the panic in the `Drop`
                 // implementation.
                 client.session.take();
-                Err(e)
+                return Err(e);
             }
+        };
+
+        let StartupResponse {
+            role_id,
+            set_vars,
+            catalog,
+        } = response;
+        client.session().initialize_role_metadata(role_id);
+        for (name, val) in set_vars {
+            client
+                .session()
+                .vars_mut()
+                .set(None, &name, VarInput::Flat(&val), false)
+                .expect("constrained to be valid");
         }
+        client
+            .session()
+            .vars_mut()
+            .end_transaction(EndTransactionAction::Commit);
+
+        let catalog = catalog.for_session(client.session());
+        if catalog.active_database().is_none() {
+            let db = client.session().vars().database().into();
+            client
+                .session()
+                .add_notice(AdapterNotice::UnknownSessionDatabase(db));
+        }
+
+        Ok(client)
     }
 
     /// Cancels the query currently running on the specified connection.
@@ -204,7 +238,7 @@ impl Client {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(conn_id, SUPPORT_USER.clone());
-        let (mut session_client, _) = self.startup(session, vec![]).await?;
+        let mut session_client = self.startup(session, vec![]).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;

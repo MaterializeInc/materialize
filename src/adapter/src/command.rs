@@ -22,9 +22,9 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
-use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
 use mz_secrets::cache::CachingSecretsReader;
@@ -32,11 +32,14 @@ use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, WebhookValidation, WebhookValidationSecret};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{oneshot, watch};
+use uuid::Uuid;
 
+use crate::catalog::Catalog;
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
@@ -53,6 +56,11 @@ pub enum Command {
         /// keys of settings that were set on statup, and thus should not be
         /// overridden by defaults.
         set_setting_keys: Vec<String>,
+        user: User,
+        conn_id: ConnectionId,
+        secret_key: u32,
+        uuid: Uuid,
+        application_name: String,
     },
 
     Declare {
@@ -209,8 +217,11 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
-    /// Notifications associated with session startup.
-    pub messages: Vec<StartupMessage>,
+    /// RoleId for the user.
+    pub role_id: RoleId,
+    /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
+    pub set_vars: Vec<(String, String)>,
+    pub catalog: Arc<Catalog>,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`
@@ -219,42 +230,6 @@ impl Transmittable for StartupResponse {
     type Allowed = bool;
     fn to_allowed(&self) -> Self::Allowed {
         true
-    }
-}
-
-/// Messages in a [`StartupResponse`].
-#[derive(Debug)]
-pub enum StartupMessage {
-    /// The database specified in the initial session does not exist.
-    UnknownSessionDatabase(String),
-}
-
-impl StartupMessage {
-    /// Reports additional details about the error, if any are available.
-    pub fn detail(&self) -> Option<String> {
-        None
-    }
-
-    /// Reports a hint for the user about how the error could be fixed.
-    pub fn hint(&self) -> Option<String> {
-        match self {
-            StartupMessage::UnknownSessionDatabase(_) => Some(
-                "Create the database with CREATE DATABASE \
-                 or pick an extant database with SET DATABASE = name. \
-                 List available databases with SHOW DATABASES."
-                    .into(),
-            ),
-        }
-    }
-}
-
-impl fmt::Display for StartupMessage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            StartupMessage::UnknownSessionDatabase(name) => {
-                write!(f, "session database {} does not exist", name.quoted())
-            }
-        }
     }
 }
 

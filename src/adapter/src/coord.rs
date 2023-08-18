@@ -90,7 +90,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
@@ -140,7 +140,7 @@ use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, RoleMetadata, Session};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
@@ -526,6 +526,13 @@ pub struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+    /// The time when the session's connection was initiated.
+    connected_at: EpochMillis,
+    user: User,
+    application_name: String,
+    role_metadata: RoleMetadata,
+    uuid: Uuid,
+    conn_id: ConnectionId,
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
@@ -538,31 +545,33 @@ pub struct ConnMeta {
     pub(crate) authenticated_role: RoleId,
 }
 
-/// Metadata about a session. This type is used to limit and enumerate coordinator access to session
-/// innards. It will be used in the future when Sessions are no longer transmitted between the
-/// Coordinator and Adapter.
-pub trait SessionMeta {
-    fn conn_id(&self) -> &ConnectionId;
-    fn user(&self) -> &User;
-    fn application_name(&self) -> &str;
-    fn current_role_id(&self) -> &RoleId;
-}
-
-impl SessionMeta for Session {
-    fn conn_id(&self) -> &ConnectionId {
-        self.conn_id()
+impl ConnMeta {
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
     }
 
-    fn user(&self) -> &User {
-        self.user()
+    pub fn user(&self) -> &User {
+        &self.user
     }
 
-    fn application_name(&self) -> &str {
-        self.application_name()
+    pub fn application_name(&self) -> &str {
+        &self.application_name
     }
 
-    fn current_role_id(&self) -> &RoleId {
-        self.current_role_id()
+    pub fn current_role_id(&self) -> &RoleId {
+        &self.role_metadata.current_role
+    }
+
+    pub fn session_role_id(&self) -> &RoleId {
+        &self.role_metadata.session_role
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
+    pub fn connected_at(&self) -> EpochMillis {
+        self.connected_at
     }
 }
 
@@ -1952,13 +1961,6 @@ impl Coordinator {
         // most one clone per catalog mutation, but only if there's a read-only
         // reference to it.
         Arc::make_mut(&mut self.catalog)
-    }
-
-    /// Obtain writeable Catalog and Controller references. This function is
-    /// needed to allow rust to have multiple mutable references on self at the
-    /// same time.
-    fn catalog_and_controller_mut(&mut self) -> (&mut Catalog, &mut mz_controller::Controller) {
-        (Arc::make_mut(&mut self.catalog), &mut self.controller)
     }
 
     /// Publishes a notice message to all sessions.

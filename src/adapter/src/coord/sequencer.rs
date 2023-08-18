@@ -28,6 +28,7 @@ use mz_sql_parser::ast::{Raw, Statement};
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
+use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
@@ -141,7 +142,9 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateRole(plan) => {
-                let result = self.sequence_create_role(ctx.session(), plan).await;
+                let result = self
+                    .sequence_create_role(ctx.session().conn_id(), plan)
+                    .await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }
@@ -602,10 +605,10 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_role_for_startup(
         &mut self,
-        session: &Session,
+        conn_id: &ConnectionId,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_create_role(session, plan).await
+        self.sequence_create_role(conn_id, plan).await
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
