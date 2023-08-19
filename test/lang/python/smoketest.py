@@ -9,24 +9,23 @@
 
 import unittest
 
+import psycopg  # type: ignore
 import psycopg2  # type: ignore
-import psycopg3  # type: ignore
 import sqlalchemy  # type: ignore
-from psycopg3.oids import builtins  # type: ignore
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
 
 class SmokeTest(unittest.TestCase):
     def test_connection_options(self) -> None:
-        with psycopg3.connect(MATERIALIZED_URL + "?options=--cluster%3Db") as conn:
+        with psycopg.connect(MATERIALIZED_URL + "?options=--cluster%3Db") as conn:
             with conn.cursor() as cur:
                 cur.execute("SHOW cluster")
                 row = cur.fetchone()
                 self.assertEqual(row, ("b",))
 
     def test_custom_types(self) -> None:
-        with psycopg3.connect(MATERIALIZED_URL, autocommit=True) as conn:
+        with psycopg.connect(MATERIALIZED_URL, autocommit=True) as conn:
             # Text encoding of lists and maps is supported...
             with conn.cursor() as cur:
                 cur.execute("SELECT LIST[1, 2, 3]")
@@ -40,19 +39,19 @@ class SmokeTest(unittest.TestCase):
             # ...but binary encoding is not.
             with conn.cursor(binary=True) as cur:
                 with self.assertRaisesRegex(
-                    psycopg3.errors.ProtocolViolation,
+                    psycopg.errors.ProtocolViolation,
                     "binary encoding of list types is not implemented",
                 ):
                     cur.execute("SELECT LIST[1, 2, 3]")
 
                 with self.assertRaisesRegex(
-                    psycopg3.errors.ProtocolViolation,
+                    psycopg.errors.ProtocolViolation,
                     "binary encoding of map types is not implemented",
                 ):
                     cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
 
     def test_arrays(self) -> None:
-        with psycopg3.connect(MATERIALIZED_URL, autocommit=True) as conn:
+        with psycopg.connect(MATERIALIZED_URL, autocommit=True) as conn:
             # Text roundtripping of a one-dimensional integer array is supported.
             with conn.cursor() as cur:
                 cur.execute("SELECT %t", ([1, 2, 3],))
@@ -69,7 +68,7 @@ class SmokeTest(unittest.TestCase):
             # Binary roundtripping is not.
             with conn.cursor(binary=True) as cur:
                 with self.assertRaisesRegex(
-                    psycopg3.errors.InvalidParameterValue,
+                    psycopg.errors.InvalidParameterValue,
                     "input of array types is not implemented",
                 ):
                     cur.execute("SELECT %b", ([1, 2, 3],))
@@ -119,7 +118,7 @@ class SmokeTest(unittest.TestCase):
 
     def test_psycopg3_subscribe_copy(self) -> None:
         """Test SUBSCRIBE with psycopg3 via its new binary COPY decoding support."""
-        with psycopg3.connect(MATERIALIZED_URL) as conn:
+        with psycopg.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
                 # Create a table with one row of data.
@@ -133,10 +132,10 @@ class SmokeTest(unittest.TestCase):
                 ) as copy:
                     copy.set_types(
                         [
-                            builtins["numeric"].oid,  # timestamp
-                            builtins["int8"].oid,  # diff
-                            builtins["int4"].oid,  # a column
-                            builtins["text"].oid,  # b column
+                            psycopg.adapters.types["numeric"].oid,  # timestamp
+                            psycopg.adapters.types["int8"].oid,  # diff
+                            psycopg.adapters.types["int4"].oid,  # a column
+                            psycopg.adapters.types["text"].oid,  # b column
                         ]
                     )
 
@@ -148,7 +147,7 @@ class SmokeTest(unittest.TestCase):
 
                     # Insert another row from another connection to simulate an
                     # update arriving.
-                    with psycopg3.connect(MATERIALIZED_URL) as conn2:
+                    with psycopg.connect(MATERIALIZED_URL) as conn2:
                         conn2.autocommit = True
                         with conn2.cursor() as cur2:
                             cur2.execute(
@@ -175,7 +174,7 @@ class SmokeTest(unittest.TestCase):
     @unittest.skip("https://github.com/psycopg/psycopg3/issues/30")
     def test_psycopg3_subscribe_stream(self) -> None:
         """Test subscribe with psycopg3 via its new streaming query support."""
-        with psycopg3.connect(MATERIALIZED_URL) as conn:
+        with psycopg.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
                 # Create a table with one row of data.
@@ -194,7 +193,7 @@ class SmokeTest(unittest.TestCase):
 
                 # Insert another row from another connection to simulate an
                 # update arriving.
-                with psycopg3.connect(MATERIALIZED_URL) as conn2:
+                with psycopg.connect(MATERIALIZED_URL) as conn2:
                     conn2.autocommit = True
                     with conn2.cursor() as cur2:
                         cur2.execute(
