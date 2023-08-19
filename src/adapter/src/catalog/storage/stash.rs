@@ -616,7 +616,7 @@ pub async fn initialize(
         proto::audit_log_event_v1::Details::CreateClusterReplicaV1(
             proto::audit_log_event_v1::CreateClusterReplicaV1 {
                 cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
-                cluser_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
+                cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
                 replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
                 replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string().into()),
                 logical_size: options.default_cluster_replica_size.to_string(),

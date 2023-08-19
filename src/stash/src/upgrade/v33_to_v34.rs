@@ -186,7 +186,7 @@ async fn migrate_audit_log(tx: &mut Transaction<'_>, now: u64) -> Result<(), Sta
             details: Some(v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
                 v34::audit_log_event_v1::CreateClusterReplicaV1 {
                     cluster_id: details.cluster_id,
-                    cluser_name: details.cluser_name,
+                    cluster_name: details.cluser_name,
                     replica_id: Some(v34::StringWrapper { inner: new_id }),
                     replica_name: details.replica_name,
                     logical_size: details.logical_size,
@@ -506,7 +506,7 @@ mod tests {
                                 v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
                                     v34::audit_log_event_v1::CreateClusterReplicaV1 {
                                         cluster_id: "u1".into(),
-                                        cluser_name: "c1".into(),
+                                        cluster_name: "c1".into(),
                                         replica_id: Some(v34::StringWrapper { inner: "1".into() }),
                                         replica_name: "r1".into(),
                                         logical_size: "small".into(),
@@ -530,7 +530,7 @@ mod tests {
                                 v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
                                     v34::audit_log_event_v1::CreateClusterReplicaV1 {
                                         cluster_id: "u2".into(),
-                                        cluser_name: "c2".into(),
+                                        cluster_name: "c2".into(),
                                         replica_id: Some(v34::StringWrapper { inner: "2".into() }),
                                         replica_name: "r2".into(),
                                         logical_size: "big".into(),
@@ -594,7 +594,7 @@ mod tests {
                                 v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
                                     v34::audit_log_event_v1::CreateClusterReplicaV1 {
                                         cluster_id: "u2".into(),
-                                        cluser_name: "c2".into(),
+                                        cluster_name: "c2".into(),
                                         replica_id: Some(v34::StringWrapper { inner: "u2".into() }),
                                         replica_name: "r2".into(),
                                         logical_size: "big".into(),
