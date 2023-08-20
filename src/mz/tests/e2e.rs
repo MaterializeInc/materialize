@@ -508,12 +508,7 @@ mod tests {
         //     .assert()
         //     .success();
 
-        let binding = cmd()
-            .arg("region")
-            .arg("show")
-            // .env("PATH", "/opt/homebrew/bin/")
-            .assert()
-            .success();
+        let binding = cmd().arg("region").arg("show").assert().success();
         let output = output_to_string(binding);
 
         assert!(output.trim().starts_with("Healthy: \tyes"));
@@ -521,8 +516,8 @@ mod tests {
         let binding = cmd()
             .arg("region")
             .arg("show")
-            .arg("--region aws/us-east-1")
-            // .env("PATH", "/opt/homebrew/bin/")
+            .arg("--region")
+            .arg("aws/us-east-1")
             .assert()
             .success();
         let output = output_to_string(binding);
