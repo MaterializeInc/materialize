@@ -111,15 +111,15 @@ mod mixin;
 // TODO(guswynn): remove this when we are using Clap v4.
 #[allow(clippy::almost_swapped)]
 mod clap_clippy_hack {
+
     use super::*;
 
     /// Command-line interface for Materialize.
     #[derive(Debug, clap::Parser)]
     #[clap(
-      long_about = None,
+        long_about = None,
         version = mz::VERSION.as_str(),
     )]
-
     pub struct Args {
         /// Set the configuration file.
         #[clap(long, global = true, value_name = "PATH", env = "CONFIG")]
@@ -130,6 +130,8 @@ mod clap_clippy_hack {
         pub(crate) no_color: bool,
         #[clap(subcommand)]
         pub(crate) command: Command,
+        #[clap(long, env = "REGION", global = true)]
+        pub(crate) region: Option<String>,
     }
 
     /// Specifies an output format.
@@ -186,8 +188,8 @@ async fn main() -> Result<(), Error> {
     let cx = Context::load(ContextLoadArgs {
         config_file_path: args.config,
         output_format: args.format.into(),
-        // TODO: no_color: env::no_color() || args.no_color
         no_color: args.no_color,
+        region: args.region,
     })
     .await?;
 

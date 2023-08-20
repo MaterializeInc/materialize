@@ -47,6 +47,8 @@ pub struct ContextLoadArgs {
     pub output_format: OutputFormat,
     /// Whether to suppress color output.
     pub no_color: bool,
+    /// Global optional region.
+    pub region: Option<String>,
 }
 
 /// Context for a basic command.
@@ -54,6 +56,7 @@ pub struct ContextLoadArgs {
 pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
+    region: Option<String>,
 }
 
 impl Context {
@@ -63,6 +66,7 @@ impl Context {
             config_file_path,
             output_format,
             no_color,
+            region,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
         let config_file_path = match config_file_path {
@@ -73,6 +77,7 @@ impl Context {
         Ok(Context {
             config_file,
             output_formatter: OutputFormatter::new(output_format, no_color),
+            region,
         })
     }
 
@@ -152,13 +157,16 @@ pub struct ProfileContext {
 
 impl ProfileContext {
     /// Loads the profile and returns a region context.
-    pub fn activate_region(self, name: Option<String>) -> Result<RegionContext, Error> {
+    pub fn activate_region(self) -> Result<RegionContext, Error> {
         let profile = self
             .context
             .config_file
             .load_profile(&self.profile_name)
             .unwrap();
-        let region_name = name
+        let region_name = self
+            .context
+            .region
+            .clone()
             .or(profile.region().map(|r| r.to_string()))
             .ok_or_else(|| panic!("no region configured"))
             .unwrap();

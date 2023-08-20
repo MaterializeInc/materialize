@@ -19,12 +19,10 @@ use mz::command::secret::CreateArgs;
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::{ProfileArg, RegionArg};
+use crate::mixin::ProfileArg;
 
 #[derive(Debug, clap::Args)]
 pub struct SecretCommand {
-    #[clap(flatten)]
-    region: RegionArg,
     #[clap(flatten)]
     profile: ProfileArg,
     #[clap(subcommand)]
@@ -51,7 +49,7 @@ pub enum SecretSubcommand {
 pub async fn run(cx: Context, cmd: SecretCommand) -> Result<(), Error> {
     let mut cx = cx
         .activate_profile(cmd.profile.profile)?
-        .activate_region(cmd.region.region)?;
+        .activate_region()?;
     match cmd.subcommand {
         SecretSubcommand::Create {
             database,
