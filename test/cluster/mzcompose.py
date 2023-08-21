@@ -8,7 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import json
+import re
 import time
+from datetime import datetime
 from textwrap import dedent
 from threading import Thread
 from typing import Dict, Optional, Tuple
@@ -83,6 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-query-without-default-cluster",
         "test-clusterd-death-detection",
         "test-replica-metrics",
+        "test-metrics-retention-across-restart",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -2145,3 +2148,64 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None
+
+
+def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
+    """
+    Test that sinces of retained-metrics objects are held back across
+    restarts of environmentd.
+    """
+
+    # There are three kinds of retained-metrics objects currently:
+    #  * tables (like `mz_cluster_replicas`)
+    #  * indexes (like `mz_cluster_replicas_ind`)
+
+    # Generally, metrics tables are indexed in `mz_introspection` and
+    # not indexed in the `default` cluster, so we can use that to
+    # collect the `since` frontiers we want.
+    def collect_sinces() -> Tuple[int, int]:
+        explain = c.sql_query(
+            "SET cluster = default;"
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
+        )[0][0]
+        table_since = parse_since_from_explain(explain)
+
+        explain = c.sql_query(
+            "SET cluster = mz_introspection;"
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
+        )[0][0]
+        index_since = parse_since_from_explain(explain)
+
+        return table_since, index_since
+
+    def parse_since_from_explain(explain: str) -> int:
+        since_line = re.compile(r"\s*read frontier:\[(?P<since>\d+) \(.+\)\]")
+        for line in explain.splitlines():
+            if match := since_line.match(line):
+                return int(match.group("since"))
+
+        raise AssertionError(f"since not found in explain: {explain}")
+
+    def validate_since(since: int, name: str) -> None:
+        now = datetime.now()
+        dt = datetime.fromtimestamp(since / 1000.0)
+        diff = now - dt
+
+        assert (
+            diff.days >= 30
+        ), f"{name} greater than expected (since={since}, diff={diff})"
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    table_since1, index_since1 = collect_sinces()
+    validate_since(table_since1, "table_since1")
+    validate_since(index_since1, "index_since1")
+
+    # Restart Materialize.
+    c.kill("materialized")
+    c.up("materialized")
+
+    table_since2, index_since2 = collect_sinces()
+    validate_since(table_since2, "table_since2")
+    validate_since(index_since2, "index_since2")
