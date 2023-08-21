@@ -107,11 +107,11 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
     if roots:
         (local_deps, areas) = filter_to_roots(areas, local_deps, roots)
 
-    diagram_file = str(MZ_ROOT / diagram_file)
+    diagram_file_path = MZ_ROOT / diagram_file
     with NamedTemporaryFile(mode="w+", prefix="mz-arch-diagram-") as out:
         write_dot_graph(member_meta, local_deps, areas, out)
 
-        cmd = ["dot", "-Tsvg", "-o", str(diagram_file), out.name]
+        cmd = ["dot", "-Tsvg", "-o", str(diagram_file_path), out.name]
         try:
             spawn.runv(cmd)
         except subprocess.CalledProcessError:
