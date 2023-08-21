@@ -138,6 +138,12 @@ pub struct RocksDBTuningParameters {
     /// If not provided there will be no optimization.
     /// <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L82-L85>
     pub point_lookup_block_cache_size_mb: Option<u32>,
+
+    /// The number of times by which unused buffers will be reduced.
+    /// For example, if the number is 2, the buffers will be reduced to being twice as small,
+    /// i.e. halved.
+    /// Shrinking will be disabled if value is 0;
+    pub shrink_buffers_by_ratio: usize,
 }
 
 impl Default for RocksDBTuningParameters {
@@ -157,6 +163,7 @@ impl Default for RocksDBTuningParameters {
             stats_log_interval_seconds: defaults::DEFAULT_STATS_LOG_INTERVAL_S,
             stats_persist_interval_seconds: defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
             point_lookup_block_cache_size_mb: None,
+            shrink_buffers_by_ratio: defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
         }
     }
 }
@@ -176,6 +183,7 @@ impl RocksDBTuningParameters {
         stats_log_interval_seconds: u32,
         stats_persist_interval_seconds: u32,
         point_lookup_block_cache_size_mb: Option<u32>,
+        shrink_buffers_by_ratio: usize,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -208,6 +216,7 @@ impl RocksDBTuningParameters {
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb,
+            shrink_buffers_by_ratio,
         })
     }
 }
@@ -323,6 +332,7 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             stats_log_interval_seconds: self.stats_log_interval_seconds,
             stats_persist_interval_seconds: self.stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb: self.point_lookup_block_cache_size_mb,
+            shrink_buffers_by_ratio: u64::cast_from(self.shrink_buffers_by_ratio),
         }
     }
 
@@ -390,6 +400,7 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             stats_log_interval_seconds: proto.stats_log_interval_seconds,
             stats_persist_interval_seconds: proto.stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb: proto.point_lookup_block_cache_size_mb,
+            shrink_buffers_by_ratio: usize::cast_from(proto.shrink_buffers_by_ratio),
         })
     }
 }
@@ -421,6 +432,7 @@ pub struct RocksDBConfig {
     pub stats_log_interval_seconds: u32,
     pub stats_persist_interval_seconds: u32,
     pub point_lookup_block_cache_size_mb: Option<u32>,
+    pub shrink_buffers_by_ratio: usize,
     pub dynamic: RocksDBDynamicConfig,
 }
 
@@ -445,6 +457,7 @@ impl RocksDBConfig {
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb,
+            shrink_buffers_by_ratio,
         } = params;
 
         Self {
@@ -459,6 +472,7 @@ impl RocksDBConfig {
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb,
+            shrink_buffers_by_ratio,
             dynamic: RocksDBDynamicConfig {
                 batch_size: Arc::new(AtomicUsize::new(batch_size)),
             },
@@ -481,6 +495,7 @@ impl RocksDBConfig {
             stats_log_interval_seconds,
             stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb,
+            shrink_buffers_by_ratio,
         } = params;
 
         self.compaction_style = compaction_style;
@@ -494,6 +509,7 @@ impl RocksDBConfig {
         self.stats_log_interval_seconds = stats_log_interval_seconds;
         self.stats_persist_interval_seconds = stats_persist_interval_seconds;
         self.point_lookup_block_cache_size_mb = point_lookup_block_cache_size_mb;
+        self.shrink_buffers_by_ratio = shrink_buffers_by_ratio;
 
         // SeqCst is probably not required here, but its the easiest to reason about
         self.dynamic.batch_size.store(batch_size, Ordering::SeqCst);
@@ -545,6 +561,9 @@ pub mod defaults {
 
     /// Default is 10 minutes, from <https://docs.rs/rocksdb/latest/rocksdb/struct.Options.html#method.set_stats_persist_period_sec>
     pub const DEFAULT_STATS_PERSIST_INTERVAL_S: u32 = 600;
+
+    /// Default is 0, i.e. shrinking will be disabled
+    pub const DEFAULT_SHRINK_BUFFERS_BY_RATIO: usize = 0;
 }
 
 #[cfg(test)]
@@ -569,6 +588,7 @@ mod tests {
             defaults::DEFAULT_STATS_LOG_INTERVAL_S,
             defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
             None,
+            defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
         )
         .unwrap();
 

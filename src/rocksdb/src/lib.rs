@@ -663,15 +663,18 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
                 for _ in buf_size..batch_size {
                     encoded_batch_buffers.push(Some(Vec::new()));
                 }
-                // shrinking the buffers in case the scratch buffer's capacity is more than
-                // double the batch size
-                let half_capacity = encoded_batch_buffers.capacity() / 2;
-                if half_capacity > batch_size {
-                    encoded_batch_buffers.truncate(half_capacity);
-                    encoded_batch_buffers.shrink_to(half_capacity);
+                // shrinking the buffers in case the scratch buffer's capacity is significantly
+                // more than the size of batch
+                if tuning_config.shrink_buffers_by_ratio > 0 {
+                    let reduced_capacity =
+                        encoded_batch_buffers.capacity() / tuning_config.shrink_buffers_by_ratio;
+                    if reduced_capacity > batch_size {
+                        encoded_batch_buffers.truncate(reduced_capacity);
+                        encoded_batch_buffers.shrink_to(reduced_capacity);
 
-                    encoded_batch.truncate(half_capacity);
-                    encoded_batch.shrink_to(half_capacity);
+                        encoded_batch.truncate(reduced_capacity);
+                        encoded_batch.shrink_to(reduced_capacity);
+                    }
                 }
                 assert!(encoded_batch_buffers.len() >= batch_size);
 

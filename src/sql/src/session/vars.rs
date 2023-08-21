@@ -782,6 +782,16 @@ mod upsert_rocksdb {
                   Only takes effect on source restart (Materialize).",
             internal: true,
         };
+
+    /// The number of times by which allocated buffers will be shrinked in upsert rocksdb.
+    /// If value is 0, then no shrinking will occur.
+    pub static UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_shrink_allocated_buffers_by_ratio"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
+        description:
+            "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -2107,6 +2117,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2533,6 +2544,10 @@ impl SystemVars {
 
     pub fn upsert_rocksdb_point_lookup_block_cache_size_mb(&self) -> Option<u32> {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
+    }
+
+    pub fn upsert_rocksdb_shrink_allocated_buffers_by_ratio(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -4239,6 +4254,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
