@@ -12,7 +12,6 @@ import unittest
 import psycopg
 import psycopg2  # type: ignore
 import sqlalchemy  # type: ignore
-from pytest import fail
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
@@ -153,13 +152,11 @@ class SmokeTest(unittest.TestCase):
 
                     # Validate the first row, but ignore the timestamp column.
                     row = copy.read_row()
-                    if row is not None:
-                        (ts, diff, a, b) = row
-                        self.assertEqual(diff, 1)
-                        self.assertEqual(a, 1)
-                        self.assertEqual(b, "a")
-                    else:
-                        fail("Expected row")
+                    assert row is not None
+                    (ts, diff, a, b) = row
+                    self.assertEqual(diff, 1)
+                    self.assertEqual(a, 1)
+                    self.assertEqual(b, "a")
 
                     # Insert another row from another connection to simulate an
                     # update arriving.
@@ -172,13 +169,11 @@ class SmokeTest(unittest.TestCase):
 
                     # Validate the new row, again ignoring the timestamp column.
                     row = copy.read_row()
-                    if row is not None:
-                        (ts, diff, a, b) = row
-                        self.assertEqual(diff, 1)
-                        self.assertEqual(a, 2)
-                        self.assertEqual(b, "b")
-                    else:
-                        fail("Expected row")
+                    assert row is not None
+                    (ts, diff, a, b) = row
+                    self.assertEqual(diff, 1)
+                    self.assertEqual(a, 2)
+                    self.assertEqual(b, "b")
 
                     # The subscribe won't end until we send a cancel request.
                     conn.cancel()
