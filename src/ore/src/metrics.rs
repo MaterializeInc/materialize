@@ -424,13 +424,13 @@ pub trait MetricsFutureExt<F> {
     /// a wall time of 1 second, meanwhile it's execution time may have only been 50ms. The 950ms
     /// delta would be how long the [`Future`] waited for a response from the network.
     ///
-    /// Measuring wall time can be particularly useful for determining `Future`s with a "high
-    /// latency", meanwhile measuring execution time can help find `Future`s that are CPU bound.
-    ///
     /// # Uses
     ///
-    /// Note: You must call either [`observe`] or [`inc_by`] and provide a metric that we can
-    /// record to. The following will not compile:
+    /// Recording the wall time can be useful for monitoring latency, for example the latency of a
+    /// SQL request.
+    ///
+    /// Note: You must call either [`observe`] to record the execution time to a [`Histogram`] or
+    /// [`inc_by`] to record to a [`Counter`]. The following will not compile:
     ///
     /// ```compile_fail
     /// use mz_ore::metrics::MetricsFutureExt;
@@ -459,16 +459,16 @@ pub trait MetricsFutureExt<F> {
     /// a wall time of 1 second, meanwhile it's execution time may have only been 50ms. The 950ms
     /// delta would be how long the [`Future`] waited for a response from the network.
     ///
-    /// Measuring wall time can be particularly useful for determining `Future`s with a "high
-    /// latency", meanwhile measuring execution time can help find `Future`s that are CPU bound.
-    ///
     /// # Uses
     ///
-    /// You can record the execution time to either a [`Histogram`] or a [`Counter`], via the
-    /// [`observe`] or [`inc_by`] methods, respectively.
+    /// Recording execution time can be useful if you want to monitor [`Future`]s that could be
+    /// sensitive to CPU usage. For example, if you have a single logical control thread you'll
+    /// want to make sure that thread never spends too long running a single `Future`. Reporting
+    /// the execution time of `Future`s running on this thread can help ensure there is no
+    /// unexpected blocking.
     ///
-    /// Note: You must call either `observe` or `inc_by` and provide a metric that we can record
-    /// to. The following will not compile:
+    /// Note: You must call either [`observe`] to record the execution time to a [`Histogram`] or
+    /// [`inc_by`] to record to a [`Counter`]. The following will not compile:
     ///
     /// ```compile_fail
     /// use mz_ore::metrics::MetricsFutureExt;
@@ -721,7 +721,7 @@ impl<F: Future, M: DurationMetric> Future for ExecTimeFuture<F, M> {
 /// [`MetricsFutureExt`].
 ///
 /// For example, `WallTimeFuture<F, M>` only implements [`Future`] for `M` that implements
-/// [`DurationMetric`] which [`UnspecifiedMetric`] does not. This forces users at build time to
+/// `DurationMetric` which [`UnspecifiedMetric`] does not. This forces users at build time to
 /// call [`WallTimeFuture::observe`] or [`WallTimeFuture::inc_by`].
 #[derive(Debug)]
 pub struct UnspecifiedMetric(());
