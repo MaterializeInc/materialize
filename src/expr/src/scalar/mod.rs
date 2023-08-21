@@ -2045,15 +2045,15 @@ impl MirScalarExpr {
             .chain(variadic.into_iter().flatten())
     }
 
-    /// Visits all subexpressions in breadth-first search order.
-    pub fn visit_bfs<F>(&self, f: &mut F)
+    /// Visits all subexpressions in DFS preorder.
+    pub fn visit_pre<F>(&self, f: &mut F)
     where
         F: FnMut(&Self),
     {
         let mut worklist = vec![self];
         while let Some(e) = worklist.pop() {
             f(e);
-            worklist.extend(e.children());
+            worklist.extend(e.children().rev());
         }
     }
 }

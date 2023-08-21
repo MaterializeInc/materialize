@@ -45,6 +45,7 @@ class ControllerDefinition:
     default_port: str
     has_configurable_address: bool = True
     endpoint: Optional[Endpoint] = None
+    client_cert: Optional[tuple[str, str]] = None
 
     def default_address(self) -> str:
         return f"http://127.0.0.1:{self.default_port}"

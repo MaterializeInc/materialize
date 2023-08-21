@@ -33,10 +33,3 @@ pub struct EndpointArgs {
     #[clap(long, hidden = true, env = "ADMIN_ENDPOINT")]
     pub admin_endpoint: Option<Url>,
 }
-
-#[derive(Debug, clap::Args)]
-pub struct RegionArg {
-    /// Use the specified region.
-    #[clap(long, env = "REGION")]
-    pub region: Option<String>,
-}

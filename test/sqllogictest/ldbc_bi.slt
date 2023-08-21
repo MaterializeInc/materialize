@@ -394,7 +394,7 @@ Explained Query:
   Finish order_by=[#0 desc nulls_first, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#6]
     Return // { arity: 7 }
       Project (#0..=#2, #4, #7, #5, #8) // { arity: 7 }
-        Map ((numeric_to_double(#5) / bigint_to_double(case when (#6 = 0) then null else #6 end)), (bigint_to_numeric(#4) / #3)) // { arity: 9 }
+        Map ((#5 / bigint_to_numeric(case when (#6 = 0) then null else #6 end)), (bigint_to_numeric(#4) / #3)) // { arity: 9 }
           Reduce group_by=[#1..=#4] aggregates=[count(*), sum(integer_to_bigint(#0)), count(integer_to_bigint(#0))] // { arity: 7 }
             CrossJoin type=differential // { arity: 5 }
               implementation
