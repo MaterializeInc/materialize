@@ -23,21 +23,16 @@ typecheck_cmd="npx pyright@$PYRIGHT_VERSION --level=error"
 python_folders=(ci misc/python)
 flake8_folders=(ci misc/python test)
 
-try $typecheck_cmd "${python_folders[@]}"
-if ! try_last_failed; then
-    # mzcompose.py files need to be passed to the typechecker individually to avoid
-    # duplicate module warnings. We don't check these if the previous `pyright`
-    # invocation failed, though, or we'll get a ton of duplicate warnings.
-    for file in $(git_files "**/mzcompose.py"); do
-        try $typecheck_cmd "$file"
-    done
+compose_files=$(git_files "**/mzcompose.py")
+test_files=$(git_files "test/**.py")
+unique_files=$(echo $compose_files $test_files | sort -u)
 
-    for file in $(git_files "test/**.py"); do
-        if [[ $file == *"mzcompose"* ]]; then
-            continue
-        fi
-        try $typecheck_cmd "$file"
-    done
+try $typecheck_cmd "${python_folders[@]}" $unique_files
+
+try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
+
+if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
+  try bin/pyactivate -m pytest -qq --doctest-modules misc/python
 fi
 try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
 
