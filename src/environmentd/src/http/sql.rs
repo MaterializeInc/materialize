@@ -26,12 +26,11 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
-    SessionClient,
+    SessionClient, Severity,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
 use mz_ore::result::ResultExt;
-use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};

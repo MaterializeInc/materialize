@@ -46,6 +46,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
+use crate::severity::Severity;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -414,6 +415,12 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Returns Some if the notice should be reported, otherwise None.
     fn notice_filter(&mut self, notice: AdapterNotice) -> Option<AdapterNotice> {
+        // Filter out low threshold severity.
+        let minimum_client_severity = self.vars.client_min_messages();
+        let sev = Severity::for_adapter_notice(&notice);
+        if !sev.should_output_to_client(minimum_client_severity) {
+            return None;
+        }
         // Filter out notices for other clusters.
         if let AdapterNotice::ClusterReplicaStatusChanged { cluster, .. } = &notice {
             if cluster != self.vars.cluster() {
