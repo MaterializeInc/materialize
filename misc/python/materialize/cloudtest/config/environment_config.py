@@ -65,7 +65,7 @@ class EnvironmentConfig:
 
 
 @dataclass
-class EgressIpConfig:
+class PgTestDBConfig:
     testdb_dbname: str
     testdb_user: str
     testdb_password: str
@@ -98,7 +98,7 @@ def load_environment_config(pytestconfig: pytest.Config) -> EnvironmentConfig:
     return config
 
 
-def load_egress_ip_config(pytestconfig: pytest.Config) -> EgressIpConfig:
+def load_pg_test_db_config(pytestconfig: pytest.Config) -> PgTestDBConfig:
     args = pytestconfig.option
 
     testdb_dbname = args.testdb_dbname
@@ -112,7 +112,7 @@ def load_egress_ip_config(pytestconfig: pytest.Config) -> EgressIpConfig:
     testdb_port = args.testdb_port
     assert testdb_port is not None
 
-    return EgressIpConfig(
+    return PgTestDBConfig(
         testdb_dbname=testdb_dbname,
         testdb_user=testdb_user,
         testdb_password=testdb_password,
