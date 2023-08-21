@@ -369,8 +369,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterConnection(plan) => {
-                    let result = self.sequence_alter_connection(ctx.session(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_alter_connection(ctx, plan).await;
                 }
                 Plan::AlterSetCluster(plan) => {
                     let result = self.sequence_alter_set_cluster(ctx.session(), plan).await;

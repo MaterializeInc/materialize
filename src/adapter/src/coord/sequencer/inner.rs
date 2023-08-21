@@ -99,10 +99,10 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
-    peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
-    PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
-    PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    TargetCluster,
+    peek, AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady,
+    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
+    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
+    RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -4488,16 +4488,20 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_connection(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         AlterConnectionPlan { id, action }: AlterConnectionPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         match action {
-            AlterConnectionAction::RotateKeys => self.sequence_rotate_keys(session, id).await,
+            AlterConnectionAction::RotateKeys => {
+                let r = self.sequence_rotate_keys(ctx.session(), id).await;
+                ctx.retire(r);
+            }
             AlterConnectionAction::AlterOptions {
                 set_options,
                 drop_options,
+                validate,
             } => {
-                self.sequence_alter_connection_options(session, id, set_options, drop_options)
+                self.sequence_alter_connection_options(ctx, id, set_options, drop_options, validate)
                     .await
             }
         }
@@ -4529,98 +4533,176 @@ impl Coordinator {
 
     async fn sequence_alter_connection_options(
         &mut self,
-        session: &Session,
+        mut ctx: ExecuteContext,
         id: GlobalId,
         set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
         drop_options: BTreeSet<ConnectionOptionName>,
-    ) -> Result<ExecuteResponse, AdapterError> {
+        validate: bool,
+    ) {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_conn = cur_entry.connection().expect("known to be connection");
 
-        // Parse statement.
-        let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
-            .expect("invalid create sql persisted to catalog")
-            .into_element()
-            .ast
-        {
-            Statement::CreateConnection(stmt) => stmt,
-            _ => unreachable!("proved type is source"),
-        };
+        let inner = || -> Result<catalog::Connection, AdapterError> {
+            // Parse statement.
+            let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast
+            {
+                Statement::CreateConnection(stmt) => stmt,
+                _ => unreachable!("proved type is source"),
+            };
 
-        let catalog = self.catalog().for_system_session();
+            let catalog = self.catalog().for_system_session();
 
-        // Resolve items in statement
-        let (mut create_conn_stmt, resolved_ids) =
-            mz_sql::names::resolve(&catalog, create_conn_stmt)
+            // Resolve items in statement
+            let (mut create_conn_stmt, resolved_ids) =
+                mz_sql::names::resolve(&catalog, create_conn_stmt)
+                    .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
+
+            // Retain options that are neither set nor dropped.
+            create_conn_stmt
+                .values
+                .retain(|o| !set_options.contains_key(&o.name) && !drop_options.contains(&o.name));
+
+            // Set new values
+            create_conn_stmt.values.extend(
+                set_options
+                    .into_iter()
+                    .map(|(name, value)| ConnectionOption { name, value }),
+            );
+
+            // Open a new catalog, which we will use to re-plan our
+            // statement with the desired config.
+            let mut catalog = self.catalog().for_system_session();
+            catalog.mark_id_unresolvable_for_replanning(id);
+
+            // Re-define our source in terms of the amended statement
+            let plan = match mz_sql::plan::plan(
+                None,
+                &catalog,
+                Statement::CreateConnection(create_conn_stmt),
+                &Params::empty(),
+                &resolved_ids,
+            )
+            .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
+            {
+                Plan::CreateConnection(plan) => plan,
+                _ => unreachable!("create source plan is only valid response"),
+            };
+
+            // Parse statement.
+            let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast
+            {
+                Statement::CreateConnection(stmt) => stmt,
+                _ => unreachable!("proved type is source"),
+            };
+
+            let catalog = self.catalog().for_system_session();
+
+            // Resolve items in statement
+            let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
                 .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
 
-        // Retain options that are neither set nor dropped.
-        create_conn_stmt
-            .values
-            .retain(|o| !set_options.contains_key(&o.name) && !drop_options.contains(&o.name));
+            Ok(catalog::Connection {
+                create_sql: plan.connection.create_sql,
+                connection: plan.connection.connection,
+                resolved_ids: new_deps,
+            })
+        };
 
-        // Set new values
-        create_conn_stmt.values.extend(
-            set_options
-                .into_iter()
-                .map(|(name, value)| ConnectionOption { name, value }),
-        );
+        let conn = match inner() {
+            Ok(conn) => conn,
+            Err(e) => {
+                return ctx.retire(Err(e));
+            }
+        };
 
-        // Open a new catalog, which we will use to re-plan our
-        // statement with the desired config.
-        let mut catalog = self.catalog().for_system_session();
-        catalog.mark_id_unresolvable_for_replanning(id);
+        if validate {
+            let connection = conn
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state());
 
-        // Re-define our source in terms of the amended statement
-        let plan = match mz_sql::plan::plan(
-            None,
-            &catalog,
-            Statement::CreateConnection(create_conn_stmt),
-            &Params::empty(),
-            &resolved_ids,
-        )
-        .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let transient_revision = self.catalog().transient_revision();
+            let conn_id = ctx.session().conn_id().clone();
+            let connection_context = self.connection_context.clone();
+            let otel_ctx = OpenTelemetryContext::obtain();
+            let role_metadata = ctx.session().role_metadata().clone();
+
+            task::spawn(
+                || format!("validate_alter_connection:{conn_id}"),
+                async move {
+                    let dependency_ids = conn.resolved_ids.0.clone();
+                    let result = match connection.validate(id, &connection_context).await {
+                        Ok(()) => Ok(conn),
+                        Err(err) => Err(err.into()),
+                    };
+
+                    // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                    let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
+                        AlterConnectionValidationReady {
+                            ctx,
+                            result,
+                            connection_gid: id,
+                            plan_validity: PlanValidity {
+                                transient_revision,
+                                dependency_ids,
+                                cluster_id: None,
+                                replica_id: None,
+                                role_metadata,
+                            },
+                            otel_ctx,
+                        },
+                    ));
+                    if let Err(e) = result {
+                        tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                },
+            );
+        } else {
+            let result = self
+                .sequence_alter_connection_stage_finish(ctx.session_mut(), id, conn)
+                .await;
+            ctx.retire(result);
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn sequence_alter_connection_stage_finish(
+        &mut self,
+        session: &mut Session,
+        id: GlobalId,
+        connection: catalog::Connection,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        if let mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) =
+            connection.connection
         {
-            Plan::CreateConnection(plan) => plan,
-            _ => unreachable!("create source plan is only valid response"),
-        };
+            let spec = VpcEndpointConfig {
+                aws_service_name: privatelink.service_name.to_owned(),
+                availability_zone_ids: privatelink.availability_zones.to_owned(),
+            };
+            self.cloud_resource_controller
+                .as_ref()
+                .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                .ensure_vpc_endpoint(id, spec)
+                .await?;
+        }
 
-        // Parse statement.
-        let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql)
-            .expect("invalid create sql persisted to catalog")
-            .into_element()
-            .ast
-        {
-            Statement::CreateConnection(stmt) => stmt,
-            _ => unreachable!("proved type is source"),
-        };
-
-        let catalog = self.catalog().for_system_session();
-        // Resolve items in statement
-        let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
-            .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
-
-        let conn = catalog::Connection {
-            create_sql: plan.connection.create_sql,
-            connection: plan.connection.connection,
-            resolved_ids: new_deps,
-        };
-
-        // Redefine connection.
         let ops = vec![catalog::Op::UpdateItem {
             id,
-            // Look this up again so we don't have to hold an immutable reference to the
-            // entry for so long.
             name: self.catalog.get_entry(&id).name().clone(),
-            to_item: CatalogItem::Connection(conn),
+            to_item: CatalogItem::Connection(connection.clone()),
         }];
 
         self.catalog_transact(Some(session), ops).await?;
 
         // todo: restart ingestions
-
-        // todo: fix
-        Ok(ExecuteResponse::AlteredRole)
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
     pub(super) async fn sequence_alter_source(
